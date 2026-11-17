@@ -44,6 +44,7 @@ namespace
 			}
 
 			const TSharedRef<SVerticalBox> Entries = SNew(SVerticalBox);
+			EntriesBox = Entries;
 			const auto Entry = [this, &Entries](const FString& Caption, const FString& Sub, const FString& Description, TFunction<void()> OnPressed) -> TSharedRef<SScctButton>
 			{
 				TSharedPtr<SScctButton> Made;
@@ -54,6 +55,7 @@ namespace
 					.Compact(true)
 					.Text(FText::FromString(Caption.ToUpper()))
 					.SubText(FText::FromString(Sub))
+					.SubTextVisibility(this, &SScctMenuHome::GetSubTextVisibility)
 					.Description(FText::FromString(Description))
 					.OnPressed(FSimpleDelegate::CreateLambda([OnPressed] { OnPressed(); }))
 				];
@@ -88,6 +90,7 @@ namespace
 							return FText::FromString(WeakRejoin.IsValid() && WeakRejoin->GetOffer(Choice) ? FString::Printf(TEXT("REJOIN %s"), Choice.ServerName).ToUpper() : FString(TEXT("REJOIN")));
 						}))
 						.SubText(TAttribute<FText>::CreateLambda([WeakRejoin] { return FText::FromString(ScctRejoinPrompt::Describe(WeakRejoin.Get()) + TEXT(", still being played")); }))
+						.SubTextVisibility(this, &SScctMenuHome::GetSubTextVisibility)
 						.Description(FText::FromString(TEXT("Back into the round this game dropped out of, on the same side and with the score and lives kept, as the server held them.")))
 						.OnPressed(FSimpleDelegate::CreateLambda([WeakRejoin] { if (WeakRejoin.IsValid()) { WeakRejoin->Rejoin(); } }))
 					]
@@ -168,13 +171,14 @@ namespace
 						[
 							SNew(SBox).WidthOverride(64.0f).HAlign(HAlign_Left)[ SNew(SBox).WidthOverride(64.0f)[ ScctUi::Rule(0.5f) ] ]
 						]
-						// The entries take the height left above the key hints and scroll (following the focus) when they
-						// need more, as with REJOIN shown or on a short window.
+						// The entries take the height left above the key hints. When they need more (REJOIN shown, a
+						// short window) their second lines go (Tick), and should even that not fit they scroll,
+						// following the focus.
 						+ SVerticalBox::Slot().FillHeight(1.0f).Padding(-24.0f, 0.0f, 0.0f, 0.0f)
 						[
 							SNew(SBox).WidthOverride(480.0f)
 							[
-								SNew(SScrollBox)
+								SAssignNew(EntriesScroll, SScrollBox)
 								.ScrollBarVisibility(EVisibility::Collapsed)
 								.ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll)
 								+ SScrollBox::Slot()[ Entries ]
@@ -199,7 +203,34 @@ namespace
 
 		virtual FString GetTitle() const override { return FString(); }
 
+		virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override
+		{
+			SScctMenuPage::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+			if (!EntriesScroll.IsValid() || !EntriesBox.IsValid())
+			{
+				return;
+			}
+			const float Room = EntriesScroll->GetTickSpaceGeometry().GetLocalSize().Y;
+			const float Wanted = EntriesBox->GetDesiredSize().Y;
+			if (Room <= 0.0f)
+			{
+				return;
+			}
+			if (!bTight)
+			{
+				// The height with the second lines, kept to know when there is room for them again.
+				FullHeight = Wanted;
+				bTight = Wanted > Room + 1.0f;
+			}
+			else if (FullHeight <= Room)
+			{
+				bTight = false;
+			}
+		}
+
 	private:
+		EVisibility GetSubTextVisibility() const { return bTight ? EVisibility::Collapsed : EVisibility::Visible; }
+
 		/** Whole sentences from the start of a text, as many as fit in about MaxChars (at least one): never a sentence cut off. */
 		static FString FirstSentences(const FString& Text, int32 MaxChars)
 		{
@@ -333,6 +364,11 @@ namespace
 		}
 
 		FString FeaturedMap;
+		TSharedPtr<SScrollBox> EntriesScroll;
+		TSharedPtr<SVerticalBox> EntriesBox;
+		/** The entries would not fit with their second lines, which are hidden; FullHeight is the height they need with them. */
+		bool bTight = false;
+		float FullHeight = 0.0f;
 		TWeakObjectPtr<UScctRejoinSubsystem> Rejoin;
 		bool bAsking = false;
 	};

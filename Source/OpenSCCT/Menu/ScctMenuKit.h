@@ -144,10 +144,12 @@ protected:
 class SScctButton : public SButton, public IScctDriven
 {
 public:
-	SLATE_BEGIN_ARGS(SScctButton) : _Look(EScctButtonLook::Secondary), _Selected(false), _Colour(ScctUi::Accent()), _MinWidth(0.0f), _FillWidth(false), _Compact(false) {}
+	SLATE_BEGIN_ARGS(SScctButton) : _SubTextVisibility(EVisibility::Visible), _Look(EScctButtonLook::Secondary), _Selected(false), _Colour(ScctUi::Accent()), _MinWidth(0.0f), _FillWidth(false), _Compact(false) {}
 		SLATE_ATTRIBUTE(FText, Text)
 		/** A second, smaller line under the caption (Menu look). */
 		SLATE_ATTRIBUTE(FText, SubText)
+		/** Whether that second line shows (a long column hides it when it would not fit otherwise). */
+		SLATE_ATTRIBUTE(EVisibility, SubTextVisibility)
 		SLATE_ARGUMENT(EScctButtonLook, Look)
 		SLATE_ATTRIBUTE(bool, Selected)
 		SLATE_ARGUMENT(FLinearColor, Colour)
