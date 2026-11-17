@@ -14,6 +14,7 @@
 #include "HAL/IConsoleManager.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Play/ScctLevelStateSubsystem.h"
 #include "Play/ScctEquipmentSubsystem.h"
 #include "Play/ScctExposure.h"
 #include "Play/ScctPawnProxy.h"
@@ -45,8 +46,11 @@ namespace
 		TEXT("Strength of the edge light from behind the local player's body on the bodies of his own side (0: off)."), ECVF_Default);
 
 	// The local body's near fade (UpdateBodyFade): what of it is nearer the camera than this, in cm, thins out of
-	// the picture and is gone at half the distance. The camera of a spy who walks stands about 90 cm behind him.
-	TAutoConsoleVariable<float> CVarBodyFade(TEXT("scct.BodyFade"), 70.0f,
+	// the picture and is gone at half the distance. The camera of a spy who walks stands about 90 cm behind him;
+	// with the gun drawn it stands 30 to 40 cm behind his back, and the arm and gun reach from there to 70 cm
+	// (at 70 they were a see-through ghost in front of the picture). The head goes whole a little further out
+	// (AScctPawnProxy::SetNearFade).
+	TAutoConsoleVariable<float> CVarBodyFade(TEXT("scct.BodyFade"), 40.0f,
 		TEXT("Distance from the camera, cm, under which the local player's own body fades out of the picture (gone at half of it; 0: never)."), ECVF_Default);
 
 	constexpr int32 MaxLights = 16;
@@ -428,11 +432,13 @@ void UScctEffectsSubsystem::UpdateBodyFade()
 	// A tour camera is not the player's and shows him whole.
 	const AScctPawnProxy* Local = Session->FindLocalProxy();
 	const float Distance = Session->IsTourView() ? 0.0f : FMath::Max(CVarBodyFade.GetValueOnGameThread(), 0.0f);
+	const FScctBridgeView& View = Session->GetView();
+	const FVector Eye(View.X, View.Y, View.Z);
 	for (const TPair<int32, TObjectPtr<AScctPawnProxy>>& Pair : Session->GetProxies())
 	{
 		if (AScctPawnProxy* Proxy = Pair.Value)
 		{
-			Proxy->SetNearFade(Proxy == Local ? Distance : 0.0f);
+			Proxy->SetNearFade(Proxy == Local ? Distance : 0.0f, Eye);
 		}
 	}
 }
@@ -573,6 +579,29 @@ void UScctEffectsSubsystem::UpdateTracers(float DeltaSeconds)
 // Impact marks
 // ---------------------------------------------------------------------------------------------------------------
 
+USceneComponent* UScctEffectsSubsystem::FindMarkSurface(int32 SurfaceActorId)
+{
+	if (SurfaceActorId == 0)
+	{
+		return nullptr;
+	}
+
+	// The simulation names the surface by its actor; the level state knows the level actor by the actor's map name.
+	const FScctPlayApi* Play = ScctFeature<FScctPlayApi>();
+	UScctLevelStateSubsystem* Level = GetWorld()->GetSubsystem<UScctLevelStateSubsystem>();
+	if (Play == nullptr || Level == nullptr)
+	{
+		return nullptr;
+	}
+	TCHAR Name[128] = {};
+	if (Play->GetActorName(SurfaceActorId, Name, UE_ARRAY_COUNT(Name)) <= 0)
+	{
+		return nullptr;
+	}
+	const AActor* Actor = Level->FindLevelActor(Name);
+	return Actor != nullptr ? Actor->GetRootComponent() : nullptr;
+}
+
 void UScctEffectsSubsystem::UpdateImpactMarks()
 {
 	const int32 Count = Events->GetImpactMarks(MarkBuffer.GetData(), MarkBuffer.Num());
@@ -616,7 +645,18 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 				// Each slot's decal has its own colours, set for the surface that was hit.
 				DecalTints[Mark.Slot] = Decal->CreateDynamicMaterialInstance();
 			}
-			if (bNew || !Decal->IsVisible())
+			// A mark on something the simulation has taken away since (a pane that broke, a prop that is hidden)
+			// goes with it, and comes back with it.
+			const USceneComponent* Carrier = Decal->GetAttachParent();
+			const bool bSurfaceHidden = Carrier != nullptr && Carrier != Host->GetRootComponent() && Carrier->GetOwner() != nullptr && Carrier->GetOwner()->IsHidden();
+			if (bSurfaceHidden && !bNew)
+			{
+				if (Decal->IsVisible())
+				{
+					Decal->SetVisibility(false);
+				}
+			}
+			else if (bNew || !Decal->IsVisible())
 			{
 				const float HalfSize = TintDecal(DecalTints[Mark.Slot], GetName(Mark.TypeId), GetName(Mark.SparkClassId));
 				// A decal projects along its own X axis, into the surface; its turn about that axis is random so
@@ -626,8 +666,23 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 				Facing.Roll = Random.FRandRange(0.0f, 360.0f);
 				// Shallow, so a mark on a thin wall or a door edge is not projected onto what stands behind it.
 				Decal->DecalSize = FVector(4.0, Size, Size);
+
+				// A mark on a door, a lift or any other map actor that moves goes with it: the decal hangs on the
+				// level actor the simulation's actor is drawn by. A mark on the level's own geometry stays put.
+				USceneComponent* Surface = FindMarkSurface(Mark.SurfaceActorId);
+				USceneComponent* Wanted = Surface != nullptr ? Surface : Host->GetRootComponent();
+				if (Decal->GetAttachParent() != Wanted)
+				{
+					Decal->AttachToComponent(Wanted, FAttachmentTransformRules::KeepWorldTransform);
+				}
 				Decal->SetWorldLocationAndRotation(At, Facing);
+				// The surface's own scale must not stretch the mark.
+				Decal->SetWorldScale3D(FVector::OneVector);
 				Decal->SetVisibility(true);
+				if (bLog && Surface != nullptr)
+				{
+					UE_LOG(LogOpenSCCT, Log, TEXT("Effects: the mark of impact slot %d lies on map actor %d (level actor %s) and moves with it"), Mark.Slot, Mark.SurfaceActorId, *GetNameSafe(Surface->GetOwner()));
+				}
 			}
 		}
 		else if (Decal != nullptr && Decal->IsVisible())
@@ -1053,7 +1108,9 @@ void UScctEffectsSubsystem::SpawnMuzzleFlash(const FVector& At, const FVector& D
 
 	const FLinearColor LightTint = bSticky ? FLinearColor(0.3f, 0.55f, 1.0f) : FLinearColor(1.0f, 0.68f, 0.36f);
 	// The light sits a little way down the line of fire, so it lights the room and not just the shooter's hands.
-	AcquireLight(At + Direction * 35.0, LightTint, 45.0f * Level, 900.0f, 0.09f, true);
+	// As strong as the view model's own flash (45 cd here, times an exposure scale that is 0.04 in a lamp-lit
+	// room, lit nothing: a spy's or a bot's shot left the room as it was).
+	AcquireLight(At + Direction * 35.0, LightTint, FScctExposure::MuzzleFlashCandelas() * Level, 900.0f, 0.9f /*SCRATCH*/, true);
 }
 
 void UScctEffectsSubsystem::SpawnSparks(const FVector& At, const FVector& Normal, int32 Count, const FLinearColor& Color, float Speed)

@@ -124,6 +124,9 @@ private:
 	void DrainShots();
 	void UpdateTracers(float DeltaSeconds);
 	void UpdateImpactMarks();
+
+	/** The root of the level actor that draws the map actor a mark lies on (a door, a lift), or null for the level's own geometry. */
+	USceneComponent* FindMarkSurface(int32 SurfaceActorId);
 	void UpdateEffectActors(float DeltaSeconds);
 	void UpdateLights(float DeltaSeconds);
 
