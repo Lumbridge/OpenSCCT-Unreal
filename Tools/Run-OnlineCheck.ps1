@@ -31,6 +31,9 @@ param(
     [int] $Port = 28961,
     # Minutes a round lasts on the server (its results and the way back to the lobby follow).
     [int] $TimeLimit = 10,
+    # Minutes the second map's round lasts (0: the map's own setting). A personal demo downloads between rounds, so
+    # a recording check (-Extra -ScctRecord) wants short rounds on both maps.
+    [int] $SecondTimeLimit = 0,
     [int] $Shots = 6,
     [double] $Every = 6,
     # Seconds into the first round at which the game leaves the server (0: it stays).
@@ -81,7 +84,8 @@ try {
         @{
             name = 'Unreal online check'; port = $Port; lanPort = 0; loopbackOnly = $true; maxPlayers = 4
             maps = (Join-Path $Content 'svmap')
-            rotation = @(@{ map = $Map; mode = 'Story'; timeLimit = $TimeLimit }, @{ map = $SecondMap; mode = 'Story' })
+            rotation = @(@{ map = $Map; mode = 'Story'; timeLimit = $TimeLimit },
+                $(if ($SecondTimeLimit -gt 0) { @{ map = $SecondMap; mode = 'Story'; timeLimit = $SecondTimeLimit } } else { @{ map = $SecondMap; mode = 'Story' } }))
             minPlayersToLaunch = $MinPlayers; launchCountdownSeconds = 2; resultsSeconds = 6; bansFile = $null; matchLog = $null
             adminPassword = $(if ($AdminPassword) { $AdminPassword } else { $null })
             practice = [bool] $Practice

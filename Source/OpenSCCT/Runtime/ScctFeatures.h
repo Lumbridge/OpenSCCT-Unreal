@@ -7,6 +7,7 @@
 #include "Runtime/ScctAudioCheckApi.h"
 #include "Runtime/ScctContentApi.h"
 #include "Runtime/ScctControlsApi.h"
+#include "Runtime/ScctDemoApi.h"
 #include "Runtime/ScctEquipmentApi.h"
 #include "Runtime/ScctEventsApi.h"
 #include "Runtime/ScctHubActivityApi.h"
@@ -55,6 +56,7 @@ SCCT_FEATURE_TABLE(FScctAccountApi, "AccountExports", ScctAccountApiVersion);
 SCCT_FEATURE_TABLE(FScctAudioCheckApi, "AudioCheckExports", ScctAudioCheckApiVersion);
 SCCT_FEATURE_TABLE(FScctContentApi, "ContentExports", ScctContentApiVersion);
 SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
+SCCT_FEATURE_TABLE(FScctDemoApi, "DemoExports", ScctDemoApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
 SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
 SCCT_FEATURE_TABLE(FScctHostApi, "HostExports", ScctHostApiVersion);
