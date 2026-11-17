@@ -5,6 +5,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Menu/SScctGearPage.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -429,6 +430,13 @@ namespace
 				.Options({ ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), 0, TEXT("Spy")), ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), 1, TEXT("Mercenary")) })
 				.Get([this] { return bMerc ? 1 : 0; })
 				.Set([this](int32 Value) { bMerc = Value == 1 || IsMercDeathmatch(); RefreshHero(); }));
+			// The side's saved kit, and the Equipment page to change it (Menu/ScctOverlayPages.h).
+			Add(SNew(SScctButton)
+				.Look(EScctButtonLook::Menu)
+				.Text(FText::FromString(TEXT("EQUIPMENT")))
+				.SubText_Lambda([this] { return FText::FromString(SScctGearPage::SummaryLine(bMerc ? 1 : 0)); })
+				.Description(FText::FromString(TEXT("The gadgets (and for a mercenary the weapon) your side takes into the match. The sidearm is the stepper under Rules.")))
+				.OnPressed(FSimpleDelegate::CreateLambda([this] { Host.Open(bMerc ? TEXT("gear/merc") : TEXT("gear/spy")); })));
 
 			Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Bots")) ];
 			Add(SNew(SScctSlider)

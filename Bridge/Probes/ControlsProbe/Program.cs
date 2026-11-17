@@ -68,6 +68,53 @@ var stock = new ControlSettings();
 Check(stock.SpyKbm.FreeLook == 1.4f && stock.SpyKbm.Look == 1f && stock.MercKbm.Look == 1f && stock.MercKbm.ScopeVertical == 2.45f &&
     stock.SpyKbm.Scope == 0.75f && !stock.InvertY && stock.Widescreen && stock.MercFovCap == 112f && MouseLook.UnitsPerCount == 3f,
     $"original defaults: spy free look 1.4, gun look 1, merc look 1, scope 0.75, scope vertical 2.45, no invert, widescreen with a 112 degree cap; a count turns {MouseLook.UnitsPerCount} x multiplier rotation units");
+
+// ---- The bindings menu: a new key replaces the default, it is not added beside it --------------------------------
+
+{
+    string freeKey = ActionBindings.Canonical("Ctrl+F12", pad: false);
+    var kept = new List<string>();
+    int checkedActions = 0;
+    foreach (bool merc in new[] { false, true })
+    {
+        foreach (ControlAction action in ControlActions.All.Where(a => merc ? a.Merc : a.Spy))
+        {
+            foreach (bool pad in new[] { false, true })
+            {
+                var fresh = new ControlBindings();
+                SideBindings side = fresh.Of(merc);
+                ActionBindings.Bind(side, pad, action, pad ? "P1" : "Ctrl+F12", keepOthers: false);
+                List<string> now = ActionBindings.KeysOf(side, pad, action);
+                checkedActions++;
+                if (now.Count != 1 || !string.Equals(now[0], pad ? "P1" : freeKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    kept.Add($"{(merc ? "merc" : "spy")} {(pad ? "pad" : "keys")} {action.Id}: {string.Join(", ", now)}");
+                }
+            }
+        }
+    }
+
+    Check(kept.Count == 0, $"every action of both sides, keys and controller ({checkedActions} rebinds): only the new key does it afterwards" +
+        (kept.Count == 0 ? "" : " -- still on the old one: " + string.Join("; ", kept)));
+
+    var pads = new ControlBindings();
+    ControlAction Act(string id) => ActionBindings.Find(id)!;
+    bool readDefaults = ActionBindings.KeysOf(pads.Spy, true, Act("fire")).SequenceEqual(["RT"])
+        && ActionBindings.KeysOf(pads.Spy, true, Act("crouch")).SequenceEqual(["B"])
+        && ActionBindings.KeysOf(pads.Spy, true, Act("wall")).SequenceEqual(["DpadDown"])
+        && ActionBindings.KeysOf(pads.Merc, true, Act("altfire")).SequenceEqual(["LT"]);
+    ActionBindings.Bind(pads.Spy, true, Act("fire"), "RB", keepOthers: false);
+    ActionBindings.Bind(pads.Spy, true, Act("wall"), "P2", keepOthers: false);
+    Check(readDefaults && pads.Spy.Pad["RT"] == "" && pads.Spy.Pad["RB"] == "Action:fire" && pads.Spy.Pad["DpadDown"] == "Action:weaponlaser" &&
+        pads.Spy.Pad["P2"] == "Action:wall",
+        "the controller's contextual defaults read as bound (spy fire RT, crouch B, back to wall D-pad down, merc gadget LT); fire moved to RB leaves RT free, back to wall moved to P2 leaves D-pad down the pistol laser");
+
+    var keys = new ControlBindings();
+    ActionBindings.Bind(keys.Spy, false, Act("fire"), "P", keepOthers: false);
+    Check(keys.Spy.Keys.Bindings["LeftMouse"] == "GadgetQuickChoice 0" && keys.Spy.Keys.Bindings["P"] == "Button bFire | Function Fire" &&
+        ActionBindings.LabelsOf(keys.Spy, false, false, "LeftMouse").Count == 1,
+        "fire moved to P: the left mouse button keeps only its quick gadget, P fires");
+}
 unsafe
 {
     // The sizes Source/OpenSCCT/Runtime/ScctControlsApi.h asserts for its mirrors.

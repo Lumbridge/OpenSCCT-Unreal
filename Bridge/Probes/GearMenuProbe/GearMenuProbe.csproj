@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A console check of the gear picker's table without Unreal: the drafts of both sides before a match, the
+       catalogue, swaps, level locks, the intel panel and APPLY writing the kit, then the picker in a merc's round. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\OpenScct.UnrealBridge\OpenScct.UnrealBridge.csproj" />
+  </ItemGroup>
+</Project>

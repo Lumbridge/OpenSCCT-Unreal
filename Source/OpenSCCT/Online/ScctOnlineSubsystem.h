@@ -65,8 +65,9 @@ DECLARE_MULTICAST_DELEGATE(FScctOnlineChanged);
  *     opened with ?ScctOnline=1, which tells AScctGameMode to start no local match and to present the bridge's
  *     session. When that level has begun play and the round is in the session slot, ReportLoaded is called and
  *     the server's start gate counts this player.
- *   - otherwise (lobby, back from a round, failed, left) a level opened for a round is left for the front end,
- *     which shows the lobby or the reason of the failure.
+ *   - otherwise (lobby, back from a round, left) a level opened for a round is left for the front end, which shows
+ *     the lobby. A visit that failed in a round's level stays there with the play error page (Menu/SScctPlayErrorPage.h)
+ *     until the player leaves it; a failure anywhere else is the front end's notice.
  *
  * Unattended switches (off by default; for runs with nobody at the keyboard, used with -RenderOffscreen):
  *   -ScctJoin=<host[:port]>   join that server as soon as the game is up

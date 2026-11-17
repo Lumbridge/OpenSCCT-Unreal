@@ -20,6 +20,12 @@ struct FScctLoadingPage
 	/** A tip for the side, from the player's content, with his keys in it; may be empty. */
 	FString Tip;
 
+	/** What the page waits for, in place of "LOADING" ("JOINING THE ROUND"); empty for a level load. */
+	FString Status;
+
+	/** A Splinter Cell fact (Menu/ScctSplashTrivia.h), shown when there is no tip to give; may be empty. */
+	FString Trivia;
+
 	/** The side's accent: 0 spies, 1 mercs, -1 none. */
 	int32 Side = -1;
 
@@ -54,6 +60,13 @@ public:
 
 	/** The page as a widget: the same one for the movie player and for -ScctLoadingHold. */
 	static TSharedRef<SWidget> MakePage(const FScctLoadingPage& Page);
+
+	/**
+	 * The page of a round of Map (an OpenSCCT map's folder name) for a side (0 spy, 1 merc, -1 watching): the map's
+	 * title, the side's tip and the map's loading picture from the player's content, with Detail and Status as
+	 * given. The match overlay covers an online level with it while the round is travelled to or joined.
+	 */
+	FScctLoadingPage DescribeRound(const FString& Map, int32 Side, const FString& Detail, const FString& Status);
 
 private:
 	void HandlePreLoadMap(const FWorldContext& Context, const FString& MapName);

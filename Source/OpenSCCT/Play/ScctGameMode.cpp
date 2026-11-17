@@ -175,6 +175,22 @@ void AScctGameMode::Tick(float DeltaSeconds)
 		MatchMenu->OnWantsOpen.BindUObject(this, &AScctGameMode::SetMenuOpen, true);
 		MatchMenu->AddToViewport(30);
 		GiveInputToGame(Player);
+
+		// What stops play from now on is shown as it happens; what already did (the start in StartPlay) at once.
+		if (UScctSessionSubsystem* Session = GetWorld()->GetSubsystem<UScctSessionSubsystem>())
+		{
+			Session->OnPlayError.AddUObject(this, &AScctGameMode::HandlePlayError);
+			if (Session->GetPlayError().Kind != EScctPlayErrorKind::None)
+			{
+				HandlePlayError(Session->GetPlayError());
+			}
+		}
+	}
+
+	if (MatchMenu->IsShowingPlayError())
+	{
+		TickPlayError(Player, DeltaSeconds);
+		return;
 	}
 
 	// The menu opens on the player's own binding (ShowMenu, Quit), which arrives as an interface command.
@@ -234,6 +250,74 @@ void AScctGameMode::HandleLocalCommand(FName Name, int32 Arg, bool bPressed)
 	if (bPressed && IsValid(MatchMenu) && !MatchMenu->IsMenuOpen() && Name == TEXT("ShowMenu"))
 	{
 		SetMenuOpen(true);
+	}
+}
+
+void AScctGameMode::HandlePlayError(const FScctPlayError& Error)
+{
+	APlayerController* Player = GetWorld()->GetFirstPlayerController();
+	if (Player == nullptr || !IsValid(MatchMenu))
+	{
+		return;
+	}
+	if (MatchMenu->IsMenuOpen())
+	{
+		SetMenuOpen(false);
+	}
+	MatchMenu->ShowPlayError(Error);
+
+	// The page takes the mouse and the keys as the menu does; the controls hold everything back (no match is left).
+	CloseKeys = TArray<FKey>();
+	if (AScctPlayerController* ScctPlayer = Cast<AScctPlayerController>(Player))
+	{
+		CloseKeys = ScctPlayer->FindKeysBoundTo(TEXT("ShowMenu"));
+		ScctPlayer->SetMenuOpen(true);
+	}
+	CloseKeys.AddUnique(EKeys::Escape);
+	bCloseKeysArmed = false;
+	Player->SetShowMouseCursor(true);
+	FInputModeGameAndUI Mode;
+	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	Mode.SetHideCursorDuringCapture(false);
+	Player->SetInputMode(Mode);
+
+	PlayErrorLeaveIn = -1.0f;
+	if (FApp::IsUnattended())
+	{
+		// Nobody is there to press Escape: an unattended run leaves on its own, after time for its screenshots.
+		PlayErrorLeaveIn = 10.0f;
+		FParse::Value(FCommandLine::Get(), TEXT("ScctPlayErrorLeaveAfter="), PlayErrorLeaveIn);
+	}
+}
+
+void AScctGameMode::TickPlayError(APlayerController* Player, float DeltaSeconds)
+{
+	// Escape (and the keys bound to ShowMenu) leave, as the page says; the press that was down when it came up does not.
+	bool bAnyDown = false;
+	bool bAnyPressed = false;
+	for (const FKey& Key : CloseKeys)
+	{
+		bAnyDown |= Player->IsInputKeyDown(Key);
+		bAnyPressed |= Player->WasInputKeyJustPressed(Key);
+	}
+	if (bCloseKeysArmed && bAnyPressed)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctPlayError: Escape pressed, leaving"));
+		MatchMenu->LeaveFromPlayError();
+	}
+	else if (!bAnyDown && !bAnyPressed)
+	{
+		bCloseKeysArmed = true;
+	}
+
+	if (PlayErrorLeaveIn >= 0.0f)
+	{
+		PlayErrorLeaveIn -= DeltaSeconds;
+		if (PlayErrorLeaveIn < 0.0f)
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctPlayError: unattended run, leaving as the page's LEAVE button does"));
+			MatchMenu->LeaveFromPlayError();
+		}
 	}
 }
 
