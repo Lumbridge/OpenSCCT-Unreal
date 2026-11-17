@@ -138,6 +138,7 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 	if ((!bAnyMode && !IsValid(Volume)) || !EnsureVolume())
 	{
 		Motion.Update(GetWorld(), Data, nullptr, false, DeltaSeconds);
+		Backdrop.Update(GetWorld(), false);
 		return;
 	}
 
@@ -173,6 +174,9 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 		}
 	}
 	Objects.Update(GetWorld(), ObjectMode, Data);
+
+	// Thermal and EMF draw no coronas and no sky, from the moment one is the mode furthest in until it has faded out.
+	Backdrop.Update(GetWorld(), ObjectMode == 36 || ObjectMode == 38);
 }
 
 void UScctVisionSubsystem::Clear()
@@ -192,6 +196,7 @@ void UScctVisionSubsystem::Clear()
 	Motion.Reset();
 	MarkCharacters(false);
 	Objects.Reset();
+	Backdrop.Reset();
 }
 
 int32 UScctVisionSubsystem::PawnStencil(float Intensity, float Opacity)

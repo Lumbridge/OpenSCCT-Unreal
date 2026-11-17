@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Hud/ScctVisionBackdrop.h"
 #include "Hud/ScctVisionData.h"
 #include "Hud/ScctVisionMotion.h"
 #include "Hud/ScctVisionObjects.h"
@@ -63,6 +64,12 @@ public:
 	/** Night or thermal: the modes that show effects flagged bHideInNormalVision (the original's EffectViews rule). */
 	bool ShowsVisionOnlyEffects() const { return ShownMode == 34 || ShownMode == 36; }
 
+	/**
+	 * Thermal or EMF is in the picture: coronas (the level's, the torches' and the glow cards) and the sky are not drawn,
+	 * so the frame keeps the mode's clear colour (FScctVisionBackdrop). The equipment asks for the torch coronas.
+	 */
+	bool ShouldHideCoronasAndSky() const { return Backdrop.IsHidden(); }
+
 	/** The simulation's per-actor vision values of this frame (heat, EMF, motion, shock protection), refreshed by Present. */
 	const FScctVisionData& GetData() const { return Data; }
 	FScctVisionData& GetData() { return Data; }
@@ -120,6 +127,9 @@ private:
 
 	/** The gadgets, devices and level meshes thermal and EMF draw by their own values. */
 	FScctVisionObjects Objects;
+
+	/** The coronas and the sky, hidden in thermal and EMF. */
+	FScctVisionBackdrop Backdrop;
 
 	/** Motion tracking's level ramp and the tracker's clean rectangles. */
 	FScctVisionMotion Motion;

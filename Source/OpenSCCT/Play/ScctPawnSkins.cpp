@@ -53,7 +53,7 @@ namespace
 	constexpr float ShockLightRadius = 10.0f;
 
 	/** As the effect lights are: candelas per step of UE2 LightBrightness, and 25 cm per step of LightRadius plus one. */
-	constexpr float CandelasPerBrightness = 2.0f;
+	constexpr float SkinCandelasPerBrightness = 2.0f;
 	constexpr float LightRadiusUnit = 25.0f;
 
 	/** LT_Blink on and off; the original's period is not decoded, the Godot client blinks it every 0.2 s. */
@@ -440,7 +440,7 @@ void UScctPawnSkinsSubsystem::UpdateLight(AScctPawnProxy& Proxy, FPawnSkin& Skin
 		Light = NewObject<UPointLightComponent>(&Proxy, NAME_None, RF_Transient);
 		Light->SetMobility(EComponentMobility::Movable);
 		Light->SetIntensityUnits(ELightUnits::Candelas);
-		Light->SetIntensity(ShockLightBrightness * CandelasPerBrightness);
+		Light->SetIntensity(ShockLightBrightness * SkinCandelasPerBrightness);
 		Light->SetLightColor(ShockLightColor());
 		Light->SetAttenuationRadius(LightRadiusUnit * (ShockLightRadius + 1.0f));
 		Light->SetCastShadows(false);
