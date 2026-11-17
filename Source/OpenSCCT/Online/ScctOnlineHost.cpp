@@ -481,6 +481,12 @@ void UScctOnlineSubsystem::RunUnattendedHost()
 		{
 			Request.SetupOptions = FString::Printf(TEXT("?MapName=%s%s"), *AutoHostMap, *Request.SetupOptions);
 		}
+		// -ScctHostOptions="?TimeLimit=1?GamesInARow=2": more of the match's rules, by the setup line's names.
+		FString MoreOptions;
+		if (FParse::Value(FCommandLine::Get(), TEXT("ScctHostOptions="), MoreOptions, false) && !MoreOptions.IsEmpty())
+		{
+			Request.SetupOptions += MoreOptions.StartsWith(TEXT("?")) ? MoreOptions : TEXT("?") + MoreOptions;
+		}
 		if (!bAutoHostPublic)
 		{
 			// As Godot's command-line round: loopback only and unlisted, so a test run raises no firewall prompt and

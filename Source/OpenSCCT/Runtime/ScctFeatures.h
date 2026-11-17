@@ -10,6 +10,7 @@
 #include "Runtime/ScctHudApi.h"
 #include "Runtime/ScctLobbyApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Runtime/ScctRoundApi.h"
 #include "Runtime/ScctWorldApi.h"
 
 // The bridge's feature tables by their C++ type: which bridge class hands each one over and which version the
@@ -39,6 +40,7 @@ SCCT_FEATURE_TABLE(FScctHostApi, "HostExports", ScctHostApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
 SCCT_FEATURE_TABLE(FScctLobbyApi, "LobbyExports", ScctLobbyApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
+SCCT_FEATURE_TABLE(FScctRoundApi, "RoundExports", ScctRoundApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);
 
 #undef SCCT_FEATURE_TABLE

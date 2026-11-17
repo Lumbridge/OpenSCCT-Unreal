@@ -6,6 +6,7 @@
 #include "Runtime/ScctHostApi.h"
 #include "Runtime/ScctLobbyApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Runtime/ScctRoundApi.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "ScctOnlineSubsystem.generated.h"
 
@@ -87,6 +88,7 @@ DECLARE_MULTICAST_DELEGATE(FScctOnlineChanged);
  *   -ScctHostMode=<mode>      Story, DiskHunt, Deathmatch, MercDeathmatch... (default Story)
  *   -ScctHostName=<name>      the hosted game's name; -ScctHostPassword=<password> its password
  *   -ScctHostPublic           host on every interface with the Online page's listing, UPnP and LAN choices
+ *   -ScctHostOptions=<line>   more rules of the hosted match by the setup line's names ("?TimeLimit=1?GamesInARow=2")
  *   -ScctLaunchWhen=N         the host launches once N players are in the lobby and the others are ready (default 2);
  *                             -ScctSide picks the host's own side
  *   -ScctOnlineSettingsDump   log every option of the Online settings page with its value at start
@@ -226,6 +228,26 @@ public:
 
 	/** The lobby's setup as an options line (LobbySetup.ToOptions), as of the last revision; empty outside a visit. */
 	const FString& GetSetupOptions() const { return SetupOptions; }
+
+	// ---- around a round (ScctOnlineRound.cpp, Runtime/ScctRoundApi.h) ----------------------------------------
+
+	/** Host or admin: everyone back to the lobby, from the results (the rest of the series is dropped) or a round. */
+	void BackToLobby();
+
+	/** While a network round waits for its players: the waiting list (RoundStartList's lines). False when no round waits. */
+	bool GetRoundWaitList(TArray<FScctRoundWaitLine>& OutLines) const;
+
+	/** What the results screen adds to the lines of GetResults, in the same order; empty without results. */
+	TArray<FScctRoundResultExtra> GetResultExtras() const;
+
+	/** EScctRoundDemoFlags of the personal demo; 0 when not online. */
+	int32 GetDemoFlags() const;
+
+	/** A text of the round table (the demo's state, the last demo's file, the loading picture). */
+	FString GetRoundText(EScctRoundText Kind) const;
+
+	/** The local player's side in the last results: his own results line (a Revenge game swaps sides), else his lobby side (RoundResultSide). */
+	int32 GetResultsLocalTeam() const;
 
 	// ---- moderation and the admin console (ScctOnlineModeration.cpp) ----------------------------------------
 
@@ -395,6 +417,7 @@ private:
 
 	// The server browser (ScctServerBrowser.cpp).
 	const FScctBrowserApi* ConnectBrowser() const;
+	const FScctRoundApi* ConnectRound() const;
 	bool CanActOn(int32 PlayerId, const TCHAR* What) const;
 	void ReadModerationSwitches();
 	void RunUnattendedModeration(float DeltaSeconds);

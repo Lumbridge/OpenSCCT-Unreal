@@ -15,6 +15,7 @@ using OpenScct.UnrealBridge.Online;
 // OnlineProbe <content root> <OpenSCCT checkout> [first map] [second map] [seconds in the second match] [port] [master url] [invite key]
 // OnlineProbe host [content root] [map] [port] [lan port] [upnp]   (hosting from the game: see HostProbe.cs)
 // OnlineProbe setup [content root] [map]                           (Create Session's rules: see SetupProbe.cs)
+// OnlineProbe endround [content root] [map] [seconds]               (the round table's EndLocalRound: see EndRoundProbe.cs)
 //
 // Starts a real dedicated server (svm-server, the OpenSCCT checkout's src/OpenScct.Server.Cli) on localhost with
 // bots filling the sides, and visits it the way Unreal does: through the function table OnlineExports.GetApi fills
@@ -34,11 +35,12 @@ using OpenScct.UnrealBridge.Online;
 // loopback-only socket (the exported Join binds every interface, which can raise a firewall prompt on a test
 // machine).
 return args.Length > 0 && args[0] == "host" ? HostProbe.Run(args[1..]) : args.Length > 0 && args[0] == "setup" ? SetupProbe.Run(args[1..])
-    : args.Length > 0 && args[0] == "lan" ? LanProbe.Run(args[1..]) : Probe.Run(args);
+    : args.Length > 0 && args[0] == "lan" ? LanProbe.Run(args[1..]) : args.Length > 0 && args[0] == "endround" ? EndRoundProbe.Run(args[1..]) : Probe.Run(args);
 
 internal static unsafe class Probe
 {
     private static OnlineApi s_api;
+    private static RoundApi s_round;
     private static BridgeApi s_main;
     private static HudApi s_hud;
     private static EventsApi s_events;
@@ -73,6 +75,10 @@ internal static unsafe class Probe
         int version = getApi(&api);
         s_api = api;
         Console.WriteLine($"table: version {version} (header expects {OnlineBridge.ApiVersion}), {sizeof(OnlineApi)} bytes");
+        RoundApi round = default;
+        int roundVersion = ((delegate* unmanaged<RoundApi*, int>)&RoundExports.GetApi)(&round);
+        s_round = round;
+        Console.WriteLine($"round table: version {roundVersion}, {sizeof(RoundApi)} bytes; EndLocalRound without a local match -> {s_round.EndLocalRound()}");
         Console.WriteLine($"installed maps before the content is configured: '{Text(OnlineText.InstalledMaps).Replace("\n", " ", StringComparison.Ordinal)}'");
         BridgeSession.Configure(content);
         string installed = Text(OnlineText.InstalledMaps);
@@ -160,6 +166,9 @@ internal static unsafe class Probe
             ("HostApi", sizeof(HostApi), 8 + 8 * sizeof(void*)),
             ("LobbyApi", sizeof(LobbyApi), 8 + 4 * sizeof(void*)),
             ("BrowserApi", sizeof(BrowserApi), 8 + 7 * sizeof(void*)),
+            ("RoundApi", sizeof(RoundApi), 8 + 5 * sizeof(void*)),
+            ("RoundWaitLine", sizeof(RoundWaitLine), 104),
+            ("RoundResultExtra", sizeof(RoundResultExtra), 16),
             ("BrowserRowData", sizeof(BrowserRowData), 8 * 4 + (96 + 64 + 32 + 16 + 64 + 48) * 2),
         ];
         bool ok = true;
@@ -549,6 +558,36 @@ internal static unsafe class Probe
                         string.Equals(new string(info.Map), round.Map, StringComparison.OrdinalIgnoreCase);
                 }
 
+                // The round's waiting list, as the match overlay reads it every frame while the round loads.
+                if (state == OnlineState.Loading)
+                {
+                    var wait = new RoundWaitLine[32];
+                    int waitCount;
+                    var waitText = new System.Text.StringBuilder();
+                    fixed (RoundWaitLine* w = wait)
+                    {
+                        waitCount = s_round.GetWaitList(w, wait.Length);
+                        waitText.Append(waitCount);
+                        for (int i = 0; i < waitCount && i < wait.Length; i++)
+                        {
+                            waitText.Append(" | ").Append(new string(w[i].Name)).Append(' ').Append((RoundWaitState)w[i].State).Append(" team ").Append(w[i].Team);
+                        }
+                    }
+
+                    if (waitText.ToString() != round.WaitShown)
+                    {
+                        round.WaitShown = waitText.ToString();
+                        round.WaitLines = Math.Max(round.WaitLines, waitCount);
+                        Console.WriteLine($"t={t:F1} waiting list: {waitText}");
+                    }
+
+                    if (round.Picture is null)
+                    {
+                        round.Picture = RoundTextOf(RoundText.LoadingPicture);
+                        Console.WriteLine($"t={t:F1} loading picture (seed {status.LoadingPictureSeed}): '{round.Picture}', exists {File.Exists(round.Picture)}");
+                    }
+                }
+
                 // Unreal's level streams in for a moment, then it reports.
                 if (!round.Reported && t - round.Since > 1.0)
                 {
@@ -634,7 +673,23 @@ internal static unsafe class Probe
                     Console.WriteLine($"   #{r.Id} '{new string(r.Name)}' team {r.Team} score {r.Score} kills {r.Kills} deaths {r.Deaths} lives {r.Lives}");
                 }
 
-                results = count > 0;
+                var extras = new RoundResultExtra[32];
+                int extraCount;
+                fixed (RoundResultExtra* e = extras)
+                {
+                    extraCount = s_round.GetResultExtras(e, extras.Length);
+                }
+
+                bool sameOrder = extraCount == count;
+                for (int i = 0; i < extraCount && i < extras.Length; i++)
+                {
+                    sameOrder &= extras[i].Id == rows[i].Id;
+                    Console.WriteLine($"   extras #{extras[i].Id}: objectives {extras[i].Objectives}, left early {extras[i].LeftEarly}, rank {extras[i].Rank}");
+                }
+
+                int demo = s_round.GetDemoFlags();
+                Console.WriteLine($"   {extraCount} extra line(s) in the results' order {sameOrder}; demo flags {demo}, status '{RoundTextOf(RoundText.DemoStatus)}', last demo '{RoundTextOf(RoundText.LastDemoPath)}'");
+                results = count > 0 && sameOrder;
             }
 
             Thread.Sleep(4);
@@ -650,6 +705,8 @@ internal static unsafe class Probe
             ok &= others > 0 && seen.ViewValid && seen.PoseBones > 0 && seen.MatchSince >= 0;
             ok &= seen.Remote && seen.SameSession && seen.MainTicks > 0 && seen.TeamsRight() && seen.HudValid && seen.WorldActors > 0 &&
                 seen.Equipment > 0 && seen.RawEvents > 0;
+            Console.WriteLine($"   while it loaded: waiting list of up to {seen.WaitLines} line(s), loading picture '{seen.Picture}'");
+            ok &= seen.WaitLines > 0 && seen.Picture is { Length: > 0 } picture && File.Exists(picture);
         }
 
         ok &= rounds.Count == 2 && !string.Equals(rounds[0].Map, rounds[1].Map, StringComparison.OrdinalIgnoreCase);
@@ -761,6 +818,13 @@ internal static unsafe class Probe
     private static double Now => s_run.Elapsed.TotalSeconds;
 
     /// <summary>A text through the exported GetText, with the buffer grown to the length it reports.</summary>
+    private static string RoundTextOf(RoundText kind)
+    {
+        char* buffer = stackalloc char[1024];
+        int length = s_round.GetText((int)kind, buffer, 1024);
+        return new string(buffer, 0, Math.Min(length, 1023));
+    }
+
     private static string Text(OnlineText kind)
     {
         char* small = stackalloc char[256];
@@ -816,6 +880,11 @@ internal sealed class RoundSeen
     public bool SameSession = true;
     public int Frames, PoseBones, SessionId, TicksAtStart, MainTicks, HudSide, HudMessages, Sounds, RawEvents, WorldActors, WorldLights, Equipment;
     public long Ticks;
+
+    /// <summary>The round table while the round loaded: the waiting list last printed, its most lines, the loading picture.</summary>
+    public string WaitShown = string.Empty;
+    public int WaitLines;
+    public string? Picture;
 
     /// <summary>The other tables read the same session: the HUD, the events, the level state and the equipment.</summary>
     public void Features() => Probe.ReadFeatures(this);

@@ -135,6 +135,7 @@ void AScctGameMode::Tick(float DeltaSeconds)
 			return;
 		}
 		MatchMenu->OnResumed.BindUObject(this, &AScctGameMode::SetMenuOpen, false);
+		MatchMenu->OnWantsOpen.BindUObject(this, &AScctGameMode::SetMenuOpen, true);
 		MatchMenu->AddToViewport(30);
 		GiveInputToGame(Player);
 	}
