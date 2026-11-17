@@ -2,6 +2,9 @@
 
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
+#include "Engine/PostProcessVolume.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "Hud/ScctHudModel.h"
@@ -94,6 +97,11 @@ void UScctScreenEffectsSubsystem::Initialize(FSubsystemCollectionBase& Collectio
 	{
 		ForceDelay = FMath::Max(Seconds, 0.0f);
 	}
+	float CrossEye = 0.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("ScctForceCrossEye="), CrossEye))
+	{
+		ForcedCrossEye = FMath::Clamp(CrossEye, 0.0f, 1.0f);
+	}
 }
 
 void UScctScreenEffectsSubsystem::Deinitialize()
@@ -137,11 +145,123 @@ float UScctScreenEffectsSubsystem::FlashWhiteOut(const FScctHudState& State)
 	return White;
 }
 
+float UScctScreenEffectsSubsystem::CrossEyeFactor(const FScctHudState& State)
+{
+	// The bridge already sets CrossEyedFactor from the slots as ProcessSFX does; the slots are read too so a slot
+	// value is never lost to an update order between the two.
+	float Factor = FMath::Clamp(State.CrossEyedFactor, 0.0f, 1.0f);
+	for (int32 Slot = 0; Slot < ScctHudSfxSlots; ++Slot)
+	{
+		if (State.SfxType[Slot] == EScctHudSfx::CrossEye || State.SfxType[Slot] == EScctHudSfx::Smoke)
+		{
+			Factor = FMath::Max(Factor, FMath::Clamp(State.SfxValue[Slot], 0.0f, 1.0f));
+		}
+	}
+	return Factor;
+}
+
+FVector2f UScctScreenEffectsSubsystem::DoubleVisionSpread(float Factor, double Seconds)
+{
+	const double F = FMath::Clamp(Factor, 0.0f, 1.0f);
+	const double A = (20.0 * FMath::Cos(1.8849557195089517 * Seconds) + 5.0 * FMath::Cos(4.826742963254986 * Seconds) + 50.0) * F * 0.0015625;
+	const double B = (20.0 * FMath::Cos(2.8274335792634275 * Seconds) + 5.0 * FMath::Cos(4.826742963254986 * (Seconds + 0.12999999523162842)) + 50.0) * F * 0.0015625;
+	return FVector2f(static_cast<float>(A), static_cast<float>(B));
+}
+
+bool UScctScreenEffectsSubsystem::EnsureDoubleVision()
+{
+	if (IsValid(DoubleVolume) && IsValid(DoubleMaterial))
+	{
+		return true;
+	}
+	if (bTriedDoubleVision)
+	{
+		return false;
+	}
+	bTriedDoubleVision = true;
+
+	static const TCHAR* MaterialPath = TEXT("/Game/OpenSCCT/UI/Vision/M_ScctDoubleVision.M_ScctDoubleVision");
+	UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, MaterialPath);
+	if (Material == nullptr)
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("ScreenFx: %s is missing; run Tools/Materials/Build-VisionMaterials.ps1. Gas and smoke will not double the view."), MaterialPath);
+		return false;
+	}
+
+	FActorSpawnParameters Parameters;
+	Parameters.ObjectFlags |= RF_Transient;
+	DoubleVolume = GetWorld()->SpawnActor<APostProcessVolume>(Parameters);
+	if (!IsValid(DoubleVolume))
+	{
+		return false;
+	}
+	DoubleVolume->bUnbound = true;
+	DoubleVolume->BlendWeight = 1.0f;
+	// Over the goggles' volume (1000); the material's own blendable priority puts it after their materials.
+	DoubleVolume->Priority = 1001.0f;
+	DoubleMaterial = UMaterialInstanceDynamic::Create(Material, this);
+	DoubleMaterial->SetScalarParameterValue(TEXT("Amount"), 0.0f);
+	DoubleVolume->Settings.WeightedBlendables.Array.Emplace(0.0f, DoubleMaterial);
+	return true;
+}
+
+void UScctScreenEffectsSubsystem::PresentDoubleVision(float Factor)
+{
+	// Factors at or under the threshold draw no doubling (the spreads are next to nothing there anyway).
+	const bool bOn = Factor > AfterImageThreshold;
+	if (bOn != bDoubled)
+	{
+		bDoubled = bOn;
+		if (bOn)
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScreenFx: double vision %.2f"), Factor);
+			NextDoubleLog = 0.0;
+		}
+		else
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScreenFx: double vision over"));
+		}
+	}
+
+	if (!bOn)
+	{
+		if (IsValid(DoubleVolume))
+		{
+			DoubleMaterial->SetScalarParameterValue(TEXT("Amount"), 0.0f);
+			DoubleVolume->Settings.WeightedBlendables.Array[0].Weight = 0.0f;
+		}
+		return;
+	}
+	if (!EnsureDoubleVision())
+	{
+		return;
+	}
+
+	// The viewport's time, taken as wall-clock seconds as the Godot port does.
+	const double Seconds = GetWorld()->GetRealTimeSeconds();
+	const FVector2f Spread = DoubleVisionSpread(Factor, Seconds);
+	DoubleMaterial->SetScalarParameterValue(TEXT("Amount"), 1.0f);
+	DoubleMaterial->SetScalarParameterValue(TEXT("SpreadA"), Spread.X);
+	DoubleMaterial->SetScalarParameterValue(TEXT("SpreadB"), Spread.Y);
+	DoubleVolume->Settings.WeightedBlendables.Array[0].Weight = 1.0f;
+
+	if (Seconds >= NextDoubleLog)
+	{
+		NextDoubleLog = Seconds + 2.0;
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScreenFx: double vision %.2f, spread %.4f %.4f at %.1f s"), Factor, Spread.X, Spread.Y, Seconds);
+	}
+}
+
 void UScctScreenEffectsSubsystem::Present(FScctHudModel& Model, float DeltaSeconds)
 {
 	ApplyForcedFlash(Model, DeltaSeconds);
+	if (ForcedCrossEye >= 0.0f && Model.bHasState)
+	{
+		Model.State.CrossEyedFactor = FMath::Max(Model.State.CrossEyedFactor, ForcedCrossEye);
+	}
 
 	const FScctHudState& State = Model.State;
+	PresentDoubleVision(Model.bHasState ? CrossEyeFactor(State) : 0.0f);
 	if (Model.bHasState)
 	{
 		// bCaptureRemanence: each new request freezes the next frame (the first value seen is only remembered).
@@ -185,6 +305,7 @@ void UScctScreenEffectsSubsystem::Clear()
 	bHeld = false;
 	bWhiteOut = false;
 	LastCaptures = INDEX_NONE;
+	PresentDoubleVision(0.0f);
 }
 
 void UScctScreenEffectsSubsystem::RequestCapture()

@@ -232,6 +232,63 @@ def build(name, code):
     log("built %s" % path)
 
 
+# Cross-eyed double vision (spec/hud/screen-effects.md, "Cross-eyed double vision"), as the original's final draw of
+# the frame does it: the picture twice, half each. One copy shows U 0 to 1 - SpreadA across the screen, the other U
+# SpreadB to 1, V unchanged, so each is stretched from its own side. Source/OpenSCCT/Hud/ScctScreenEffectsSubsystem
+# works the two spreads out from CrossEyedFactor and the time (the original's formula) and sets them each frame;
+# Amount blends the doubled picture in (1 while the factor is on).
+DOUBLE = """
+float2 VUV = GetViewportUV(Parameters);
+float3 C = Scene.rgb;
+float2 U0 = float2(VUV.x * (1.0 - SpreadA), VUV.y);
+float2 U1 = float2(SpreadB + VUV.x * (1.0 - SpreadB), VUV.y);
+float3 Doubled = 0.5 * (SceneTextureLookup(ViewportUVToSceneTextureUV(U0, 14), 14, true).rgb
+    + SceneTextureLookup(ViewportUVToSceneTextureUV(U1, 14), 14, true).rgb);
+return lerp(C, Doubled, saturate(Amount));
+"""
+
+
+def build_double_vision():
+    asset_name = "M_ScctDoubleVision"
+    path = "%s/%s" % (PACKAGE, asset_name)
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        unreal.EditorAssetLibrary.delete_asset(path)
+
+    library = unreal.MaterialEditingLibrary
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(asset_name, PACKAGE, unreal.Material, unreal.MaterialFactoryNew())
+    material.set_editor_property("material_domain", unreal.MaterialDomain.MD_POST_PROCESS)
+    material.set_editor_property("blendable_location", unreal.BlendableLocation.BL_SCENE_COLOR_AFTER_TONEMAPPING)
+    # After the goggles' materials (priority 0): the original doubled the finished frame as its very last draw.
+    material.set_editor_property("blendable_priority", 10)
+
+    inputs = [("Scene", scene_texture(material, unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0, 0), "Color")]
+    for index, (parameter, default) in enumerate([("Amount", 0.0), ("SpreadA", 0.0), ("SpreadB", 0.0)]):
+        node = library.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -700, 200 + index * 150)
+        node.set_editor_property("parameter_name", parameter)
+        node.set_editor_property("default_value", default)
+        inputs.append((parameter, node, ""))
+
+    custom = library.create_material_expression(material, unreal.MaterialExpressionCustom, -250, 200)
+    custom.set_editor_property("description", "ScctDoubleVision")
+    custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    pins = []
+    for pin_name, _, _ in inputs:
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", pin_name)
+        pins.append(pin)
+    custom.set_editor_property("inputs", pins)
+    custom.set_editor_property("code", DOUBLE.strip())
+
+    for pin_name, node, output in inputs:
+        if not library.connect_material_expressions(node, output, custom, pin_name):
+            log("could not connect %s of %s" % (pin_name, asset_name))
+    library.connect_material_property(custom, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    library.recompile_material(material)
+    unreal.EditorAssetLibrary.save_loaded_asset(material, only_if_is_dirty=False)
+    log("built %s" % path)
+
+
 for mode_name, mode_code in MODES:
     build(mode_name, mode_code)
-log("done: %d materials" % len(MODES))
+build_double_vision()
+log("done: %d materials" % (len(MODES) + 1))

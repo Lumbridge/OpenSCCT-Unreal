@@ -115,6 +115,11 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 			// The slot drives the after-image above; its white-out is painted over the whole HUD
 			// (PaintFlashWhiteOut), as the merc page's Flash covers the page.
 			break;
+		case EScctHudSfx::CrossEye:
+		case EScctHudSfx::Smoke:
+			// Gas and smoke paint nothing on the HUD: the original's ProcessSFX only sets CrossEyedFactor from them,
+			// and the picture itself is doubled (UScctScreenEffectsSubsystem's double vision).
+			break;
 		default:
 			break;
 		}
