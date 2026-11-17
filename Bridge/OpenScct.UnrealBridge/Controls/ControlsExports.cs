@@ -254,10 +254,18 @@ public static unsafe class ControlsExports
     /// <summary>Reads both sides' bindings from a JSON file (the defaults when it does not exist). Returns 1, or 0 with <see cref="LastError"/> set.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int LoadBindings(char* path) =>
-        Try(path, static p => ControlsStore.Bindings = ControlBindings.Load(p, ControlsStore.Settings.MouseWheel));
+        Try(path, static p =>
+        {
+            ControlsStore.Bindings = ControlBindings.Load(p, ControlsStore.Settings.MouseWheel);
+            ControlsStore.SavedBindingsJson = ControlsStore.Bindings.ToJson();
+        });
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int SaveBindings(char* path) => Try(path, static p => ControlsStore.Bindings.Save(p));
+    private static int SaveBindings(char* path) => Try(path, static p =>
+    {
+        ControlsStore.Bindings.Save(p);
+        ControlsStore.SavedBindingsJson = ControlsStore.Bindings.ToJson();
+    });
 
     /// <summary>
     /// Copies what a key or pad control is bound to: the command of a key ("W", "Ctrl+F", "Double+H") in the
@@ -278,7 +286,7 @@ public static unsafe class ControlsExports
             }
             else
             {
-                side.Keys.Bindings.TryGetValue(BindingKey.TryParse(name, out BindingKey parsed) ? parsed.Canonical : name, out bound);
+                ControlsStore.Bindings.KeysOf(merc != 0).Bindings.TryGetValue(BindingKey.TryParse(name, out BindingKey parsed) ? parsed.Canonical : name, out bound);
             }
 
             return Copy(bound ?? "", buffer, capacity);
@@ -304,7 +312,7 @@ public static unsafe class ControlsExports
             string text = command == null ? "" : new string(command);
             if (pad == 0)
             {
-                return side.Keys.Bind(name, text) ? 1 : 0;
+                return ControlsStore.Bindings.KeysOf(merc != 0).Bind(name, text) ? 1 : 0;
             }
 
             if (Array.IndexOf(ControlBindings.PadControls, name) < 0)

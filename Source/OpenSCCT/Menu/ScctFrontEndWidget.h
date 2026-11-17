@@ -25,6 +25,12 @@ public:
 	/** The QUIT question, as the button asks it. */
 	void AskQuit();
 
+	/** The front end's Equipment page for a side (0 spy, 1 merc), over the main menu (Menu/ScctOverlayPages.h). */
+	TSharedPtr<class SScctGearPage> ShowGear(int32 Side = -1);
+
+	/** A map's strategic map, over the main menu, as the lobby's STRATEGIC MAP shows the lobby's map. */
+	TSharedPtr<class SScctStrategicMapPage> ShowStrategicMap(const FString& Map = FString());
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void ReleaseSlateResources(bool bReleaseChildren) override;

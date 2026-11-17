@@ -2,6 +2,7 @@
 // buttons. Shown by the front end while the visit is in EScctOnlineState::Lobby (Menu/SScctFrontEnd.cpp).
 
 #include "Menu/ScctMenuPage.h"
+#include "Menu/ScctOverlayPages.h"
 
 #include "Framework/Application/SlateApplication.h"
 #include "Menu/ScctMenuSubsystem.h"
@@ -91,6 +92,9 @@ namespace
 			TSharedPtr<SScctButton> ReadyButton;
 			ChildSlot
 			[
+				SNew(SOverlay)
+				+ SOverlay::Slot()
+				[
 				SNew(SHorizontalBox)
 				// The sides.
 				+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, 22.0f, 0.0f)
@@ -186,6 +190,12 @@ namespace
 								V->Launch();
 							}))
 						]
+						// The kit the player takes into the round for the player's side (the spy's while spectating), the
+						// Equipment page under the lobby's rules and the lobby map's strategic map (Menu/ScctOverlayPages.cpp).
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
+						[
+							ScctOverlayPages::MakeRow(Weak, [this] { OpenGear(); }, [this] { OpenStrategicMap(); })
+						]
 						+ SVerticalBox::Slot().AutoHeight()
 						[
 							SNew(SHorizontalBox)
@@ -237,6 +247,9 @@ namespace
 						]
 					]
 				]
+				]
+				// The Equipment page and the strategic map open over the lobby.
+				+ SOverlay::Slot()[ SAssignNew(PageLayer, SOverlay) ]
 			];
 			DefaultFocus = ReadyButton;
 			Refresh();
@@ -267,6 +280,11 @@ namespace
 		/** Escape or B: the same question as Leave (Stay has the focus), so the footer's Back does what it says. */
 		virtual bool HandleBack() override
 		{
+			// A page over the lobby goes back first.
+			if (ScctOverlayPages::Back(PageLayer))
+			{
+				return true;
+			}
 			if (Host.Back)
 			{
 				Host.Back();
@@ -302,6 +320,12 @@ namespace
 		}
 
 	private:
+		void OpenGear() { ScctOverlayPages::OpenGear(PageLayer, Host); }
+		void OpenStrategicMap() { ScctOverlayPages::OpenStrategicMap(PageLayer); }
+
+		/** The Equipment page and the strategic map, over the lobby. */
+		TSharedPtr<SOverlay> PageLayer;
+
 		// The chat: the other team's chat line in the match HUD is separate (Play/ScctHudWidget).
 		void SendChat(const FText& Text, ETextCommit::Type Commit)
 		{
