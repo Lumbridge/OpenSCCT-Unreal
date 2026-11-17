@@ -17,7 +17,7 @@
 // the hub spawns the player's pawn.
 // Text is UTF-16, zero terminated.
 
-constexpr int32 ScctHubApiVersion = 1;
+constexpr int32 ScctHubApiVersion = 2;
 
 /** Where the hub visit is. */
 enum class EScctHubState : int32
@@ -38,7 +38,44 @@ namespace EScctHubStatusFlags
 	constexpr int32 ReportedWaiting = 8; // the hub knows this player is in the map
 	constexpr int32 Hosting = 16;        // this PC hosts the hub
 	constexpr int32 LocalPawn = 32;      // the local player has a pawn
+	constexpr int32 HostListed = 64;     // the hub this PC hosts is listed in the master's hub list
+	constexpr int32 ListedHub = 128;     // the visit came in through the master's join answer for a listed hub
+	constexpr int32 AskingMaster = 256;  // the master is being asked the way to a listed hub (no connection yet)
 }
+
+/** Where the master's hub list is (GetListState). */
+enum class EScctHubListState : int32
+{
+	Idle = 0,   // not asked yet
+	Busy = 1,   // asked, the answer is not in
+	Ready = 2,  // the list is in (it may be empty)
+	Failed = 3, // no answer or no master: GetText(EScctHubText::ListMessage)
+};
+
+/** FScctHubListEntry::Flags. */
+namespace EScctHubListFlags
+{
+	constexpr int32 Official = 1;        // one of the OpenSCCT servers' own hubs
+	constexpr int32 Dedicated = 2;       // a dedicated hub server, not one a player hosts
+	constexpr int32 RequireAccounts = 4; // signed-in players only
+	constexpr int32 Full = 8;
+	constexpr int32 OtherBuild = 16;     // another build's protocol: the join would be refused
+	constexpr int32 OtherMap = 32;       // its hub map is not the one installed here
+	constexpr int32 Pinged = 64;         // PingMs is valid
+}
+
+/** One hub of the master's list, in the page's order: official hubs first, then the nearest, then the fullest. */
+struct FScctHubListEntry
+{
+	int32 Players;
+	int32 MaxPlayers;
+	int32 PingMs;       // -1 before an answer
+	int32 Flags;        // EScctHubListFlags
+	TCHAR Id[64];
+	TCHAR Name[64];
+	TCHAR Region[16];
+	TCHAR Problem[32];  // why it cannot be joined ("full", "another build", "another hub map"), empty when it can
+};
 
 /** The visit in one read (GetStatus); cheap enough for every frame. */
 struct FScctHubStatus
@@ -64,6 +101,7 @@ enum class EScctHubText : int32
 	Address = 3,    // the "host:port" the visit connects to
 	Status = 4,     // what is happening, as the hub page says it
 	PlayerName = 5, // the name the player joined under
+	ListMessage = 6, // what the master's hub list says ("3 hub(s) listed.", the master's error)
 };
 
 struct FScctHubApi
@@ -96,8 +134,29 @@ struct FScctHubApi
 
 	/** Copies the next waiting log line (the visit's steps, a hosted hub's own lines) into Buffer and drops it. Returns its full length, -1 when none waits. */
 	int32 (__cdecl* TakeLog)(TCHAR* Buffer, int32 Capacity);
+
+	// Version 2: the master's hub list, listed joins and the hosted hub's listing.
+
+	/** The master (its http address and invite key) and the saved sign-in token, used when the online side has not set them yet; a master or token already set is kept. Null or empty values are skipped. */
+	void (__cdecl* ConfigureMaster)(const TCHAR* Url, const TCHAR* InviteKey, const TCHAR* AccountToken);
+
+	/** Asks the master for its hubs (the pings follow by themselves while the list is up). The revision moves when the answer is in. */
+	void (__cdecl* RequestList)();
+
+	/** EScctHubListState. */
+	int32 (__cdecl* GetListState)();
+
+	/** Writes up to Capacity hubs. Returns the number of hubs. */
+	int32 (__cdecl* GetList)(FScctHubListEntry* Entries, int32 Capacity);
+
+	/** Joins the hub at Index of GetList as Name on Team, through the master's join answer. Returns 1 when it started (state Connecting, AskingMaster), 0 with the reason in GetText(Error). */
+	int32 (__cdecl* JoinListed)(int32 Index, const TCHAR* Name, int32 Team);
+
+	/** Whether a hub hosted from now on lists itself in the master's hub list (on by default; a loopback-only hub never does). */
+	void (__cdecl* SetHostListed)(int32 bListed);
 };
 
 static_assert(sizeof(TCHAR) == 2, "The bridge's text is UTF-16");
 static_assert(sizeof(FScctHubStatus) == 40, "FScctHubStatus does not match HubStatus");
-static_assert(sizeof(FScctHubApi) == 8 + 9 * sizeof(void*), "FScctHubApi does not match HubApi");
+static_assert(sizeof(FScctHubListEntry) == 368, "FScctHubListEntry does not match HubListEntry");
+static_assert(sizeof(FScctHubApi) == 8 + 15 * sizeof(void*), "FScctHubApi does not match HubApi");

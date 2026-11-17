@@ -11,9 +11,11 @@ namespace OpenScct.UnrealBridge.Hub;
 /// <summary>
 /// A hub hosted from the game (port of the Godot client's game/Scripts/Hub/HubHost.cs): the dedicated server's
 /// <see cref="HubServer"/> on its own thread, on a UDP port of this PC, so a player without a hub server can open one
-/// and others on the LAN or by address join it. The host's own player joins it like anyone else, on 127.0.0.1.
-/// <para>Not listed on a master server: the master's hub list, its NAT relay and the host's account are left for the
-/// hub page.</para>
+/// and others on the LAN, by address or from the master's hub list (with the master's NAT punch and relay) join it. The
+/// host's own player joins it like anyone else, on 127.0.0.1. Stopping it takes it off the master's list (the hub
+/// server unlists itself when disposed).
+/// <para>Not ported: the host's account (HostAccount: his rank and looks in his own hub) and map downloads for the
+/// pads' laptops.</para>
 /// </summary>
 public sealed class HubHost : IDisposable
 {
@@ -49,9 +51,10 @@ public sealed class HubHost : IDisposable
     /// Opens UDP <paramref name="port"/> (every interface, or the loopback addresses only) and the hub on
     /// <paramref name="maps"/>, and starts the host thread. <paramref name="log"/> receives the hub's log lines, on
     /// the host thread. Throws <see cref="InvalidOperationException"/> with a readable reason (the port is in use,
-    /// the hub map is missing).
+    /// the hub map is missing). With <paramref name="master"/> the hub lists itself in that master's hub list.
     /// </summary>
-    public static HubHost Start(int port, string name, MapCatalog maps, NetClassRegistry classes, bool loopbackOnly, Action<string> log)
+    public static HubHost Start(int port, string name, MapCatalog maps, NetClassRegistry classes, bool loopbackOnly, Action<string> log,
+        OpenScct.Server.Online.MasterLinkSettings? master = null)
     {
         ArgumentNullException.ThrowIfNull(maps);
         ArgumentNullException.ThrowIfNull(log);
@@ -81,6 +84,7 @@ public sealed class HubHost : IDisposable
                     PrepareMatchBots = OpenScct.Bots.OnlineServerBots.Preparation(botNavigation),
                     MatchClock = static () => new StopwatchClock(),
                     MatchLoopbackOnly = loopbackOnly,
+                    Master = master,
                     HostKey = key,
                 });
             }
@@ -93,7 +97,8 @@ public sealed class HubHost : IDisposable
             log(server.PadsSummary);
             var host = new HubHost(server, udp, key);
             host._thread.Start();
-            log($"hosting {name} on UDP port {udp.LocalPort}{(loopbackOnly ? " (this PC only)" : " (LAN and direct address)")}");
+            log($"hosting {name} on UDP port {udp.LocalPort}{(loopbackOnly ? " (this PC only)" : " (LAN and direct address)")}"
+                + (master is null ? ", not listed on a master" : $", listing it in the hub list of {master.Url}"));
             return host;
         }
         catch

@@ -20,15 +20,16 @@ namespace OpenScct.UnrealBridge.Hub;
 /// session slot, so pawns, poses, the view and input read the same as in a match. A refusal or a lost connection
 /// ends the visit as Failed with the reason.
 /// <para>It can also host the hub it joins (<see cref="HostAndJoin"/>): an in-process <see cref="HubServer"/> on its
-/// own thread, as "Host a hub on this PC" does in the Godot client.</para>
-/// <para>Not ported yet: the master's hub list and listed joins, the pads' matches (the hub's match offer is logged
-/// and refused), voice chat, emotes, the activities' props and sounds.</para>
+/// own thread, as "Host a hub on this PC" does in the Godot client, listed in the master's hub list when asked. The
+/// master's hub list, its pings and joins of a listed hub are in HubBridge.Master.cs.</para>
+/// <para>Not ported yet: the pads' matches (the hub's match offer is logged and refused), voice chat, emotes, the
+/// activities' props and sounds.</para>
 /// <para>Single-threaded: everything is called from Unreal's game thread; only the hosted hub's log lines arrive on
 /// its own thread, and they are queued.</para>
 /// </summary>
-public sealed class HubBridge : IDisposable
+public sealed partial class HubBridge : IDisposable
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     /// <summary>When the caller falls further behind than this (a stall, a level load), the backlog is dropped.</summary>
     private const int MaxCatchUpTicks = 5;
@@ -104,7 +105,7 @@ public sealed class HubBridge : IDisposable
         {
             if (Client is null)
             {
-                return _error is null ? HubState.Idle : HubState.Failed;
+                return _pendingJoin is not null ? HubState.Connecting : _error is null ? HubState.Idle : HubState.Failed;
             }
 
             return Round is not null ? HubState.InHub : Client.Welcomed ? HubState.Loading : HubState.Connecting;
@@ -179,6 +180,7 @@ public sealed class HubBridge : IDisposable
     {
         string target = Normalise(address);
         Leave();
+        ForgetListed();
         Connect(target, name, team);
     }
 
@@ -189,11 +191,12 @@ public sealed class HubBridge : IDisposable
     public bool HostAndJoin(int port, string? name, int team, bool loopbackOnly)
     {
         Leave();
+        ForgetListed();
         string player = string.IsNullOrWhiteSpace(name) ? "Player" : name.Trim();
         try
         {
             Host = HubHost.Start(port <= 0 ? HubK.DefaultPort : port, player + "'s hub", new MapCatalog([.. Catalog.Maps.Roots]), Classes,
-                loopbackOnly, line => Log("server: " + line));
+                loopbackOnly, line => Log("server: " + line), HostListing(loopbackOnly));
         }
         catch (InvalidOperationException e)
         {
@@ -232,6 +235,8 @@ public sealed class HubBridge : IDisposable
             Voice = false,
             InstallId = OnlineBridge.Existing?.InstallId ?? string.Empty,
             HostKey = Host?.HostKey,
+            // The master's ticket is for the listed hub it was asked about only (a hosted or typed-in hub gets none).
+            Ticket = _masterId is not null ? _ticket : null,
         }, ownsTransport: true);
         client.Play.Clock = () => _clock.NowMicroseconds / 1_000_000.0;
         Client = client;
@@ -267,6 +272,7 @@ public sealed class HubBridge : IDisposable
         EndVisit();
         _error = null;
         _status = string.Empty;
+        _lastState = HubState.Idle;
         if (had)
         {
             Touch();
@@ -279,12 +285,15 @@ public sealed class HubBridge : IDisposable
         EndVisit();
         _error = error;
         _status = error;
+        _lastState = HubState.Failed;
         Log("failed: " + error);
         Touch();
     }
 
     private void EndVisit()
     {
+        _pendingJoin = null;
+        _attempts.Clear();
         StopRound();
         if (Client is { } client)
         {
@@ -332,6 +341,7 @@ public sealed class HubBridge : IDisposable
     /// </summary>
     public int Update()
     {
+        PumpMaster();
         if (Client is not { } client)
         {
             return 0;
@@ -343,11 +353,16 @@ public sealed class HubBridge : IDisposable
             return 0;
         }
 
+        if (client.Error is { } failed && !client.Welcomed && client.Session.State != EClientState.Rejected && TryNextAttempt(failed))
+        {
+            return 0;
+        }
+
         if (client.Error is { } error)
         {
             Fail(client.Welcomed || client.Session.State == EClientState.Rejected
                 ? error
-                : $"No hub answered at {_target}. Check that a hub is running there (svm-server --hub) and that its UDP port "
+                : $"No hub answered at {_masterName ?? _target}. Check that a hub is running there (svm-server --hub) and that its UDP port "
                   + $"(default {HubK.DefaultPort.ToString(CultureInfo.InvariantCulture)}) is open, or host a hub on this PC.");
             return 0;
         }
@@ -400,7 +415,7 @@ public sealed class HubBridge : IDisposable
             long waited = (_clock.NowMicroseconds - _start) / 1_000_000;
             string status = client.Welcomed
                 ? $"Loading {client.ServerName}..."
-                : string.Create(CultureInfo.InvariantCulture, $"Connecting to {_target}... {waited} s (gives up after {(int)OpenScct.Net.K.InitialConnectTimeout} s)");
+                : string.Create(CultureInfo.InvariantCulture, $"Connecting to {_masterName ?? _target}... {waited} s (gives up after {(int)OpenScct.Net.K.InitialConnectTimeout} s)");
             if (status != _status)
             {
                 _status = status;
@@ -502,6 +517,7 @@ public sealed class HubBridge : IDisposable
     public void Dispose()
     {
         EndVisit();
+        StopPings();
         if (ReferenceEquals(s_instance, this))
         {
             s_instance = null;

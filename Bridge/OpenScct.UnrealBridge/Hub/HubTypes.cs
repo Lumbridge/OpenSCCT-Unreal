@@ -43,6 +43,79 @@ public static class HubStatusFlags
 
     /// <summary>The local player has a pawn.</summary>
     public const int LocalPawn = 32;
+
+    /// <summary>The hub this PC hosts lists itself in the master's hub list (with its NAT punch and relay).</summary>
+    public const int HostListed = 64;
+
+    /// <summary>The visit is a hub of the master's list (it came in through the master's join answer).</summary>
+    public const int ListedHub = 128;
+
+    /// <summary>The master is being asked the way to a listed hub (no connection yet).</summary>
+    public const int AskingMaster = 256;
+}
+
+/// <summary>Where the master's hub list is.</summary>
+public enum HubListState
+{
+    /// <summary>Not asked yet.</summary>
+    Idle = 0,
+
+    /// <summary>Asked; the answer is not in.</summary>
+    Busy = 1,
+
+    /// <summary>The list is in (it may be empty).</summary>
+    Ready = 2,
+
+    /// <summary>The master did not answer, or no master is set (text <see cref="HubText.ListMessage"/>).</summary>
+    Failed = 3,
+}
+
+public static class HubListFlags
+{
+    /// <summary>One of the OpenSCCT servers' own hubs.</summary>
+    public const int Official = 1;
+
+    /// <summary>A dedicated hub server (not one a player hosts from his game).</summary>
+    public const int Dedicated = 2;
+
+    /// <summary>Only players signed in on the master may join.</summary>
+    public const int RequireAccounts = 4;
+
+    public const int Full = 8;
+
+    /// <summary>It runs another build's network protocol: the join would be refused.</summary>
+    public const int OtherBuild = 16;
+
+    /// <summary>Its hub map is not the one installed here.</summary>
+    public const int OtherMap = 32;
+
+    /// <summary>A ping answer came (<see cref="HubListEntry.PingMs"/> is valid).</summary>
+    public const int Pinged = 64;
+}
+
+/// <summary>One hub of the master's hub list (GetHubList), in the page's order: official hubs first, then by ping.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct HubListEntry
+{
+    public const int IdCapacity = 64;
+    public const int NameCapacity = 64;
+    public const int RegionCapacity = 16;
+    public const int ProblemCapacity = 32;
+
+    public int Players, MaxPlayers;
+
+    /// <summary>The lowest of the last answers' round trips in ms, -1 before an answer.</summary>
+    public int PingMs;
+
+    /// <summary><see cref="HubListFlags"/>.</summary>
+    public int Flags;
+
+    public fixed char Id[IdCapacity];
+    public fixed char Name[NameCapacity];
+    public fixed char Region[RegionCapacity];
+
+    /// <summary>Why it cannot be joined ("another build", "another hub map", "full"), empty when it can.</summary>
+    public fixed char Problem[ProblemCapacity];
 }
 
 /// <summary>The visit in one read (GetStatus).</summary>
@@ -81,4 +154,7 @@ public enum HubText
 
     /// <summary>The name the player joined under.</summary>
     PlayerName = 5,
+
+    /// <summary>What the master's hub list says ("3 hub(s) listed.", "Asking the master server for hubs...", its error).</summary>
+    ListMessage = 6,
 }

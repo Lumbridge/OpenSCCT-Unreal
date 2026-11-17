@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using OpenScct.UnrealBridge.Hub;
@@ -24,6 +25,14 @@ public unsafe struct HubApi
     public delegate* unmanaged[Cdecl]<int, char*, int, int> GetText;
     public delegate* unmanaged[Cdecl]<void> ReportLoaded;
     public delegate* unmanaged[Cdecl]<char*, int, int> TakeLog;
+
+    // Version 2: the master's hub list, listed joins and the hosted hub's listing.
+    public delegate* unmanaged[Cdecl]<char*, char*, char*, void> ConfigureMaster;
+    public delegate* unmanaged[Cdecl]<void> RequestList;
+    public delegate* unmanaged[Cdecl]<int> GetListState;
+    public delegate* unmanaged[Cdecl]<HubListEntry*, int, int> GetList;
+    public delegate* unmanaged[Cdecl]<int, char*, int, int> JoinListed;
+    public delegate* unmanaged[Cdecl]<int, void> SetHostListed;
 }
 
 public static unsafe class HubExports
@@ -49,6 +58,12 @@ public static unsafe class HubExports
         api->GetText = &GetText;
         api->ReportLoaded = &ReportLoaded;
         api->TakeLog = &TakeLog;
+        api->ConfigureMaster = &ConfigureMaster;
+        api->RequestList = &RequestList;
+        api->GetListState = &GetListState;
+        api->GetList = &GetList;
+        api->JoinListed = &JoinListed;
+        api->SetHostListed = &SetHostListed;
         return HubBridge.ApiVersion;
     }
 
@@ -186,7 +201,104 @@ public static unsafe class HubExports
         }
     }
 
+    /// <summary>
+    /// The master the hub list comes from and the saved sign-in, used when the online side has not set them yet (a
+    /// master or token already set is kept). Null or empty values are skipped.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void ConfigureMaster(char* url, char* inviteKey, char* token)
+    {
+        string? address = Text(url), key = Text(inviteKey), saved = Text(token);
+        Guard(() => Hub.ConfigureMaster(address, key, saved));
+    }
+
+    /// <summary>Asks the master for its hubs; follow it with GetListState and GetList (the revision moves when it is in).</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void RequestList() => Guard(() => Hub.RequestList());
+
+    /// <summary>Where the hub list is (<see cref="HubListState"/>); its line is GetText(ListMessage).</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetListState()
+    {
+        try
+        {
+            return (int)Hub.ListState;
+        }
+        catch (Exception e)
+        {
+            Failed(e);
+            return (int)HubListState.Failed;
+        }
+    }
+
+    /// <summary>Writes the hub list in the page's order. Returns the number of hubs (only <paramref name="capacity"/> are written).</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetList(HubListEntry* entries, int capacity)
+    {
+        try
+        {
+            return List(Hub, entries == null || capacity <= 0 ? default : new Span<HubListEntry>(entries, capacity));
+        }
+        catch (Exception e)
+        {
+            Failed(e);
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Joins the hub at <paramref name="index"/> of GetList as <paramref name="name"/> on <paramref name="team"/>:
+    /// the master is asked the way in first (state Connecting, flag AskingMaster). Returns 1 when that started, 0 with
+    /// the reason in GetText(Error).
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int JoinListed(int index, char* name, int team)
+    {
+        string? who = Text(name);
+        try
+        {
+            return Hub.JoinListed(index, who, team) ? 1 : 0;
+        }
+        catch (Exception e)
+        {
+            Failed(e);
+            return 0;
+        }
+    }
+
+    /// <summary>Whether a hub hosted from now on lists itself in the master's hub list (default on).</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void SetHostListed(int listed) => Guard(() => Hub.HostListed = listed != 0);
+
     // ---- the managed side of the reads (the probe calls these too) ----------------------------------------------
+
+    /// <summary>The hub list as <c>GetList</c> writes it. Returns the number of hubs.</summary>
+    public static int List(HubBridge hub, Span<HubListEntry> target)
+    {
+        IReadOnlyList<ListedHub> hubs = hub.Hubs;
+        for (int i = 0; i < hubs.Count && i < target.Length; i++)
+        {
+            ListedHub h = hubs[i];
+            OpenScct.Net.Discovery.ServerEntry e = h.Entry;
+            int flags = (e.Trusted ? HubListFlags.Official : 0) | (e.Dedicated ? HubListFlags.Dedicated : 0)
+                | (e.RequireAccounts ? HubListFlags.RequireAccounts : 0) | (h.PingMs >= 0 ? HubListFlags.Pinged : 0)
+                | h.Problem switch { "full" => HubListFlags.Full, "another build" => HubListFlags.OtherBuild, "another hub map" => HubListFlags.OtherMap, _ => 0 };
+            ref HubListEntry entry = ref target[i];
+            entry.Players = e.Players;
+            entry.MaxPlayers = e.MaxPlayers;
+            entry.PingMs = h.PingMs;
+            entry.Flags = flags;
+            fixed (HubListEntry* p = &entry)
+            {
+                OnlineTextCopy.Fixed(p->Id, HubListEntry.IdCapacity, e.Id);
+                OnlineTextCopy.Fixed(p->Name, HubListEntry.NameCapacity, e.Name);
+                OnlineTextCopy.Fixed(p->Region, HubListEntry.RegionCapacity, e.Region);
+                OnlineTextCopy.Fixed(p->Problem, HubListEntry.ProblemCapacity, h.Problem);
+            }
+        }
+
+        return hubs.Count;
+    }
 
     /// <summary>The visit's status as <c>GetStatus</c> writes it.</summary>
     public static HubStatus Status(HubBridge hub)
@@ -203,6 +315,9 @@ public static unsafe class HubExports
         flags |= hub.Round?.Client.ReportedWaiting == true ? HubStatusFlags.ReportedWaiting : 0;
         flags |= hub.Host is not null ? HubStatusFlags.Hosting : 0;
         flags |= hub.Round?.LocalPawn is not null ? HubStatusFlags.LocalPawn : 0;
+        flags |= hub.Host?.Server.Master is not null ? HubStatusFlags.HostListed : 0;
+        flags |= hub.IsListedVisit ? HubStatusFlags.ListedHub : 0;
+        flags |= hub.AskingMaster ? HubStatusFlags.AskingMaster : 0;
         return new HubStatus
         {
             State = (int)hub.State,
@@ -227,6 +342,7 @@ public static unsafe class HubExports
         HubText.Address => hub.Address,
         HubText.Status => hub.Status,
         HubText.PlayerName => hub.PlayerName,
+        HubText.ListMessage => hub.ListMessage,
         _ => null,
     } ?? string.Empty;
 

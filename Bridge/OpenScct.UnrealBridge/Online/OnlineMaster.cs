@@ -41,6 +41,12 @@ public sealed class OnlineMaster : IDisposable
     /// <summary>The master's address (never the original game's or Reloaded's), or null before <see cref="Configure"/>.</summary>
     public string? Url { get; private set; }
 
+    /// <summary>The master's client, carrying the signed-in token, for the hub's list and joins (Hub/HubBridge.Master.cs); null before <see cref="Configure"/>.</summary>
+    internal MasterClient? Client => _client;
+
+    /// <summary>The invite key given with the master's address (a hub this PC hosts lists itself with it), or null.</summary>
+    internal string? InviteKey { get; private set; }
+
     public OnlineMasterState State { get; private set; }
 
     /// <summary>Why the last request failed, as a player reads it, or null.</summary>
@@ -96,6 +102,7 @@ public sealed class OnlineMaster : IDisposable
         {
             _client = new MasterClient(url, string.IsNullOrEmpty(inviteKey) ? null : inviteKey) { SessionToken = token };
             Url = url;
+            InviteKey = string.IsNullOrEmpty(inviteKey) ? null : inviteKey;
             State = OnlineMasterState.Idle;
             Error = null;
             if (token is not null)

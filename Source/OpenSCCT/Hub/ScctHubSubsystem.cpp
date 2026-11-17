@@ -2,6 +2,8 @@
 
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
+#include "Engine/GameViewportClient.h"
+#include "Hub/SScctHubLoadingScreen.h"
 #include "Engine/World.h"
 #include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
@@ -12,9 +14,11 @@
 #include "OpenSCCT.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
+#include "Settings/ScctSettings.h"
 
 const TCHAR* const UScctHubSubsystem::HubLevel = TEXT("/Game/Imported/Maps/Hub/Hub");
 const TCHAR* const UScctHubSubsystem::HubOption = TEXT("ScctHub");
+const TCHAR* const UScctHubSubsystem::HubListedSetting = TEXT("Online.HubListed");
 
 namespace
 {
@@ -29,6 +33,21 @@ namespace
 
 	/** A level must have run this long before the hub is told the player is in: its first frames are drawn. */
 	constexpr float LoadedAfterSeconds = 0.5f;
+
+	/** The project's settings, where the master the game uses is set (the online pages read the same keys). */
+	const TCHAR* const HubProjectSection = TEXT("OpenSCCT.Online");
+
+	/** Frames the loading cover is drawn before the hub level is opened (the load blocks the frames after it). */
+	constexpr int32 CoverFramesBeforeLoad = 3;
+
+	/** Frames the player stands in the drawn hub before the loading cover fades (HubService.CoverFramesInHub). */
+	constexpr int32 CoverFramesStanding = 10;
+
+	/** The loading cover never stays longer than this, whatever the hub sends (HubService.CoverMaxSeconds). */
+	constexpr double CoverMaxSeconds = 30.0;
+
+	/** Above the front end (20) and the HUD: the cover hides everything while the hub loads. */
+	constexpr int32 CoverZOrder = 1000;
 
 	const TCHAR* StateName(EScctHubState State)
 	{
@@ -78,6 +97,19 @@ void UScctHubSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	{
 		AutoTeam = Side.Equals(TEXT("merc"), ESearchCase::IgnoreCase) ? 1 : 0;
 	}
+	FParse::Value(CommandLine, TEXT("ScctHubCoverHold="), CoverHoldSeconds);
+
+	FScctSettingDesc Listed;
+	Listed.Key = HubListedSetting;
+	Listed.Page = TEXT("Online");
+	Listed.Group = NSLOCTEXT("ScctHub", "HubGroup", "Hub");
+	Listed.Label = NSLOCTEXT("ScctHub", "HubListed", "Show a hub I host in the hub list");
+	Listed.Tooltip = NSLOCTEXT("ScctHub", "HubListedTip",
+		"A hub you host from the Hub page is listed on the master server, where others find and join it (through its relay when your router does not let them in). Off: others join it by your address.");
+	Listed.Type = EScctSettingType::Bool;
+	Listed.Default = TEXT("true");
+	FScctSettings::Register(Listed);
+
 	// The status lines are for unattended runs; a player's log is not filled with them.
 	LogEvery = AutoJoin.IsEmpty() && !bAutoHost ? 0.0f : 2.0f;
 	FParse::Value(CommandLine, TEXT("ScctHubLog="), LogEvery);
@@ -89,6 +121,7 @@ void UScctHubSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 void UScctHubSubsystem::Deinitialize()
 {
 	FTSTicker::RemoveTicker(TickerHandle);
+	CloseCover();
 	if (Api != nullptr && GetState() != EScctHubState::Idle)
 	{
 		// The game is closing: the hub hears that the player left instead of timing them out.
@@ -121,7 +154,19 @@ const FScctHubApi* UScctHubSubsystem::Connect()
 	Api->AddMapRoot(*HubMaps);
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: ready, hub maps looked for first in %s%s"), *HubMaps,
 		FPaths::DirectoryExists(HubMaps / TEXT("Hub")) ? TEXT("") : TEXT(" (missing: run Tools/Import/Import-HubMap.ps1)"));
+	ConfigureMaster();
+	DrainLog();
 	return Api;
+}
+
+void UScctHubSubsystem::ConfigureMaster()
+{
+	// The same master and sign-in the online pages use; the bridge keeps what the online side set already.
+	FString MasterUrl, InviteKey, Token;
+	GConfig->GetString(HubProjectSection, TEXT("MasterUrl"), MasterUrl, GGameIni);
+	GConfig->GetString(HubProjectSection, TEXT("InviteKey"), InviteKey, GGameIni);
+	GConfig->GetString(OnlineUserSection, TEXT("AccountToken"), Token, GGameUserSettingsIni);
+	Api->ConfigureMaster(*MasterUrl, *InviteKey, *Token);
 }
 
 FString UScctHubSubsystem::FindPlayerName() const
@@ -173,6 +218,8 @@ bool UScctHubSubsystem::Join(const FString& InAddress, int32 Team)
 	Notice.Reset();
 	bWasPresented = false;
 	ReportedSessionId = 0;
+	CloseCover();
+	bCoverShown = false;
 	const FString Name = FindPlayerName();
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: joining %s as '%s' (%s)"), *InAddress, *Name, Team == 1 ? TEXT("merc") : TEXT("spy"));
 	const bool bStarted = Api->Connect(*InAddress, *Name, Team) != 0;
@@ -201,9 +248,13 @@ bool UScctHubSubsystem::HostAndJoin(int32 Port, int32 Team, bool bLoopbackOnly)
 	Notice.Reset();
 	bWasPresented = false;
 	ReportedSessionId = 0;
+	CloseCover();
+	bCoverShown = false;
 	const FString Name = FindPlayerName();
-	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: hosting a hub on this PC (UDP port %d, %s) and joining it as '%s'"), Port > 0 ? Port : HubDefaultPort,
-		bLoopbackOnly ? TEXT("this PC only") : TEXT("LAN"), *Name);
+	const bool bListed = !bLoopbackOnly && FScctSettings::GetBool(HubListedSetting);
+	Api->SetHostListed(bListed ? 1 : 0);
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: hosting a hub on this PC (UDP port %d, %s%s) and joining it as '%s'"), Port > 0 ? Port : HubDefaultPort,
+		bLoopbackOnly ? TEXT("this PC only") : TEXT("LAN"), bListed ? TEXT(", listed on the master") : TEXT(", not listed"), *Name);
 	const bool bStarted = Api->HostAndJoin(Port, *Name, Team, bLoopbackOnly ? 1 : 0) != 0;
 	DrainLog();
 	if (!bStarted)
@@ -215,8 +266,72 @@ bool UScctHubSubsystem::HostAndJoin(int32 Port, int32 Team, bool bLoopbackOnly)
 	return bStarted;
 }
 
+bool UScctHubSubsystem::JoinListed(int32 Index, int32 Team)
+{
+	if (Connect() == nullptr)
+	{
+		return false;
+	}
+
+	if (UScctOnlineSubsystem* Online = GetGameInstance()->GetSubsystem<UScctOnlineSubsystem>(); Online != nullptr && Online->GetState() != EScctOnlineState::Idle)
+	{
+		Online->Leave();
+	}
+
+	Notice.Reset();
+	bWasPresented = false;
+	ReportedSessionId = 0;
+	CloseCover();
+	bCoverShown = false;
+	const FString Name = FindPlayerName();
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: joining listed hub %d ('%s') as '%s' (%s)"), Index, HubList.IsValidIndex(Index) ? HubList[Index].Name : TEXT("?"), *Name,
+		Team == 1 ? TEXT("merc") : TEXT("spy"));
+	const bool bStarted = Api->JoinListed(Index, *Name, Team) != 0;
+	DrainLog();
+	if (!bStarted)
+	{
+		Notice = ReadText(EScctHubText::Error);
+		UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHub: the listed join did not start: %s"), *Notice);
+	}
+	Api->GetStatus(&Status);
+	Touch();
+	return bStarted;
+}
+
+void UScctHubSubsystem::RequestHubList()
+{
+	if (Connect() == nullptr)
+	{
+		ListState = EScctHubListState::Failed;
+		ListMessage = Notice;
+		Touch();
+		return;
+	}
+	Api->RequestList();
+	DrainLog();
+	RefreshList();
+	Touch();
+}
+
+void UScctHubSubsystem::RefreshList()
+{
+	if (Api == nullptr)
+	{
+		return;
+	}
+	ListState = static_cast<EScctHubListState>(Api->GetListState());
+	ListMessage = ReadText(EScctHubText::ListMessage);
+	const int32 Count = Api->GetList(nullptr, 0);
+	HubList.SetNumZeroed(Count);
+	if (Count > 0)
+	{
+		Api->GetList(HubList.GetData(), Count);
+	}
+}
+
 void UScctHubSubsystem::Leave()
 {
+	CloseCover();
 	if (Api != nullptr && GetState() != EScctHubState::Idle)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: leaving (state %s)"), StateName(GetState()));
@@ -312,6 +427,7 @@ void UScctHubSubsystem::TickVisit()
 		HandleStateChange(OldState, GetState());
 	}
 
+	UpdateCover();
 	FollowLevel();
 	ReportLoadedWhenReady();
 	RunUnattended();
@@ -324,6 +440,7 @@ void UScctHubSubsystem::RefreshTexts()
 	StatusText = ReadText(EScctHubText::Status);
 	Address = ReadText(EScctHubText::Address);
 	MapToLoad = ReadText(EScctHubText::MapToLoad);
+	RefreshList();
 }
 
 void UScctHubSubsystem::DrainLog()
@@ -344,6 +461,7 @@ void UScctHubSubsystem::HandleStateChange(EScctHubState Old, EScctHubState New)
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: state %s players %d (was %s, map to load '%s', flags 0x%x)"), StateName(New), Status.PlayerCount, StateName(Old), *MapToLoad, Status.Flags);
 	if (New == EScctHubState::Failed)
 	{
+		CloseCover();
 		Notice = ReadText(EScctHubText::Error);
 		if (Notice.IsEmpty())
 		{
@@ -406,6 +524,11 @@ void UScctHubSubsystem::FollowLevel()
 			DrainLog();
 			Notice = TEXT("The hub's level has not been imported into this game yet.");
 			Touch();
+			return;
+		}
+		if (Cover.IsValid() && CoverFramesUp < CoverFramesBeforeLoad)
+		{
+			// The cover is drawn first: the level load blocks the frames after it.
 			return;
 		}
 		OpenLevel(FString::Printf(TEXT("%s?%s=1"), HubLevel, HubOption));
@@ -503,4 +626,100 @@ void UScctHubSubsystem::LogStatus(float DeltaSeconds)
 		}
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("%s"), *Line);
+}
+
+// ---- the loading cover ------------------------------------------------------------------------------------------
+
+void UScctHubSubsystem::UpdateCover()
+{
+	const EScctHubState State = GetState();
+	const bool bLocalPawn = HasFlag(EScctHubStatusFlags::LocalPawn);
+	if (!Cover.IsValid())
+	{
+		// Up once the hub has welcomed the player and named its map (before the level is opened), until he stands in
+		// the drawn hub; once a visit. The visit can go from Connecting straight to InHub within one update.
+		if (!bCoverShown && IsUnderWay(State) && !MapToLoad.IsEmpty() && !bLocalPawn)
+		{
+			OpenCover();
+		}
+		return;
+	}
+
+	if (!IsUnderWay(State))
+	{
+		CloseCover();
+		return;
+	}
+
+	++CoverFramesUp;
+	const UWorld* World = GetGameInstance()->GetWorld();
+	if (bLocalPawn && PendingLevel.IsEmpty() && IsPresenting(World))
+	{
+		++CoverFramesInHub;
+	}
+
+	const double Up = FPlatformTime::Seconds() - CoverSince;
+	if (!Cover->IsFading())
+	{
+		const bool bTimedOut = Up > CoverMaxSeconds + CoverHoldSeconds;
+		if (bTimedOut || (CoverFramesInHub >= CoverFramesStanding && Up >= CoverHoldSeconds))
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: loading cover fades after %.1f s (%d frames standing in the hub%s)"), Up, CoverFramesInHub,
+				bTimedOut ? TEXT(", timed out") : TEXT(""));
+			Cover->FadeOut();
+			CoverSince = FPlatformTime::Seconds();
+		}
+	}
+	else if (Cover->IsGone() || Up > 2.0)
+	{
+		// Faded (or the screen is not drawn, and nothing ticks the fade): off the screen.
+		CloseCover();
+	}
+}
+
+void UScctHubSubsystem::OpenCover()
+{
+	UGameViewportClient* Viewport = GEngine != nullptr ? GEngine->GameViewport.Get() : nullptr;
+	if (Viewport == nullptr)
+	{
+		return;
+	}
+
+	const TWeakObjectPtr<UScctHubSubsystem> Weak(this);
+	Cover = SNew(SScctHubLoadingScreen)
+		.bMerc(Status.Team == 1)
+		.HubName_Lambda([Weak] { return Weak.IsValid() ? FText::FromString(Weak->HubName) : FText::GetEmpty(); })
+		.Status_Lambda([Weak]
+		{
+			const UScctHubSubsystem* Hub = Weak.Get();
+			if (Hub == nullptr)
+			{
+				return FText::GetEmpty();
+			}
+			if (!Hub->HasFlag(EScctHubStatusFlags::RoundActive))
+			{
+				return FText::FromString(TEXT("Loading the hub map..."));
+			}
+			return FText::FromString(Hub->HasFlag(EScctHubStatusFlags::LocalPawn) ? TEXT("Entering the hub...") : TEXT("Waiting for the hub to place you..."));
+		});
+	Viewport->AddViewportWidgetContent(Cover.ToSharedRef(), CoverZOrder);
+	bCoverShown = true;
+	CoverFramesUp = 0;
+	CoverFramesInHub = 0;
+	CoverSince = FPlatformTime::Seconds();
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: loading cover up for '%s' (state %s)"), *HubName, StateName(GetState()));
+}
+
+void UScctHubSubsystem::CloseCover()
+{
+	if (!Cover.IsValid())
+	{
+		return;
+	}
+	if (UGameViewportClient* Viewport = GEngine != nullptr ? GEngine->GameViewport.Get() : nullptr)
+	{
+		Viewport->RemoveViewportWidgetContent(Cover.ToSharedRef());
+	}
+	Cover.Reset();
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: loading cover down"));
 }

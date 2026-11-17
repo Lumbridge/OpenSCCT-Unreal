@@ -6,6 +6,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "ScctHubSubsystem.generated.h"
 
+class SScctHubLoadingScreen;
 class UScctSessionSubsystem;
 
 /** Raised when what the hub page shows changed: the state, a text, the roster count. */
@@ -27,11 +28,22 @@ DECLARE_MULTICAST_DELEGATE(FScctHubChanged);
  *   - the visit failed: the front end level is opened and GetNotice says why.
  *   - the hub level was left another way (the in-match menu's leave button opens the front end): the visit is left.
  *
+ * The master's hub list (official hubs first with their region and ping, then the hubs players host) comes from the
+ * master the game is set up with ([OpenSCCT.Online] MasterUrl and InviteKey in Config/DefaultGame.ini), through the
+ * same master client and sign-in as the server list, so a signed-in player joins a listed hub under his account. A
+ * hub this PC hosts lists itself there unless the player turned off the Online page's "Show a hub I host in the hub
+ * list" (the setting Online.HubListed).
+ *
+ * The loading cover (SScctHubLoadingScreen) goes up as soon as the hub has welcomed the player, a few frames before
+ * the hub level is opened, and fades once the player has stood in the drawn hub for a few frames; it never stays
+ * longer than 30 seconds, and goes at once when the visit fails or is left.
+ *
  * Unattended switches (off by default; for runs with nobody at the keyboard, used with -RenderOffscreen):
  *   -ScctHub=<host[:port]>        join that hub as soon as the game is up (port 28886 when none is given)
- *   -ScctHostHub[=lan|loopback]   host a hub on this PC (its own server thread, UDP 28886, not listed on any
- *                                 master) and join it; lan (the default) opens the port on every interface so others
- *                                 on the network can join, loopback keeps it to this PC
+ *   -ScctHostHub[=lan|loopback]   host a hub on this PC (its own server thread, UDP 28886) and join it; lan (the
+ *                                 default) opens the port on every interface so others on the network can join and
+ *                                 lists it on the master as the setting says, loopback keeps it to this PC
+ *   -ScctHubCoverHold=S           the loading cover stays at least S seconds (to catch it in a screenshot)
  *   -ScctHubPort=<port>           the port -ScctHostHub opens
  *   -ScctSide=spy|merc            the side to enter the hub on (default spy)
  *   -ScctName=<name>              the player's name for this run
@@ -61,8 +73,26 @@ public:
 	/** Hosts a hub on this PC on Port (0: the hub's default) and joins it. False when it could not (GetNotice says why). */
 	bool HostAndJoin(int32 Port = 0, int32 Team = 0, bool bLoopbackOnly = false);
 
+	/** Joins the hub at Index of GetHubList through the master's join answer. False when it could not start (GetNotice says why). */
+	bool JoinListed(int32 Index, int32 Team = 0);
+
 	/** Leaves the hub (and closes the hub this PC hosts), or dismisses a failure. The state is Idle afterwards. */
 	void Leave();
+
+	// ---- the master's hub list ---------------------------------------------------------------------------------
+
+	/** Asks the master for its hubs; the list and its line change (OnChanged) when the answer is in. */
+	void RequestHubList();
+
+	EScctHubListState GetListState() const { return ListState; }
+	const TArray<FScctHubListEntry>& GetHubList() const { return HubList; }
+	const FString& GetListMessage() const { return ListMessage; }
+
+	/** The setting: a hub this PC hosts lists itself in the master's hub list. */
+	static const TCHAR* const HubListedSetting;
+
+	/** The name the player visits under: -ScctName, or the online pages' saved name. */
+	FString GetPlayerName() const { return FindPlayerName(); }
 
 	// ---- what the hub page shows ------------------------------------------------------------------------------
 
@@ -117,6 +147,12 @@ private:
 	void RunUnattended();
 	void LogStatus(float DeltaSeconds);
 	void Touch();
+	void RefreshList();
+	void ConfigureMaster();
+
+	void UpdateCover();
+	void OpenCover();
+	void CloseCover();
 
 	FString ReadText(EScctHubText Kind) const;
 	FString FindPlayerName() const;
@@ -146,6 +182,20 @@ private:
 
 	/** ReportLoaded was sent for this bridge session id. */
 	int32 ReportedSessionId = 0;
+
+	// The master's hub list as last read.
+	EScctHubListState ListState = EScctHubListState::Idle;
+	TArray<FScctHubListEntry> HubList;
+	FString ListMessage;
+
+	// The loading cover: on the screen, its frames before the level is opened and in the drawn hub, when it went up,
+	// and whether this visit had it already (it is not put up again once it faded).
+	TSharedPtr<SScctHubLoadingScreen> Cover;
+	int32 CoverFramesUp = 0;
+	int32 CoverFramesInHub = 0;
+	double CoverSince = 0.0;
+	bool bCoverShown = false;
+	float CoverHoldSeconds = 0.0f;
 
 	// Unattended switches.
 	FString AutoJoin;

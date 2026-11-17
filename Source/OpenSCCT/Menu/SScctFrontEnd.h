@@ -20,6 +20,7 @@ class UScctOnlineSubsystem;
  *   Offline   map, mode, side, bots and their skill, start
  *   Join      name, address, password, side
  *   Servers   the master's list, refresh, sign in
+ *   Hub       the master's hubs, join by address, host a hub on this PC (SScctHubPage)
  *   Visit     shown instead of the above while UScctOnlineSubsystem::IsVisiting
  */
 class SScctFrontEnd : public SCompoundWidget
@@ -44,6 +45,7 @@ private:
 		Join,
 		Servers,
 		Visit,
+		Hub,
 	};
 
 	/** What the visit page is showing; a change rebuilds it. */
@@ -68,6 +70,7 @@ private:
 	TSharedRef<SWidget> BuildServers();
 	TSharedRef<SWidget> BuildVisit();
 	TSharedRef<SWidget> BuildLobby();
+	TSharedRef<SWidget> BuildHub();
 
 	void RefillLobby();
 	void RefillServers();
