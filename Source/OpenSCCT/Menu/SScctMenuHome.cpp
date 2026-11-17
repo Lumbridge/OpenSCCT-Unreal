@@ -3,6 +3,8 @@
 #include "Menu/ScctMenuPage.h"
 
 #include "Menu/ScctMenuSubsystem.h"
+#include "Menu/ScctSplashTrivia.h"
+#include "OpenSCCT.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
@@ -67,6 +69,9 @@ namespace
 			Entry(TEXT("Hub"), TEXT("Meet other players between matches"),
 				TEXT("The hubs the master lists, joining one by its address, or hosting a hub on this PC."),
 				[this] { Host.Open(TEXT("hub")); });
+			Entry(TEXT("Account"), TEXT("Your name, rank and career"),
+				TEXT("Sign in or out, claim or change the name the servers show, see your rank, experience and career, prestige, and choose an emblem and a title."),
+				[this] { Host.Open(TEXT("account")); });
 			Entry(ScctUi::GameText(TEXT("All_Settings"), TEXT("TitlePage"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
 				TEXT("Everything you can set: the picture, the sound, the mouse and the controller, every key of both sides, and your name."),
 				[this] { Host.Open(TEXT("settings")); });
@@ -78,6 +83,8 @@ namespace
 				[this] { Host.Back(); });
 
 			const FString Tagline = ScctUi::GameText(TEXT("Menu_Multi"), TEXT("TitlePage"), TEXT("Spies versus Mercenaries"));
+			const FString Trivia = ScctSplashTrivia::Pick();
+			UE_LOG(LogOpenSCCT, Log, TEXT("Main menu trivia: %s"), *Trivia);
 
 			ChildSlot
 			[
@@ -103,6 +110,14 @@ namespace
 						+ SVerticalBox::Slot().AutoHeight().Padding(6.0f, 2.0f, 0.0f, 0.0f)
 						[
 							ScctUi::Label(Tagline, ScctHudStyle::TextDim(), 13.0f)
+						]
+						// A Splinter Cell fact, a different one each time the page opens (the Godot menu's SplashTrivia).
+						+ SVerticalBox::Slot().AutoHeight().Padding(6.0f, 8.0f, 0.0f, 0.0f)
+						[
+							SNew(STextBlock)
+							.Text(FText::FromString(Trivia))
+							.Font(ScctHudStyle::Font(ScctHudStyle::EWeight::Regular, 12.0f))
+							.ColorAndOpacity(ScctHudStyle::Fade(ScctHudStyle::TextDim(), 0.85f))
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 22.0f, 0.0f, 34.0f)
 						[

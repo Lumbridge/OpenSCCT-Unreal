@@ -65,8 +65,9 @@ DECLARE_MULTICAST_DELEGATE(FScctOnlineChanged);
  *     opened with ?ScctOnline=1, which tells AScctGameMode to start no local match and to present the bridge's
  *     session. When that level has begun play and the round is in the session slot, ReportLoaded is called and
  *     the server's start gate counts this player.
- *   - otherwise (lobby, back from a round, failed, left) a level opened for a round is left for the front end,
- *     which shows the lobby or the reason of the failure.
+ *   - otherwise (lobby, back from a round, left) a level opened for a round is left for the front end, which shows
+ *     the lobby. A visit that failed in a round's level stays there with the play error page (Menu/SScctPlayErrorPage.h)
+ *     until the player leaves it; a failure anywhere else is the front end's notice.
  *
  * Unattended switches (off by default; for runs with nobody at the keyboard, used with -RenderOffscreen):
  *   -ScctJoin=<host[:port]>   join that server as soon as the game is up
@@ -129,6 +130,12 @@ public:
 	/** Leaves the server (or gives up connecting, or dismisses a failure). The state is Idle afterwards. A host stops hosting. */
 	void Leave();
 
+	/**
+	 * Brings the online bridge up (the identity, the master) without joining, so a visit another part of the game
+	 * starts in the bridge (a hub's pad match) is followed: its levels opened, its round presented. False when the
+	 * bridge cannot be loaded (GetNotice says why).
+	 */
+	bool EnsureReady() { return Connect() != nullptr; }
 	// ---- hosting (ScctOnlineHost.cpp) ------------------------------------------------------------------------
 
 	/**

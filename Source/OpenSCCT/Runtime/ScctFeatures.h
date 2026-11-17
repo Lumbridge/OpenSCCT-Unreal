@@ -2,17 +2,21 @@
 
 #include "CoreMinimal.h"
 #include "OpenSCCT.h"
+#include "Runtime/ScctAccountApi.h"
 #include "Runtime/ScctAudioCheckApi.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctEquipmentApi.h"
 #include "Runtime/ScctEventsApi.h"
+#include "Runtime/ScctHubActivityApi.h"
 #include "Runtime/ScctHostApi.h"
 #include "Runtime/ScctHubApi.h"
+#include "Runtime/ScctHubPadsApi.h"
 #include "Runtime/ScctHubSocialApi.h"
 #include "Runtime/ScctHudApi.h"
 #include "Runtime/ScctMenuApi.h"
 #include "Runtime/ScctMarkSurfaceApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Runtime/ScctSocialApi.h"
 #include "Runtime/ScctPlayApi.h"
 #include "Runtime/ScctProjectionsApi.h"
 #include "Runtime/ScctVisionApi.h"
@@ -41,6 +45,7 @@ struct TScctFeatureInfo;
 		static constexpr int32 Version = VersionConstant; \
 	}
 
+SCCT_FEATURE_TABLE(FScctAccountApi, "AccountExports", ScctAccountApiVersion);
 SCCT_FEATURE_TABLE(FScctAudioCheckApi, "AudioCheckExports", ScctAudioCheckApiVersion);
 SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
@@ -48,10 +53,13 @@ SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
 SCCT_FEATURE_TABLE(FScctHostApi, "HostExports", ScctHostApiVersion);
 SCCT_FEATURE_TABLE(FScctHubApi, "HubExports", ScctHubApiVersion);
 SCCT_FEATURE_TABLE(FScctHubSocialApi, "HubSocialExports", ScctHubSocialApiVersion);
+SCCT_FEATURE_TABLE(FScctHubPadsApi, "HubPadsExports", ScctHubPadsApiVersion);
+SCCT_FEATURE_TABLE(FScctHubActivityApi, "HubActivityExports", ScctHubActivityApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
 SCCT_FEATURE_TABLE(FScctMenuApi, "MenuExports", ScctMenuApiVersion);
 SCCT_FEATURE_TABLE(FScctMarkSurfaceApi, "MarkSurfaceExports", ScctMarkSurfaceApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
+SCCT_FEATURE_TABLE(FScctSocialApi, "SocialExports", ScctSocialApiVersion);
 SCCT_FEATURE_TABLE(FScctPlayApi, "PlayExports", ScctPlayApiVersion);
 SCCT_FEATURE_TABLE(FScctProjectionsApi, "ProjectionExports", ScctProjectionsApiVersion);
 SCCT_FEATURE_TABLE(FScctVisionApi, "VisionExports", ScctVisionApiVersion);

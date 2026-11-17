@@ -2,8 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "Runtime/ScctHudApi.h"
+#include "Runtime/ScctHudBackpackApi.h"
+#include "Runtime/ScctHudBinocularApi.h"
 #include "Runtime/ScctHudGadgetApi.h"
+#include "Runtime/ScctHudMotionApi.h"
+#include "Runtime/ScctHudRadarApi.h"
 #include "Runtime/ScctHudTextureApi.h"
+#include "Hud/ScctTeamPingView.h"
 
 /**
  * The HUD's own labels. Their text is the original game's, read from the player's content with the bridge's
@@ -123,8 +128,47 @@ public:
 	/** Unattended look check only (-ScctHudCommands "PreviewCoop N"): shows coop icon N as if the game offered it; 0 off. */
 	int32 PreviewCoopIcon = 0;
 
+	/** The radar's blips (FScctHudBlip: teammates, enemies, alarms, as world locations), read with the snapshot. */
+	TArray<FScctHudBlip> Radar;
+
+	/** The heart beat sensor's cone and the frame of its clip (Cone 0 when it is not selected or the table is missing). */
+	FScctHudHeartSensor HeartSensor = {};
+
+	/** The player's radar options (Hud.RadarScale, Hud.RadarRotate in the settings registry), read with the snapshot. */
+	float RadarScale = 1.0f;
+	bool bRadarRotate = true;
+
+	/** The merc backpack panels (which show, their titles and mates' names) and their gadget rows, read with the snapshot. */
+	FScctHudBackpackState Backpack = {};
+	TArray<FScctHudBackpackRow> BackpackRows;
+
 	/** The name of the Use key, which cycles the Merc Deathmatch respawn weapon (empty when unbound). */
 	FString RespawnUseKey;
+
+	/**
+	 * The spy binoculars (State.BinocularMode 1): the objective triggers they show (GetBinocularTargets) and the same
+	 * placed on the screen for this frame (a target behind the camera is pushed far out on its side, so its edge arrow
+	 * points the right way); the content's P_BinocularsATT page evaluated for this moment (ScctHudBinoculars.cpp); and
+	 * the Use key's name for the lock hint's \USE.
+	 */
+	TArray<FScctHudObjective> BinocularTargets;
+	TArray<FScctHudMarker> BinocularMarkers;
+	TArray<FScctHudPageLayer> BinocularLayers;
+	FString BinocularUseKey;
+
+	/**
+	 * The merc's motion tracking for this frame's view (ScctHudMotion.cpp): the goggles' lock boxes around moving targets
+	 * and the laser target's bracket with its friend marks, as rows in the full-screen layer's units, and what the draw
+	 * counted. Empty when nothing is tracked or the bridge lacks the table.
+	 */
+	FScctHudMotionState Motion = {};
+	TArray<FScctHudMotionRow> MotionRows;
+
+	/**
+	 * The team pings for this frame's view: teammates' (and the player's own) pings placed on the screen and the ping
+	 * wheel while the TeamPing key is held. Filled by UScctTeamPingSubsystem; empty when there are none.
+	 */
+	FScctTeamPingView TeamPing;
 
 	/** The team of the player at this machine (0 spies, 1 mercs), from the scoreboard, else the side played. */
 	int32 LocalTeam = 0;

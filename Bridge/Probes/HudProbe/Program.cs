@@ -42,6 +42,42 @@ if (args.Length > 5 && args[5].Equals("icons", StringComparison.OrdinalIgnoreCas
     return IconsRun(content, map, mode, merc, seconds);
 }
 
+Console.WriteLine($"sizes: HudHeartSensorState {Unsafe.SizeOf<HudHeartSensorState>()}, HudRadarApi {Unsafe.SizeOf<HudRadarApi>()}");
+
+if (args.Length > 5 && args[5].Equals("radar", StringComparison.OrdinalIgnoreCase))
+{
+    return RadarRun(content, map, mode, merc, seconds);
+}
+
+Console.WriteLine($"sizes: HudBackpackState {Unsafe.SizeOf<HudBackpackState>()}, HudBackpackRow {Unsafe.SizeOf<HudBackpackRow>()}, HudBackpackApi {Unsafe.SizeOf<HudBackpackApi>()}");
+
+if (args.Length > 5 && args[5].Equals("backpack", StringComparison.OrdinalIgnoreCase))
+{
+    return BackpackRun(content, map, mode, merc, seconds);
+}
+
+Console.WriteLine($"sizes: HudPageLayer {Unsafe.SizeOf<HudPageLayer>()}, HudBinocularPageInput {Unsafe.SizeOf<HudBinocularPageInput>()}, HudBinocularApi {Unsafe.SizeOf<HudBinocularApi>()}");
+
+if (args.Length > 5 && args[5].Equals("binoculars", StringComparison.OrdinalIgnoreCase))
+{
+    return BinocularsRun(content, map, mode, merc, seconds);
+}
+
+Console.WriteLine($"sizes: HudMotionView {Unsafe.SizeOf<HudMotionView>()}, HudMotionState {Unsafe.SizeOf<HudMotionState>()}, HudMotionRow {Unsafe.SizeOf<HudMotionRow>()}, " +
+    $"HudMotionLock {Unsafe.SizeOf<HudMotionLock>()}, HudMotionApi {Unsafe.SizeOf<HudMotionApi>()}");
+
+if (args.Length > 5 && args[5].Equals("motion", StringComparison.OrdinalIgnoreCase))
+{
+    return MotionRun(content, map, mode, merc, seconds);
+}
+
+Console.WriteLine($"sizes: TeamPingCamera {Unsafe.SizeOf<TeamPingCamera>()}, TeamPingState {Unsafe.SizeOf<TeamPingState>()}, TeamPingRow {Unsafe.SizeOf<TeamPingRow>()}, TeamPingApi {Unsafe.SizeOf<TeamPingApi>()}");
+
+if (args.Length > 5 && args[5].Equals("ping", StringComparison.OrdinalIgnoreCase))
+{
+    return PingRun(content, map, mode, merc, seconds);
+}
+
 BridgeSession.Configure(content);
 var load = Stopwatch.StartNew();
 using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
@@ -615,6 +651,542 @@ static unsafe int IconsRun(string content, string map, string mode, bool merc, d
     }
 
     return 0;
+}
+
+// The radar and the heart sensor: the blips by kind each second, and for a spy the sensor selected at 2 s, the weapon
+// drawn (the FireMode button held) from 3 s, the cone, its clip frame and the scan pings and heartbeats it raised,
+// checked against the sound records the events feature resolved from them.
+static unsafe int RadarRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+    HudFeature hud = HudFeature.Of(session);
+    OpenScct.UnrealBridge.Events.EventsFeature events = OpenScct.UnrealBridge.Events.EventsFeature.Of(session);
+    HudHeartSensor sensor = HudHeartSensor.Of(session);
+    hud.SetViewport(1920, 1080);
+    var input = default(BridgeInput);
+    var blips = new HudBlip[64];
+    var sounds = new BridgeSound[256];
+    var run = Stopwatch.StartNew();
+    bool selected = false;
+    double nextReport = 1;
+    int pings = 0, beats = 0, maxCone = 0;
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        const int FireMode = 11;
+        input.Buttons[FireMode] = (byte)(!merc && t is > 3 and < 3.7 ? 1 : 0);
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        if (!merc && !selected && t > 2)
+        {
+            selected = true;
+            Console.WriteLine($"t={t:F1} SelectHeartSensor -> {HudRadarExports.Select(session.Session.LocalController)}");
+        }
+
+        int n;
+        while ((n = events.DrainSounds(sounds)) > 0)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                string name = OpenScct.UnrealBridge.Events.EventNames.Text(sounds[i].SoundId);
+                pings += name.EndsWith("echo_indic1", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+                beats += name.EndsWith("Heart_Beat", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            }
+        }
+
+        hud.GetState(out HudState s);
+        HudHeartSensorState h = HudRadarExports.Read(sensor);
+        maxCone = Math.Max(maxCone, h.Cone);
+        if (t >= nextReport)
+        {
+            nextReport += 1;
+            int count = hud.Frame.Radar.CopyTo(blips);
+            int[] kinds = new int[4];
+            for (int i = 0; i < count; i++)
+            {
+                kinds[Math.Clamp(blips[i].Kind, 0, 3)]++;
+            }
+
+            string far = string.Join(" ", blips.Take(count).Select(b =>
+                $"k{b.Kind}:{MathF.Sqrt((b.X - s.X) * (b.X - s.X) + (b.Y - s.Y) * (b.Y - s.Y)) / 44f:F0}/{(b.Z - s.Z) / 44f:F0}"));
+            Console.WriteLine($"t={t:F1} side {s.Side} yaw {s.Yaw:F0} location '{hud.Texts.Text(s.LocationNameId)}' | {count} blips: {kinds[0]} teammates, {kinds[1]} enemies, " +
+                $"{kinds[2]} alarms, {kinds[3]} gpo [radar units dist/dz {far}] | HeartCone {s.HeartCone} sensor cone {h.Cone} frame {h.Frame:F1}/{h.LoopFrames} " +
+                $"pings {h.CheckSounds} beats {h.DetectedSounds} raised {h.SoundsRaised} resolved echo_indic1 {pings} Heart_Beat {beats}");
+        }
+
+        Thread.Sleep(4);
+    }
+
+    Console.WriteLine($"radar summary: highest cone {maxCone}, scan pings asked {sensor.CheckSounds}, heartbeats asked {sensor.DetectedSounds}, raised {sensor.SoundsRaised}, " +
+        $"sound records resolved: echo_indic1 {pings}, Heart_Beat {beats}");
+    return 0;
+}
+
+// The merc backpack panels (five bots, so a merc has two merc mates): backpacks given to every merc at 1.2 s, every merc's gadgets and backpack slots on the server at 2 s, the backpack selected at 3 s,
+// the panels each second (own share and both mates' shares with icons), and from 8 s for 5 s the mate carrying the
+// player's share held in front of him with one of his charges spent, so the refill entry offers that share.
+static unsafe int BackpackRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 5);
+    HudFeature hud = HudFeature.Of(session);
+    hud.SetViewport(1920, 1080);
+    var input = default(BridgeInput);
+    var rows = new System.Collections.Generic.List<HudBackpackRow>();
+    var run = Stopwatch.StartNew();
+    bool given = false, listed = false, selected = false, forced = false;
+    double nextReport = 1;
+    int maxMode = 0, sharePanels = 0;
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        if (!given && t > 1.2 && session.Session.Host is { } giveHost && session.Session.LocalController?.PlayerReplicationInfo is { } me)
+        {
+            given = true;
+            int id = me.PlayerID;
+            void Give(OpenScct.Server.ServerHost running)
+            {
+                running.BeforeWorldTick -= Give;
+                Console.WriteLine($"t={run.Elapsed.TotalSeconds:F1} GiveOnServer(player {id}, all mercs) -> {HudBackpackExports.GiveOnServer(running, id, true)} backpacks given");
+            }
+
+            giveHost.BeforeWorldTick += Give;
+        }
+
+        if (!listed && t > 2.5 && session.Session.Host is { } host)
+        {
+            listed = true;
+            void List(OpenScct.Server.ServerHost running)
+            {
+                running.BeforeWorldTick -= List;
+                foreach (OpenScct.Game.SBase.SBasePawn p in running.World.Level.AllActors<OpenScct.Game.SBase.SBasePawn>())
+                {
+                    var names = new System.Collections.Generic.List<string>();
+                    for (OpenScct.Game.SBase.SGadget? g = p.MyGadget; g is not null; g = g.MyGadget)
+                    {
+                        names.Add($"{g.GetType().Name}({g.Charge})");
+                    }
+
+                    string who = (p.Controller?.PlayerReplicationInfo ?? p.PlayerReplicationInfo)?.PlayerName ?? "?";
+                    Console.WriteLine($"   server pawn '{who}' type {p.SPawnType} health {p.Health}: {string.Join(" ", names)} | A '{p.aBackPackOwner_A?.PlayerReplicationInfo?.PlayerName}' " +
+                        $"{p.aIDGad_Mate_A0}:{p.aNbChargesGad_Mate_A0} {p.aIDGad_Mate_A1}:{p.aNbChargesGad_Mate_A1} | B '{p.aBackPackOwner_B?.PlayerReplicationInfo?.PlayerName}' {p.aIDGad_Mate_B0}:{p.aNbChargesGad_Mate_B0} {p.aIDGad_Mate_B1}:{p.aNbChargesGad_Mate_B1}");
+                }
+            }
+
+            host.BeforeWorldTick += List;
+        }
+
+        if (!selected && t > 3)
+        {
+            selected = true;
+            Console.WriteLine($"t={t:F1} SelectBackpack -> {HudBackpackExports.Select(session.Session.LocalController)}");
+        }
+
+        if (!forced && t > 8 && session.Session.Host is { } h && session.Session.LocalController?.PlayerReplicationInfo is { } pri)
+        {
+            forced = true;
+            Console.WriteLine($"t={t:F1} ForceRefill 5 s for player {pri.PlayerID}");
+            HudBackpackExports.Queue(h, pri.PlayerID, 5f);
+        }
+
+        if (forced && t >= nextReport && session.Session.LocalController is { } lpc && lpc.SBPawn is { } lp)
+        {
+            // What the refill entry sees on the client: its focus, whether it can be used, the mate found and where
+            // the nearest mate stands.
+            var entry = lpc.IManager?.Interactions.Length > 0 ? lpc.IManager.Interactions[0] : null;
+            string near = "";
+            foreach (OpenScct.Game.SBase.SBasePawn p in lp.XLevel.AllActors<OpenScct.Game.SBase.SBasePawn>())
+            {
+                if (!ReferenceEquals(p, lp) && p.SPawnType == lp.SPawnType)
+                {
+                    near += $"'{p.PlayerReplicationInfo?.PlayerName}' {(p.Location - lp.Location).Size():F0} uu yaw {p.Rotation.Yaw & 0xFFFF} (mine {lp.Rotation.Yaw & 0xFFFF}) ";
+                }
+            }
+            string charges = "";
+            for (OpenScct.Game.SBase.SGadget? g = lp.MyGadget; g is not null; g = g.MyGadget)
+            {
+                charges += $"{g.GetType().Name}({g.Charge}) ";
+            }
+
+            Console.WriteLine($"   refill entry {entry?.GetType().Name} focus {(entry as OpenScct.Game.SBase.SInteractObject)?.bHasFocus} canUse {entry?.CanUse(lpc)} " +
+                $"mate '{(entry as OpenScct.Game.SBase.SMateInteraction)?.Mate?.PlayerReplicationInfo?.PlayerName}' selected {lpc.IManager?.SelectedInteractions} of {lpc.IManager?.NbObjects} | {near} | {charges}");
+        }
+
+        if (forced && t < 13 && session.Session.LocalController is { } focusPc)
+        {
+            HudBackpackExports.FocusRefill(focusPc);
+        }
+
+        HudBackpackState s = HudBackpackExports.Read(session.Session.LocalController, hud, rows);
+        maxMode = Math.Max(maxMode, s.Mode);
+        sharePanels += s.Mode == 2 ? 1 : 0;
+        if (t >= nextReport || (s.Mode == 2 && sharePanels == 1))
+        {
+            nextReport = Math.Floor(t) + 1;
+            string text = string.Join(" ", rows.Select(r => $"[p{r.Panel} r{r.Row} id{r.GadgetId} {r.Charges}/{r.Max} {r.TextureName()} ({r.U0},{r.V0})-({r.U1},{r.V1})]"));
+            Console.WriteLine($"t={t:F1} backpack mode {s.Mode} rows {s.Rows} panels {s.Panels} labels '{hud.Texts.Text(s.SelfLabelId)}'/'{hud.Texts.Text(s.MateLabelId)}' " +
+                $"mates '{hud.Texts.Text(s.MateANameId)}' '{hud.Texts.Text(s.MateBNameId)}' | {s.RowCount} rows {text}");
+        }
+
+        Thread.Sleep(4);
+    }
+
+    Console.WriteLine($"backpack summary: highest mode {maxMode}, frames with the refill share {sharePanels}");
+    return 0;
+}
+
+// The spy binoculars: raised at 2 s (the controller's SwitchBinocularVision, as the B key's binding calls it), the
+// mode, zoom, lock texts and objective targets each second, the view turned onto the first target at 3 s, and the
+// page's layers (goggle frame, sound meter, zoom scale, key help) for each zoom step and at three moments of the meter.
+static unsafe int BinocularsRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    HudMagmaPage? page = HudBinocularExports.SpyPage(out string? pageError);
+    Console.WriteLine(page is null ? $"spy page: missing ({pageError})" : $"spy page {page.Name}: instances {string.Join(", ", page.Instances)}");
+    foreach (int step in new[] { 3, 2, 1 })
+    {
+        var layers = HudBinocularExports.ReadSpyPage(0.5f, -1f, step, "Mouse Wheel Up / Mouse Wheel Down", "B", "");
+        int images = layers.Count(l => !l.IsText);
+        string texts = string.Join(" | ", layers.Where(l => l.IsText).Select(l => $"{l.Widget}='{l.Text}' at ({l.L:F0},{l.T:F0}) h {l.Height:F0}"));
+        HudMagmaPage.Layer marker = layers.FirstOrDefault(l => l.Widget == "zoomInside");
+        Console.WriteLine($"   step {step} ({HudBinocularExports.ZoomLabel(step)}): {layers.Count} layers, {images} images; zoomInside at ({marker.L:F0},{marker.T:F0}); texts {texts}");
+    }
+
+    foreach (float at in new[] { 0f, 1.0f, 1.6f, 2.9f })
+    {
+        var layers = HudBinocularExports.ReadSpyPage(at, -1f, 3, "", "", "");
+        string meter = string.Join(" ", layers.Where(l => l.Widget.StartsWith("curseur", StringComparison.Ordinal) || l.Widget.StartsWith("soundAnimation", StringComparison.Ordinal))
+            .Select(l => $"{l.Widget}:{l.T:F0}-{l.B:F0}/a{l.Alpha:F2}"));
+        Console.WriteLine($"   meter at {at:F1} s: {meter}");
+    }
+
+    var speak = HudBinocularExports.ReadSpyPage(1f, 0.3f, 3, "", "", "Hack");
+    Console.WriteLine("   speak box: " + string.Join(" | ", speak.Where(l => l.Widget is "_TextSpeakATT" or "Element4").Select(l => $"{l.Widget}='{l.Text}' at ({l.L:F0},{l.T:F0})")));
+
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+    HudFeature hud = HudFeature.Of(session);
+    hud.SetViewport(1920, 1080);
+    var input = default(BridgeInput);
+    var targets = new HudObjective[16];
+    var run = Stopwatch.StartNew();
+    bool raised = false, aimed = false;
+    double nextReport = 1;
+    int maxTargets = 0;
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        // The Use button from 5 to 5.3 s marks the target under the reticle (and again from 8 s, which unmarks it).
+        const int Use = 10;
+        input.Buttons[Use] = (byte)(t is > 5 and < 5.3 or > 8 and < 8.3 ? 1 : 0);
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        if (!raised && t > 2 && session.Session.LocalController is { } pc)
+        {
+            raised = true;
+            pc.eventSwitchBinocularVision();
+            Console.WriteLine($"t={t:F1} SwitchBinocularVision -> state {pc.GetStateName()}");
+        }
+
+        hud.GetState(out HudState s);
+        int count = hud.Frame.BinocularTargets.CopyTo(targets);
+        maxTargets = Math.Max(maxTargets, count);
+        if (!aimed && t > 3 && count > 0)
+        {
+            aimed = true;
+            HudObjective first = targets.Take(Math.Min(count, targets.Length))
+                .MinBy(o => (o.X - s.X) * (o.X - s.X) + (o.Y - s.Y) * (o.Y - s.Y) + (o.Z - s.Z) * (o.Z - s.Z));
+            Console.WriteLine($"t={t:F1} AimAt nearest '{hud.Texts.Text(first.NameId)}' -> {HudBinocularExports.Aim(session.Session.LocalController, new OpenScct.Core.FVector(first.X, first.Y, first.Z))}" +
+                $", under the reticle now: '{OpenScct.Game.Equipment.SpyBinoculars.ObjectiveUnderReticle(session.Session.LocalController!)?.TriggerName}'");
+        }
+
+        if (t >= nextReport)
+        {
+            nextReport += 1;
+            string rows = string.Join(" | ", targets.Take(Math.Min(count, targets.Length)).Select(o =>
+                $"'{hud.Texts.Text(o.NameId)}' kind {o.Kind} flags {o.Flags} {o.Percent}% at {MathF.Sqrt((o.X - s.X) * (o.X - s.X) + (o.Y - s.Y) * (o.Y - s.Y) + (o.Z - s.Z) * (o.Z - s.Z)):F0} uu"));
+            string marked = string.Join(", ", targets.Take(Math.Min(count, targets.Length)).Where(o => (o.Flags & HudObjectiveFlags.Marked) != 0)
+                .Select(o => hud.Texts.Text(o.NameId)));
+            Console.WriteLine($"t={t:F1} marked '{marked}' (SHud.LockedObjective '{(session.Session.LocalController?.myHUD as OpenScct.Game.SBase.SHud)?.LockedObjective?.TriggerName}')");
+            Console.WriteLine($"t={t:F1} mode {s.BinocularMode} fov {s.BinocularFov:F0} yaw {s.Yaw:F0} ER {((s.Flags & HudFlags.EnhancedReality) != 0 ? 1 : 0)} | lock '{hud.Texts.Text(s.LockTextId)}' locked '{hud.Texts.Text(s.LockedTextId)}' " +
+                $"drop zone '{hud.Texts.Text(s.DropZoneTextId)}' | {count} targets: {rows}");
+        }
+
+        Thread.Sleep(4);
+    }
+
+    Console.WriteLine($"binocular summary: most targets {maxTargets}");
+    return 0;
+}
+
+// The merc's motion tracking: the first vision mode switched on at 1.5 s (SwitchHeadset 1, then 2 if that was not
+// motion), and each second the goggles' locks with the actors' speeds, then the draw built for a 1920 x 1080 view from the
+// merc's eye turned onto the first lock (so a moving pawn is in front of him), with its rows by kind and the boxes.
+static unsafe int MotionRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+    HudFeature hud = HudFeature.Of(session);
+    hud.SetViewport(1920, 1080);
+    var input = default(BridgeInput);
+    var rows = new HudMotionRow[256];
+    var run = Stopwatch.StartNew();
+    double nextReport = 1;
+    int switched = 0, summoned = 0, maxLocks = 0, maxDrawn = 0, framesWithRows = 0, cornersInFront = 0, maxFriends = 0, friendMarks = 0, holdFire = 0;
+    bool laserOn = false;
+    var lockedIds = new System.Collections.Generic.HashSet<int>();
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        hud.GetState(out HudState s);
+        if ((switched == 0 && t > 1.5) || (switched == 1 && t > 2.5 && s.VisionMode != 37))
+        {
+            switched++;
+            session.Command("SwitchHeadset", switched);
+            Console.WriteLine($"t={t:F1} SwitchHeadset {switched} (vision now {s.VisionMode})");
+        }
+
+        // An enemy, then a teammate put in front of the merc on the server (the bots start across the map), then the
+        // laser gadget on, so its target (the teammate in front) gets the HUD tracker's friend marks.
+        if (summoned < 2 && t > 3 + summoned * 0.4 && session.Session.Host is { } host && session.Session.LocalController?.PlayerReplicationInfo is { } pri)
+        {
+            bool mate = summoned == 1;
+            int id = pri.PlayerID;
+            summoned++;
+            void Run(OpenScct.Server.ServerHost running)
+            {
+                running.BeforeWorldTick -= Run;
+                Console.WriteLine($"   summon {(mate ? "teammate" : "enemy")} -> server actor {HudMotionExports.SummonOnServer(running, id, mate)}");
+            }
+
+            host.BeforeWorldTick += Run;
+        }
+
+        if (!laserOn && t > 4.5)
+        {
+            laserOn = true;
+            session.Command("GadLaserSwitch", 0);
+            Console.WriteLine($"t={t:F1} GadLaserSwitch");
+        }
+
+        var pc = session.Session.LocalController;
+
+        OpenScct.Game.SBase.SMotionTrackingVision? tracker = HudMotionDraw.TrackerOf(pc);
+        var view = new HudMotionView { Width = 1920, Height = 1080, FocalX = 960f / MathF.Tan(45f * MathF.PI / 180f), CentreX = 960, CentreY = 540, Page = 1 };
+        view.FocalY = view.FocalX;
+        if (pc?.Pawn is { } pawn)
+        {
+            view.X = pawn.Location.X;
+            view.Y = pawn.Location.Y;
+            view.Z = pawn.Location.Z + pawn.BaseEyeHeight;
+            view.Yaw = pc.Rotation.Yaw * 360f / 65536f;
+            view.Pitch = pc.Rotation.Pitch * 360f / 65536f;
+            // From 4.5 s to 9 s the merc aims at his nearest teammate (the laser's target, for the friend marks) and the
+            // view is his own; otherwise the view turns onto the first lock.
+            OpenScct.Game.SBase.SBasePawn? mate = null;
+            if (t is > 4.5 and < 9 && pc.XLevel is { } lv)
+            {
+                foreach (OpenScct.Game.SBase.SBasePawn p in lv.AllActors<OpenScct.Game.SBase.SBasePawn>())
+                {
+                    if (!p.bDeleteMe && !ReferenceEquals(p, pawn) && p is OpenScct.Game.SBase.SPAWNDEFENSE &&
+                        (mate is null || (p.Location - pawn.Location).SizeSquared() < (mate.Location - pawn.Location).SizeSquared()))
+                    {
+                        mate = p;
+                    }
+                }
+            }
+
+            if (mate is not null)
+            {
+                HudBinocularExports.Aim(pc, mate.Location);
+                view.Yaw = pc.Rotation.Yaw * 360f / 65536f;
+                view.Pitch = pc.Rotation.Pitch * 360f / 65536f;
+            }
+            else if (tracker is { LockedObjects.Count: > 0 } && tracker.LockedObjects[0].Actor is { } first)
+            {
+                float dx = first.Location.X - view.X, dy = first.Location.Y - view.Y, dz = first.Location.Z - view.Z;
+                view.Yaw = MathF.Atan2(dy, dx) * 180f / MathF.PI;
+                view.Pitch = MathF.Atan2(dz, MathF.Sqrt(dx * dx + dy * dy)) * 180f / MathF.PI;
+            }
+        }
+
+        int n = HudMotionDraw.Shared.Build(pc, view, hud.TargetNameRan, out HudMotionState ms, rows);
+        maxLocks = Math.Max(maxLocks, ms.Locks);
+        maxDrawn = Math.Max(maxDrawn, ms.Drawn);
+        maxFriends = Math.Max(maxFriends, ms.Friends);
+        framesWithRows += n > 0 ? 1 : 0;
+        foreach (HudMotionLock l in HudMotionDraw.Shared.Locks)
+        {
+            lockedIds.Add(l.ActorId);
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            cornersInFront += rows[i].Kind == 0 ? 1 : 0;
+            friendMarks += rows[i].Kind == 2 ? 1 : 0;
+            HudMotionRow copy = rows[i];
+            holdFire += copy.Kind == 3 && new string(copy.Text).Contains("Hold", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        }
+
+        if (t >= nextReport)
+        {
+            nextReport += 1;
+            int[] kinds = new int[4];
+            for (int i = 0; i < n; i++)
+            {
+                kinds[Math.Clamp(rows[i].Kind, 0, 3)]++;
+            }
+
+            string locks = string.Join(" ", HudMotionDraw.Shared.Locks.Select(l =>
+                $"[#{l.ActorId} side {l.Side} friend {l.Friend} laser {l.Laser} front {l.InFront} removing {l.Removing} speed {l.Speed:F0} box ({l.X1:F0},{l.Y1:F0})-({l.X2:F0},{l.Y2:F0})]"));
+            string movers = "";
+            if (pc?.XLevel is { } level && pc.Pawn is { } own)
+            {
+                foreach (OpenScct.Game.SBase.SBasePawn p in level.AllActors<OpenScct.Game.SBase.SBasePawn>())
+                {
+                    if (!p.bDeleteMe && !ReferenceEquals(p, own))
+                    {
+                        movers += $"#{p.ActorId}:{(p is OpenScct.Game.SBase.SPAWNDEFENSE ? "merc" : "spy")} v{p.Velocity.Size():F0} d{(p.Location - own.Location).Size():F0} ";
+                    }
+                }
+            }
+            Console.WriteLine($"t={t:F1} vision {s.VisionMode} tracking {ms.Tracking} locks {ms.Locks} laser {ms.LaserLocks} drawn {ms.Drawn} friends {ms.Friends} | rows {ms.Rows}/{ms.TotalRows} " +
+                $"(corners {kinds[0]}, sweeps {kinds[1]}, friend marks {kinds[2]}, texts {kinds[3]}) name {ms.NameRow} scale {ms.FrameScale:F2} | {locks} | pawns {movers}");
+            for (int i = 0; i < Math.Min(n, 6); i++)
+            {
+                HudMotionRow r = rows[i];
+                Console.WriteLine($"   row {i}: kind {r.Kind} at ({r.X:F0},{r.Y:F0}) size ({r.XL:F0},{r.YL:F0}) texels ({r.U},{r.V},{r.UL},{r.VL}) colour {r.R},{r.G},{r.B},{r.A}" +
+                    (r.Kind == 3 ? $" text '{new string(r.Text)}'" : ""));
+            }
+        }
+
+        Thread.Sleep(4);
+    }
+
+    Console.WriteLine($"motion summary: most locks {maxLocks}, most drawn {maxDrawn}, most friends {maxFriends}, frames with rows {framesWithRows}, corner rows {cornersInFront}, friend mark rows {friendMarks}, Hold Fire rows {holdFire}, actors locked [{string.Join(",", lockedIds)}]");
+    return 0;
+}
+
+// The team ping through a local match: once a ping can be placed, a tap (generic) aimed through the session's view and,
+// after the server's one-second limit, a "check here" and a spy-only kind (refused for a merc); every second the state
+// and the team's pings as Unreal reads them.
+static int PingRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+    HudFeature hud = HudFeature.Of(session);
+    TeamPingFeature pings = TeamPingFeature.Of(session);
+    var input = default(BridgeInput);
+    var rows = new TeamPingRow[8];
+    var run = Stopwatch.StartNew();
+    double nextReport = 1, firstSendAt = -1;
+    int step = 0, lastContext = 0, mostRows = 0, ownRows = 0;
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        TeamPingState state = pings.State();
+        if (state.Context != lastContext)
+        {
+            Console.WriteLine($"t={t:F1} context {lastContext} -> {state.Context} team {state.Team} supported {state.Supported}");
+            lastContext = state.Context;
+        }
+
+        var view = session.Session.View;
+        var camera = new TeamPingCamera
+        {
+            X = view.Location.X, Y = view.Location.Y, Z = view.Location.Z,
+            Pitch = view.Rotation.Pitch * 360f / 65536f, Yaw = view.Rotation.Yaw * 360f / 65536f, Roll = view.Rotation.Roll * 360f / 65536f,
+        };
+        (OpenScct.Server.TeamPingKind Kind, double Delay)[] plan =
+            [(OpenScct.Server.TeamPingKind.Generic, 0), (OpenScct.Server.TeamPingKind.Check, 1.3), (OpenScct.Server.TeamPingKind.Mine, 2.6)];
+        if (state.Context != 0 && step < plan.Length && t > 3)
+        {
+            firstSendAt = firstSendAt < 0 ? t : firstSendAt;
+            if (t >= firstSendAt + plan[step].Delay)
+            {
+                int result = pings.Send(plan[step].Kind, camera, out OpenScct.Core.FVector target);
+                Console.WriteLine($"t={t:F1} send {plan[step].Kind} from ({camera.X:F0},{camera.Y:F0},{camera.Z:F0}) yaw {camera.Yaw:F0} pitch {camera.Pitch:F0} -> {result} at ({target.X:F0},{target.Y:F0},{target.Z:F0})");
+                step++;
+            }
+        }
+
+        int count = pings.Rows(rows);
+        mostRows = Math.Max(mostRows, count);
+        for (int i = 0; i < count; i++)
+        {
+            ownRows += rows[i].Own;
+        }
+
+        if (t >= nextReport)
+        {
+            nextReport += 1;
+            string list = string.Join(" ", rows.Take(count).Select(r =>
+                $"[{(OpenScct.Server.TeamPingKind)r.Kind} team {r.Team} from #{r.SenderId} '{hud.Texts.Text(r.SenderNameId)}'{(r.Own != 0 ? " own" : "")} at ({r.X:F0},{r.Y:F0},{r.Z:F0}) age {r.Age:F2} opacity {r.Opacity:F2}]"));
+            Console.WriteLine($"t={t:F1} ping state: context {state.Context} team {state.Team} supported {state.Supported} sent {state.Sent} received {state.Received} refused {state.Refused} | {count} rows {list}");
+        }
+
+        Thread.Sleep(5);
+    }
+
+    TeamPingState end = pings.State();
+    Console.WriteLine($"ping summary: sent {end.Sent} received {end.Received} refused {end.Refused}, most rows at once {mostRows}, frames with an own row {ownRows}");
+    return end.Received > 0 ? 0 : 2;
 }
 
 static unsafe string Pairs(HudRound r) =>

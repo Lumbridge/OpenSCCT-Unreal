@@ -307,11 +307,56 @@ public sealed class ControlBindings
 
     public SideBindings Of(bool merc) => merc ? Merc : Spy;
 
-    /// <summary>Puts one side back to the defaults.</summary>
+    /// <summary>
+    /// The spy and the merc have a key layout each (true, the default), or both play the spy's (false: the Godot
+    /// client's use_split_spy_merc_keyboard off). The controller's buttons are always per side.
+    /// </summary>
+    public bool Split { get; set; } = true;
+
+    /// <summary>The key layout a side plays: its own, or the spy's while the layouts are shared.</summary>
+    public KeyLayout KeysOf(bool merc) => (merc && !Split ? Spy : Of(merc)).Keys;
+
+    /// <summary>
+    /// Shares one layout between the sides or gives each its own. Going to a shared layout copies the spy's keys over
+    /// the merc's, so splitting again later starts both sides from the layout that was played.
+    /// </summary>
+    public void SetSplit(bool split)
+    {
+        if (!split)
+        {
+            Merc = new SideBindings(Spy.Keys.Clone(), Merc.Pad);
+        }
+
+        Split = split;
+    }
+
+    /// <summary>A copy that shares nothing with this one, so it can be edited apart.</summary>
+    public ControlBindings Clone() =>
+        new(new SideBindings(Spy.Keys.Clone(), new Dictionary<string, string>(Spy.Pad, StringComparer.Ordinal)),
+            new SideBindings(Merc.Keys.Clone(), new Dictionary<string, string>(Merc.Pad, StringComparer.Ordinal))) { Split = Split };
+
+    /// <summary>Puts one side back to the defaults (with a shared layout, the keys of both).</summary>
     public void Reset(bool merc, string wheelMode = "Gadget")
     {
         var side = new SideBindings(DefaultKeys(wheelMode), DefaultPad(merc));
         if (merc) Merc = side; else Spy = side;
+        if (!Split)
+        {
+            // One layout for both: its keys go back to the defaults whichever side asked; the other side's pad stays.
+            if (merc) Spy = new SideBindings(DefaultKeys(wheelMode), Spy.Pad);
+            SetSplit(false);
+        }
+    }
+
+    /// <summary>Puts one side's keys (not its controller) back to the defaults; with a shared layout, the shared keys.</summary>
+    public void ResetKeys(bool merc, string wheelMode = "Gadget")
+    {
+        if (merc && Split) Merc = new SideBindings(DefaultKeys(wheelMode), Merc.Pad);
+        else Spy = new SideBindings(DefaultKeys(wheelMode), Spy.Pad);
+        if (!Split)
+        {
+            SetSplit(false);
+        }
     }
 
     /// <summary>The default key layout of either side.</summary>
@@ -379,12 +424,21 @@ public sealed class ControlBindings
 
         [JsonPropertyName("pad")]
         public Dictionary<string, string>? Pad { get; set; }
+
+        /// <summary>The bindings editor's order of each action's keys (only written when there is one).</summary>
+        [JsonPropertyName("order")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public SortedDictionary<string, string[]>? Order { get; set; }
     }
 
     private sealed class BindingsFile
     {
         [JsonPropertyName("version")]
         public int Version { get; set; } = 1;
+
+        /// <summary>Each side has its own key layout (absent in older files: split).</summary>
+        [JsonPropertyName("split")]
+        public bool Split { get; set; } = true;
 
         [JsonPropertyName("spy")]
         public SideFile? Spy { get; set; }
@@ -398,7 +452,7 @@ public sealed class ControlBindings
     }
 
     public string ToJson() => JsonSerializer.Serialize(
-        new BindingsFile { Spy = FileOf(Spy), Merc = FileOf(Merc), Hub = OpenScct.UnrealBridge.Hub.HubBindings.Version }, ControlSettings.Json);
+        new BindingsFile { Split = Split, Spy = FileOf(Spy), Merc = FileOf(Merc), Hub = OpenScct.UnrealBridge.Hub.HubBindings.Version }, ControlSettings.Json);
 
     /// <summary>
     /// Reads bindings. A side's "keys" is the whole layout (a key left out is unbound, as the player left it); a
@@ -407,7 +461,9 @@ public sealed class ControlBindings
     public static ControlBindings FromJson(string json, string wheelMode = "Gadget")
     {
         BindingsFile file = JsonSerializer.Deserialize<BindingsFile>(json, ControlSettings.Json) ?? new BindingsFile();
-        return new ControlBindings(SideOf(file.Spy, merc: false, wheelMode, file.Hub), SideOf(file.Merc, merc: true, wheelMode, file.Hub));
+        var bindings = new ControlBindings(SideOf(file.Spy, merc: false, wheelMode, file.Hub), SideOf(file.Merc, merc: true, wheelMode, file.Hub));
+        bindings.SetSplit(file.Split);
+        return bindings;
     }
 
     /// <summary>Reads the bindings file; the defaults when there is none.</summary>
@@ -434,6 +490,7 @@ public sealed class ControlBindings
     {
         Keys = new SortedDictionary<string, string>(new Dictionary<string, string>(side.Keys.Bindings), StringComparer.OrdinalIgnoreCase),
         Pad = side.Pad,
+        Order = side.Keys.InputOrders.Count == 0 ? null : new SortedDictionary<string, string[]>(new Dictionary<string, string[]>(side.Keys.InputOrders), StringComparer.Ordinal),
     };
 
     private static SideBindings SideOf(SideFile? file, bool merc, string wheelMode, int hubVersion)
@@ -459,6 +516,17 @@ public sealed class ControlBindings
         else
         {
             keys = DefaultKeys(wheelMode);
+        }
+
+        if (file?.Order is { } order)
+        {
+            foreach ((string action, string[] inputs) in order)
+            {
+                if (inputs is not null)
+                {
+                    keys.SetInputOrder(action, inputs);
+                }
+            }
         }
 
         Dictionary<string, string> pad = DefaultPad(merc);

@@ -2,19 +2,30 @@
 
 #include "CoreMinimal.h"
 #include "Menu/ScctMenuPage.h"
+#include "Runtime/ScctMatchMenuApi.h"
 #include "Widgets/SCompoundWidget.h"
 
 class SBox;
+class SOverlay;
 class SScctDialogLayer;
+class SScctGearPage;
+class SScctStrategicMapPage;
 class UScctOnlineSubsystem;
 class UWorld;
 
 /**
  * The menu over a match (Escape, Start): the pause page, the settings and the round's results.
  *
- *   PAUSE     Resume; Options (the settings page, the match goes on behind it); Change side (local match: the
- *             level starts again with the other side); Return to lobby (online, for the player who controls the
- *             server); Leave (the server, or the match for the main menu), each that ends something asked first
+ *   PAUSE     Resume; Change gear (the Equipment page, Menu/SScctGearPage.h); Switch team in a practice round (the
+ *             side changes in the round: online the lobby's SetTeam, offline the practice side change); Strategic
+ *             map (Menu/SScctStrategicMapPage.h); Options (the settings page, the match goes on behind it); Help (the
+ *             side's keys and the round's goals, Menu/SScctHelpPage.h); Change side and Restart (a local match outside
+ *             practice: the level starts again); Resign (online, with lives left); Return to lobby (online, for the
+ *             player who controls the server); Leave (the server, or the match for the main menu); Quit game. Which
+ *             of the Godot client's entries show is InGameMenuModel.Layout for who the player is
+ *             (Runtime/ScctMatchMenuApi.h), read again four times a second; each that ends something asks first, a
+ *             resign question is taken back once resigning is no longer allowed, and the menu takes no close key in
+ *             its first half second (SSMenu_LANMainPage)
  *   SETTINGS  Menu/SScctSettingsPanel.h, as in the front end
  *   RESULTS   the winner and every player's score: online from the server's results, offline from the HUD's
  *             scoreboard once the round ended. Shown without taking the mouse while the menu is closed; offline it
@@ -22,7 +33,9 @@ class UWorld;
  *
  * UScctMatchMenuWidget (Menu/ScctMatchMenuWidget.cpp) holds it with the visit's banner; AScctGameMode opens and
  * closes it. Unattended runs drive it with -ScctMatchMenu=S and -ScctMenuDo (pages "pause", "settings/<tab>",
- * "results").
+ * "results", "gear", "map", "help"), and -ScctMatchMenuAct=<entry>[,yes] presses a pause entry a second after the
+ * menu first opens (Gear, SwitchTeam, Map, Options, Help, Resign, Lobby, Leave, Quit, Resume) and answers its question
+ * yes; the log has the entries, each press, question and answer ("ScctMatchMenu: ...").
  */
 class SScctMatchMenu : public SCompoundWidget
 {
@@ -53,6 +66,17 @@ public:
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 
+	/**
+	 * The Equipment page over the menu, for Side (-1 the side played). bOnly: opened on its own (the ChangeGear
+	 * binding), so closing it goes back to the game; from the menu it goes back to the menu. Null when it cannot open.
+	 */
+	TSharedPtr<SScctGearPage> ShowGear(int32 Side, bool bOnly);
+	TSharedPtr<SScctGearPage> GetGear() const;
+
+	/** The round's strategic map over the menu; bOnly as for ShowGear (the DisplayStrategicMap binding). */
+	TSharedPtr<SScctStrategicMapPage> ShowStrategicMap(bool bOnly);
+	TSharedPtr<SScctStrategicMapPage> GetStrategicMap() const;
+
 private:
 	enum class EView : uint8 { Pause, Settings, Results };
 
@@ -71,6 +95,20 @@ private:
 	bool IsMercLocal() const;
 	bool CanChangeSide() const;
 
+	void ShowHelp();
+	/** Escape or B while a page over the menu is open: that page goes back. False when none is open. */
+	bool BackFromOverlayPage();
+	void CloseOverlayPages();
+	/** InGameMenuModel.UpdateContext: who the player is, read again; the pause page is laid out anew when its entries change. */
+	void RefreshContext(bool bLog);
+	/** The pause page's entries from the context (EScctMatchMenuButton, and Quit game). */
+	TArray<int32> GetEntries() const;
+	FString EntryCaption(int32 Entry) const;
+	void Act(int32 Entry);
+	/** A question about an entry, taken back when the entry goes (a resign once out of lives). */
+	void Ask(int32 Entry, const FString& Title, const FString& Question, const FString& Yes, TFunction<void()> OnYes);
+	void TickUnattended(float DeltaSeconds);
+
 	TWeakObjectPtr<UScctOnlineSubsystem> Online;
 	TWeakObjectPtr<UWorld> World;
 	bool bOnlineLevel = false;
@@ -85,6 +123,22 @@ private:
 	/** The pause page's Options entry: the focus goes back to it when the settings close. */
 	TWeakPtr<SWidget> OptionsEntry;
 	FScctMenuHost Host;
+
+	/** The Equipment page, the strategic map and the help page open over the menu here. */
+	TSharedPtr<SOverlay> PageLayer;
+	/** The page over the menu was opened on its own (a binding): its closing goes back to the game. */
+	bool bPageOnly = false;
+
+	FScctMatchMenuContext Context = {};
+	bool bContextKnown = false;
+	TArray<int32> ShownEntries;
+	/** The entry whose question is open; -1 none. */
+	int32 Asking = -1;
+	float OpenedSeconds = 0.0f;
+	float ContextTimer = 0.0f;
+	float UnattendedSeconds = 0.0f;
+	bool bUnattendedActed = false;
+	bool bUnattendedYes = false;
 
 	EView View = EView::Pause;
 	bool bOpen = false;

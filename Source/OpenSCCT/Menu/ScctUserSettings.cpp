@@ -43,6 +43,8 @@ void UScctUserSettings::Load()
 	GConfig->GetInt(Section, TEXT("MenuSoundsVolume"), MenuSoundsVolume, Ini);
 	GConfig->GetInt(Section, TEXT("ObjectiveVolume"), ObjectiveVolume, Ini);
 	GConfig->GetInt(Section, TEXT("VoiceVolume"), VoiceVolume, Ini);
+	GConfig->GetInt(Section, TEXT("HubJukeboxVolume"), HubJukeboxVolume, Ini);
+	GConfig->GetInt(Section, TEXT("HubChimesVolume"), HubChimesVolume, Ini);
 	GConfig->GetBool(Section, TEXT("MotionBlur"), bMotionBlur, Ini);
 	GConfig->GetFloat(Section, TEXT("Gamma"), Gamma, Ini);
 	GConfig->GetInt(Section, TEXT("RenderScale"), RenderScale, Ini);
@@ -56,6 +58,8 @@ void UScctUserSettings::Load()
 	MenuSoundsVolume = FMath::Clamp(MenuSoundsVolume, 0, 100);
 	ObjectiveVolume = FMath::Clamp(ObjectiveVolume, 0, 100);
 	VoiceVolume = FMath::Clamp(VoiceVolume, 0, 100);
+	HubJukeboxVolume = FMath::Clamp(HubJukeboxVolume, 0, 100);
+	HubChimesVolume = FMath::Clamp(HubChimesVolume, 0, 100);
 	Gamma = FMath::Clamp(Gamma, 1.6f, 3.0f);
 	RenderScale = FMath::Clamp(RenderScale, 50, 100);
 }
@@ -71,6 +75,8 @@ void UScctUserSettings::Save()
 	GConfig->SetInt(Section, TEXT("MenuSoundsVolume"), MenuSoundsVolume, Ini);
 	GConfig->SetInt(Section, TEXT("ObjectiveVolume"), ObjectiveVolume, Ini);
 	GConfig->SetInt(Section, TEXT("VoiceVolume"), VoiceVolume, Ini);
+	GConfig->SetInt(Section, TEXT("HubJukeboxVolume"), HubJukeboxVolume, Ini);
+	GConfig->SetInt(Section, TEXT("HubChimesVolume"), HubChimesVolume, Ini);
 	GConfig->SetBool(Section, TEXT("MotionBlur"), bMotionBlur, Ini);
 	GConfig->SetFloat(Section, TEXT("Gamma"), Gamma, Ini);
 	GConfig->SetInt(Section, TEXT("RenderScale"), RenderScale, Ini);
@@ -126,6 +132,8 @@ void UScctUserSettings::ResetAudio()
 	MenuSoundsVolume = 5;
 	ObjectiveVolume = 80;
 	VoiceVolume = 100;
+	HubJukeboxVolume = 100;
+	HubChimesVolume = 100;
 }
 
 void UScctUserSettings::ResetInterface()
@@ -143,6 +151,8 @@ float UScctUserSettings::GetGain(EScctSoundKind Kind) const
 	case EScctSoundKind::MenuMusic: return MenuMusicVolume / 100.0f;
 	case EScctSoundKind::Objective: return ObjectiveVolume / 100.0f;
 	case EScctSoundKind::Voice: return VoiceVolume / 100.0f;
+	case EScctSoundKind::HubJukebox: return HubJukeboxVolume / 100.0f;
+	case EScctSoundKind::HubChimes: return HubChimesVolume / 100.0f;
 	default: return MenuSoundsVolume / 100.0f;
 	}
 }
@@ -150,8 +160,8 @@ float UScctUserSettings::GetGain(EScctSoundKind Kind) const
 void UScctUserSettings::LogValues(const TCHAR* Why) const
 {
 	const UGameUserSettings* Engine = GEngine != nullptr ? GEngine->GetGameUserSettings() : nullptr;
-	UE_LOG(LogOpenSCCT, Log, TEXT("Settings %s: volumes master %d effects %d ambient %d music %d menu music %d menu sounds %d objective %d voice %d; motion blur %d, gamma %.2f, render scale %d, feet %d"),
-		Why, MasterVolume, EffectsVolume, AmbientVolume, MusicVolume, MenuMusicVolume, MenuSoundsVolume, ObjectiveVolume, VoiceVolume, bMotionBlur ? 1 : 0, Gamma, RenderScale, bDistanceInFeet ? 1 : 0);
+	UE_LOG(LogOpenSCCT, Log, TEXT("Settings %s: volumes master %d effects %d ambient %d music %d menu music %d menu sounds %d objective %d voice %d hub jukebox %d hub chimes %d; motion blur %d, gamma %.2f, render scale %d, feet %d"),
+		Why, MasterVolume, EffectsVolume, AmbientVolume, MusicVolume, MenuMusicVolume, MenuSoundsVolume, ObjectiveVolume, VoiceVolume, HubJukeboxVolume, HubChimesVolume, bMotionBlur ? 1 : 0, Gamma, RenderScale, bDistanceInFeet ? 1 : 0);
 	if (Engine != nullptr)
 	{
 		const FIntPoint Size = Engine->GetScreenResolution();

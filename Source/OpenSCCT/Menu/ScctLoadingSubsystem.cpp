@@ -8,6 +8,7 @@
 #include "Engine/GameViewportClient.h"
 #include "Engine/Texture2D.h"
 #include "Hud/ScctHudStyle.h"
+#include "Menu/ScctSplashTrivia.h"
 #include "ImageUtils.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
@@ -97,7 +98,7 @@ namespace
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 				[
 					SNew(STextBlock)
-					.Text(FText::FromString(TEXT("LOADING")))
+					.Text(FText::FromString(Page.Status.IsEmpty() ? FString(TEXT("LOADING")) : Page.Status.ToUpper()))
 					.Font(Label(11.0f))
 					.ColorAndOpacity(Colour)
 				]
@@ -155,6 +156,28 @@ namespace
 							.ColorAndOpacity(Text())
 							.AutoWrapText(true)
 						]
+					]
+				];
+			}
+			else if (!Page.Trivia.IsEmpty())
+			{
+				Words->AddSlot().AutoHeight().Padding(0.0f, Page.Title.IsEmpty() ? 18.0f : 44.0f, 0.0f, 0.0f)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight().Padding(2.0f, 0.0f, 0.0f, 6.0f)
+					[
+						SNew(STextBlock)
+						.Text(FText::FromString(TEXT("DID YOU KNOW")))
+						.Font(Label(8.5f))
+						.ColorAndOpacity(Fade(Colour, 0.9f))
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(2.0f, 0.0f, 0.0f, 0.0f)
+					[
+						SNew(STextBlock)
+						.Text(FText::FromString(Page.Trivia))
+						.Font(Font(EWeight::Regular, 13.0f))
+						.ColorAndOpacity(TextDim())
+						.AutoWrapText(true)
 					]
 				];
 			}
@@ -284,7 +307,8 @@ FScctLoadingPage UScctLoadingSubsystem::DescribeLoad(const FWorldContext& Contex
 	const FString Level = FPackageName::GetShortName(MapName);
 	if (Level.Equals(LoadingFrontEndLevel, ESearchCase::IgnoreCase))
 	{
-		// On the way back to the menu: nothing to say but that it loads.
+		// On the way back to the menu: no map and no side, so a Splinter Cell fact instead of a tip.
+		Page.Trivia = ScctSplashTrivia::Pick();
 		return Page;
 	}
 
@@ -322,18 +346,28 @@ FScctLoadingPage UScctLoadingSubsystem::DescribeLoad(const FWorldContext& Contex
 		: UGameplayStatics::ParseOption(Options, TEXT("Side")).Equals(TEXT("merc"), ESearchCase::IgnoreCase);
 	const bool bWatching = bOnline && Online != nullptr && Online->GetStatus().LocalTeam != 0 && Online->GetStatus().LocalTeam != 1;
 
-	Page.Side = bWatching ? -1 : (bMerc ? 1 : 0);
-	Page.Title = Map;
 	const TCHAR* SideName = bWatching ? TEXT("SPECTATOR") : (bMerc ? TEXT("MERCENARY") : TEXT("SPY"));
-	Page.Detail = bOnline
+	const FString Detail = bOnline
 		? FString::Printf(TEXT("%s   /   %s"), Online != nullptr && !Online->GetServerName().IsEmpty() ? *Online->GetServerName() : TEXT("ONLINE"), SideName)
 		: FString::Printf(TEXT("%s   /   %s"), *LoadingModeLabel(UGameplayStatics::ParseOption(Options, TEXT("Mode"))), SideName);
+	return DescribeRound(Map, bWatching ? -1 : (bMerc ? 1 : 0), Detail, FString());
+}
+
+FScctLoadingPage UScctLoadingSubsystem::DescribeRound(const FString& Map, int32 Side, const FString& Detail, const FString& Status)
+{
+	FScctLoadingPage Page;
+	Page.Side = Side;
+	Page.Title = Map;
+	Page.Detail = Detail;
+	Page.Status = Status;
+	const bool bMerc = Side == 1;
 
 	// The map's name, picture and the side's tip are the player's own content, read through the bridge.
 	FString Error;
 	const FScctPlayApi* Play = ScctFeature<FScctPlayApi>(&Error);
 	if (Play == nullptr)
 	{
+		Page.Trivia = ScctSplashTrivia::Pick();
 		return Page;
 	}
 	Page.Title = ReadPlayText([&](TCHAR* Buffer, int32 Capacity) { return Play->GetMapTitle(*Map, Buffer, Capacity); });
@@ -342,6 +376,10 @@ FScctLoadingPage UScctLoadingSubsystem::DescribeLoad(const FWorldContext& Contex
 		Page.Title = Map;
 	}
 	Page.Tip = ReadPlayText([&](TCHAR* Buffer, int32 Capacity) { return Play->GetTip(bMerc ? 1 : 0, -1, Buffer, Capacity); });
+	if (Page.Tip.IsEmpty())
+	{
+		Page.Trivia = ScctSplashTrivia::Pick();
+	}
 
 	const FString File = ReadPlayText([&](TCHAR* Buffer, int32 Capacity) { return Play->GetLoadingImage(*Map, bMerc ? 1 : 0, Buffer, Capacity); });
 	if (!File.IsEmpty())
@@ -364,8 +402,8 @@ void UScctLoadingSubsystem::HandlePreLoadMap(const FWorldContext& Context, const
 	}
 	Pending = DescribeLoad(Context, MapName);
 	bHasPending = true;
-	UE_LOG(LogOpenSCCT, Log, TEXT("Loading page for %s: '%s', '%s', picture %s, tip \"%s\""), *MapName, *Pending.Title, *Pending.Detail,
-		Pending.Picture != nullptr ? TEXT("yes") : TEXT("none"), *Pending.Tip.Left(120));
+	UE_LOG(LogOpenSCCT, Log, TEXT("Loading page for %s: '%s', '%s', picture %s, tip \"%s\", trivia \"%s\""), *MapName, *Pending.Title, *Pending.Detail,
+		Pending.Picture != nullptr ? TEXT("yes") : TEXT("none"), *Pending.Tip.Left(120), *Pending.Trivia);
 
 	// Set up here as well as on the movie player's own request: whichever of the two hears the load first, the
 	// page is there when the player starts.

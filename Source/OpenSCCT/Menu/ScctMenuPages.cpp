@@ -1,6 +1,7 @@
 #include "Menu/ScctMenuPage.h"
 
 #include "Menu/ScctMenuSubsystem.h"
+#include "Menu/ScctOverlayPages.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
@@ -13,8 +14,12 @@ TSharedPtr<SScctMenuPage> ScctMenuPages::Make(const FString& Name, const FScctMe
 	if (Name.Equals(TEXT("address"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("join"), ESearchCase::IgnoreCase)) { return MakeOnline(Host, true); }
 	if (Name.Equals(TEXT("host"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("create"), ESearchCase::IgnoreCase)) { return MakeHostGame(Host); }
 	if (Name.Equals(TEXT("hub"), ESearchCase::IgnoreCase)) { return MakeHub(Host); }
+	if (Name.Equals(TEXT("account"), ESearchCase::IgnoreCase)) { return MakeAccount(Host); }
 	if (Name.Equals(TEXT("settings"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("options"), ESearchCase::IgnoreCase)) { return MakeSettings(Host); }
 	if (Name.Equals(TEXT("credits"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("about"), ESearchCase::IgnoreCase)) { return MakeCredits(Host); }
+	// The Equipment page and a map's strategic map (Menu/ScctOverlayPages.h).
+	if (Name.Equals(TEXT("gear"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("equipment"), ESearchCase::IgnoreCase)) { return MakeGear(Host); }
+	if (Name.Equals(TEXT("map"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("strategicmap"), ESearchCase::IgnoreCase)) { return MakeStrategicMap(Host); }
 	return nullptr;
 }
 

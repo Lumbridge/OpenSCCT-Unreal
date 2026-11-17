@@ -67,6 +67,12 @@ struct FScctHubHudModel
 	FString Prompt;
 	FString EmoteMenu;
 	FString Queue;
+	FLinearColor QueueColour = FLinearColor::White; // the state colour of the pad queued on (Hub/ScctHubPads.h)
+	FString Note;                                   // the note about the last pad match (going, back, why)
+	FString Activity;                               // the course run's or the range round's clock (Hub/ScctHubActivities.h)
+	FString Notices;                                // the activities' recent notices, one a line
+	FString BoardTitle;                             // the nearest score board in reach that is not a world sign
+	FString BoardLines;
 	FString HubName;
 	int32 Team = -1;
 
@@ -118,8 +124,10 @@ struct FScctHubHudModel
  * the queued pad's match. The keys are the bindings' hub commands (Bridge/.../Hub/HubBindings.cs), which arrive on
  * AScctPlayerController::OnLocalCommand like every interface command; this HUD subscribes there.
  *
- * Not ported here: the match pad queue panel's state colours and the activities' clocks, notices and boards (a later
- * step), rank emblems on the name tags, the Armoury (O is logged and ignored), the voice overlay (no voice chat yet).
+ * The pad panel (the queue line on glass with its pad's state colour, the note about the last match) reads the match
+ * pads' view (Hub/ScctHubPads.h). The activities' clock (top middle), their notices under it and the nearest score
+ * board (a panel on the right) read the hub's activities (Hub/ScctHubActivities.h). Not ported here: rank emblems on
+ * the name tags, the Armoury (O is logged and ignored), the voice overlay (no voice transport yet).
  *
  * Unattended switches (for runs with nobody at the keyboard):
  *   -ScctHubOpen=<panel>[@seconds][,...]   open players, chat, travel or emotes that long after the player stands in

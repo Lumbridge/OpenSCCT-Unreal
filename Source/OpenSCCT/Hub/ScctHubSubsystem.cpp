@@ -4,7 +4,13 @@
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
 #include "Hub/SScctHubLoadingScreen.h"
+#include "Hub/ScctHubActivities.h"
+#include "Hub/ScctHubAudio.h"
+#include "Hub/ScctHubEmotes.h"
 #include "Hub/ScctHubHud.h"
+#include "Hub/ScctHubPads.h"
+#include "Hub/ScctHubProps.h"
+#include "Hub/ScctHubVoice.h"
 #include "Engine/World.h"
 #include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
@@ -13,6 +19,7 @@
 #include "Misc/Paths.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
+#include "Online/ScctTokenStore.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 #include "Settings/ScctSettings.h"
@@ -52,7 +59,7 @@ namespace
 
 	const TCHAR* StateName(EScctHubState State)
 	{
-		static const TCHAR* const Names[] = { TEXT("Idle"), TEXT("Connecting"), TEXT("Loading"), TEXT("InHub"), TEXT("Failed") };
+		static const TCHAR* const Names[] = { TEXT("Idle"), TEXT("Connecting"), TEXT("Loading"), TEXT("InHub"), TEXT("Failed"), TEXT("InMatch") };
 		const int32 Index = static_cast<int32>(State);
 		return Index >= 0 && Index < UE_ARRAY_COUNT(Names) ? Names[Index] : TEXT("?");
 	}
@@ -100,7 +107,31 @@ void UScctHubSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	FParse::Value(CommandLine, TEXT("ScctHubCoverHold="), CoverHoldSeconds);
 	FParse::Value(CommandLine, TEXT("ScctHubBots="), AutoBots);
+	FString PadRun;
+	if (FParse::Value(CommandLine, TEXT("ScctHubPad="), PadRun))
+	{
+		FString Number, PadSide;
+		if (!PadRun.Split(TEXT(":"), &Number, &PadSide))
+		{
+			Number = PadRun;
+		}
+		AutoPad = FCString::Atoi(*Number);
+		AutoPadSide = PadSide.Equals(TEXT("merc"), ESearchCase::IgnoreCase) ? 1 : 0;
+		if (Side.IsEmpty())
+		{
+			// He enters the hub on the side he queues for.
+			AutoTeam = AutoPadSide;
+		}
+		AutoPadOptions = TEXT("?TimeLimit=1?SvmBots=2");
+		FParse::Value(CommandLine, TEXT("ScctHubPadOptions="), AutoPadOptions);
+	}
 	Hud = MakeShared<FScctHubHud>(this);
+	Pads = MakeShared<FScctHubPads>(this);
+	Activities = MakeShared<FScctHubActivities>(this);
+	Props = MakeShared<FScctHubProps>(Activities);
+	Audio = MakeShared<FScctHubAudio>(Activities);
+	Emotes = MakeShared<FScctHubEmotes>(Activities);
+	Voice = MakeShared<FScctHubVoice>(this, Activities);
 
 	FScctSettingDesc Listed;
 	Listed.Key = HubListedSetting;
@@ -129,6 +160,17 @@ void UScctHubSubsystem::Deinitialize()
 		Hud->Stop();
 		Hud.Reset();
 	}
+	if (Pads.IsValid())
+	{
+		Pads->Stop();
+		Pads.Reset();
+	}
+	StopActivities();
+	Voice.Reset();
+	Emotes.Reset();
+	Audio.Reset();
+	Props.Reset();
+	Activities.Reset();
 	CloseCover();
 	if (Api != nullptr && GetState() != EScctHubState::Idle)
 	{
@@ -164,6 +206,12 @@ const FScctHubApi* UScctHubSubsystem::Connect()
 		FPaths::DirectoryExists(HubMaps / TEXT("Hub")) ? TEXT("") : TEXT(" (missing: run Tools/Import/Import-HubMap.ps1)"));
 	ConfigureMaster();
 	DrainLog();
+
+	// A pad's match is an online visit the bridge starts: the online subsystem must be up to follow it.
+	if (UScctOnlineSubsystem* Online = GetGameInstance()->GetSubsystem<UScctOnlineSubsystem>(); Online == nullptr || !Online->EnsureReady())
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHub: the online subsystem is not up: the pads' matches cannot be followed"));
+	}
 	return Api;
 }
 
@@ -173,7 +221,7 @@ void UScctHubSubsystem::ConfigureMaster()
 	FString MasterUrl, InviteKey, Token;
 	GConfig->GetString(HubProjectSection, TEXT("MasterUrl"), MasterUrl, GGameIni);
 	GConfig->GetString(HubProjectSection, TEXT("InviteKey"), InviteKey, GGameIni);
-	GConfig->GetString(OnlineUserSection, TEXT("AccountToken"), Token, GGameUserSettingsIni);
+	Token = ScctAccountToken::Load();
 	Api->ConfigureMaster(*MasterUrl, *InviteKey, *Token);
 }
 
@@ -306,6 +354,41 @@ bool UScctHubSubsystem::JoinListed(int32 Index, int32 Team)
 	return bStarted;
 }
 
+bool UScctHubSubsystem::JoinListedId(const FString& Id, const FString& ListedName, bool bRequireAccount, int32 Team)
+{
+	// The listed join by id lives in the social table (it came with the website join).
+	const FScctSocialApi* Social = ScctFeature<FScctSocialApi>();
+	if (Connect() == nullptr || Social == nullptr)
+	{
+		return false;
+	}
+
+	UScctOnlineSubsystem* Online = GetGameInstance()->GetSubsystem<UScctOnlineSubsystem>();
+	if (Online != nullptr && Online->GetState() != EScctOnlineState::Idle)
+	{
+		Online->Leave();
+	}
+
+	Notice.Reset();
+	bWasPresented = false;
+	ReportedSessionId = 0;
+	CloseCover();
+	bCoverShown = false;
+	// A website join enters under the account the master's ticket is for.
+	const FString Name = Online != nullptr && !Online->GetAccountName().IsEmpty() ? Online->GetAccountName() : FindPlayerName();
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: joining the master's hub %s ('%s') as '%s' (%s)"), *Id, *ListedName, *Name, Team == 1 ? TEXT("merc") : TEXT("spy"));
+	const bool bStarted = Social->JoinHubListed(*Id, *ListedName, *Name, Team, bRequireAccount ? 1 : 0) != 0;
+	DrainLog();
+	if (!bStarted)
+	{
+		Notice = ReadText(EScctHubText::Error);
+		UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHub: the join by id did not start: %s"), *Notice);
+	}
+	Api->GetStatus(&Status);
+	Touch();
+	return bStarted;
+}
+
 void UScctHubSubsystem::RequestHubList()
 {
 	if (Connect() == nullptr)
@@ -387,6 +470,38 @@ void UScctHubSubsystem::HandleFrame(float DeltaSeconds)
 	{
 		Hud->Tick(World, DeltaSeconds, LogEvery > 0.0f);
 	}
+	if (Pads.IsValid() && World != nullptr && GetState() == EScctHubState::InHub)
+	{
+		Pads->Tick(World, DeltaSeconds, LogEvery > 0.0f);
+	}
+	if (Activities.IsValid() && World != nullptr && GetState() == EScctHubState::InHub)
+	{
+		// The activities are read first: the props, the sounds, the emotes and the voice work from what was read.
+		const bool bVerbose = LogEvery > 0.0f;
+		Activities->Tick(World, DeltaSeconds, bVerbose);
+		Props->Tick(World, DeltaSeconds, bVerbose);
+		Audio->Tick(World, DeltaSeconds, bVerbose);
+		Emotes->Tick(World, DeltaSeconds, bVerbose);
+		Voice->Tick(World, DeltaSeconds, bVerbose);
+	}
+}
+
+void UScctHubSubsystem::StopActivities()
+{
+	if (Activities.IsValid())
+	{
+		Voice->Stop();
+		Emotes->Stop();
+		Audio->Stop();
+		Props->Stop();
+		Activities->Stop();
+	}
+}
+
+const TArray<FScctHubVoiceSpeaker>& UScctHubSubsystem::GetVoiceSpeakers() const
+{
+	static const TArray<FScctHubVoiceSpeaker> None;
+	return Voice.IsValid() ? Voice->GetSpeakers() : None;
 }
 
 float UScctHubSubsystem::GetVoiceVolume(const FString& PlayerName) const
@@ -448,6 +563,11 @@ void UScctHubSubsystem::TickVisit()
 	if (Hud.IsValid() && Hud->IsRunning() && (!PresentedWorld.IsValid() || GetState() != EScctHubState::InHub))
 	{
 		Hud->Stop();
+	}
+	if (Pads.IsValid() && (!PresentedWorld.IsValid() || GetState() != EScctHubState::InHub))
+	{
+		Pads->Stop();
+		StopActivities();
 	}
 
 	const double Now = FPlatformTime::Seconds();
@@ -522,6 +642,23 @@ void UScctHubSubsystem::HandleStateChange(EScctHubState Old, EScctHubState New)
 			Notice = TEXT("The connection to the hub was lost.");
 		}
 		UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHub: the visit failed: %s"), *Notice);
+	}
+	if (New == EScctHubState::InMatch)
+	{
+		// The online subsystem opens the match's level; this level is left without leaving the hub.
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: away at a pad's match: the online visit plays it"));
+	}
+	if (Old == EScctHubState::InMatch && IsUnderWay(New))
+	{
+		// Back from the match: the hub level is opened now, before the online subsystem's way back to the front end,
+		// and presents the visit again once the hub has welcomed the player.
+		bWasPresented = false;
+		ReportedSessionId = 0;
+		PresentedWorld.Reset();
+		if (FPackageName::DoesPackageExist(HubLevel))
+		{
+			OpenLevel(FString::Printf(TEXT("%s?%s=1"), HubLevel, HubOption));
+		}
 	}
 	Touch();
 }
@@ -645,6 +782,12 @@ void UScctHubSubsystem::RunUnattended()
 		if (HostAndJoin(AutoHostPort, AutoTeam, bAutoHostLoopback))
 		{
 			StartBots();
+			if (AutoPad > 0 && Pads.IsValid())
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: -ScctHubPad: queueing on pad %d as a %s, the laptop taking '%s'"), AutoPad, AutoPadSide == 1 ? TEXT("merc") : TEXT("spy"), *AutoPadOptions);
+				Pads->QueueOnPad(AutoPad, AutoPadSide, AutoPadOptions);
+				DrainLog();
+			}
 		}
 	}
 	else
