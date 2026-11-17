@@ -64,6 +64,7 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	InitRadar();
 	InitBackpack();
 	InitBinoculars();
+	InitDetails();
 
 	// -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1"
 	FString Commands;
@@ -153,6 +154,10 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	LastMotionSignature = 0;
 	bMotionTableMissingLogged = false;
 	AimMateUntil = -1.0f;
+	bTutorialSwitchDone = false;
+	LastLoggedTutorialId = 0;
+	LastLoggedFadeStep = -1;
+	bLastLoggedHeldBriefings = false;
 	if (NewSessionId != 0 && Api == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Error, TEXT("HUD: the bridge has no HUD table (its reason is in the log above); the match plays without a HUD and without goggles"));
@@ -306,6 +311,7 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 		ReadSnapshot();
 		bSnapshotRead = true;
 	}
+	ReadDetails();
 	ProjectMarkers();
 	BuildMotion();
 	ProjectNames();
@@ -348,6 +354,7 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 	Model->Advance(DeltaSeconds);
 	ReadIcons(DeltaSeconds);
 	ReadBinoculars(DeltaSeconds);
+	LogDetails();
 
 	if (UScctVisionSubsystem* Vision = GetWorld()->GetSubsystem<UScctVisionSubsystem>())
 	{
@@ -481,6 +488,7 @@ void UScctHudSubsystem::RunTimedCommands()
 		}
 		else if (RunIconCommand(Command.Name, Command.Argument) || RunRadarCommand(Command.Name, Command.Argument)
 			|| RunBackpackCommand(Command.Name, Command.Argument) || RunMotionCommand(Command.Name, Command.Argument)
+			|| RunDetailsCommand(Command.Name, Command.Argument)
 			|| (GetWorld()->GetSubsystem<UScctTeamPingSubsystem>() != nullptr && GetWorld()->GetSubsystem<UScctTeamPingSubsystem>()->RunCommand(Command.Name, Command.Argument)))
 		{
 		}
