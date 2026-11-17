@@ -87,7 +87,8 @@ public sealed partial class OnlineBridge : IDisposable
     {
         get
         {
-            if (_catalog is null || (Client is null && !string.Equals(_catalogRoot, ContentPaths.Root, StringComparison.OrdinalIgnoreCase)))
+            if (_catalog is null || (Client is null && (!string.Equals(_catalogRoot, ContentPaths.Root, StringComparison.OrdinalIgnoreCase)
+                || _catalog.Revision != MapFolders.Revision)))
             {
                 _catalogRoot = ContentPaths.Root;
                 _catalog = new PlayCatalog();

@@ -250,7 +250,7 @@ TSharedRef<SWidget> SScctFrontEnd::BuildOffline()
 {
 	if (Maps.IsEmpty())
 	{
-		Maps = UScctOnlineSubsystem::FindImportedMaps();
+		Maps = UScctOnlineSubsystem::FindPlayableMaps();
 		// AquaE first if it is there: the map everything was first seen on.
 		MapIndex = FMath::Max(Maps.IndexOfByKey(FString(TEXT("AquaE"))), 0);
 	}

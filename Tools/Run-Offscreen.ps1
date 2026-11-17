@@ -33,6 +33,9 @@ param(
     # Run the audio engine without a sound device (the engine's non-realtime renderer, -DeterministicAudio)
     # instead of no audio engine at all (-nosound): voices really play, into nothing. Never audible.
     [switch] $NullAudio,
+    # Draw the map in the runtime level from its render files even when it has an imported level (a map without one
+    # always is: Source/OpenSCCT/Play/ScctRuntimeMapActor.h). Point -Extra "-ScctMaps=<dir>" at maps outside the content.
+    [switch] $Runtime,
     [string] $Engine = 'F:\UE_5.8'
 )
 
@@ -48,10 +51,14 @@ $shotDir = $ShotDir.Replace('\', '/')
 $log = (Join-Path $project "Saved\Logs\run-$Map$Tag.log").Replace('\', '/')
 $contentDir = "$Content".Replace('\', '/')
 New-Item -ItemType Directory -Force (Join-Path $project 'Saved\Logs') | Out-Null
+$level = "/Game/Imported/Maps/$Map/$Map"
+if ($Runtime -or -not (Test-Path (Join-Path $project "Content\Imported\Maps\$Map\$Map.umap"))) {
+    $level = "/Game/OpenSCCT/RuntimeMap/L_RuntimeMap?ScctMap=$Map"
+}
 
 $arguments = @(
     "`"$project\OpenSCCTUnreal.uproject`"",
-    "`"/Game/Imported/Maps/$Map/$Map$Options`"",
+    "`"$level$Options`"",
     '-game', '-RenderOffscreen', '-ResX=1920', '-ResY=1080', '-ForceRes', '-unattended', '-nosplash',
     $(if ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
     (Format-Switch 'ScctContent' $contentDir),

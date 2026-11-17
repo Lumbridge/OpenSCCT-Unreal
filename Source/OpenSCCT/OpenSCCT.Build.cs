@@ -27,6 +27,11 @@ public class OpenSCCT : ModuleRules
 			"AssetRegistry",
 			// A sound wave class of our own (Play/ScctSoundWave) links against the audio proxy interfaces.
 			"AudioExtensions",
+			// Maps the editor never imported are built at run time from their glTF render files (Play/ScctRuntimeMapActor).
+			"GLTFCore",
+			"ImageWrapper",
+			"MeshDescription",
+			"StaticMeshDescription",
 			"Json",
 			"Projects",
 			"RenderCore",

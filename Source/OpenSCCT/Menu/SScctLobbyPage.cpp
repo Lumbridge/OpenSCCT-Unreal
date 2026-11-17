@@ -106,7 +106,7 @@ void SScctLobbyPage::Construct(const FArguments& InArgs)
 {
 	Online = InArgs._Online;
 	Maps = ScctHostSetup::Maps();
-	for (const FString& Map : UScctOnlineSubsystem::FindImportedMaps())
+	for (const FString& Map : UScctOnlineSubsystem::FindPlayableMaps())
 	{
 		ImportedMaps.Add(Map.ToLower());
 	}

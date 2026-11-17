@@ -8,6 +8,7 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
+#include "Online/ScctMapFolders.h"
 #include "OpenSCCT.h"
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
@@ -16,6 +17,7 @@
 
 const TCHAR* const UScctOnlineSubsystem::FrontEndLevel = TEXT("/Game/OpenSCCT/Maps/L_FrontEnd");
 const TCHAR* const UScctOnlineSubsystem::OnlineOption = TEXT("ScctOnline");
+const TCHAR* const UScctOnlineSubsystem::RuntimeLevel = TEXT("/Game/OpenSCCT/RuntimeMap/L_RuntimeMap");
 
 namespace
 {
@@ -63,30 +65,82 @@ UScctOnlineSubsystem* UScctOnlineSubsystem::Get(const UObject* WorldContext)
 	return Instance != nullptr ? Instance->GetSubsystem<UScctOnlineSubsystem>() : nullptr;
 }
 
-FString UScctOnlineSubsystem::LevelOf(const FString& Map)
+FString UScctOnlineSubsystem::ImportedLevelOf(const FString& Map)
 {
 	return FString::Printf(TEXT("/Game/Imported/Maps/%s/%s"), *Map, *Map);
 }
 
-TArray<FString> UScctOnlineSubsystem::FindImportedMaps()
+FString UScctOnlineSubsystem::LevelOf(const FString& Map)
 {
-	// The maps a match can be played on are the ones the bridge has converted content for; of those, the ones
-	// with an imported level can be shown.
+	const FString Imported = ImportedLevelOf(Map);
+	if (Map.IsEmpty() || FPackageName::DoesPackageExist(Imported) || !FPackageName::DoesPackageExist(RuntimeLevel))
+	{
+		return Imported;
+	}
+	return FString::Printf(TEXT("%s?ScctMap=%s"), RuntimeLevel, *Map);
+}
+
+FString UScctOnlineSubsystem::LevelPackageOfMap(const FString& Map)
+{
+	FString Level = LevelOf(Map);
+	int32 Options = INDEX_NONE;
+	if (Level.FindChar(TEXT('?'), Options))
+	{
+		Level.LeftInline(Options);
+	}
+	return Level;
+}
+
+bool UScctOnlineSubsystem::IsPlayable(const FString& Map)
+{
+	if (Map.IsEmpty())
+	{
+		return false;
+	}
+	if (FPackageName::DoesPackageExist(ImportedLevelOf(Map)))
+	{
+		return true;
+	}
+	return FPackageName::DoesPackageExist(RuntimeLevel) && ScctMapFolders::CanBuild(Map);
+}
+
+bool UScctOnlineSubsystem::IsLevelOf(const UWorld& World, const FString& Map)
+{
+	if (LevelPackageOf(World) != LevelPackageOfMap(Map))
+	{
+		return false;
+	}
+	// The runtime level plays whichever map its URL names.
+	return LevelPackageOf(World) != RuntimeLevel || World.URL.GetOption(TEXT("ScctMap="), TEXT("")) == Map;
+}
+
+TArray<FString> UScctOnlineSubsystem::FindPlayableMaps()
+{
+	// The maps a match can be played on are the ones the bridge has converted content for (in any of its map
+	// folders); of those, the ones with an imported level, or with the render files the runtime level is built
+	// from, can be shown.
 	TArray<FString> Maps;
 	const FScctOnlineApi* Online = ScctFeature<FScctOnlineApi>();
 	if (Online == nullptr)
 	{
 		return Maps;
 	}
+	ScctMapFolders::Apply();
 
 	TArray<TCHAR> Buffer;
 	Buffer.SetNumZeroed(Online->GetText(static_cast<int32>(EScctOnlineText::InstalledMaps), nullptr, 0) + 1);
 	Online->GetText(static_cast<int32>(EScctOnlineText::InstalledMaps), Buffer.GetData(), Buffer.Num());
 	TArray<FString> Installed;
 	FString(Buffer.GetData()).ParseIntoArrayLines(Installed);
+	const bool bRuntimeLevel = FPackageName::DoesPackageExist(RuntimeLevel);
+	TSet<FString> Renderable;
+	if (bRuntimeLevel)
+	{
+		Renderable.Append(ScctMapFolders::RenderableMaps());
+	}
 	for (const FString& Map : Installed)
 	{
-		if (FPackageName::DoesPackageExist(LevelOf(Map)))
+		if (FPackageName::DoesPackageExist(ImportedLevelOf(Map)) || Renderable.Contains(Map))
 		{
 			Maps.Add(Map);
 		}
@@ -691,22 +745,21 @@ void UScctOnlineSubsystem::FollowLevel()
 		return;
 	}
 
-	const FString Current = LevelPackageOf(*World);
 	const bool bInOnlineLevel = World->URL.HasOption(OnlineOption);
 	FString Wanted;
 	if (IsOnARoundsMap(GetState()) && !MapToLoad.IsEmpty() && !HasFlag(EScctOnlineStatusFlags::RoundRefused))
 	{
 		const FString Level = LevelOf(MapToLoad);
-		if (!FPackageName::DoesPackageExist(Level))
+		if (!IsPlayable(MapToLoad))
 		{
 			// The simulation could play it, but there is nothing to draw: the visit ends with the reason.
-			UE_LOG(LogOpenSCCT, Error, TEXT("Online: the server plays %s, which has no imported level (%s)"), *MapToLoad, *Level);
+			UE_LOG(LogOpenSCCT, Error, TEXT("Online: the server plays %s, which has no imported level (%s) and no render files to build one from"), *MapToLoad, *Level);
 			Api->Leave();
-			Notice = FString::Printf(TEXT("The server plays %s, which has not been imported into this game yet."), *MapToLoad);
+			Notice = FString::Printf(TEXT("The server plays %s, which this game can neither find imported nor build from its render files."), *MapToLoad);
 			Touch();
 			return;
 		}
-		if (Current != Level || !bInOnlineLevel)
+		if (!IsLevelOf(*World, MapToLoad) || !bInOnlineLevel)
 		{
 			Wanted = FString::Printf(TEXT("%s?%s=1"), *Level, OnlineOption);
 		}
@@ -739,7 +792,7 @@ void UScctOnlineSubsystem::ReportLoadedWhenReady()
 
 	const UWorld* World = GetGameInstance()->GetWorld();
 	if (World == nullptr || !World->HasBegunPlay() || World->GetTimeSeconds() < LoadedAfterSeconds
-		|| !World->URL.HasOption(OnlineOption) || LevelPackageOf(*World) != LevelOf(MapToLoad))
+		|| !World->URL.HasOption(OnlineOption) || !IsLevelOf(*World, MapToLoad))
 	{
 		return;
 	}

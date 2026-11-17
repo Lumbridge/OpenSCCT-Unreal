@@ -120,11 +120,32 @@ public:
 
 	static UScctOnlineSubsystem* Get(const UObject* WorldContext);
 
+	/** The level a map without an imported one is drawn in, built from its render files (Play/ScctRuntimeMapActor). */
+	static const TCHAR* const RuntimeLevel;
+
 	/** The imported level of an OpenSCCT map ("/Game/Imported/Maps/AquaE/AquaE"), whether it exists or not. */
+	static FString ImportedLevelOf(const FString& Map);
+
+	/**
+	 * The level URL that plays an OpenSCCT map: its imported level when the editor imported it, else the runtime level
+	 * with ?ScctMap=<Map> ("/Game/OpenSCCT/RuntimeMap/L_RuntimeMap?ScctMap=AquaD"). More options can be appended.
+	 */
 	static FString LevelOf(const FString& Map);
 
-	/** The OpenSCCT maps that have an imported level in this project, by folder name, sorted. */
-	static TArray<FString> FindImportedMaps();
+	/** The package of LevelOf, without its options. */
+	static FString LevelPackageOfMap(const FString& Map);
+
+	/** True when the map can be drawn here: it has an imported level, or its render files can build the runtime level. */
+	static bool IsPlayable(const FString& Map);
+
+	/** True when a world is the level that plays this map (its package, and the map option of the runtime level). */
+	static bool IsLevelOf(const UWorld& World, const FString& Map);
+
+	/** The OpenSCCT maps a match can be played on here (imported, or buildable from their render files), sorted. */
+	static TArray<FString> FindPlayableMaps();
+
+	/** The same as FindPlayableMaps (the older name). */
+	static TArray<FString> FindImportedMaps() { return FindPlayableMaps(); }
 
 	// ---- joining and leaving ---------------------------------------------------------------------------------
 

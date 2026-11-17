@@ -126,6 +126,8 @@ public sealed class BridgeSession : IDisposable
             Sidearms = match.Sidearms,
             Rifles = match.Rifles,
             OfflineRules = match.OfflineRules,
+            // The map folders Unreal names (-ScctMaps, maps next to the game) and the content's maps.
+            MapRoots = Online.MapFolders.ExtraRoots(),
         }.ForLocalLaunch();
         return Wrap(new PlaySession(settings, new StopwatchClock()));
     }
