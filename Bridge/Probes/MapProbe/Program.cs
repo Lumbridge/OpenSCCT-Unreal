@@ -9,7 +9,7 @@ using OpenScct.UnrealBridge;
 // team mates' markers from their PRIs, and the blink and the markers follow the half-second timer.
 // Arguments: content folder, map, bots.
 
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
 int bots = args.Length > 2 ? int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 3;
 

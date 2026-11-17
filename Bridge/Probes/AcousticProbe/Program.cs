@@ -17,7 +17,7 @@ using OpenScct.UnrealBridge;
 // results printed; the blocked one must be heard from the opening (a way of one hop), the open one straight with
 // occlusion 0. Then the match runs with bots for a while and the hearing reach's shrink counts are printed.
 // The last line gives the -ScctAudioProbe switch for the same two places in Unreal.
-string content = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal) ? args[1] : "AquaE";
 bool merc = args.Length > 2 && args[2] == "merc";
 FVector? givenListener = null;

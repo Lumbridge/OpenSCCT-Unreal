@@ -17,6 +17,7 @@ cook, stage and archive the game (RunUAT BuildCookRun) and writes the release fo
     Engine\                            the engine's staged files
     Prerequisites\vc_redist.x64.exe    the Visual C++ runtime installer
     README.txt                         what it is, the notices
+    THIRD-PARTY-NOTICES.md             the third-party components the release ships and their licences
     version.json                       version, commits, the names the release owns and every file's SHA-256
 
 then zips it (one top folder) and writes, in -Out:
@@ -65,7 +66,10 @@ next to this repo (the bridge project's own default).
 
 .PARAMETER Repository
 The GitHub repository (owner/name) the release is published to. Players' launchers read its releases without a
-token, so it must be public. Without it no publish.ps1 is written.
+token, so it must be public. Default Lumbridge/OpenSCCT-Unreal. Pass -Repository '' to write no publish.ps1.
+
+.PARAMETER CheckContentOnly
+Run only the provenance check of the source assets and stop.
 
 .PARAMETER NoDotNet
 Do not ship a private .NET runtime: players then need the .NET 10 runtime installed.
@@ -82,7 +86,8 @@ The drive letter the game is built from (see the build step). Always the same le
 exe. Default U.
 
 .EXAMPLE
-pwsh Tools/Package-Release.ps1 -Repository Lumbridge/OpenSCCT-Unreal-Releases
+pwsh Tools/Package-Release.ps1
+pwsh Tools/Package-Release.ps1 -Local -CheckContentOnly
 pwsh Tools/Package-Release.ps1 -Local -Version 0.1.1 -Configuration Development
 #>
 param(
@@ -93,12 +98,13 @@ param(
     [string]$Out = '',
     [string]$Engine = $(if ($env:UE_ROOT) { $env:UE_ROOT } else { 'F:\UE_5.8' }),
     [string]$OpenScct = '',
-    [string]$Repository = '',
+    [string]$Repository = 'Lumbridge/OpenSCCT-Unreal',
     [switch]$NoDotNet,
     [string[]]$Base = @(),
     [string]$StoreTag = 'unreal-files-1',
     [ValidatePattern('^[A-Za-z]$')]
-    [string]$BuildDrive = 'U'
+    [string]$BuildDrive = 'U',
+    [switch]$CheckContentOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -119,6 +125,56 @@ function Invoke-Native([string]$what, [scriptblock]$command) {
     if ($LASTEXITCODE -ne 0) { Fail "$what failed (exit code $LASTEXITCODE)" }
 }
 function Warn-Or-Fail([string]$message) { if ($Local) { Write-Warning $message } else { Fail $message } }
+
+# --- Provenance of the source assets --------------------------------------------------------------------------------
+# An asset imported from a file keeps that file's path in its AssetImportData, which the editor saves into the .uasset
+# (as Latin-1 or UTF-16 text). Every asset under Content/ outside Imported/ may be cooked (/Game/OpenSCCT
+# always is), so none of them may come from the converted original game: no import path into a .content folder, an
+# svmap folder or the shared chars or maps folders, and no SPersoTextures_ file. A Git LFS pointer cannot be checked.
+# Returns one line per problem.
+function Test-ContentProvenance([string]$contentRoot) {
+    $skip = @('Imported') | ForEach-Object { [IO.Path]::GetFullPath((Join-Path $contentRoot $_)).TrimEnd('\') + '\' }
+    $marker = [regex]::new('(?i)[\\/](?:\.content|svmap|shared[\\/](?:chars|maps))[\\/]|(?<![A-Za-z0-9])SPersoTextures_', 'Compiled')
+    # The characters a path may hold, to widen a match to the whole path for the report.
+    $pathChar = [regex]::new('^[\x20-\x7E-["<>|*?]]$')
+    $lfs = [Text.Encoding]::ASCII.GetBytes('version https://git-lfs.github.com/spec/')
+    $latin1 = [Text.Encoding]::Latin1
+    $utf16 = [Text.Encoding]::Unicode
+    $files = Get-ChildItem -LiteralPath $contentRoot -Recurse -File -Include '*.uasset', '*.umap' |
+        Where-Object { $full = $_.FullName; -not ($skip | Where-Object { $full.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }) }
+    foreach ($file in $files) {
+        $relative = $file.FullName.Substring($contentRoot.TrimEnd('\', '/').Length + 1).Replace('\', '/')
+        $bytes = [IO.File]::ReadAllBytes($file.FullName)
+        if ($bytes.Length -ge $lfs.Length -and [Linq.Enumerable]::SequenceEqual([byte[]]$bytes[0..($lfs.Length - 1)], $lfs)) {
+            "Content/${relative}: a Git LFS pointer, not the asset (run git lfs pull)"
+            continue
+        }
+        # UTF-16 text starts at an even or an odd offset of the file: both readings.
+        $texts = @($latin1.GetString($bytes), $utf16.GetString($bytes))
+        if ($bytes.Length -gt 1) { $texts += $utf16.GetString($bytes, 1, $bytes.Length - 1) }
+        $found = [Collections.Generic.SortedSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($text in $texts) {
+            foreach ($m in $marker.Matches($text)) {
+                $start = $m.Index; $end = $m.Index + $m.Length
+                while ($start -gt 0 -and $pathChar.IsMatch([string]$text[$start - 1])) { $start-- }
+                while ($end -lt $text.Length -and $pathChar.IsMatch([string]$text[$end])) { $end++ }
+                [void]$found.Add($text.Substring($start, $end - $start).Trim())
+            }
+        }
+        foreach ($path in $found) { "Content/${relative}: imported from $path" }
+    }
+}
+
+$provenanceWatch = [Diagnostics.Stopwatch]::StartNew()
+$provenance = @(Test-ContentProvenance (Join-Path $repo 'Content'))
+$provenanceWatch.Stop()
+if ($provenance.Count -gt 0) {
+    Warn-Or-Fail ("source assets that would be cooked come from the original game's converted content (move them out of " +
+        "Content/ or replace them with project-made ones; Git LFS pointers need git lfs pull):`n  " + ($provenance -join "`n  "))
+} else {
+    Write-Host ('No source asset comes from converted original content ({0:0.0} s).' -f $provenanceWatch.Elapsed.TotalSeconds)
+}
+if ($CheckContentOnly) { return }
 
 # --- Version -------------------------------------------------------------------------------------------------------
 $gameIni = Get-Content -LiteralPath (Join-Path $repo 'Config/DefaultGame.ini') -Raw
@@ -367,13 +423,16 @@ $readme = @(
     'the United States of America and elsewhere. Unreal(R) Engine, Copyright 1998 - 2026, Epic Games, Inc. All rights',
     'reserved.', '',
     "OpenSCCT $openScctVersion (commit $openScctCommit) runs the simulation: https://github.com/Lumbridge/OpenSCCT", '',
-    'The textures from ambientCG (ambientcg.com) and Poly Haven (polyhaven.com) are CC0.'
+    'The textures from ambientCG (ambientcg.com) and Poly Haven (polyhaven.com) are CC0.', '',
+    'THIRD-PARTY-NOTICES.md lists the third-party components this release ships and their licences.'
 )
 if (-not $NoDotNet) {
     $readme += @('', 'The .NET runtime in OpenSCCTUnreal\Binaries\DotNet is (c) the .NET Foundation and contributors, under the MIT',
         'licence: see LICENSE.txt and ThirdPartyNotices.txt in that folder.')
 }
 Write-Text (Join-Path $folder 'README.txt') ($readme -join "`n")
+# The repository's list of the third-party components a release ships, with their licences.
+Copy-Item -LiteralPath (Join-Path $repo 'THIRD-PARTY-NOTICES.md') -Destination $folder
 
 # --- version.json --------------------------------------------------------------------------------------------------
 $entries = @(Get-ChildItem -LiteralPath $folder -Force | ForEach-Object Name) + 'version.json' | Sort-Object -Unique
@@ -414,7 +473,7 @@ $info = [ordered]@{
 
 # --- Checks --------------------------------------------------------------------------------------------------------
 # NOTICES.txt is the engine's own third-party notices, staged by UAT.
-$expected = @($starter, $target, 'Engine', 'NOTICES.txt', 'Prerequisites', 'README.txt', 'version.json')
+$expected = @($starter, $target, 'Engine', 'NOTICES.txt', 'Prerequisites', 'README.txt', 'THIRD-PARTY-NOTICES.md', 'version.json')
 $unexpected = $entries | Where-Object { $_ -notin $expected }
 $missing = $expected | Where-Object { $_ -notin $entries }
 if ($unexpected) { Warn-Or-Fail "unexpected entries in the folder: $($unexpected -join ', ')" }

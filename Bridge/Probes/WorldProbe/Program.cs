@@ -20,7 +20,7 @@ using OpenScct.UnrealBridge.Devices;
 // the state (every change must have been said once), the placed actors against the importer's own placement
 // formula, and every name handed out against the map's render files, read here on their own.
 
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
 double seconds = args.Length > 2 ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 20;
 

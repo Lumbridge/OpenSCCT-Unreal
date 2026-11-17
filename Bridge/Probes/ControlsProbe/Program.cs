@@ -12,7 +12,7 @@ using OpenScctGame.Play.Session;
 // Unreal would send it (one BridgeRawInput a frame), and what the simulation got printed with a verdict per step.
 // Arguments: content root, map, scratch folder for the saved bindings and settings.
 
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
 string scratch = args.Length > 2 ? args[2] : Path.Combine(Path.GetTempPath(), "ControlsProbe");
 

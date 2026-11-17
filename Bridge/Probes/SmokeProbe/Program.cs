@@ -13,7 +13,7 @@ using OpenScct.UnrealBridge;
 // server (ResponsiveSmokeWorld.Bullet, what a gun's trace does). What is printed is what reached the client: the
 // smoke state, the cloud's box and its density grid at the three quality sizes with the time each takes to sample,
 // and the density along the bullet's line before and after it.
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
 double seconds = args.Length > 2 ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 9;
 bool on = !(args.Length > 3 && args[3] == "off");

@@ -22,6 +22,8 @@ A release is a zip that the OpenSCCT launcher installs, plus a checksum and a la
 - A private .NET 10 runtime in `Binaries/DotNet`, copied from the newest installed 10.x runtime. Players then need
   no .NET installed. `-NoDotNet` leaves it out.
 - `Prerequisites/vc_redist.x64.exe`, the Visual C++ runtime installer from the engine.
+- `THIRD-PARTY-NOTICES.md`, copied from the repository root: the third-party components a release ships and their
+  licences. Update it when the bridge gains a package or the release gains a component.
 - `version.json`, in format 1. It is the Editor's package format with a few more fields: `configuration`,
   `engineVersion`, `openscctVersion`, `openscctCommit`, `executable` and `gameExecutable`. It lists every file with
   its size and SHA-256.
@@ -92,7 +94,7 @@ handshake and in the release notes. It refuses an OpenSCCT checkout with uncommi
    clean tree and an unused tag:
 
    ```powershell
-   pwsh Tools/Package-Release.ps1 -Repository <owner/name>
+   pwsh Tools/Package-Release.ps1
    ```
 
    The build and cook take a long time. UAT's log is `Saved/Release/<version>/uat.log`.
@@ -109,13 +111,30 @@ fails if the checkout's path, or the user profile path, is found in any shipped 
 Development build (`-Configuration Development`), and only warns about private paths and size. Never upload a local
 package.
 
+## Provenance of the source assets
+
+Before anything is built, the script reads every `.uasset` and `.umap` under `Content/` except `Content/Imported`
+(everything else may be cooked) as Latin-1 and as UTF-16LE text. An asset imported from a file keeps that file's
+path, so the script fails if any of them names a path into a `.content`, `svmap`, `shared/chars` or `shared/maps`
+folder (either separator) or an `SPersoTextures_` file: those come from the original game's converted content. It
+also fails on a Git LFS pointer file (`version https://git-lfs...`), which means `git lfs pull` was not run and
+the asset cannot be checked. With `-Local` both only warn. `-CheckContentOnly` runs this check alone and stops:
+
+```powershell
+pwsh Tools/Package-Release.ps1 -Local -CheckContentOnly
+```
+
+## Where releases are published
+
+`-Repository` defaults to `Lumbridge/OpenSCCT-Unreal`, this repository, which is public, as it must be: players'
+launchers read releases without a token. `-Repository ''` writes no `publish.ps1`.
+
+## The launcher side
+
+The OpenSCCT launcher has an Unreal tab (`UnrealService` in OpenSCCT's
+`src/OpenScct.Launcher.Core/Unreal/UnrealService.cs`). It installs a release from its `launcher.json` and file list
+through the delta installer, which already applies the binary patches from the store release.
+
 ## Not decided yet
 
-- **Where releases are published.** This repository is private, and players' launchers read releases without a
-  token, so releases need a public repository. Until one is chosen, `-Repository` has no default and no
-  `publish.ps1` is written without it.
-- **The launcher side.** The launcher does not read these releases yet. The plan is an Unreal tab built like the
-  Editor's (`EditorService` in OpenSCCT's `src/OpenScct.Launcher.Core/Editor`). It would start the game with
-  `-ScctContent=<packs folder>` and update through the game's delta installer, which first needs to learn to apply
-  `patches`. Until then, a launcher updating from the file list downloads changed files whole.
 - **Code signing.** Nothing is signed.

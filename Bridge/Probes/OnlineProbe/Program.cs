@@ -57,8 +57,8 @@ internal static unsafe class Probe
 
     public static int Run(string[] args)
     {
-        string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
-        string openScct = args.Length > 1 ? args[1] : @"C:\Users\ryans\source\repos\OSC-unreal-bridge";
+        string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
+        string openScct = args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.OpenScctCheckout();
         string firstMap = args.Length > 2 ? args[2] : "AquaE";
         string secondMap = args.Length > 3 ? args[3] : "ClubE";
         double secondMatchSeconds = args.Length > 4 ? double.Parse(args[4], CultureInfo.InvariantCulture) : 10;

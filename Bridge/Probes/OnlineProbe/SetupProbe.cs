@@ -16,7 +16,7 @@ internal static unsafe class SetupProbe
 
     public static int Run(string[] args)
     {
-        string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+        string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
         string map = args.Length > 1 ? args[1] : "AquaE";
         HostApi host = default;
         int version = ((delegate* unmanaged<HostApi*, int>)&HostExports.GetApi)(&host);

@@ -15,7 +15,7 @@ using OpenScct.UnrealBridge.Loadout;
 // level locks with the player's level counted; and the picker in a merc's round, where his own side is the played one.
 // Arguments: content folder, map, scratch folder.
 
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
 string scratch = args.Length > 2 ? args[2] : Path.Combine(Path.GetTempPath(), "GearMenuProbe");
 Directory.CreateDirectory(scratch);

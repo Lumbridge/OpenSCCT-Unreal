@@ -16,7 +16,7 @@ internal static unsafe class DownloadProbe
     {
         string map = args.Length > 0 ? args[0] : throw new ArgumentException("a map code is needed");
         string packs = Path.GetFullPath(args.Length > 1 ? args[1] : throw new ArgumentException("a scratch packs folder is needed"));
-        string content = Path.GetFullPath(args.Length > 2 ? args[2] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content");
+        string content = Path.GetFullPath(args.Length > 2 ? args[2] : OpenScct.UnrealBridge.DevPaths.ContentRoot());
         bool nav = args.Length > 3 && args[3] == "nav";
 
         // The packs folder BridgeSession.Configure reads, as a test process of Unreal moves it.

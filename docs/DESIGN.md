@@ -2,9 +2,9 @@
 
 Started 2026-11-17.
 
-## What Ryan asked for
+## Goals
 
-- Port OpenSCCT to Unreal Engine 5.8.4, in its own private repo.
+- Port OpenSCCT to Unreal Engine 5.8.4, in its own repository.
 - 1:1 parity with the original is not the goal. It should look AAA and better than the Godot client:
   flashy, beautiful graphics, new textures and models, a cool gun for the merc.
 - The first map pool is the Enhanced maps (the E maps: AquaE, CineE, ClubE, FactE, KrauE, MissE, MounE,
@@ -25,12 +25,13 @@ Started 2026-11-17.
 3. **New Rust server plus native Unreal client.** Same rewrite cost as 2 on the client and a second rewrite
    on the server. Only worth it if 1 turned out impossible.
 
-Ryan's preference for the existing server picks 1. The Rust fallback is not needed unless hosting .NET in
+The preference for the existing server picks 1. The Rust fallback is not needed unless hosting .NET in
 Unreal fails.
 
 ## Calls made (mine, open to correction)
 
-- **Repo**: `Lumbridge/OpenSCCT-Unreal`, private. Project `OpenSCCTUnreal`, game module `OpenSCCT`.
+- **Repo**: `Lumbridge/OpenSCCT-Unreal`, public. Its GitHub releases are what the OpenSCCT launcher installs.
+  Project `OpenSCCTUnreal`, game module `OpenSCCT`.
 - **Runtime hosting**: the full .NET runtime through `hostfxr`, not NativeAOT, so the simulation runs
   unmodified whatever it does with reflection. The bridge exposes a flat C interface.
 - **OpenSCCT source**: referenced from a sibling checkout of `Lumbridge/OpenSCCT` at a pinned commit, not

@@ -17,7 +17,7 @@ using OpenScct.UnrealBridge.Devices;
 // A merc round: motion vision on (SwitchHeadset 1), the tracker's state and its locks boxed from the view in the
 // 640 x 480 frame, the clean rectangles among them.
 
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
 double seconds = args.Length > 2 ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 10;
 

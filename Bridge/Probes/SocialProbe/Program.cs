@@ -22,7 +22,7 @@ return mode switch
     "demo" => DemoCheck.Run(args[1..]),
     "forward" => Forward(args.Length > 1 ? args[1] : string.Empty),
     "list" => List(args.Length > 1 ? args[1] : WebsiteJoin.OfficialMasterUrl),
-    _ => States(args.Length > 1 ? args[1] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content"),
+    _ => States(args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.ContentRoot()),
 };
 
 static int States(string content)

@@ -46,7 +46,7 @@ internal static unsafe class HackProbe
 
     public static int Run(string[] args)
     {
-        string content = args.Length > 1 ? args[1] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+        string content = args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
         int port = args.Length > 2 ? int.Parse(args[2], CultureInfo.InvariantCulture) : 28953;
         string map = args.Length > 3 ? args[3] : "AquaE";
 
@@ -436,7 +436,7 @@ internal static unsafe class HackProbe
     /// </summary>
     public static int Host(string[] args)
     {
-        string content = args.Length > 1 ? args[1] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+        string content = args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
         int port = args.Length > 2 ? int.Parse(args[2], CultureInfo.InvariantCulture) : 28962;
         double seconds = args.Length > 3 ? double.Parse(args[3], CultureInfo.InvariantCulture) : 120;
         string spyName = args.Length > 4 ? args[4] : "UnrealCheck";

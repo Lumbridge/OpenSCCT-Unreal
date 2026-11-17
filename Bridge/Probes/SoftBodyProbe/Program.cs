@@ -10,7 +10,7 @@ using OpenScct.UnrealBridge.SoftBodies;
 // the first body pawns push (a strip curtain if there is one) for 1.5 s, at 4 s a shot line goes through every body.
 // Printed each second: how far the bodies are from rest, the colliders, shot lines and the sounds played, and at the
 // end which of the sounds the events feature resolved.
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "ClubE";
 double seconds = args.Length > 2 ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 7;
 int bots = args.Length > 3 ? int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture) : 0;

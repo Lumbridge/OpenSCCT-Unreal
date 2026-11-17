@@ -91,3 +91,17 @@ Nothing here was downloaded. `Content/OpenSCCT/Effects/` holds only things built
 
 The textures the placed effects show (smoke, sparks, coronas, cookies) are original game content: they are
 imported per map into `Content/Imported/` and never committed.
+
+## Pawn skins (Tools/Materials, Content/OpenSCCT/Materials/PawnSkins)
+
+The state skins `Source/OpenSCCT/Play/ScctPawnSkins` draws over a pawn's body are materials built by this repo's own
+script (`Tools/Materials/Build-PawnSkinMaterials.ps1`, which runs `build_pawn_skin_materials.py`):
+
+| Asset | Used for |
+|---|---|
+| M_ScctStickySkin | the sticky shocker's Stickess skin |
+| M_ScctShockImmunityEdge | the merc's shock-protection edge (a computed fresnel edge, no texture) |
+| M_ScctWetSkin, MI_ScctWetSkin_ATT, MI_ScctWetSkin_ATT2, MI_ScctWetSkin_DEF | the wet skin of a pawn in the rain (spy body, spy head, merc body) |
+
+The textures these skins show (the Stickess and wet-skin textures of SPersoTextures) are original game content. They
+are not committed: the game takes them at run time from the player's own imported content.

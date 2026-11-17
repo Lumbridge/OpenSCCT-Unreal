@@ -10,7 +10,7 @@ using OpenScct.UnrealBridge.Test;
 // Vision-cancelling: a baseline drop, back to the ledge, a drop switching to night vision at touchdown while moving;
 // both must be measured with a recovery time. Spy-grab: one mercenary must stand in the lane and a grab from behind
 // must count. Exit code 1 on a failure.
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 
 // The sizes ScctLessonApi.h asserts.
 Console.WriteLine($"sizes: BridgeLessonState {Unsafe.SizeOf<BridgeLessonState>()}, BridgeLessonAttempt {Unsafe.SizeOf<BridgeLessonAttempt>()}, LessonApi {Unsafe.SizeOf<LessonApi>()}");

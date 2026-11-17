@@ -14,7 +14,7 @@ internal static unsafe class MapsProbe
 {
     public static int Run(string[] args)
     {
-        string content = Path.GetFullPath(args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content");
+        string content = Path.GetFullPath(args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot());
         string folder = args.Length > 1 ? Path.GetFullPath(args[1]) : throw new ArgumentException("a folder of map folders is needed");
         string map = args.Length > 2 ? args[2] : "AquaD";
 

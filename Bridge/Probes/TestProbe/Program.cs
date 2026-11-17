@@ -11,7 +11,7 @@ using OpenScct.UnrealBridge.Test;
 // The world check must step its ticks; the match (TestBox by default: the fixture the bridge ships in maps/) must
 // show all four pawns on the client with replicated state, run its ticks, and once the server is stopped every server
 // pawn must be on the client within 100 uu of where the server has it. Exit code 1 on a failure.
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "TestBox";
 int matchTicks = args.Length > 2 ? int.Parse(args[2], CultureInfo.InvariantCulture) : 600;
 

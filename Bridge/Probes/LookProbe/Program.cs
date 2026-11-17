@@ -9,7 +9,7 @@ using OpenScct.UnrealBridge.Pose;
 // is printed (it came back through replication), with the camo files Unreal would draw on the stock surfaces. The map's
 // outfits (render/outfits.json) are printed at the start, and for an outfit model the posed skeleton is checked: how
 // many bones the stock clips move on it.
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
 string text = args.Length > 2 ? args[2] : "woodland+blue";
 int bots = args.Length > 3 ? int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture) : 3;

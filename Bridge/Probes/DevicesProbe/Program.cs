@@ -13,7 +13,7 @@ using OpenScct.UnrealBridge.Events;
 // the local spy (PlaceModem) and at 6 s every modem is shot (ShootModems), all on the SERVER's world; what is printed
 // is what reached the client. Passes when the cameras' markers say Disabled, the modem is followed as a spawned
 // prop with its mesh, and its destruction preset is reported as an effect actor.
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
 double seconds = args.Length > 2 ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 10;
 

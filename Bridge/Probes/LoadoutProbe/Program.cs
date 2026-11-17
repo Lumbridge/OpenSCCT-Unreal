@@ -13,7 +13,7 @@ using OpenScct.UnrealBridge.Loadout;
 // them; and, for a merc, a gear change asked mid-round with the server's answer and the kit after it.
 // Arguments: content folder, map, scratch folder.
 
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
 string scratch = args.Length > 2 ? args[2] : Path.Combine(Path.GetTempPath(), "LoadoutProbe");
 Directory.CreateDirectory(scratch);

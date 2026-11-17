@@ -22,7 +22,7 @@ param(
     [string] $ShotDir = '',
     # The level to open: the front end by default, "/Game/Imported/Maps/AquaE/AquaE?Side=merc" for a match.
     [string] $Level = '/Game/OpenSCCT/Maps/L_FrontEnd',
-    [string] $Content = $(if ($env:SVM_CONTENT) { $env:SVM_CONTENT } else { 'C:\Users\ryans\source\repos\SVM-Rewrite\.content' }),
+    [string] $Content = $(if ($env:SVM_CONTENT) { $env:SVM_CONTENT } else { (Join-Path $env:LOCALAPPDATA 'OpenSCCT\packs') }),
     [string] $Extra = '',
     [int] $TimeoutSeconds = 300,
     [string] $Engine = 'F:\UE_5.8'

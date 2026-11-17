@@ -11,7 +11,7 @@ using OpenScct.UnrealBridge.Hud;
 // HudProbe <content root> [map] [spy|merc] [seconds] [mode] [api]
 // With "api" as the sixth argument the whole run goes through the two function tables exactly as Unreal calls them
 // (Exports.GetApi and HudExports.GetApi, unmanaged function pointers, raw buffers), instead of the managed methods.
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
 bool merc = args.Length > 2 && args[2].Equals("merc", StringComparison.OrdinalIgnoreCase);
 double seconds = args.Length > 3 ? double.Parse(args[3], CultureInfo.InvariantCulture) : 14;

@@ -54,8 +54,8 @@ internal static unsafe class Probe
 
     public static int Run(string[] args)
     {
-        string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
-        string openScct = args.Length > 1 ? args[1] : @"C:\Users\ryans\source\repos\OSC-unreal-bridge";
+        string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
+        string openScct = args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.OpenScctCheckout();
         int port = args.Length > 2 ? int.Parse(args[2], CultureInfo.InvariantCulture) : 28951;
 
         bool ok = CheckLayout();
@@ -710,7 +710,7 @@ internal static class Listener
     public static int Run(string[] args)
     {
         string address = args.Length > 1 ? args[1] : "127.0.0.1:28961";
-        string content = args.Length > 2 ? args[2] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+        string content = args.Length > 2 ? args[2] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
         double seconds = args.Length > 3 ? double.Parse(args[3], CultureInfo.InvariantCulture) : 60;
         string expect = args.Length > 4 ? args[4] : "UnrealCheck";
         double toneHz = args.Length > 5 ? double.Parse(args[5], CultureInfo.InvariantCulture) : 660;

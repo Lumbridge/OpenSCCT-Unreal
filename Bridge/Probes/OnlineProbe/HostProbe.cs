@@ -32,7 +32,7 @@ internal static unsafe class HostProbe
 
     public static int Run(string[] args)
     {
-        string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+        string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
         string map = args.Length > 1 ? args[1] : "AquaE";
         int port = args.Length > 2 ? int.Parse(args[2], CultureInfo.InvariantCulture) : 28941;
         int lanPort = args.Length > 3 ? int.Parse(args[3], CultureInfo.InvariantCulture) : 28942;

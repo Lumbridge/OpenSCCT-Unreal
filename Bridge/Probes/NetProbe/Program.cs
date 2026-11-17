@@ -11,7 +11,7 @@ using OpenScct.UnrealBridge.Test;
 // bots for a listen match; the dedicated server brings its own), runs it and prints the netcode figures every 2 s.
 // Fails when the link was not applied, the measured round trip is far from the profile's, a bot resynchronised, or a
 // scenario failed or did not finish.
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string profile = args.Length > 1 ? args[1] : "100";
 bool dedicated = args.Length > 2 && args[2] == "dedicated";
 string scenario = args.Length > 3 ? args[3] : "walk";
