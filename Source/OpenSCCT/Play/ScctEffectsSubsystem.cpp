@@ -13,6 +13,8 @@
 #include "Misc/CommandLine.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/Parse.h"
+#include "Hud/ScctVisionSubsystem.h"
+#include "Misc/ScopeExit.h"
 #include "OpenSCCT.h"
 #include "Play/ScctEquipmentSubsystem.h"
 #include "Play/ScctExposure.h"
@@ -589,6 +591,19 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 {
 	const int32 Count = Events->GetEffectActors(ActorBuffer.GetData(), ActorBuffer.Num());
+	const UScctVisionSubsystem* Vision = UScctVisionSubsystem::Find(GetWorld());
+	const bool bShowVisionOnly = Vision != nullptr && Vision->ShowsVisionOnlyEffects();
+	int32 NumVisionOnly = 0;
+	ON_SCOPE_EXIT
+	{
+		const int32 Shown = bShowVisionOnly ? NumVisionOnly : 0;
+		if (NumVisionOnly != LoggedVisionOnly || Shown != LoggedVisionOnlyShown)
+		{
+			LoggedVisionOnly = NumVisionOnly;
+			LoggedVisionOnlyShown = Shown;
+			UE_LOG(LogOpenSCCT, Log, TEXT("Effects: %d vision-only effects listed, %d shown (mode %d)"), NumVisionOnly, Shown, Vision != nullptr ? Vision->GetVisionMode() : 0);
+		}
+	};
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
 		const FScctEffectActor& Record = ActorBuffer[Index];
@@ -613,7 +628,10 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 		// Where it is: on a drawn pawn's bone, or where the simulation has it.
 		const FVector Scale(Record.ScaleX != 0.0f ? Record.ScaleX : 1.0f, Record.ScaleY != 0.0f ? Record.ScaleY : 1.0f, Record.ScaleZ != 0.0f ? Record.ScaleZ : 1.0f);
 		FTransform Place(FRotator(Record.Pitch, Record.Yaw, Record.Roll), FVector(Record.X, Record.Y, Record.Z));
-		bool bHidden = (Record.Flags & (EScctEffectFlags::Hidden | EScctEffectFlags::VisionOnly)) != 0;
+		// bHideInNormalVision: shown only while the goggles show night or thermal vision.
+		const bool bVisionOnly = (Record.Flags & EScctEffectFlags::VisionOnly) != 0;
+		NumVisionOnly += bVisionOnly ? 1 : 0;
+		bool bHidden = (Record.Flags & EScctEffectFlags::Hidden) != 0 || (bVisionOnly && !bShowVisionOnly);
 		if ((Record.Flags & EScctEffectFlags::OnBone) != 0)
 		{
 			const AScctPawnProxy* Proxy = Session->FindProxy(Record.BaseActorId);

@@ -226,6 +226,11 @@ private:
 	TArray<FScctImpactMark> MarkBuffer;
 
 	uint32 Frame = 0;
+
+	/** What the log last said about the effects flagged bHideInNormalVision: listed, and shown by the goggles. */
+	int32 LoggedVisionOnly = 0;
+	int32 LoggedVisionOnlyShown = 0;
+
 	float TimeScale = 1.0f;
 	float MatchSeconds = 0.0f;
 	bool bSceneReady = false;

@@ -4,10 +4,12 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "Hud/ScctVisionSubsystem.h"
 #include "OpenSCCT.h"
 #include "Play/ScctLevelStateSubsystem.h"
 #include "Play/ScctSessionSubsystem.h"
@@ -45,6 +47,11 @@ namespace
 	constexpr float BeamHaloWidth = 7.0f;
 	constexpr float BeamEndSize = 5.0f;
 	constexpr float LampSize = 6.0f;
+
+	// The goggles' beam: never thinner than this across (cm), and wider with distance so it stays about one and a
+	// half pixels across in a full HD picture, as the original's beam mesh never vanishes between pixels.
+	constexpr float VisionBeamMinWidth = 1.2f;
+	constexpr float VisionBeamWidthPerDistance = 0.0022f;
 
 	const FName MarkerColorParameter(TEXT("Color"));
 	const FName MarkerIntensityParameter(TEXT("Intensity"));
@@ -100,8 +107,8 @@ void UScctMarkersSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 {
 	if (OldId != 0 && bReported)
 	{
-		UE_LOG(LogOpenSCCT, Log, TEXT("Markers summary: at most %d objective signs, %d status lamps and %d laser beams drawn at once; %d beams left out because the map shows them only in the vision modes"),
-			PeakSigns, PeakLamps, PeakBeams, NumVisionOnlyBeams);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Markers summary: at most %d objective signs, %d status lamps and %d laser beams drawn at once; %d beams the map shows only in thermal and EMF vision, at most %d beams drawn for the goggles"),
+			PeakSigns, PeakLamps, PeakBeams, NumVisionOnlyBeams, PeakGoggleBeams);
 	}
 	// Name ids and beam ids belong to one match.
 	ResetMatch();
@@ -109,7 +116,7 @@ void UScctMarkersSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 
 void UScctMarkersSubsystem::ResetMatch()
 {
-	for (FPool* Pool : { &Signs, &Lamps, &Cores, &Halos })
+	for (FPool* Pool : { &Signs, &Lamps, &Cores, &Halos, &VisionBeams })
 	{
 		for (int32 Index = 0; Index < Pool->Used.Num(); ++Index)
 		{
@@ -124,7 +131,8 @@ void UScctMarkersSubsystem::ResetMatch()
 	Beams.Reset();
 	MatchSeconds = 0.0f;
 	bReported = false;
-	PeakSigns = PeakLamps = PeakBeams = NumVisionOnlyBeams = 0;
+	PeakSigns = PeakLamps = PeakBeams = NumVisionOnlyBeams = PeakGoggleBeams = 0;
+	LoggedGoggleBeams = LoggedGoggleMode = 0;
 }
 
 void UScctMarkersSubsystem::HandleMatchStarted()
@@ -179,6 +187,14 @@ bool UScctMarkersSubsystem::EnsureScene()
 	Cores.Material = BeamMaterial;
 	Halos.Mesh = CylinderMesh;
 	Halos.Material = BeamMaterial;
+	// Never drawn in the picture, only into the custom depth stencil, so any opaque material will do: the engine's
+	// own one for its shapes.
+	VisionBeams.Mesh = CylinderMesh;
+	VisionBeams.Material = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	if (VisionBeams.Material == nullptr)
+	{
+		VisionBeams.Material = UMaterial::GetDefaultMaterial(MD_Surface);
+	}
 	bSceneReady = true;
 	return true;
 }
@@ -501,14 +517,25 @@ void UScctMarkersSubsystem::UpdateLasers()
 	}
 	const int32 Count = FMath::Clamp(Total, 0, LaserBuffer.Num());
 
+	// Thermal and EMF draw every beam from its vision look only (the original's FaithfulView hides the normal streak
+	// while the vision-only nodes are shown); the other modes draw the beams the map does not hide, as in plain sight.
+	const UScctVisionSubsystem* Vision = UScctVisionSubsystem::Find(GetWorld());
+	const int32 Mode = Vision != nullptr ? Vision->GetVisionMode() : 0;
+	const bool bGoggleLook = Vision != nullptr && Vision->IsHeatOrEmf();
+	const FScctBridgeView& View = Session->GetView();
+	const FVector Eye(View.X, View.Y, View.Z);
+
 	int32 NumDrawn = 0;
 	int32 NumVisionOnly = 0;
+	int32 NumGoggle = 0;
+	int32 NumGoggleVisionOnly = 0;
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
 		const FScctWorldLaser& Laser = LaserBuffer[Index];
 		const bool bVisionOnly = (Laser.Flags & EScctWorldLaserFlags::HideInNormalVision) != 0;
 		NumVisionOnly += bVisionOnly ? 1 : 0;
-		if (bVisionOnly && !bShowVisionLasers)
+		const bool bStreak = !bGoggleLook && (!bVisionOnly || bShowVisionLasers);
+		if (!bStreak && !bGoggleLook)
 		{
 			continue;
 		}
@@ -522,25 +549,61 @@ void UScctMarkersSubsystem::UpdateLasers()
 		}
 
 		FBeam& Beam = Beams.FindOrAdd(Laser.Id);
+		if (Beam.Core == INDEX_NONE && Beam.Vision == INDEX_NONE && bLog)
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("Markers: %.1f s laser beam %d (%s) from (%.0f, %.0f, %.0f) to (%.0f, %.0f, %.0f), heat %.2f%s"), MatchSeconds, Laser.Id, Laser.Kind == 1 ? TEXT("mine") : TEXT("tripwire"),
+				Start.X, Start.Y, Start.Z, End.X, End.Y, End.Z, Laser.Heat, bVisionOnly ? TEXT(", vision modes only") : TEXT(""));
+		}
+		Beam.SeenFrame = Frame;
+		const FQuat Along = FRotationMatrix::MakeFromZ(End - Start).ToQuat();
+		const FVector Middle = (Start + End) * 0.5;
+
+		// The goggles' look: a cylinder drawn only into the custom depth stencil, which the mode's material paints
+		// (thermal at the beam's heat, EMF as a dark grey streak).
+		if (bGoggleLook)
+		{
+			if (Beam.Vision == INDEX_NONE)
+			{
+				Beam.Vision = Acquire(VisionBeams);
+			}
+			if (UStaticMeshComponent* Component = VisionBeams.Components[Beam.Vision].Get())
+			{
+				const FVector Nearest = FMath::ClosestPointOnSegment(Eye, Start, End);
+				const double Width = FMath::Max<double>(VisionBeamMinWidth, FVector::Dist(Eye, Nearest) * VisionBeamWidthPerDistance);
+				Component->SetRenderInMainPass(false);
+				Component->SetRenderInDepthPass(false);
+				Component->SetRenderCustomDepth(true);
+				Component->SetCustomDepthStencilValue(Mode == 36 ? UScctVisionSubsystem::HeatStencil(Laser.Heat) : UScctVisionSubsystem::StencilEmfStreak);
+				Component->SetWorldLocationAndRotation(Middle, Along);
+				Component->SetWorldScale3D(FVector(Width / 100.0, Width / 100.0, Length / 100.0));
+			}
+			++NumGoggle;
+			NumGoggleVisionOnly += bVisionOnly ? 1 : 0;
+		}
+		else
+		{
+			Release(VisionBeams, Beam.Vision);
+		}
+
+		if (!bStreak)
+		{
+			Release(Cores, Beam.Core);
+			Release(Halos, Beam.Halo);
+			Release(Lamps, Beam.Ends[0]);
+			Release(Lamps, Beam.Ends[1]);
+			continue;
+		}
 		if (Beam.Core == INDEX_NONE)
 		{
-			if (bLog)
-			{
-				UE_LOG(LogOpenSCCT, Log, TEXT("Markers: %.1f s laser beam %d (%s) from (%.0f, %.0f, %.0f) to (%.0f, %.0f, %.0f)%s"), MatchSeconds, Laser.Id, Laser.Kind == 1 ? TEXT("mine") : TEXT("tripwire"),
-					Start.X, Start.Y, Start.Z, End.X, End.Y, End.Z, bVisionOnly ? TEXT(", vision modes only") : TEXT(""));
-			}
 			Beam.Core = Acquire(Cores);
 			Beam.Halo = Acquire(Halos);
 			Beam.Ends[0] = Acquire(Lamps);
 			Beam.Ends[1] = Acquire(Lamps);
 		}
-		Beam.SeenFrame = Frame;
 		++NumDrawn;
 
 		// A mine's beam is fainter than a tripwire's, as its heat is in the original (0.4 against 1).
 		const float Strength = (Laser.Kind == 1 ? 0.6f : 1.0f) * (bVisionOnly ? 0.35f : 1.0f);
-		const FQuat Along = FRotationMatrix::MakeFromZ(End - Start).ToQuat();
-		const FVector Middle = (Start + End) * 0.5;
 		const auto Place = [&](FPool& Pool, int32 Slot, const FVector& At, const FVector& Scale, float Intensity, float Sharpness, float Shimmer)
 		{
 			UStaticMeshComponent* Component = Pool.Components[Slot].Get();
@@ -572,10 +635,19 @@ void UScctMarkersSubsystem::UpdateLasers()
 			Release(Halos, Beam.Halo);
 			Release(Lamps, Beam.Ends[0]);
 			Release(Lamps, Beam.Ends[1]);
+			Release(VisionBeams, Beam.Vision);
 			It.RemoveCurrent();
 		}
 	}
 
 	PeakBeams = FMath::Max(PeakBeams, NumDrawn);
-	NumVisionOnlyBeams = FMath::Max(NumVisionOnlyBeams, bShowVisionLasers ? 0 : NumVisionOnly);
+	PeakGoggleBeams = FMath::Max(PeakGoggleBeams, NumGoggle);
+	NumVisionOnlyBeams = FMath::Max(NumVisionOnlyBeams, NumVisionOnly);
+	const int32 GoggleMode = bGoggleLook ? Mode : 0;
+	if (NumGoggleVisionOnly != LoggedGoggleBeams || GoggleMode != LoggedGoggleMode)
+	{
+		LoggedGoggleBeams = NumGoggleVisionOnly;
+		LoggedGoggleMode = GoggleMode;
+		UE_LOG(LogOpenSCCT, Log, TEXT("Markers: %d vision-only beams drawn (mode %d), %d beams in all for the goggles, %d listed"), NumGoggleVisionOnly, Mode, NumGoggle, Count);
+	}
 }

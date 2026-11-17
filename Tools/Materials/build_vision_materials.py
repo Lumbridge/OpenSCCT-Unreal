@@ -11,7 +11,9 @@ script again; the assets are rebuilt from nothing each time.
 
 Scene inputs the shaders read:
   14 the picture so far, 1 scene depth (cm), 13 custom depth (cm), 25 custom stencil.
-The game marks characters in the custom stencil while a mode is on: 1 a spy, 2 a merc.
+The game marks characters in the custom stencil while a mode is on: 1 a spy, 2 a merc. Detector beams are marked
+while thermal or EMF is on by a cylinder drawn only into the custom depth (Source/OpenSCCT/Play/ScctMarkersSubsystem):
+3 a beam EMF draws as a dark grey streak, 128 to 255 a beam thermal draws at the heat (stencil - 128) / 127.
 """
 import unreal
 
@@ -37,15 +39,42 @@ float Grain = frac(sin(dot(Cell + frac(T) * 37.0, float2(12.9898, 78.233))) * 43
 BODY = """
 float2 SUV = GetDefaultSceneTextureUV(Parameters, 25);
 float2 SPx = GetSceneTextureBufferSize(25).zw;
-float Body = (SceneTextureLookup(SUV, 25, false).r > 0.5
+float S0 = SceneTextureLookup(SUV, 25, false).r;
+float Body = (S0 > 0.5 && S0 < 2.5
     && SceneTextureLookup(SUV, 13, false).r < SceneTextureLookup(SUV, 1, false).r + 30.0) ? 1.0 : 0.0;
 float Ring = 0.0;
 for (int k = 0; k < 8; k++)
 {
     float Ak = k * 0.785398;
     float2 O = SUV + float2(cos(Ak), sin(Ak)) * SPx * Radius;
-    Ring += (SceneTextureLookup(O, 25, false).r > 0.5
+    float Sk = SceneTextureLookup(O, 25, false).r;
+    Ring += (Sk > 0.5 && Sk < 2.5
         && SceneTextureLookup(O, 13, false).r < SceneTextureLookup(O, 1, false).r + 30.0) ? 0.125 : 0.0;
+}
+"""
+
+# The detector beams the goggles show (after BODY): Beam how much of the pixel a heat-marked beam covers and BeamHeat
+# its heat, Streak how much an EMF-marked beam covers. The pixel and its four neighbours one pixel away are read,
+# the neighbours at half weight, so a beam a pixel or two across reads as a soft line rather than broken dots. A
+# beam is seen only where nothing of the scene stands in front of it (the beam is not in the scene depth itself).
+BEAMS = """
+float Beam = 0.0;
+float BeamHeat = 0.0;
+float Streak = 0.0;
+for (int b = 0; b < 5; b++)
+{
+    float2 O = SUV + (b == 0 ? float2(0.0, 0.0) : float2(cos(b * 1.570796), sin(b * 1.570796)) * SPx);
+    float Sb = SceneTextureLookup(O, 25, false).r;
+    float Wb = (b == 0 ? 1.0 : 0.5) * (SceneTextureLookup(O, 13, false).r < SceneTextureLookup(O, 1, false).r + 5.0 ? 1.0 : 0.0);
+    if (Sb > 127.5)
+    {
+        BeamHeat = max(BeamHeat, (Sb - 128.0) / 127.0);
+        Beam = max(Beam, Wb);
+    }
+    if (Sb > 2.5 && Sb < 3.5)
+    {
+        Streak = max(Streak, Wb);
+    }
 }
 """
 
@@ -90,7 +119,7 @@ return lerp(C, Out, Amount);
 
 THERMAL = PRELUDE + """
 float Radius = 10.0;
-""" + BODY + """
+""" + BODY + BEAMS + """
 // The room as temperature rather than detail: a softened brightness, kept cold. Lamps read warmer.
 float Lb = L;
 for (int i = 0; i < 4; i++)
@@ -105,6 +134,9 @@ float Heat = 0.13 + pow(Lb, 0.7) * 0.50 + smoothstep(0.80, 1.0, Lb) * 0.20;
 // form, with warm air around it.
 float Core = 0.56 + 0.26 * Ring * Ring + 0.18 * saturate(L * 6.0);
 Heat = lerp(max(Heat, Ring * 0.50), Core, Body);
+
+// A detector beam is drawn at its own heat (HeatIntensity: 1 a tripwire, 0.4 a mine's beam).
+Heat = lerp(Heat, max(Heat, BeamHeat), Beam);
 Heat = saturate(Heat + Grain * 0.035);
 
 // Palette: deep blue, violet, magenta, orange, yellow, white.
@@ -149,7 +181,7 @@ return lerp(C, Out, Amount);
 
 EMF = PRELUDE + """
 float Radius = 2.5;
-""" + BODY + """
+""" + BODY + BEAMS + """
 // Electrical things glow: what is bright in the picture (lamps, screens) blooms blue-white over a dark field.
 float Glow = 0.0;
 for (int i = 0; i < 8; i++)
@@ -167,6 +199,9 @@ Out += float3(0.55, 0.78, 1.0) * (Hot * 0.9 + Glow * 0.9);
 
 // People carry little that shows: only a thin cold outline.
 Out += float3(0.25, 0.45, 0.9) * saturate(abs(Ring - Body) * 2.0) * 0.55;
+
+// A detector beam is a dark grey streak: it gives off nothing, the field only shows it is there.
+Out = lerp(Out, float3(0.24, 0.24, 0.25), Streak);
 
 // Interference: slow bands drifting up the picture, and grain.
 Out *= 0.90 + 0.10 * sin(VUV.y * 80.0 + T * 4.0);
