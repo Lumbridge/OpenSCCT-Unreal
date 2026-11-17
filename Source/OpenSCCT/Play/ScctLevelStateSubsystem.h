@@ -5,6 +5,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctLevelStateSubsystem.generated.h"
 
+class ASkeletalMeshActor;
 class ULightComponent;
 class UNiagaraComponent;
 class UMaterialInstanceDynamic;
@@ -42,8 +43,10 @@ struct FScctWorldDebugApi;
  *     simulation's triggers: one that waits for its event starts on it, a running one stops, a burst fires again.
  *     The wet ground under a rain volume (the decal tagged "ScctWetOf:" + the volume's name) is hidden while the
  *     rain of that name is off.
- *   - Skeletal map props (the importer's SkeletalMeshActors) are shown and hidden with the simulation; they are
- *     not moved from here (the importer places them with the mesh's own rotation origin).
+ *   - Skeletal map props (the importer's SkeletalMeshActors) are shown and hidden with the simulation, follow its
+ *     place (the mesh's own rotation origin, which the importer put in, is kept on top) and play the sequence it
+ *     names at the frame it gives (a fish loops its sequence at its own pace). A light the map hangs on a prop's
+ *     bone follows that bone, keeping where it was imported against it.
  *   - Destructibles swap to the mesh and the skins the simulation names; a mesh that was not imported is logged
  *     once and the old one stays.
  *   - A level mesh that was imported as a Nanite mesh but wears glass or a glowing material (Nanite cannot draw
@@ -174,6 +177,33 @@ private:
 		bool bBreaking = false;     // in its break flicker last frame
 		bool bShotOut = false;      // went dark out of a break flicker: no fade
 		bool bMoved = false;
+
+		/** It hangs on a skeletal prop's bone: where it was imported against that bone when first seen. */
+		FTransform BoneOffset;
+		bool bOnBone = false;
+	};
+
+	/** One skeletal map prop the table lists (GetAnimated), by its name id. */
+	struct FPropState
+	{
+		TWeakObjectPtr<ASkeletalMeshActor> Actor;
+		bool bBound = false;
+
+		// As imported: the turn of the mesh's own rotation origin (the importer's rotation less the table's first
+		// one), its scale against the table's first scale, and what it played.
+		FQuat OriginQuat = FQuat::Identity;
+		FVector ScaleRatio = FVector::OneVector;
+		FVector FirstLocation = FVector::ZeroVector;
+		FQuat FirstQuat = FQuat::Identity;
+		TWeakObjectPtr<class UAnimationAsset> OriginalAnimation;
+		bool bOriginalPlaying = false;
+		bool bOriginalLooping = false;
+
+		// What is applied now.
+		int32 SequenceId = -1;
+		TWeakObjectPtr<class UAnimSequenceBase> Sequence;
+		bool bMoved = false;
+		bool bDriven = false;
 	};
 
 	/** One sub-emitter of a map Emitter: the importer's Niagara actor. */
@@ -205,6 +235,13 @@ private:
 	void RefreshNames();
 	void UpdateActors();
 	void UpdateLights(float DeltaSeconds);
+	/** Moves and plays the skeletal map props as the table has them (place, sequence, frame). */
+	void UpdateProps();
+	void BindProp(FPropState& State, const FScctWorldAnimated& Record);
+	/** The imported sequence of a prop's mesh for the simulation's sequence name, or null. */
+	class UAnimSequenceBase* FindPropSequence(const ASkeletalMeshActor& Actor, const FString& Sequence);
+	/** Places a light that hangs on a prop's bone where that bone is now; false when the prop or the bone is not there. */
+	bool FollowBone(FLightState& State, const FScctWorldLight& Record);
 	void DrainEvents();
 	void RunDebugActions();
 
@@ -268,6 +305,10 @@ private:
 	TArray<FLightState> LightStates;
 	TArray<FScctWorldActor> ActorBuffer;
 	TArray<FScctWorldLight> LightBuffer;
+	TMap<int32, FPropState> PropStates;
+	TArray<FScctWorldAnimated> PropBuffer;
+	/** The imported sequences by the folder of a prop's mesh, loaded once. */
+	TMap<FString, TArray<TWeakObjectPtr<class UAnimSequenceBase>>> PropSequences;
 	TArray<FScctWorldEvent> EventBuffer;
 	TArray<FDebugAction> DebugActions;
 
@@ -294,6 +335,10 @@ private:
 	int32 NumMobilityChanged = 0;
 	int32 NumEvents[10] = {};
 	int32 NumEmittersReached = 0;
+	int32 NumPropsBound = 0;
+	int32 NumPropsPlayed = 0;
+	int32 NumBoneLights = 0;
+	TSet<FString> PropsReported;
 	float PlacementError = 0.0f;
 	float PlacementTurnError = 0.0f;
 	int32 PlacementChecked = 0;
