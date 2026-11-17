@@ -711,6 +711,13 @@ void UScctOnlineSubsystem::FollowLevel()
 			Wanted = FString::Printf(TEXT("%s?%s=1"), *Level, OnlineOption);
 		}
 	}
+	else if (bInOnlineLevel && GetState() == EScctOnlineState::Failed)
+	{
+		// The connection was lost or refused in the round: the level's play error page says why and stays until the
+		// player leaves it (Leave dismisses the failure, and the next frame goes back to the front end).
+		TravelDelay = 0.0f;
+		return;
+	}
 	else if (bInOnlineLevel)
 	{
 		// Back in the lobby, or the visit is over: a level that was opened for a round is left.

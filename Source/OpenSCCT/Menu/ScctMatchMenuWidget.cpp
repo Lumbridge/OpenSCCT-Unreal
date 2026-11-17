@@ -1,8 +1,13 @@
 #include "Menu/ScctMatchMenuWidget.h"
 
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Menu/ScctLoadingSubsystem.h"
 #include "Menu/SScctGearPage.h"
 #include "Menu/SScctMatchMenu.h"
+#include "Menu/SScctPlayErrorPage.h"
+#include "OpenSCCT.h"
 #include "Menu/SScctStrategicMapPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -16,8 +21,9 @@
 namespace Ui = ScctMenuStyle;
 
 /**
- * The layers of the match overlay: what the visit is waiting for (the banner), and the menu with the round's results
- * (Menu/SScctMatchMenu.h). Nothing here takes the mouse while the menu is closed: the banner and the results only show.
+ * The layers of the match overlay: what the visit is waiting for (the loading page as a cover), the menu with the
+ * round's results (Menu/SScctMatchMenu.h), and the play error page over everything. Nothing here takes the mouse
+ * while the menu is closed and no error is shown: the cover and the results only show.
  */
 class SScctMatchOverlay : public SCompoundWidget
 {
@@ -42,17 +48,12 @@ public:
 			SNew(SOverlay)
 			.Visibility(EVisibility::SelfHitTestInvisible)
 
-			// What the visit is waiting for, while the round is not being played.
-			+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Top).Padding(0.0f, 150.0f, 0.0f, 0.0f)
+			// What the visit is waiting for, while the round is not being played: the loading page (the map, the
+			// side's tip, the map's picture) with the wait in place of "LOADING", over the level that has no round yet.
+			+ SOverlay::Slot()
 			[
-				SNew(SBox)
-				.Visibility(TAttribute<EVisibility>::CreateSP(this, &SScctMatchOverlay::GetBannerVisibility))
-				[
-					Ui::Glass(SNew(STextBlock)
-						.Font(ScctHudStyle::Font(ScctHudStyle::EWeight::Light, 18.0f, 220))
-						.ColorAndOpacity(ScctHudStyle::Text())
-						.Text(TAttribute<FText>::CreateSP(this, &SScctMatchOverlay::GetBannerText)), FMargin(30.0f, 14.0f))
-				]
+				SAssignNew(CoverBox, SBox)
+				.Visibility(EVisibility::Collapsed)
 			]
 
 			// The in-match menu and the round's results.
@@ -66,37 +67,114 @@ public:
 				.OnLeave(InArgs._OnLeave)
 				.OnWantsOpen(InArgs._OnWantsOpen)
 			]
+
+			// What stopped play, over everything (Menu/SScctPlayErrorPage.h).
+			+ SOverlay::Slot()
+			[
+				SAssignNew(ErrorBox, SBox)
+				.Visibility(EVisibility::Collapsed)
+			]
 		];
+		World = InArgs._World;
+		OnLeave = InArgs._OnLeave;
 	}
 
 	void SetMenuOpen(bool bOpen) { Menu->SetOpen(bOpen); }
 	TSharedPtr<SScctMatchMenu> GetMenu() const { return Menu; }
 
-private:
-	EVisibility GetBannerVisibility() const
+	void ShowPlayError(const FScctPlayError& Error)
 	{
-		return Menu->IsOpen() || Menu->IsShowingResults() || GetBannerText().IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible;
+		SAssignNew(ErrorPage, SScctPlayErrorPage, Error)
+			.bOnline(bOnlineLevel)
+			.OnLeave(OnLeave);
+		ErrorBox->SetContent(ErrorPage.ToSharedRef());
+		ErrorBox->SetVisibility(EVisibility::Visible);
+		if (FSlateApplication::IsInitialized())
+		{
+			FSlateApplication::Get().SetAllUserFocus(ErrorPage, EFocusCause::SetDirectly);
+		}
 	}
 
-	FText GetBannerText() const
+	void LeaveFromPlayError()
+	{
+		if (ErrorPage.IsValid())
+		{
+			ErrorPage->Leave();
+		}
+	}
+
+	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override
+	{
+		SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+		UpdateCover();
+	}
+
+private:
+	/** What the visit waits for while this online level has no round to show; empty when nothing (or an error) is shown. */
+	FString GetCoverStatus() const
 	{
 		const UScctOnlineSubsystem* Visit = Online.Get();
-		if (!bOnlineLevel || Visit == nullptr)
+		if (!bOnlineLevel || Visit == nullptr || ErrorPage.IsValid())
 		{
-			return FText::GetEmpty();
+			return FString();
 		}
 		switch (Visit->GetState())
 		{
-		case EScctOnlineState::Travelling: return Ui::ToText(TEXT("TRAVELLING"));
+		case EScctOnlineState::Travelling: return TEXT("TRAVELLING");
 		case EScctOnlineState::Loading:
-			return Ui::ToText(Visit->HasFlag(EScctOnlineStatusFlags::ReportedWaiting) ? TEXT("WAITING FOR THE OTHER PLAYERS") : TEXT("JOINING THE ROUND"));
-		case EScctOnlineState::Failed: return Ui::ToText(TEXT("CONNECTION LOST"));
-		default: return FText::GetEmpty();
+			return Visit->HasFlag(EScctOnlineStatusFlags::ReportedWaiting) ? TEXT("WAITING FOR THE OTHER PLAYERS") : TEXT("JOINING THE ROUND");
+		default: return FString();
 		}
 	}
 
+	void UpdateCover()
+	{
+		const FString Status = GetCoverStatus();
+		if (Status == CoverStatus)
+		{
+			return;
+		}
+		CoverStatus = Status;
+		if (Status.IsEmpty())
+		{
+			CoverBox->SetContent(SNullWidget::NullWidget);
+			CoverBox->SetVisibility(EVisibility::Collapsed);
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctLoadingCover: the round is up, the cover is gone"));
+			return;
+		}
+
+		const UScctOnlineSubsystem* Visit = Online.Get();
+		const UWorld* Level = World.Get();
+		UScctLoadingSubsystem* Loading = Level != nullptr && Level->GetGameInstance() != nullptr ? Level->GetGameInstance()->GetSubsystem<UScctLoadingSubsystem>() : nullptr;
+		const FString Map = Visit->GetMapToLoad();
+		if (Loading != nullptr && (Map != CoverMap || !bHasCoverPage))
+		{
+			// The same tip and picture all through one round's wait: only the status changes.
+			const int32 Team = Visit->GetStatus().LocalTeam;
+			const int32 Side = Team == 0 || Team == 1 ? Team : -1;
+			const TCHAR* SideName = Side < 0 ? TEXT("SPECTATOR") : (Side == 1 ? TEXT("MERCENARY") : TEXT("SPY"));
+			const FString Server = Visit->GetServerName().IsEmpty() ? FString(TEXT("ONLINE")) : Visit->GetServerName();
+			CoverPage = Loading->DescribeRound(Map, Side, FString::Printf(TEXT("%s   /   %s"), *Server, SideName), Status);
+			CoverMap = Map;
+			bHasCoverPage = true;
+		}
+		CoverPage.Status = Status;
+		CoverBox->SetContent(UScctLoadingSubsystem::MakePage(CoverPage));
+		CoverBox->SetVisibility(EVisibility::HitTestInvisible);
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctLoadingCover: %s on %s ('%s', tip \"%s\")"), *Status, *Map, *CoverPage.Title, *CoverPage.Tip.Left(80));
+	}
+
 	TWeakObjectPtr<UScctOnlineSubsystem> Online;
+	TWeakObjectPtr<UWorld> World;
 	TSharedPtr<SScctMatchMenu> Menu;
+	TSharedPtr<SBox> CoverBox;
+	TSharedPtr<SBox> ErrorBox;
+	TSharedPtr<SScctPlayErrorPage> ErrorPage;
+	FSimpleDelegate OnLeave;
+	FScctLoadingPage CoverPage;
+	FString CoverMap;
+	FString CoverStatus;
+	bool bHasCoverPage = false;
 	bool bOnlineLevel = false;
 };
 
@@ -115,7 +193,34 @@ TSharedRef<SWidget> UScctMatchMenuWidget::RebuildWidget()
 		.OnLeave(FSimpleDelegate::CreateUObject(this, &UScctMatchMenuWidget::LeaveMatch))
 		.OnWantsOpen(FSimpleDelegate::CreateWeakLambda(this, [this] { OnWantsOpen.ExecuteIfBound(); }));
 	Overlay->SetMenuOpen(bMenuOpen);
+	if (PlayErrorSerial != 0)
+	{
+		Overlay->ShowPlayError(ShownPlayError);
+	}
 	return Overlay.ToSharedRef();
+}
+
+void UScctMatchMenuWidget::ShowPlayError(const FScctPlayError& Error)
+{
+	if (Error.Kind == EScctPlayErrorKind::None || Error.Serial == PlayErrorSerial)
+	{
+		return;
+	}
+	PlayErrorSerial = Error.Serial;
+	ShownPlayError = Error;
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctPlayError: page shown: \"%s\""), *SScctPlayErrorPage::Describe(Error, SScctPlayErrorPage::MapTitleOf(Error.Map)));
+	if (Overlay.IsValid())
+	{
+		Overlay->ShowPlayError(Error);
+	}
+}
+
+void UScctMatchMenuWidget::LeaveFromPlayError()
+{
+	if (Overlay.IsValid())
+	{
+		Overlay->LeaveFromPlayError();
+	}
 }
 
 void UScctMatchMenuWidget::ReleaseSlateResources(bool bReleaseChildren)

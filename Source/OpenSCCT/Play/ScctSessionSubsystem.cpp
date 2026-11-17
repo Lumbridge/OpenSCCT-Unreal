@@ -7,6 +7,8 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "Engine/GameInstance.h"
+#include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctViewPawn.h"
@@ -61,7 +63,7 @@ bool UScctSessionSubsystem::ConnectBridge()
 	Api = FOpenSCCTModule::Get().GetBridge(Error);
 	if (Api == nullptr)
 	{
-		Fail(Error);
+		Fail(Error, EScctPlayErrorKind::StartFailed, LastOptions.Map);
 		return false;
 	}
 
@@ -133,7 +135,7 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 	const int32 NewId = Api->StartLocalEx(&Start);
 	if (NewId == 0)
 	{
-		Fail(FOpenSCCTModule::Get().GetBridgeError());
+		Fail(FOpenSCCTModule::Get().GetBridgeError(), EScctPlayErrorKind::StartFailed, Options.Map);
 		// A failed start has no session to stop, and the bridge stays Failed until told otherwise. Nothing is in
 		// its slot now (it ended the session before as it started), so this only clears that state.
 		Api->Stop();
@@ -143,7 +145,7 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 	FScctBridgeSessionInfo Info = {};
 	if (Api->GetSession(&Info) != NewId)
 	{
-		Fail(FString::Printf(TEXT("The bridge started session %d but now holds session %d."), NewId, Info.Id));
+		Fail(FString::Printf(TEXT("The bridge started session %d but now holds session %d."), NewId, Info.Id), EScctPlayErrorKind::StartFailed, Options.Map);
 		return false;
 	}
 	ChangeSession(Info, true);
@@ -202,6 +204,10 @@ void UScctSessionSubsystem::ChangeSession(const FScctBridgeSessionInfo& NewInfo,
 
 	SessionId = NewInfo.Id;
 	SessionInfo = NewInfo;
+	if (SessionId != 0)
+	{
+		LastPresentedMap = SessionInfo.Map;
+	}
 	bStartedHere = bNewStartedHere && SessionId != 0;
 	UE_LOG(LogOpenSCCT, Log, TEXT("Session %d -> %d"), OldId, SessionId);
 	OnSessionChanged.Broadcast(OldId, SessionId);
@@ -248,7 +254,8 @@ void UScctSessionSubsystem::CheckSession()
 		{
 			// The bridge has already stopped the failed session; this shows why, once, and clears the failure
 			// (StopSession does that for the session that failed and for no other).
-			Fail(FOpenSCCTModule::Get().GetBridgeError());
+			Fail(FOpenSCCTModule::Get().GetBridgeError(),
+				IsRemoteSession() ? EScctPlayErrorKind::Disconnected : EScctPlayErrorKind::ServerStopped, SessionInfo.Map);
 			Api->StopSession(SessionId);
 			Info.State = static_cast<int32>(EScctBridgeState::Idle);
 		}
@@ -283,6 +290,11 @@ void UScctSessionSubsystem::Tick(float DeltaTime)
 	{
 		OnBeforeTicks.Broadcast(DeltaTime);
 		CheckSession();
+		if (bFollowBridge)
+		{
+			CheckVisitFailure();
+		}
+		TickForcedDisconnect(DeltaTime);
 
 		if (SessionId != 0)
 		{
@@ -412,7 +424,7 @@ void UScctSessionSubsystem::ApplyViewToPlayer()
 	}
 }
 
-void UScctSessionSubsystem::Fail(const FString& Reason)
+void UScctSessionSubsystem::Fail(const FString& Reason, EScctPlayErrorKind Kind, const FString& Map, bool bRejected)
 {
 	// The bridge's errors are whole exception texts; the first line says what went wrong and the rest is for the log.
 	FString FirstLine = Reason;
@@ -422,13 +434,98 @@ void UScctSessionSubsystem::Fail(const FString& Reason)
 		FirstLine.LeftInline(LineEnd);
 	}
 	FirstLine.TrimStartAndEndInline();
+	// An exception's first line starts with its type ("System.IO.FileNotFoundException: ..."): the player reads the message.
+	int32 TypeEnd = FirstLine.Find(TEXT("Exception: "));
+	if (TypeEnd != INDEX_NONE && !FirstLine.Left(TypeEnd).Contains(TEXT(" ")))
+	{
+		FirstLine.RightChopInline(TypeEnd + 11);
+	}
+	if (FirstLine.IsEmpty())
+	{
+		FirstLine = TEXT("Unknown error");
+	}
 
 	Failure = FirstLine;
 	UE_LOG(LogOpenSCCT, Error, TEXT("OpenSCCT match failed: %s"), *Reason);
-	if (GEngine != nullptr)
+
+	// The page that shows it is the match overlay's (Menu/SScctPlayErrorPage.h), in every build: the engine's
+	// on-screen debug messages are compiled out of Shipping.
+	PlayError.Kind = Kind;
+	PlayError.Map = Map;
+	PlayError.Reason = FirstLine;
+	PlayError.bRejected = bRejected;
+	++PlayError.Serial;
+	static const TCHAR* const KindNames[] = { TEXT("none"), TEXT("start failed"), TEXT("disconnected"), TEXT("server stopped") };
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctPlayError: %s on '%s'%s: %s (error %d)"), KindNames[static_cast<int32>(Kind)], *Map,
+		bRejected ? TEXT(" (rejected)") : TEXT(""), *FirstLine, PlayError.Serial);
+	OnPlayError.Broadcast(PlayError);
+}
+
+void UScctSessionSubsystem::CheckVisitFailure()
+{
+	const UGameInstance* Game = GetWorld()->GetGameInstance();
+	const UScctOnlineSubsystem* Visit = Game != nullptr ? Game->GetSubsystem<UScctOnlineSubsystem>() : nullptr;
+	const bool bFailed = Visit != nullptr && Visit->GetState() == EScctOnlineState::Failed;
+	if (!bFailed)
 	{
-		GEngine->AddOnScreenDebugMessage(INDEX_NONE, 20.0f, FColor::Red, FString::Printf(TEXT("OpenSCCT: %s"), *FirstLine));
+		bVisitFailureSeen = false;
+		SerialBeforeVisitFailure = PlayError.Serial;
+		return;
 	}
+	if (bVisitFailureSeen)
+	{
+		return;
+	}
+	bVisitFailureSeen = true;
+	if (PlayError.Serial != SerialBeforeVisitFailure && PlayError.Kind == EScctPlayErrorKind::Disconnected)
+	{
+		// The round's own failure (CheckSession) already said it.
+		return;
+	}
+
+	// Only a level opened for the visit's round shows it here; the front end shows the visit's notice itself.
+	if (!GetWorld()->URL.HasOption(UScctOnlineSubsystem::OnlineOption))
+	{
+		return;
+	}
+	const FString Map = SessionId != 0 ? FString(SessionInfo.Map) : (!Visit->GetMapToLoad().IsEmpty() ? Visit->GetMapToLoad() : LastPresentedMap);
+	const bool bRejected = Visit->HasFlag(EScctOnlineStatusFlags::Kicked);
+	const FString Reason = Visit->GetNotice().IsEmpty() ? FString(TEXT("Connection closed")) : Visit->GetNotice();
+	if (SessionId != 0)
+	{
+		// The round is gone with the connection; the world stops presenting it (the visit is the bridge's to end).
+		ChangeSession(FScctBridgeSessionInfo{}, false);
+	}
+	Fail(Reason, EScctPlayErrorKind::Disconnected, Map, bRejected);
+}
+
+void UScctSessionSubsystem::TickForcedDisconnect(float DeltaTime)
+{
+	if (!bForceDisconnectRead)
+	{
+		bForceDisconnectRead = true;
+		float Seconds = 0.0f;
+		if (FParse::Value(FCommandLine::Get(), TEXT("ScctForceDisconnect="), Seconds) && Seconds > 0.0f)
+		{
+			ForceDisconnectIn = Seconds;
+		}
+	}
+	if (ForceDisconnectIn < 0.0f || SessionId == 0)
+	{
+		return;
+	}
+	ForceDisconnectIn -= DeltaTime;
+	if (ForceDisconnectIn >= 0.0f)
+	{
+		return;
+	}
+
+	// What a lost connection leaves behind: the session is gone and the player is told, nothing else changes.
+	ForceDisconnectIn = -1.0f;
+	const FString Map = SessionInfo.Map;
+	UE_LOG(LogOpenSCCT, Log, TEXT("-ScctForceDisconnect: ending session %d as a lost connection would"), SessionId);
+	StopMatch();
+	Fail(TEXT("Connection closed (-ScctForceDisconnect)"), EScctPlayErrorKind::Disconnected, Map);
 }
 
 void UScctSessionSubsystem::LogFeatureTables() const
