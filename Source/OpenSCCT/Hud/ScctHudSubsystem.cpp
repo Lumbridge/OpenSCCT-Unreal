@@ -7,6 +7,7 @@
 #include "Hud/ScctChatSubsystem.h"
 #include "Hud/ScctHudModel.h"
 #include "Hud/ScctHudWidget.h"
+#include "Hud/ScctTeamPingSubsystem.h"
 #include "Hud/ScctScreenEffectsSubsystem.h"
 #include "Hud/ScctVisionSubsystem.h"
 #include "Misc/App.h"
@@ -69,6 +70,9 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	InitGadgetViews();
 	InitIcons();
+	InitRadar();
+	InitBackpack();
+	InitBinoculars();
 
 	// -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1"
 	FString Commands;
@@ -139,6 +143,25 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	LastCoopIcon = 0;
 	LastRespawnTile = FIntPoint(-1, -1);
 	RespawnKeyAge = -100.0f;
+	LastHeartCone = 0;
+	LastBackpackSignature = 0;
+	bRadarTextureMissingLogged = false;
+	BinocularCheck.Stage = 0;
+	BinocularCheck.NextZoom = 0;
+	BinocularCheck.NextUse = 0;
+	BinocularCheck.bUseHeld = false;
+	BinocularAge = 0.0f;
+	SpeakAge = -1.0f;
+	BinocularKeysAge = -100.0f;
+	LastBinocularMode = 0;
+	LastZoomStep = 0;
+	LastBinocularTargetCount = -1;
+	LastLockCandidate.Reset();
+	bLastLockMarked = false;
+	bBinocularPageMissingLogged = false;
+	LastMotionSignature = 0;
+	bMotionTableMissingLogged = false;
+	AimMateUntil = -1.0f;
 	if (NewSessionId != 0 && Api == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Error, TEXT("HUD: the bridge has no HUD table (its reason is in the log above); the match plays without a HUD and without goggles"));
@@ -370,9 +393,11 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 		bSnapshotRead = true;
 	}
 	ProjectMarkers();
+	BuildMotion();
 	ProjectNames();
 	RunTimedCommands();
 	RunGadgetChecks(DeltaSeconds);
+	RunBinocularCheck();
 
 	// The scoreboard follows the player's bindings, which arrive as interface commands.
 	AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController());
@@ -408,6 +433,7 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 	}
 	Model->Advance(DeltaSeconds);
 	ReadIcons(DeltaSeconds);
+	ReadBinoculars(DeltaSeconds);
 
 	if (UScctVisionSubsystem* Vision = GetWorld()->GetSubsystem<UScctVisionSubsystem>())
 	{
@@ -432,7 +458,11 @@ void UScctHudSubsystem::ReadSnapshot()
 	ReadRows(M.Objectives, 48, Api->GetObjectives);
 	ReadRows(M.ObjectiveLines, 16, Api->GetObjectiveLines);
 	ReadRows(M.Scores, 32, Api->GetScoreboard);
+	ReadRows(M.Radar, 64, Api->GetRadar);
+	ReadRows(M.BinocularTargets, 16, Api->GetBinocularTargets);
 	ReadGadgetViews();
+	ReadRadar();
+	ReadBackpack();
 
 	M.LocalTeam = M.State.Side;
 	for (const FScctHudScoreRow& Row : M.Scores)
@@ -464,6 +494,7 @@ void UScctHudSubsystem::ProjectMarkers()
 {
 	FScctHudModel& M = *Model;
 	M.Markers.Reset();
+	M.BinocularMarkers.Reset();
 	const APlayerController* Player = GetWorld()->GetFirstPlayerController();
 	if (Player == nullptr || !M.bHasState)
 	{
@@ -483,6 +514,7 @@ void UScctHudSubsystem::ProjectMarkers()
 		Marker.bInFront = Player->ProjectWorldLocationToScreen(Location, Screen, false);
 		Marker.Screen = FVector2f(Screen) / Scale;
 	}
+	ProjectBinocularTargets();
 }
 
 void UScctHudSubsystem::RunTimedCommands()
@@ -533,7 +565,9 @@ void UScctHudSubsystem::RunTimedCommands()
 			// For this run only: the user's own setting is not written.
 			bTeammateNames[FMath::Clamp(Model->LocalTeam, 0, 1)] = Command.Argument != 0;
 		}
-		else if (RunIconCommand(Command.Name, Command.Argument))
+		else if (RunIconCommand(Command.Name, Command.Argument) || RunRadarCommand(Command.Name, Command.Argument)
+			|| RunBackpackCommand(Command.Name, Command.Argument) || RunMotionCommand(Command.Name, Command.Argument)
+			|| (GetWorld()->GetSubsystem<UScctTeamPingSubsystem>() != nullptr && GetWorld()->GetSubsystem<UScctTeamPingSubsystem>()->RunCommand(Command.Name, Command.Argument)))
 		{
 		}
 		else if (AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController()))
@@ -579,6 +613,10 @@ void UScctHudSubsystem::LogSnapshot(float DeltaSeconds)
 		M.bHasRound ? 1 : 0, R.GameMode, R.RemainingSeconds, R.TeamLives[0], R.TeamLives[1], R.TeamScore[0], R.TeamScore[1], R.ObjectivesLeft, R.NumObjectives,
 		M.Scores.Num(), M.ObjectiveLines.Num(), M.Markers.Num(), M.Feed.Num(), M.Headlines.Num(), M.Log.Num(),
 		S.DamageCount, *M.Text(R.WatchedNameId), R.RespawnIn, R.NoRespawn);
+	LogRadar();
+	LogBackpack();
+	LogBinoculars(false);
+	LogMotion(false);
 
 	// The scoreboard's rows while it is up (and once near the start), for the same check.
 	constexpr float FirstRows = 2.0f;
