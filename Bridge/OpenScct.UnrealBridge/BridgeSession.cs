@@ -81,6 +81,9 @@ public sealed record LocalMatch
     /// dedicated server on a simulated link), or null.
     /// </summary>
     public Func<PlaySettings, IClock, PlaySession>? CreateSession { get; init; }
+
+    /// <summary>The folder the match is recorded into as a demo (PlaySettings.DemoFolder, Demo/DemoSaving.cs), or null.</summary>
+    public string? DemoFolder { get; init; }
 }
 
 /// <summary>
@@ -173,6 +176,7 @@ public sealed class BridgeSession : IDisposable
             HostMode = match.InlineHost || match.SimLink is not null ? PlayHostMode.Inline : PlayHostMode.Thread,
             SimLink = match.SimLink,
             NetworkProfile = match.NetworkProfile,
+            DemoFolder = match.DemoFolder,
         }.ForLocalLaunch();
         var clock = new StopwatchClock();
         var session = match.CreateSession?.Invoke(settings, clock) ?? new PlaySession(settings, clock);

@@ -14,10 +14,12 @@ using OpenScct.UnrealBridge.Social;
 //   SocialProbe list [masterUrl]         the master's servers and hubs with their ids (for a website join to try)
 //   SocialProbe account [masterUrl] [inviteKey] [--token T] [--sync] [--claim NAME] [--prestige] [--signout]
 //                                        the account service against a master (AccountCheck.cs)
+//   SocialProbe demo [file or folder]    the demo-saving choice and the saved demos read back (DemoCheck.cs)
 string mode = args.Length > 0 ? args[0] : "states";
 return mode switch
 {
     "account" => AccountCheck.Run(args[1..]),
+    "demo" => DemoCheck.Run(args[1..]),
     "forward" => Forward(args.Length > 1 ? args[1] : string.Empty),
     "list" => List(args.Length > 1 ? args[1] : WebsiteJoin.OfficialMasterUrl),
     _ => States(args.Length > 1 ? args[1] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content"),

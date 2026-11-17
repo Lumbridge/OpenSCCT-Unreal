@@ -344,7 +344,11 @@ public static unsafe class Exports
         {
             EndCurrent();
             ClearFailure();
-            return Adopt(BridgeSession.StartLocal(Test.NetLinkLaunch.Apply(Test.LessonLaunch.Apply(match)))).Id;
+            // The player's demo-saving choice records the match (Demo/DemoSaving.cs).
+            match = match with { DemoFolder = match.DemoFolder ?? Demo.DemoSaving.OfflineFolder() };
+            BridgeSession started = Adopt(BridgeSession.StartLocal(Test.NetLinkLaunch.Apply(Test.LessonLaunch.Apply(match))));
+            Demo.DemoSaving.Started(started);
+            return started.Id;
         }
         catch (Exception e)
         {
