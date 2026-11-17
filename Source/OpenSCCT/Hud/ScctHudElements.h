@@ -18,6 +18,9 @@ namespace ScctHudElements
 	/** Objective markers in the world. */
 	void PaintMarkers(FScctHudPainter& Painter, const FScctHudModel& Model);
 
+	/** The names over the local player's teammates (ToggleTeammateNames), drawn through walls. */
+	void PaintTeammateNames(FScctHudPainter& Painter, const FScctHudModel& Model);
+
 	/** The crosshair with its spread and hit confirmation, what the laser holds, noise and hit arcs around it. */
 	void PaintCrosshair(FScctHudPainter& Painter, const FScctHudModel& Model);
 
@@ -55,7 +58,7 @@ namespace ScctHudElements
 	/** The map's name as the round starts, and who won as it ends. */
 	void PaintBanner(FScctHudPainter& Painter, const FScctHudModel& Model);
 
-	/** The scoreboard, while held. */
+	/** The scoreboard, while held; with the objective list under it as the mission status page (DisplaySessionStatus). */
 	void PaintScoreboard(FScctHudPainter& Painter, const FScctHudModel& Model);
 
 	// --- Shared by the elements ----------------------------------------------------------------------------

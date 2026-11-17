@@ -428,7 +428,8 @@ void ScctHudElements::PaintBanner(FScctHudPainter& Painter, const FScctHudModel&
 
 void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudModel& Model)
 {
-	const float Shown = Model.ScoreboardShown;
+	// The mission status page is the same board with the mission's objectives under it.
+	const float Shown = FMath::Max(Model.ScoreboardShown, Model.StatusShown);
 	if (Shown <= 0.01f || !Model.bHasRound)
 	{
 		return;
@@ -436,6 +437,7 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 
 	const FVector2f Size = Painter.Size();
 	const FScctHudRound& Round = Model.Round;
+	const bool bObjectiveList = Model.StatusShown > 0.01f && Model.ObjectiveLines.Num() > 0;
 
 	// One table per team; in a free-for-all a single table of everyone, the most kills first. Spectators are not
 	// on the board.
@@ -457,7 +459,24 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 
 	constexpr float Pad = 28.0f, ColumnGap = 36.0f, RowHeight = 30.0f, ColumnWidth = 474.0f;
 	const float Width = Pad * 2.0f + TableCount * ColumnWidth + (TableCount - 1) * ColumnGap;
-	const float Height = 150.0f + MostRows * RowHeight;
+	const float TablesHeight = 150.0f + MostRows * RowHeight;
+
+	// The objective list is measured first: the page is as tall as its text.
+	const FSlateFontInfo ObjectiveFont = Font(EWeight::Regular, 11.0f);
+	const float ObjectiveLineHeight = Painter.Measure(TEXT("Ag"), ObjectiveFont).Y + 2.0f;
+	TArray<TArray<FString>> ObjectiveText;
+	float ObjectivesHeight = 0.0f;
+	if (bObjectiveList)
+	{
+		ObjectivesHeight = 44.0f;
+		for (const FScctHudObjectiveLine& Line : Model.ObjectiveLines)
+		{
+			TArray<FString>& Lines = ObjectiveText.AddDefaulted_GetRef();
+			Painter.Wrap(Model.Text(Line.TextId), ObjectiveFont, Width - Pad * 2.0f - 24.0f, 2, Lines);
+			ObjectivesHeight += FMath::Max(Lines.Num(), 1) * ObjectiveLineHeight + 7.0f;
+		}
+	}
+	const float Height = TablesHeight + ObjectivesHeight * Model.StatusShown;
 	const float X = (Size.X - Width) * 0.5f;
 	const float Y = (Size.Y - Height) * 0.5f - 20.0f + (1.0f - EaseOut(Shown)) * 14.0f;
 
@@ -541,5 +560,62 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 			RowY += RowHeight;
 		}
 	}
+
+	if (bObjectiveList)
+	{
+		// The mission's objectives for the player's side, ticked when done, as the original's page lists them.
+		const FLinearColor Colour = Accent(Model.LocalTeam);
+		Painter.SetOpacity(Shown * Model.StatusShown);
+		float RowY = Y + TablesHeight - 12.0f;
+		Painter.Line(FVector2f(X + Pad, RowY), FVector2f(X + Width - Pad, RowY), Fade(Text(), 0.10f), 1.0f);
+		RowY += 14.0f;
+		Painter.Text(FVector2f(X + Pad, RowY), Model.Label(EScctHudLabel::Objectives).ToUpper(), Label(8.0f), TextDim());
+		RowY += 22.0f;
+		for (int32 Index = 0; Index < Model.ObjectiveLines.Num() && Index < ObjectiveText.Num(); ++Index)
+		{
+			const bool bDone = Model.ObjectiveLines[Index].Done != 0;
+			const FBox2f Box = HudBox(X + Pad, RowY + 3.0f, 10.0f, 10.0f);
+			if (bDone)
+			{
+				Painter.Fill(Box, Fade(Colour, 0.85f), 2.0f);
+				Painter.Polyline({ Box.Min + FVector2f(2.0f, 5.0f), Box.Min + FVector2f(4.5f, 7.5f), Box.Min + FVector2f(8.0f, 2.5f) }, FLinearColor(0.0f, 0.0f, 0.0f, 0.9f), 1.5f);
+			}
+			else
+			{
+				Painter.Fill(Box, FLinearColor::Transparent, 2.0f, Fade(Text(), 0.55f), 1.0f);
+			}
+			for (const FString& Line : ObjectiveText[Index])
+			{
+				Painter.Text(FVector2f(X + Pad + 24.0f, RowY), Line, ObjectiveFont, bDone ? TextFaint() : Text());
+				RowY += ObjectiveLineHeight;
+			}
+			RowY += 7.0f;
+		}
+	}
 	Painter.SetOpacity(1.0f);
+}
+
+void ScctHudElements::PaintTeammateNames(FScctHudPainter& Painter, const FScctHudModel& Model)
+{
+	if (Model.NameLabels.Num() == 0)
+	{
+		return;
+	}
+
+	// Quiet labels: they stay behind the crosshair and the objective markers, smaller and fainter with distance
+	// (full at 3 m, least from 60 m on, as the Godot client's are).
+	const FLinearColor Colour = Accent(Model.LocalTeam);
+	for (const FScctHudNameLabel& NameLabel : Model.NameLabels)
+	{
+		float Far = FMath::Clamp((NameLabel.Metres - 3.0f) / 57.0f, 0.0f, 1.0f);
+		Far = Far * Far * (3.0f - 2.0f * Far);
+		const FSlateFontInfo NameFont = Font(EWeight::Regular, 11.5f - 4.0f * Far, 40);
+		const float Alpha = 0.85f - 0.55f * Far;
+		const FVector2f TextSize = Painter.Measure(NameLabel.Name, NameFont);
+		const FVector2f At(NameLabel.Screen.X, NameLabel.Screen.Y - TextSize.Y - 5.0f);
+		Painter.Fill(HudBox(At.X - TextSize.X * 0.5f - 6.0f, At.Y - 2.0f, TextSize.X + 12.0f, TextSize.Y + 4.0f), FLinearColor(0.0f, 0.0f, 0.0f, 0.28f * Alpha), 3.0f);
+		Painter.Text(At, NameLabel.Name, NameFont, Fade(FMath::Lerp(Text(), Colour, 0.55f), Alpha), EAlign::Centre);
+		// A small tick down to the head, so two names close together still say whose they are.
+		Painter.Line(FVector2f(NameLabel.Screen.X, NameLabel.Screen.Y - 4.0f), FVector2f(NameLabel.Screen.X, NameLabel.Screen.Y), Fade(Colour, 0.6f * Alpha), 1.0f);
+	}
 }

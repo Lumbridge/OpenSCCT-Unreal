@@ -30,6 +30,7 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 	{
 		PaintScreenEffects(Painter, *Model);
 		PaintMarkers(Painter, *Model);
+		PaintTeammateNames(Painter, *Model);
 		PaintScope(Painter, *Model);
 		PaintCrosshair(Painter, *Model);
 	}
