@@ -41,7 +41,9 @@ namespace
 	 * placement), the local player's server corrections stay under the budget per minute, every pawn the client draws
 	 * at the end is within the tolerance of a place the server had it in the last 1.5 s, no bot client resynchronised,
 	 * and the scenario completed. It prints corrections/min, the largest drawn jump, the final drift and the round trip.
-	 * -ScctTestFrames=10 saves a 10 fps picture sequence to Saved/ScctTestFrames/<test>/ for review.
+	 * -ScctTestFrames=10 saves a 10 fps picture sequence to Saved/ScctTestFrames/<test>/ for review. Each picture is a
+	 * blocking read-back, so the game then runs at about 8 fps off-screen and the measured round trip grows by up to
+	 * two frames (a 100 ms co-op run measured 279 ms over 135 ms frames); the bound below allows for that.
 	 */
 	class FScctNetcodeTest : public IScctTest
 	{
@@ -55,8 +57,15 @@ namespace
 		static constexpr double WalkSeconds = 28.0;
 		static constexpr double VerdictSeconds = 32.0;
 
-		/** Seconds after the join the grab or the co-op move must have finished in. */
+		/**
+		 * Simulated seconds (60 ticks each) after the join the grab or the co-op move must have finished in. The
+		 * scenario's own stages wait in ticks, so on a starved machine (a grab200 run measured 7 ticks a second with
+		 * other games sharing it) a wall-clock limit failed a scenario that was still on schedule; the limit counts the
+		 * client's ticks, with ScenarioWallSeconds as a backstop.
+		 */
 		static constexpr double ScenarioSeconds = 75.0;
+		static constexpr int64 SimHz = 60;
+		static constexpr double ScenarioWallSeconds = 240.0;
 
 		/**
 		 * A drawn body may move this far in one frame (uu) plus what a running pawn covers in the frame's time; more is
@@ -65,6 +74,14 @@ namespace
 		 */
 		static constexpr float CutDistance = 64.0f;
 		static constexpr float MaxSpeed = 900.0f;
+
+		/**
+		 * Seconds after a body is first drawn in which a jump is its spawn landing, not a teleport: over a 200 ms link a
+		 * bot's first snapshot can still show it where the client was told it entered while the next one already has
+		 * it placed at its start (measured: 296 uu, 0.08 s after the join, with no reset sent). Those jumps are counted
+		 * and printed as spawn jumps.
+		 */
+		static constexpr double SpawnGraceSeconds = 1.0;
 
 		/** Server corrections of the local player's prediction allowed per minute of play. */
 		static constexpr double CorrectionBudget = 30.0;
@@ -165,7 +182,7 @@ namespace
 			LastFrameTime = Now;
 
 			const int32 Count = FMath::Clamp(Api->GetNetPawns(Pawns, UE_ARRAY_COUNT(Pawns)), 0, UE_ARRAY_COUNT(Pawns));
-			WatchBodies(*Session, Count, FrameSeconds);
+			WatchBodies(*Session, Count, FrameSeconds, Now);
 			++Frames;
 			// The round trip is sampled on smooth frames only: the link's datagrams are read once a simulation tick,
 			// so a starved game (other games sharing the machine) adds its frame time to every measurement.
@@ -199,8 +216,9 @@ namespace
 			}
 			if (bWalk ? Played < VerdictSeconds : (Stats.Flags & EScctNetFlags::ScenarioDone) == 0)
 			{
-				return !bWalk && Played > ScenarioSeconds
-					? FScctTestResult::Fail(FString::Printf(TEXT("the %s scenario did not finish in %.0f s: %s"), Case.Scenario, ScenarioSeconds, *Detail(*Api)))
+				const double SimulatedSeconds = static_cast<double>(Stats.ClientTicks - Stats.JoinedTick) / SimHz;
+				return !bWalk && (SimulatedSeconds > ScenarioSeconds || Played > ScenarioWallSeconds)
+					? FScctTestResult::Fail(FString::Printf(TEXT("the %s scenario did not finish in %.0f simulated s (%.0f s played): %s"), Case.Scenario, SimulatedSeconds, Played, *Detail(*Api)))
 					: FScctTestResult::Running();
 			}
 			return Verdict(*Api, Stats, Count, Played);
@@ -208,7 +226,7 @@ namespace
 
 	private:
 		/** Every drawn body against where it was drawn last frame, and the resets the client was sent of it. */
-		void WatchBodies(const UScctSessionSubsystem& Session, int32 Count, float FrameSeconds)
+		void WatchBodies(const UScctSessionSubsystem& Session, int32 Count, float FrameSeconds, double Now)
 		{
 			const float Allowed = CutDistance + MaxSpeed * FrameSeconds;
 			for (const FScctBridgePawn& Drawn : Session.GetPawns())
@@ -230,12 +248,19 @@ namespace
 				// The body's origin is the pawn's location plus its PrePivot (AScctPawnProxy::Present): a crouch moves
 				// the PrePivot, not the pawn.
 				const FVector At = Proxy->GetActorLocation() - FVector(Drawn.PrePivotX, Drawn.PrePivotY, Drawn.PrePivotZ);
+				double FirstSeen = Now;
 				if (const FBody* Last = Bodies.Find(Drawn.ActorId))
 				{
+					FirstSeen = Last->FirstSeen;
 					const float Jump = static_cast<float>(FVector::Dist(Last->At, At));
 					if (Last->Resets != Resets)
 					{
 						++ResetJumps;
+					}
+					else if (Jump > Allowed && Now - FirstSeen < SpawnGraceSeconds)
+					{
+						++SpawnJumps;
+						UE_LOG(LogScctTest, Log, TEXT("%s: pawn %d landed %.1f uu away %.2f s after it was first drawn (spawn jump)"), *GetName(), Drawn.ActorId, Jump, Now - FirstSeen);
 					}
 					else
 					{
@@ -256,7 +281,7 @@ namespace
 						}
 					}
 				}
-				Bodies.Add(Drawn.ActorId, FBody{ At, Resets });
+				Bodies.Add(Drawn.ActorId, FBody{ At, Resets, FirstSeen });
 			}
 		}
 
@@ -353,9 +378,9 @@ namespace
 				FrameMs = FrameSamples[FrameSamples.Num() / 2];
 			}
 			const FString Figures = FString::Printf(
-				TEXT("corrections/min=%.1f (%lld in %.0f s after the spawn's %lld; %lld received) maxJump=%.1fuu (cut %.0f) teleports=%d resetJumps=%d drift=%.1fuu over %d pawns rtt=%.0fms median of %d frames of %.0f ms (link %d ms +-%d, %.0f%% loss; last %.0f, min %.0f) reinits=%lld resets=%lld link sent=%lld lost=%lld delivered=%lld bots=%d walked=%.0fuu frames=%d (%.0f fps) %s"),
+				TEXT("corrections/min=%.1f (%lld in %.0f s after the spawn's %lld; %lld received) maxJump=%.1fuu (cut %.0f) teleports=%d resetJumps=%d spawnJumps=%d drift=%.1fuu over %d pawns rtt=%.0fms median of %d frames of %.0f ms (link %d ms +-%d, %.0f%% loss; last %.0f, min %.0f) reinits=%lld resets=%lld link sent=%lld lost=%lld delivered=%lld bots=%d walked=%.0fuu frames=%d (%.0f fps) %s"),
 				CorrectionsPerMinute, Corrections, Played - SettleSeconds, FMath::Max<int64>(CorrectionsAtStart, 0), Stats.CorrectionsReceived, MaxJump, MaxJumpAllowed, Teleports,
-				ResetJumps, Drift, Compared, Rtt, RttSamples.Num(), FrameMs, Stats.LatencyMs, Stats.JitterMs, Stats.LossPercent, Stats.RttMs, Stats.MinRttMs, Stats.ServerReinits,
+				ResetJumps, SpawnJumps, Drift, Compared, Rtt, RttSamples.Num(), FrameMs, Stats.LatencyMs, Stats.JitterMs, Stats.LossPercent, Stats.RttMs, Stats.MinRttMs, Stats.ServerReinits,
 				Stats.ClientResets, Stats.LinkSent, Stats.LinkLost, Stats.LinkDelivered, Stats.BotsJoined, LocalWalked, Frames, Frames / FMath::Max(Played, 1.0), *Detail(Api));
 			UE_LOG(LogScctTest, Log, TEXT("%s: %s"), *GetName(), *Figures);
 
@@ -416,6 +441,7 @@ namespace
 		{
 			FVector At;
 			int32 Resets;
+			double FirstSeen;
 		};
 
 		FScctNetcodeCase Case;
@@ -431,6 +457,7 @@ namespace
 		float MaxJumpAllowed = CutDistance;
 		int32 Teleports = 0;
 		int32 ResetJumps = 0;
+		int32 SpawnJumps = 0;
 		FString FirstTeleport;
 		int32 HeldLeg = -1;
 		bool bHaveLocal = false;
