@@ -205,6 +205,9 @@ public unsafe struct BridgeStartOptions
 
     /// <summary>Seconds plus one.</summary>
     public int RespawnPlusOne;
+
+    /// <summary>The player count the map's match-size rules lay the match out for; 0 (an older caller's) for the bots and the local player.</summary>
+    public int MatchPlayers;
 }
 
 public static class BridgeStartFlags

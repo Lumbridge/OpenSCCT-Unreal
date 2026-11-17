@@ -2,6 +2,7 @@
 
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformMisc.h"
+#include "Menu/ScctDashboardCards.h"
 #include "Menu/ScctMenuDriver.h"
 #include "Menu/ScctMenuKit.h"
 #include "Menu/ScctMenuNav.h"
@@ -216,10 +217,22 @@ TSharedRef<SWidget> SScctFrontEnd::BuildFooter()
 			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)[ Hints ]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[
-				SNew(STextBlock)
-				.Font(ScctUi::Caps(11.0f))
-				.ColorAndOpacity(ScctHudStyle::TextFaint())
-				.Text(TAttribute<FText>::CreateLambda([] { return FText::FromString(ScctUi::BuildLabel()); }))
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
+				[
+					SNew(STextBlock)
+					.Font(ScctUi::Caps(11.0f))
+					.ColorAndOpacity(ScctHudStyle::TextFaint())
+					.Text(TAttribute<FText>::CreateLambda([] { return FText::FromString(ScctUi::BuildLabel()); }))
+				]
+				// The master's own version under the game's (the Godot client's BuildLabel and MasterVersionCheck).
+				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0.0f, 3.0f, 0.0f, 0.0f)
+				[
+					SNew(STextBlock)
+					.Font(ScctUi::Caps(10.0f))
+					.ColorAndOpacity(ScctHudStyle::TextFaint())
+					.Text(TAttribute<FText>::CreateLambda([] { return FText::FromString(ScctDashboard::MasterLabel()); }))
+				]
 			]
 		];
 }

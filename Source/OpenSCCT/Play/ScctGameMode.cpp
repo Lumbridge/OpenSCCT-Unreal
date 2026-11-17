@@ -103,6 +103,7 @@ void AScctGameMode::InitGame(const FString& MapName, const FString& Options, FSt
 	Match.bOfflineRules = ParseSwitch(Options, TEXT("Practice"));
 	Match.bUnlimitedGear = ParseSwitch(Options, TEXT("UnlimitedGear"));
 	Match.bResponsiveSmoke = ParseSwitch(Options, TEXT("ResponsiveSmoke"));
+	Match.MatchPlayers = FMath::Clamp(UGameplayStatics::GetIntOption(Options, TEXT("MatchPlayers"), 0), 0, 24);
 	Match.PlayerName = UGameplayStatics::ParseOption(Options, TEXT("Name"));
 	Match.TimeLimit = UGameplayStatics::GetIntOption(Options, TEXT("TimeLimit"), -1);
 	Match.SpyLives = UGameplayStatics::GetIntOption(Options, TEXT("SpyLives"), -1);
