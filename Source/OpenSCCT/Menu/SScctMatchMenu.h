@@ -82,6 +82,8 @@ private:
 	TSharedPtr<SScctDialogLayer> Dialogs;
 	TSharedPtr<SScctMenuPage> Settings;
 	TWeakPtr<SWidget> DefaultFocus;
+	/** The pause page's Options entry: the focus goes back to it when the settings close. */
+	TWeakPtr<SWidget> OptionsEntry;
 	FScctMenuHost Host;
 
 	EView View = EView::Pause;

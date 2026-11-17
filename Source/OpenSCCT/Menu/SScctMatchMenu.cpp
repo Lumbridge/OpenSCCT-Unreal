@@ -17,6 +17,7 @@
 #include "Widgets/Layout/SBackgroundBlur.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -81,11 +82,12 @@ void SScctMatchMenu::Construct(const FArguments& InArgs)
 	[
 		ScctUi::ScaleForSmallScreens(
 			SNew(SOverlay)
-			// The match behind, darkened and blurred while the menu is open.
+			// The match behind, darkened and blurred while the menu or the results are up (the results without the
+			// menu take no clicks: the round's end plays on behind them).
 			+ SOverlay::Slot()
 			[
 				SNew(SBox)
-				.Visibility_Lambda([this] { return bOpen ? EVisibility::Visible : EVisibility::Collapsed; })
+				.Visibility_Lambda([this] { return bOpen ? EVisibility::Visible : IsShowingResults() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
 				[
 					SNew(SOverlay)
 					+ SOverlay::Slot()[ SNew(SBackgroundBlur).BlurStrength(TAttribute<float>::CreateLambda([this] { return 9.0f * Shown; })) ]
@@ -132,6 +134,11 @@ void SScctMatchMenu::SetOpen(bool bInOpen)
 		{
 			Show(EView::Pause);
 		}
+		// A closed menu keeps no focus: the hidden buttons would otherwise still take Enter and the arrows.
+		if (HasFocusedDescendants() || HasKeyboardFocus())
+		{
+			FSlateApplication::Get().SetAllUserFocusToGameViewport(EFocusCause::SetDirectly);
+		}
 	}
 }
 
@@ -142,11 +149,17 @@ void SScctMatchMenu::Show(EView NewView, const FString& Sub)
 		Settings->OnClosing();
 		Settings.Reset();
 	}
+	const bool bFromSettings = View == EView::Settings && NewView == EView::Pause;
 	View = NewView;
 	switch (View)
 	{
 	case EView::Pause:
 		Body->SetContent(BuildPause());
+		// Back from the settings: the focus is where it was, on the entry that opened them.
+		if (bFromSettings && OptionsEntry.IsValid())
+		{
+			DefaultFocus = OptionsEntry;
+		}
 		break;
 	case EView::Settings:
 	{
@@ -286,7 +299,7 @@ FReply SScctMatchMenu::OnAnalogValueChanged(const FGeometry& MyGeometry, const F
 void SScctMatchMenu::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
 {
 	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
-	Shown = ScctHudStyle::Ease(Shown, bOpen ? 1.0f : 0.0f, FMath::Min(InDeltaTime, 0.05f), 10.0f);
+	Shown = ScctHudStyle::Ease(Shown, bOpen || IsShowingResults() ? 1.0f : 0.0f, FMath::Min(InDeltaTime, 0.05f), 10.0f);
 
 	// Unattended runs only (-ScctMenuDo): a page asked for while the menu is closed opens it.
 	FScctMenuDriver::FHost DriverHost;
@@ -491,17 +504,19 @@ TSharedRef<SWidget> SScctMatchMenu::BuildPause()
 	};
 
 	DefaultFocus = Entry(TEXT("Resume"), TEXT("Back to the match"), TEXT("Close the menu and play on. Escape and B do the same."), [this] { ScctUi::Play(EScctUiSound::Accept); OnResume.ExecuteIfBound(); });
-	Entry(ScctUi::GameText(TEXT("Start_Menu"), TEXT("Options.Caption"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
+	OptionsEntry = Entry(ScctUi::GameText(TEXT("Start_Menu"), TEXT("Options.Caption"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
 		TEXT("The settings, the same as in the main menu. Changes are in force at once."), [this] { ScctUi::Play(EScctUiSound::Accept); Show(EView::Settings); });
 	if (CanChangeSide())
 	{
 		const bool bMerc = IsMercLocal();
 		const FString Other = ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), bMerc ? 0 : 1, bMerc ? TEXT("Spy") : TEXT("Mercenary"));
-		Entry(ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Button2"), TEXT("Switch Team")), FString::Printf(TEXT("Play this map as a %s"), *Other.ToLower()),
-			TEXT("Start this match again on the other side, with the same map, mode, bots and rules."), [this, Other]
+		const FString SwitchCaption = ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Button2"), TEXT("Switch Team"));
+		Entry(SwitchCaption, FString::Printf(TEXT("Play this map as a %s"), *Other.ToLower()),
+			TEXT("Start this match again on the other side, with the same map, mode, bots and rules."), [this, Other, SwitchCaption]
 			{
-				ScctUi::Confirm(Dialogs, TEXT("Change side"), FString::Printf(TEXT("Start the match again as a %s? This round's score is lost."), *Other.ToLower()),
-					TEXT("Change side"), TEXT("Cancel"), [this] { Restart(true); });
+				// The dialog is named as the entry that opened it.
+				ScctUi::Confirm(Dialogs, SwitchCaption, FString::Printf(TEXT("Start the match again as a %s? This round's score is lost."), *Other.ToLower()),
+					SwitchCaption, TEXT("Cancel"), [this] { Restart(true); });
 			});
 		Entry(TEXT("Restart"), TEXT("The same match from the start"), TEXT("Start this match again with the same side, map, mode, bots and rules."), [this]
 		{
@@ -628,16 +643,15 @@ TSharedRef<SWidget> SScctMatchMenu::BuildResults()
 	TArray<bool> Local;
 	const bool bHave = ReadResults(Winner, Reason, Rows, Teams, Local);
 
-	const FString WinText = ScctUi::GameText(TEXT("Ending_Menu"), TEXT("TextTeamWin"), TEXT("wins"));
 	const bool bDecided = Winner == 0 || Winner == 1;
 	const bool bEnded = bOnlineLevel || bResultsReady;
+	// The original's line per winning side, a list: ("Shadownet Spies team wins","ARGUS PMC Mercenaries team wins").
 	const FString Headline = bDecided
-		? FString::Printf(TEXT("%s %s"), *ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), Winner, Winner == 0 ? TEXT("Spy") : TEXT("Mercenary")), *WinText)
+		? ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TextTeamWin"), Winner, Winner == 0 ? TEXT("Spies win") : TEXT("Mercenaries win"))
 		: bEnded ? FString(TEXT("Round over")) : FString(TEXT("Scoreboard"));
 	const bool bLocalWon = bDecided && Winner == (IsMercLocal() ? 1 : 0);
 	const FString Kicker = !bEnded ? FString(TEXT("ROUND IN PROGRESS"))
-		: bLocalWon ? ScctUi::GameText(TEXT("Ending_Menu"), TEXT("txt_Victory"), TEXT("Victory")).ToUpper()
-		: bDecided ? FString(TEXT("DEFEAT")) : FString(TEXT("NO WINNER"));
+		: bLocalWon ? FString(TEXT("VICTORY")) : bDecided ? FString(TEXT("DEFEAT")) : FString(TEXT("NO WINNER"));
 
 	// Two tables, one per side.
 	const auto SideTable = [&](int32 Team) -> TSharedRef<SWidget>
@@ -717,7 +731,12 @@ TSharedRef<SWidget> SScctMatchMenu::BuildResults()
 		]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 6.0f, 0.0f, 6.0f)
 		[
-			SNew(STextBlock).Font(ScctUi::Display(64.0f)).ColorAndOpacity(MatchMenuTeamColour(Winner)).Text(FText::FromString(Headline.ToUpper()))
+			// One line, made smaller where the screen is too narrow for it (a wrapped headline left "WINS" alone).
+			SNew(SScaleBox).Stretch(EStretch::ScaleToFitX).StretchDirection(EStretchDirection::DownOnly)
+			[
+				SNew(STextBlock).Font(ScctUi::Display(46.0f)).ColorAndOpacity(MatchMenuTeamColour(Winner))
+				.Text(FText::FromString(Headline.ToUpper()))
+			]
 		]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 0.0f, 0.0f, 30.0f)
 		[
