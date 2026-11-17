@@ -119,6 +119,7 @@ void UScctEffectsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Tracers.SetNum(MaxTracers);
 	ImpactSerials.Init(0, MaxImpactSlots);
 	ImpactSeenFrame.Init(0, MaxImpactSlots);
+	MarkSurfaces.SetNum(MaxImpactSlots);
 	Actors.Reserve(320);
 }
 
@@ -175,6 +176,11 @@ void UScctEffectsSubsystem::ResetMatch()
 	{
 		Serial = 0;
 	}
+	for (FMarkSurface& Surface : MarkSurfaces)
+	{
+		Surface = FMarkSurface();
+	}
+	ResetProjections();
 	Sprites.Clear();
 	MatchSeconds = 0.0f;
 	bFireHeld = bAltFireHeld = false;
@@ -322,6 +328,7 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 	DrainShots();
 	UpdateTracers(FxSeconds);
 	UpdateImpactMarks();
+	UpdateProjections();
 	UpdateEffectActors(FxSeconds);
 	UpdateLights(FxSeconds);
 	UpdateBodyFill();
@@ -530,6 +537,7 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 		if (bNew)
 		{
 			ImpactSerials[Mark.Slot] = Mark.Serial;
+			MarkSurfaces[Mark.Slot] = FMarkSurface();
 			++NumImpacts;
 			const FString& SparkClass = GetName(Mark.SparkClassId);
 			const FString& TypeClass = GetName(Mark.TypeId);
@@ -554,7 +562,8 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 				// Each slot's decal has its own colours, set for the surface that was hit.
 				DecalTints[Mark.Slot] = Decal->CreateDynamicMaterialInstance();
 			}
-			if (bNew || !Decal->IsVisible())
+			// A mark tied to a door that was hidden for a while comes back where it was on the door.
+			if (bNew || (!Decal->IsVisible() && !MarkSurfaces[Mark.Slot].bAttached))
 			{
 				const float HalfSize = TintDecal(DecalTints[Mark.Slot], GetName(Mark.TypeId), GetName(Mark.SparkClassId));
 				// A decal projects along its own X axis, into the surface; its turn about that axis is random so
@@ -565,12 +574,23 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 				// Shallow, so a mark on a thin wall or a door edge is not projected onto what stands behind it.
 				Decal->DecalSize = FVector(4.0, Size, Size);
 				Decal->SetWorldLocationAndRotation(At, Facing);
-				Decal->SetVisibility(true);
+				AttachMark(Mark.Slot, Mark, *Decal);
+			}
+			const bool bDrawn = FollowMarkSurface(Mark.Slot, *Decal);
+			if (Decal->IsVisible() != bDrawn)
+			{
+				Decal->SetVisibility(bDrawn);
 			}
 		}
 		else if (Decal != nullptr && Decal->IsVisible())
 		{
 			Decal->SetVisibility(false);
+			FMarkSurface& Surface = MarkSurfaces[Mark.Slot];
+			if (bLog && Surface.bAttached && !Surface.bHiddenWithSurface)
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("Effects: mark slot %d hidden with its surface #%d (no longer drawn)"), Mark.Slot, Surface.ActorId);
+			}
+			Surface.bHiddenWithSurface = Surface.bAttached;
 		}
 	}
 

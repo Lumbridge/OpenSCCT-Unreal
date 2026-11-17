@@ -10,7 +10,9 @@
 #include "Runtime/ScctHubApi.h"
 #include "Runtime/ScctHubSocialApi.h"
 #include "Runtime/ScctHudApi.h"
+#include "Runtime/ScctMarkSurfaceApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Runtime/ScctProjectionsApi.h"
 #include "Runtime/ScctVisionApi.h"
 #include "Runtime/ScctVoiceApi.h"
 #include "Runtime/ScctWorldApi.h"
@@ -42,7 +44,9 @@ SCCT_FEATURE_TABLE(FScctHostApi, "HostExports", ScctHostApiVersion);
 SCCT_FEATURE_TABLE(FScctHubApi, "HubExports", ScctHubApiVersion);
 SCCT_FEATURE_TABLE(FScctHubSocialApi, "HubSocialExports", ScctHubSocialApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
+SCCT_FEATURE_TABLE(FScctMarkSurfaceApi, "MarkSurfaceExports", ScctMarkSurfaceApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
+SCCT_FEATURE_TABLE(FScctProjectionsApi, "ProjectionExports", ScctProjectionsApiVersion);
 SCCT_FEATURE_TABLE(FScctVisionApi, "VisionExports", ScctVisionApiVersion);
 SCCT_FEATURE_TABLE(FScctVoiceApi, "VoiceExports", ScctVoiceApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);

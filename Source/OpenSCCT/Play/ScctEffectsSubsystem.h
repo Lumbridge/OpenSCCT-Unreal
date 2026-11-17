@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Play/ScctEffectsParticles.h"
 #include "Runtime/ScctEventsApi.h"
+#include "Runtime/ScctProjectionsApi.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctEffectsSubsystem.generated.h"
 
@@ -14,6 +15,7 @@ class UPointLightComponent;
 class UScctSessionSubsystem;
 class UStaticMesh;
 class UStaticMeshComponent;
+class UTexture2D;
 
 /**
  * Draws the match's transient effects from the bridge's events feature (Runtime/ScctEventsApi.h), each frame on
@@ -23,7 +25,12 @@ class UStaticMeshComponent;
  *     which draws the guns), and tracers as fast thin streaks. The local player's own first-person flash is the
  *     equipment's while it draws a view model (UScctEquipmentSubsystem::DrawsLocalMuzzleFlash); only when there
  *     is no view model is it drawn here, at the simulation's muzzle estimate;
- *   - impact marks: a decal per live mark and a burst of sparks, dust, splinters or spray by the surface;
+ *   - impact marks: a decal per live mark and a burst of sparks, dust, splinters or spray by the surface. A mark
+ *     on a map actor (a door, a lift, a pane of glass) moves with that actor and is hidden while it is hidden or
+ *     gone; a mark on the level's own geometry stays where it landed;
+ *   - abandoned projections (footprints, a flare's burn mark, shotgun pellet projectors): a decal of the original
+ *     texture each, laid on the surface the bridge found for it, riding that surface like an impact mark and fading
+ *     out at the end of its life (Play/ScctEffectsProjections.cpp);
  *   - effect actors: grenades, mines and gadgets as their original meshes (imported by
  *     Tools/Effects/build_effect_assets.py; a small glowing stand-in shape where a mesh is missing), explosions,
  *     smoke, sparks, flares and trails as particles, and the lights the simulation gives them.
@@ -124,6 +131,51 @@ private:
 	void DrainShots();
 	void UpdateTracers(float DeltaSeconds);
 	void UpdateImpactMarks();
+
+	/**
+	 * A mark on a map actor (a door, a lift, a pane): its decal is kept in that actor's frame, as the Godot client's
+	 * CombatFxView.AttachDecal does, and drawn only while the actor is. Play/ScctEffectsMarks.cpp.
+	 */
+	struct FMarkSurface
+	{
+		/** The level's actor for the surface; unset when the frame is the simulation's own pose of it. */
+		TWeakObjectPtr<AActor> Actor;
+		/** The decal's place in the surface's frame (location and turn, no scale). */
+		FTransform Local;
+		/** The simulation's id of the surface; 0 for the level's own geometry. */
+		int32 ActorId = 0;
+		bool bAttached = false;
+		/** No level actor stands for the surface: its frame is the simulation's pose of it. */
+		bool bSimulationFrame = false;
+		/** Hidden with its surface last frame (for the log). */
+		bool bHiddenWithSurface = false;
+	};
+
+	/** Ties a slot's freshly placed decal to the actor its mark hit (nothing for the level's geometry). */
+	void AttachMark(int32 Slot, const FScctImpactMark& Mark, UDecalComponent& Decal);
+	/** Carries a tied decal with its actor; false while the decal must not be drawn (its surface is hidden or gone). */
+	bool FollowMarkSurface(int32 Slot, UDecalComponent& Decal);
+	/** The two above for any decal; What and Index name it in the log. */
+	void AttachToSurface(FMarkSurface& Surface, int32 SurfaceActorId, UDecalComponent& Decal, const TCHAR* What, int32 Index);
+	bool FollowSurface(FMarkSurface& Surface, UDecalComponent& Decal, const TCHAR* What, int32 Index);
+
+	/**
+	 * The abandoned projections of the client's world (Runtime/ScctProjectionsApi.h), each a pooled decal of its
+	 * texture on the surface the bridge placed it on. Play/ScctEffectsProjections.cpp.
+	 */
+	struct FProjectionSlot
+	{
+		int32 Serial = 0;
+		uint32 SeenFrame = 0;
+		float Opacity = -1.0f;
+		FMarkSurface Surface;
+	};
+
+	void UpdateProjections();
+	void ResetProjections();
+	/** The imported texture of a projection by the bridge's name id of its asset name; null when it is not imported. */
+	UTexture2D* FindProjectionTexture(int32 AssetId);
+
 	void UpdateEffectActors(float DeltaSeconds);
 	void UpdateLights(float DeltaSeconds);
 
@@ -216,6 +268,30 @@ private:
 	TArray<FTracer> Tracers;
 	TArray<int32> ImpactSerials;
 	TArray<uint32> ImpactSeenFrame;
+	/** Same index as Decals. */
+	TArray<FMarkSurface> MarkSurfaces;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UDecalComponent>> ProjectionDecals;
+
+	/** The material instance of each projection decal (same index as ProjectionDecals). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> ProjectionLooks;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> ProjectionMaterial;
+
+	/** By the bridge's name id of the asset name; null for one that was looked for and not found. */
+	UPROPERTY(Transient)
+	TMap<int32, TObjectPtr<UTexture2D>> ProjectionTextures;
+
+	const FScctProjectionsApi* Projections = nullptr;
+	TArray<FProjectionSlot> ProjectionSlots;
+	TMap<int32, int32> ProjectionBySerial;
+	TArray<FScctProjection> ProjectionBuffer;
+	bool bProjectionsReported = false;
+	int32 NumProjections = 0;
+	int32 NumProjectionsUndrawn = 0;
 	TMap<int32, FString> Names;
 	TMap<int32, EStyle> Styles;
 	TMap<int64, FName> DrawnBones;
