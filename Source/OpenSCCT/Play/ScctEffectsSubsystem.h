@@ -66,6 +66,13 @@ public:
 	 */
 	void SpawnGlassBurst(const FVector& At, const FVector& Direction);
 
+	/**
+	 * For the goggles: the mesh drawing an effect actor (a mine, a sticky cam, a grenade) by its simulation ActorId,
+	 * or null when it draws none or is a beam. Read only; the goggles mark it for thermal and EMF and give it back as
+	 * it was.
+	 */
+	UStaticMeshComponent* FindActorMesh(int32 ActorId) const;
+
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 

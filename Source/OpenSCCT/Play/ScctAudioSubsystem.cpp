@@ -136,6 +136,12 @@ void UScctAudioSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
+UScctAudioSubsystem::FOnSummary& UScctAudioSubsystem::OnSummary()
+{
+	static FOnSummary Delegate;
+	return Delegate;
+}
+
 float UScctAudioSubsystem::DistanceGain(float Distance, float MinDistance, float Radius)
 {
 	return Distance <= MinDistance ? 1.0f : MinDistance / (MinDistance + 0.5f * (Distance - MinDistance));
@@ -1224,6 +1230,9 @@ void UScctAudioSubsystem::LogSummary() const
 		Cache.GetNumDecoded(), Cache.GetBytes() / (1024.0 * 1024.0), Cache.GetNumFailed(), NumFailedFiles, Listener.X, Listener.Y, Listener.Z);
 	LogAcousticSummary();
 	LogAudioViewSummary();
+	TArray<FString> Notes;
+	OnSummary().Broadcast(Notes);
+	UE_CLOG(Notes.Num() > 0, LogOpenSCCT, Log, TEXT("Audio summary: also %s"), *FString::Join(Notes, TEXT("; ")));
 
 	// The engine's own listener must be where this subsystem takes it to be (the camera), or every 3D voice is
 	// panned and attenuated from somewhere else: said in the log when the two are apart.

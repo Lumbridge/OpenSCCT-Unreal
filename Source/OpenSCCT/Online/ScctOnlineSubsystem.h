@@ -129,6 +129,12 @@ public:
 	/** Leaves the server (or gives up connecting, or dismisses a failure). The state is Idle afterwards. A host stops hosting. */
 	void Leave();
 
+	/**
+	 * Brings the online bridge up (the identity, the master) without joining, so a visit another part of the game
+	 * starts in the bridge (a hub's pad match) is followed: its levels opened, its round presented. False when the
+	 * bridge cannot be loaded (GetNotice says why).
+	 */
+	bool EnsureReady() { return Connect() != nullptr; }
 	// ---- hosting (ScctOnlineHost.cpp) ------------------------------------------------------------------------
 
 	/**

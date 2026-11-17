@@ -298,6 +298,22 @@ public sealed partial class HubBridge
             return false;
         }
 
+        return JoinListedId(hub.Entry.Id, hub.Entry.Name, hub.Entry.RequireAccounts, name, team);
+    }
+
+    /// <summary>
+    /// Joins a hub the master lists by its id, without the list (a website join or a friend's Join from Discord):
+    /// the same join answer and ways in as <see cref="JoinListed"/>. <paramref name="requireAccount"/> refuses the
+    /// visit when the master gives no ticket for it. False with <see cref="Error"/> set when it cannot start.
+    /// </summary>
+    public bool JoinListedId(string id, string? hubName, bool requireAccount, string? name, int team)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            Fail("No hub was named to join.");
+            return false;
+        }
+
         if (Master.Client is not { } client)
         {
             Fail("No master server is set for this game: join a hub by its address.");
@@ -306,9 +322,9 @@ public sealed partial class HubBridge
 
         Leave();
         ForgetListed();
-        _masterId = hub.Entry.Id;
-        _masterName = hub.Entry.Name;
-        _requireAccount = hub.Entry.RequireAccounts;
+        _masterId = id.Trim();
+        _masterName = string.IsNullOrWhiteSpace(hubName) ? "the hub" : hubName.Trim();
+        _requireAccount = requireAccount;
         _name = string.IsNullOrWhiteSpace(name) ? "Player" : name.Trim();
         _team = team == 1 ? 1 : 0;
         _pendingJoin = client.JoinAsync(_masterId);
