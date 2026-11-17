@@ -1,0 +1,2 @@
+# Python's cache of the import scripts (the editor's Python writes it when it runs them).
+__pycache__/

@@ -11,6 +11,7 @@ import_map.py (scct_fx.py) makes the instances a map needs.
                        lights, caustics, and the pulse and flicker of its animated lights.
   M_ScctProjector      a picture projected onto surfaces as a decal: signs, graffiti, rain splashes.
   M_ScctGlowCard       the original's painted light: beam and flare cards modelled into the level.
+  M_ScctWet            wet ground where it rains: a decal that makes surfaces shine, with standing water in patches.
 """
 import unreal
 
@@ -23,6 +24,7 @@ CORONA = EFFECTS + "/M_ScctCorona"
 LIGHT_FUNCTION = EFFECTS + "/M_ScctLightFunction"
 PROJECTOR = EFFECTS + "/M_ScctProjector"
 GLOW_CARD = EFFECTS + "/M_ScctGlowCard"
+WET = EFFECTS + "/M_ScctWet"
 RAIN_STREAK = EFFECTS + "/T_RainStreak"
 
 # Custom primitive data slots of a corona card (set per placed card by scct_fx.py).
@@ -190,11 +192,13 @@ def build_corona():
 # A spot light's function is laid over the square around its cone (0..1 both ways at any distance). The
 # original's projector lights are rectangles: RectU and RectV say how many times the cone's square is wider than
 # the rectangle's half width and half height (0: no rectangle, the whole cone). Inside the rectangle the picture
-# is the cookie texture, or without one the original's default: a soft round spot.
+# is the cookie texture, or without one a soft round spot. The original's default spot (Echelon.spot_bw) is flat
+# out to 0.7 of its radius and gone at 1; these lights are bright enough to burn their pool to white, which left
+# only that rim to see, a hard-edged disc. Here the spot is hottest in the middle and fades all the way out.
 LIGHT_SHAPE_CODE = """
 float2 p = float2((UV.y * 2.0 - 1.0) * RectU, (UV.x * 2.0 - 1.0) * RectV);
 float inside = (RectU + RectV) > 0.0 ? step(abs(p.x), 1.0) * step(abs(p.y), 1.0) : 1.0;
-float round = 1.0 - smoothstep(0.55, 1.0, length(p));
+float round = 1.0 - smoothstep(0.15, 1.0, length(p)); round *= round;
 float edge = saturate((1.0 - max(abs(p.x), abs(p.y))) * 12.0);
 return float3(p * float2(0.5, -0.5) + 0.5, inside * lerp(lerp(1.0, edge, step(0.001, RectU + RectV)), round, saturate(Round)));"""
 
@@ -215,6 +219,11 @@ def build_light_function():
     g = Graph(LIGHT_FUNCTION)
     material = g.material
     material.set_editor_property("material_domain", unreal.MaterialDomain.MD_LIGHT_FUNCTION)
+    # With MegaLights a light function is drawn once into the engine's light function atlas and read from there.
+    # The engine leaves out any function that computes its own texture coordinates (this one does: rectangle,
+    # tiling, flipbook frames) unless it is told the function is safe there. Without this no cookie, round
+    # spot, caustic or flicker of this material showed at all.
+    material.set_editor_property("force_compatible_with_light_function_atlas", True)
     time = g.node(unreal.MaterialExpressionTime)
     shape = g.custom(LIGHT_SHAPE_CODE, FLOAT3, UV=g.node(unreal.MaterialExpressionTextureCoordinate),
                      RectU=g.scalar("RectU", 0.0), RectV=g.scalar("RectV", 0.0), Round=g.scalar("Round", 0.0))
@@ -235,10 +244,12 @@ def build_light_function():
 # Projected pictures
 # ---------------------------------------------------------------------------------------------------------------
 
-# A decal's box has its picture across local Y and Z. The original lays u along the projector's Y and texture
-# row 0 toward its +Z (docs/RENDERING.md, Projectors); FlipU and FlipV turn it where the two disagree.
+# A decal projects along its local X and hands the material its local Z as the first texture coordinate and its
+# local Y as the second (the engine's DeferredDecal.usf). The original lays u along the projector's Y and texture
+# row 0 toward its +Z (docs/RENDERING.md, Projectors); FlipU and FlipV turn it where a projector is mirrored.
 PROJECTOR_UV_CODE = """
-float2 uv = float2(lerp(UV.x, 1.0 - UV.x, saturate(FlipU)), lerp(UV.y, 1.0 - UV.y, saturate(FlipV)));
+float2 uv = float2(UV.y, 1.0 - UV.x);
+uv = float2(lerp(uv.x, 1.0 - uv.x, saturate(FlipU)), lerp(uv.y, 1.0 - uv.y, saturate(FlipV)));
 return uv * float2(TileU, TileV);"""
 
 
@@ -295,6 +306,50 @@ def build_glow_card():
     return g.finish()
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Wet ground
+# ---------------------------------------------------------------------------------------------------------------
+
+# Where it rains everything is wet: damp surfaces shine a little, and water stands in patches that mirror the
+# lamps. x: how smooth the surface becomes there (the decal's roughness), y: how much of that is laid over the
+# surface. The patches come from smooth noise over the ground plan, so they do not repeat; the wetness fades out
+# toward the sides of the decal's box (UV 0..1 across it) so a rain volume has no ruled edge.
+WET_CODE = """
+float2 p = Position.xy / max(PatchSize, 1.0);
+float2 cell = floor(p);
+float2 f = p - cell;
+f = f * f * (3.0 - 2.0 * f);
+#define SCCT_WET_HASH(c) frac(sin(dot(c, float2(127.1, 311.7))) * 43758.5453)
+float coarse = lerp(lerp(SCCT_WET_HASH(cell), SCCT_WET_HASH(cell + float2(1, 0)), f.x),
+                    lerp(SCCT_WET_HASH(cell + float2(0, 1)), SCCT_WET_HASH(cell + float2(1, 1)), f.x), f.y);
+float2 q = p * 2.7 + 13.0;
+float2 cell2 = floor(q);
+float2 g = q - cell2;
+g = g * g * (3.0 - 2.0 * g);
+float fine = lerp(lerp(SCCT_WET_HASH(cell2), SCCT_WET_HASH(cell2 + float2(1, 0)), g.x),
+                  lerp(SCCT_WET_HASH(cell2 + float2(0, 1)), SCCT_WET_HASH(cell2 + float2(1, 1)), g.x), g.y);
+#undef SCCT_WET_HASH
+float puddle = smoothstep(0.52, 0.68, coarse * 0.7 + fine * 0.3);
+float edge = saturate(min(min(UV.x, 1.0 - UV.x), min(UV.y, 1.0 - UV.y)) * 6.0);
+return float2(lerp(Damp, Puddle, puddle), lerp(DampAmount, 1.0, puddle) * edge);"""
+
+
+def build_wet():
+    """M_ScctWet: a decal that only changes how rough a surface is (its colour and relief stay), laid over the
+    ground of a rain volume."""
+    g = Graph(WET)
+    material = g.material
+    material.set_editor_property("material_domain", unreal.MaterialDomain.MD_DEFERRED_DECAL)
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    wet = g.custom(WET_CODE, FLOAT2, Position=g.node(unreal.MaterialExpressionWorldPosition),
+                   UV=g.node(unreal.MaterialExpressionTextureCoordinate), PatchSize=g.scalar("PatchSize", 260.0),
+                   Damp=g.scalar("DampRoughness", 0.3), Puddle=g.scalar("PuddleRoughness", 0.04),
+                   DampAmount=g.scalar("DampAmount", 0.6))
+    g.output(g.custom("return W.x;", FLOAT1, W=wet), unreal.MaterialProperty.MP_ROUGHNESS)
+    g.output(g.custom("return W.y;", FLOAT1, W=wet), unreal.MaterialProperty.MP_OPACITY)
+    return g.finish()
+
+
 def build_all():
     build_particle_lit()
     build_particle_glow()
@@ -302,3 +357,4 @@ def build_all():
     build_light_function()
     build_projector()
     build_glow_card()
+    build_wet()

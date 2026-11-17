@@ -86,6 +86,7 @@ Nothing here was downloaded. `Content/OpenSCCT/Effects/` holds only things built
 | M_ScctProjector | `scct_effects.py` | projected signs, graffiti and rain splashes (decals) |
 | M_ScctGlowCard | `scct_effects.py` | the original's modelled beam and flare cards |
 | NS_ScctSprites | `scct_niagara.py` (through the engine's Niagara toolset) | every sprite emitter and rain volume; built from the engine's own Niagara modules |
+| M_ScctWet | `scct_effects.py` | wet, shining ground with standing water under rain volumes (a decal that changes roughness only; its patches are computed noise, no texture) |
 | T_RainStreak | `make_effect_textures.py` (drawn with numpy) | a raindrop streak |
 
 The textures the placed effects show (smoke, sparks, coronas, cookies) are original game content: they are

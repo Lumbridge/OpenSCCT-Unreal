@@ -5,6 +5,7 @@ Runs inside the editor's Python as part of import_map.py. The assets it places a
 (scct_effects.py, scct_niagara.py). The original engine's rules it follows are in OpenSCCT's
 spec/native/emitters.md and docs/RENDERING.md; where this differs on purpose (lit smoke, soft edges) it says so.
 """
+import hashlib
 import json
 import math
 import os
@@ -32,6 +33,12 @@ ANIMATED_LIGHT_TYPES = (2, 3, 4, 7)   # pulse, blink, flicker, subtle pulse
 # Projector frame blends (Projector.FrameBufferBlendingOp).
 PROJECT_MODULATE, PROJECT_ALPHA, PROJECT_ADD = 1, 2, 3
 
+# The Actor class's defaults for a projector light, and the LightBrightness past which it gets no brighter.
+ECHELON_DEFAULT_RANGE = 1000.0
+ECHELON_DEFAULT_SPOT = 250.0
+ECHELON_BRIGHTNESS_MOST = 510.0
+ECHELON_FALLOFF = 2.0     # the engine fades as (1 - (d / R)^2) ^ this
+DEFAULT_SPOT_PICTURE = "echelon_spot_bw"
 # How much of a beam light's light the air scatters, per square root of the original's beam alpha.
 BEAM_SCATTER = 4.0
 BEAM_SCATTER_MOST = 16.0
@@ -45,6 +52,7 @@ RAIN_PER_SQUARE_METRE = 14.0
 RAIN_SPEED = (1300.0, 1700.0)
 RAIN_HALF_SIZE = (0.5, 22.0)
 RAIN_MOST_PER_SECOND = 5000.0
+WET_BELOW_VOLUME = 64.0     # how far under a rain volume's floor its wet ground still reaches
 # Zone fog: the thickest a fogged zone gets across its whole width (optical depth), so rooms stay playable.
 FOG_DEPTH_MOST = 2.0
 DRAW_MESH = 2      # Actor.DrawType DT_Mesh: a skeletal mesh
@@ -307,7 +315,9 @@ class MapEffects:
                                                   max(1, pick(props, "TextureUSubdivisions", 1)), max(1, pick(props, "TextureVSubdivisions", 1)))
                 component.set_variable_material("Material", material)
                 if not active:
-                    component.set_auto_activate(False)
+                    # As a property: the component's SetAutoActivate call does nothing on a component that is
+                    # already registered with its world, and every disabled emitter then ran from the start.
+                    component.set_editor_property("auto_activate", False)
                     waiting += 1
                 else:
                     running += 1
@@ -318,8 +328,14 @@ class MapEffects:
     # Lights: projector lights, animated lights, beams
     # -----------------------------------------------------------------------------------------------------------
 
-    def light_function(self, name, scalars, cookie=None):
-        return self.instance("MI_Light_" + re.sub(r"[^A-Za-z0-9_]", "_", name), scct_effects.LIGHT_FUNCTION, scalars, {"Cookie": cookie})
+    def light_function(self, scalars, cookie=None):
+        """The light function instance with these values, shared by every light that asks for the same ones:
+        the engine keeps all the light functions in view in one small atlas (16 places unless
+        r.LightFunctionAtlas.Size is raised), and a map with one instance per light ran out of places."""
+        values = sorted((name, round(float(value), 4)) for name, value in scalars.items())
+        text = repr((values, str(cookie.get_path_name()) if cookie else ""))
+        return self.instance("MI_Light_" + hashlib.md5(text.encode()).hexdigest()[:10], scct_effects.LIGHT_FUNCTION,
+                             scalars, {"Cookie": cookie})
 
     def dress_light(self, light, actor, per_brightness):
         """What a placed light needs beyond colour, strength and cone. `per_brightness` is import_map's light
@@ -334,24 +350,30 @@ class MapEffects:
         # rectangle, cut down to it and given its picture by a light function. The original's rays start from a
         # window (its near plane), not a point; a spot light cannot do that, so close to the light the patch is
         # narrower than the original's.
-        width, height = light.get("spot_width", 0.0), light.get("spot_height", 0.0)
-        if light.get("effect") == ECHELON_SPOT and light["light_type"] == "spot" and max(width, height) > 0.0:
-            width, height = width or height, height or width
-            reach = light.get("echelon_range") or component.get_editor_property("attenuation_radius")
+        # Values a light does not set are the Actor class's defaults: range 1000, rectangle 250 x 250.
+        if light.get("effect") == ECHELON_SPOT and light["light_type"] == "spot":
+            width = light.get("spot_width") or ECHELON_DEFAULT_SPOT
+            height = light.get("spot_height") or ECHELON_DEFAULT_SPOT
+            reach = light.get("echelon_range") or ECHELON_DEFAULT_RANGE
             outer = max(5.0, min(80.0, math.degrees(math.atan(math.hypot(width, height) / reach))))
             across = math.tan(math.radians(outer)) * reach
             component.set_attenuation_radius(reach)
             component.set_outer_cone_angle(outer)
             component.set_inner_cone_angle(outer)     # the light function draws the edge
-            component.set_editor_property("light_falloff_exponent", 1.0)
-            component.set_intensity(min(light["brightness"], 510.0) * per_brightness)
+            # The original fades in a straight line to nothing at the range; this is the engine's nearest curve.
+            component.set_editor_property("light_falloff_exponent", ECHELON_FALLOFF)
+            # The original halves these lights' colour before its doubling light stage (brightness / 510, at
+            # most 1), so at the same LightBrightness one gives half the light of an ordinary lamp.
+            component.set_intensity(min(light["brightness"], ECHELON_BRIGHTNESS_MOST) * 0.5 * per_brightness)
             scalars.update({"RectU": across / width, "RectV": across / height})
-            if light.get("echelon_texture_uri"):
-                cookie = self.texture_of(light["echelon_texture_uri"])
+            # A light that names the default spot texture gets the built-in soft spot like one that names none.
+            picture = light.get("echelon_texture_uri") or ""
+            if picture and not os.path.splitext(picture)[0].lower().endswith(DEFAULT_SPOT_PICTURE):
+                cookie = self.texture_of(picture)
             if cookie:
                 scalars["CookieWeight"] = 1.0
             else:
-                scalars["Round"] = 1.0     # the original's default picture is a soft round spot
+                scalars["Round"] = 1.0     # the soft round spot of M_ScctLightFunction
             actor.tags = list(actor.tags) + [unreal.Name("ScctEchelonSpot")]
 
         # ---- pulse, blink and flicker: the light function carries the rhythm, so it needs no game code. The
@@ -363,7 +385,7 @@ class MapEffects:
             actor.tags = list(actor.tags) + [unreal.Name("ScctLightType:%d" % kind)]
 
         if scalars:
-            component.set_editor_property("light_function_material", self.light_function(light["name"], scalars, cookie))
+            component.set_editor_property("light_function_material", self.light_function(scalars, cookie))
 
         # ---- beams: the original drew a fan of see-through planes along some projector lights. With
         # volumetric fog a light draws its own shaft, shaped by its light function and cut by what stands in
@@ -425,7 +447,8 @@ class MapEffects:
             lit = light.get("initially_on", True)
             corona = light.get("corona")
             if corona and corona.get("on", True) and corona.get("texture_uri"):
-                scale = corona.get("draw_scale", 1.0) * 512.0 * corona.get("scale3d", [1.0])[0] * corona.get("scale_glow", 1.0)
+                # ScaleGlow is not a size: it is how fast the original fades a halo in and out.
+                scale = corona.get("draw_scale", 1.0) * 512.0 * corona.get("scale3d", [1.0])[0]
                 colour = [channel ** 2.2 for channel in corona.get("color", [1, 1, 1])]
                 radius = corona.get("radius", 0.0)
                 count += self.corona_card(light["name"], light["location"], corona["texture_uri"], colour,
@@ -483,9 +506,10 @@ class MapEffects:
                 component.set_cast_shadows(True)
                 component.set_editor_property("volumetric_scattering_intensity", 0.3)
                 ratio = math.tan(math.radians(outer)) / spread
-                scalars = dict(frames, RectU=ratio, RectV=ratio, CookieWeight=1.0, CookieGain=CAUSTIC_GAIN,
+                # Round: the patch fades out toward its edge instead of ending in the pyramid's square outline.
+                scalars = dict(frames, RectU=ratio, RectV=ratio, Round=1.0, CookieWeight=1.0, CookieGain=CAUSTIC_GAIN,
                                TileU=tiles[0] or 1.0, TileV=tiles[3] or 1.0)
-                component.set_editor_property("light_function_material", self.light_function(name, scalars, texture))
+                component.set_editor_property("light_function_material", self.light_function(scalars, texture))
                 lights += 1
                 continue
 
@@ -528,7 +552,7 @@ class MapEffects:
         if not volumes:
             return
         system = unreal.load_asset(scct_niagara.SPRITES)
-        material = self.instance("MI_Fx_Rain", scct_effects.PARTICLE_LIT, {"Opacity": 0.35, "Emissive": 0.25, "SoftEdge": 4.0},
+        material = self.instance("MI_Fx_Rain", scct_effects.PARTICLE_LIT, {"Opacity": 0.32, "Emissive": 0.15, "SoftEdge": 4.0},
                                  {"Texture": unreal.load_asset(scct_effects.RAIN_STREAK)})
         for volume in volumes:
             scale = volume.get("scale", [1.0, 1.0, 1.0])
@@ -554,6 +578,21 @@ class MapEffects:
                 "Kind": 1.0,
             })
             component.set_variable_material("Material", material)
+
+            # Wet ground under the rain: a decal looking straight down through the volume, a little past its
+            # floor (the box's floor is an estimate, docs/RENDERING.md). Turned to point down, the decal's
+            # second and third axes are the world's Y and X.
+            below = WET_BELOW_VOLUME
+            wet = self.spawn(unreal.DecalActor, unreal.Vector(volume["location"][0], volume["location"][1],
+                                                              volume["location"][2] + (height - below) * 0.5),
+                             unreal.Rotator(roll=0, pitch=-90, yaw=0))
+            wet.set_actor_label("Wet_" + volume["name"])
+            wet.set_folder_path("Effects/Rain")
+            wet.tags = [unreal.Name("ScctWetOf:" + volume["name"])]
+            wet.decal.set_decal_material(unreal.load_asset(scct_effects.WET))
+            wet.decal.set_editor_property("decal_size", unreal.Vector((height + below) * 0.5, half_y, half_x))
+            # Under the projected rain splashes, which are decals too.
+            wet.decal.set_editor_property("sort_order", -1)
         self.log("rain volumes: %d" % len(volumes))
 
     # -----------------------------------------------------------------------------------------------------------

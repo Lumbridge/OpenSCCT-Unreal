@@ -43,6 +43,10 @@ EMISSIVE_SELF_ILLUM = 4.0  # the self-lit part of a lit surface whose class name
 # They get the glow-card material (scct_effects.py) instead of the surface material, which draws them as solids.
 GLOW_CARDS = re.compile(r"beam|rayon|flare|lenseffect|dca_fx", re.IGNORECASE)
 GLOW_CARD_BRIGHTNESS = 0.2
+# Additive sheets laid over a floor to draw the play of light under water (AquaE's Caustic1 group). At a flare's
+# strength they burn the floor to a white slab; they are a shimmer on it.
+CAUSTIC_SHEETS = re.compile(r"caustic", re.IGNORECASE)
+EMISSIVE_CAUSTICS = 0.06
 
 # What a detail set is scaled to before a surface class's amounts apply (see fetch_assets.measure_set): the
 # variation a set with real character has. A weaker set is brought up to it, at most this many times (beyond that
@@ -272,7 +276,9 @@ def build_materials(material_doc):
 
             # Light given off: whole-surface for what the original drew unlit, masked for its self-illumination.
             glow = look.get("emissive")
-            scalar("Emissive", EMISSIVE_ADDITIVE if is_additive else (glow or EMISSIVE_UNLIT) if unlit else 0.0)
+            caustics = is_additive and CAUSTIC_SHEETS.search(record.get("source") or material_name)
+            scalar("Emissive", EMISSIVE_CAUSTICS if caustics else EMISSIVE_ADDITIVE if is_additive
+                   else (glow or EMISSIVE_UNLIT) if unlit else 0.0)
             self_lit = flags.get("self_illum")
             if isinstance(self_lit, str) and texture_of(self_lit) and not unlit:
                 texture("SelfIllumTexture", texture_of(self_lit))
@@ -363,15 +369,17 @@ def main():
             replacement = instances.get(key(str(current.get_name()))) if current else None
             if replacement:
                 mesh.set_material(index, replacement)
-                if replacement.get_blend_mode() in (unreal.BlendMode.BLEND_TRANSLUCENT, unreal.BlendMode.BLEND_ADDITIVE):
+                # Every see-through blend counts (the glass master's is none of the plain two).
+                if replacement.get_blend_mode() not in (unreal.BlendMode.BLEND_OPAQUE, unreal.BlendMode.BLEND_MASKED):
                     translucent = True
             elif current:
                 unmatched.add(str(current.get_name()))
-        if not translucent:
-            settings = mesh.get_editor_property("nanite_settings")
-            if not settings.enabled:
-                settings.enabled = True
-                mesh.set_editor_property("nanite_settings", settings)
+        # Nanite draws only solid and cut-out materials (anything else shows the engine's grey default), so a
+        # mesh that has a see-through slot now loses a Nanite setting an earlier import gave it.
+        settings = mesh.get_editor_property("nanite_settings")
+        if settings.enabled == translucent:
+            settings.enabled = not translucent
+            mesh.set_editor_property("nanite_settings", settings)
     if unmatched:
         log("materials without a record (kept as imported): %s" % sorted(unmatched)[:10])
 
@@ -383,9 +391,18 @@ def main():
         editor_assets.delete_asset(level_path)
     world = asset_tools.create_asset(MAP, DEST, unreal.World, unreal.WorldFactory())
 
-    def spawn(cls, location, rotation):
+    def spawn(cls, location, rotation, class_turn=False):
+        """Places an actor at exactly this location and rotation. The engine lays a spawn transform over the
+        class's own default one, and some classes have a turned default (a spot light and a decal point down,
+        pitch -90; a directional light is pitched -46 and scaled): left in, every spot light and projected
+        picture of a map pointed the wrong way. `class_turn` keeps the class's default in for the one caller
+        tuned with it."""
         transform = unreal.Transform(location, rotation, unreal.Vector(1, 1, 1))
-        return unreal.ScctImportLibrary.spawn_actor_in_world(world, cls, transform)
+        actor = unreal.ScctImportLibrary.spawn_actor_in_world(world, cls, transform)
+        if not class_turn:
+            actor.set_actor_rotation(rotation, False)
+            actor.set_actor_scale3d(unreal.Vector(1, 1, 1))
+        return actor
 
     def place_mesh(mesh, label, location, rotation, scale, folder, movable=False, baked_colours=False, tags=None):
         actor = spawn(unreal.StaticMeshActor, location, rotation)
@@ -562,7 +579,10 @@ def main():
 
     moon_look = sky_look.get("moon")
     if moon_look:
-        moon = spawn(unreal.DirectionalLight, unreal.Vector(0, 0, 4000), unreal.Rotator(roll=0, pitch=moon_look["pitch"], yaw=moon_look["yaw"]))
+        # The moon keeps the directional light class's own -46 degree pitch under the pitch map_skies.json gives
+        # (so it stands higher than that file says): the skies were tuned and reviewed by eye that way.
+        moon = spawn(unreal.DirectionalLight, unreal.Vector(0, 0, 4000), unreal.Rotator(roll=0, pitch=moon_look["pitch"], yaw=moon_look["yaw"]),
+                     class_turn=True)
         moon.set_actor_label("Moon")
         moon.set_folder_path("Atmosphere")
         moon_component = moon.light_component
