@@ -61,6 +61,7 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 		PaintRespawnWeapon(Painter, *Model);
 		PaintBanner(Painter, *Model);
 		PaintScoreboard(Painter, *Model);
+		PaintTelemetry(Painter, *Model);
 	}
 	return Painter.GetLayer();
 }

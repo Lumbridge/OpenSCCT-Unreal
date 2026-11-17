@@ -119,8 +119,17 @@ namespace ScctHudElements
 	/** Top left, under the radar: the mission's objectives and what is being hacked right now. */
 	void PaintObjectives(FScctHudPainter& Painter, const FScctHudModel& Model);
 
-	/** Top right: the kill feed. */
+	/** Top right: the kill feed (below the readouts when they stand there). */
 	void PaintFeed(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/**
+	 * The frame-rate and network readouts (Hud.FpsMode, Hud.NetMode) stacked in their corner, with a detailed readout's
+	 * graphs. ScctHudElementsTelemetry.cpp.
+	 */
+	void PaintTelemetry(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** The height the readouts take at the top right, with the gap under them; 0 when they are elsewhere or hidden. */
+	float TelemetryReservedTopRight(const FScctHudModel& Model);
 
 	/** Under the clock: briefings and objective headlines. */
 	void PaintHeadlines(FScctHudPainter& Painter, const FScctHudModel& Model);

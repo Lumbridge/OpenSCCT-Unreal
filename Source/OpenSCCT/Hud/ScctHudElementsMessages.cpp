@@ -38,7 +38,7 @@ void ScctHudElements::PaintFeed(FScctHudPainter& Painter, const FScctHudModel& M
 	const FSlateFontInfo CauseFont = Font(EWeight::Regular, 8.5f, 20);
 	constexpr float NameRowHeight = 26.0f, CauseRowHeight = 13.0f, RowGap = 4.0f, Pad = 12.0f, Mark = 40.0f, IconSize = 15.0f, IconGap = 9.0f;
 
-	float Y = Margin;
+	float Y = Margin + TelemetryReservedTopRight(Model);
 	for (const FScctHudLine& Line : Model.Feed)
 	{
 		const float Alpha = LineAlpha(Line);
