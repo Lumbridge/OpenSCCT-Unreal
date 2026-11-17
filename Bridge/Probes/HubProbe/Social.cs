@@ -148,7 +148,7 @@ internal static unsafe partial class Probe
         Console.WriteLine($"{signCount} signs within reach, {visible} in sight; help '{SocialText(HubSocialText.Help)}'");
         string prompt = Prompt(ex, ey, ez);
         Console.WriteLine($"prompt here: '{prompt}'");
-        if (!Pads())
+        if (!Pads() || !Activities(ex, ey, ez))
         {
             return false;
         }

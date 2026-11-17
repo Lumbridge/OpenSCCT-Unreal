@@ -106,6 +106,12 @@ void UScctAudioSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
+UScctAudioSubsystem::FOnSummary& UScctAudioSubsystem::OnSummary()
+{
+	static FOnSummary Delegate;
+	return Delegate;
+}
+
 float UScctAudioSubsystem::DistanceGain(float Distance, float MinDistance, float Radius)
 {
 	if (Distance >= ReachPerRadius * Radius && Radius > 0.0f)
@@ -1089,6 +1095,9 @@ void UScctAudioSubsystem::LogSummary() const
 	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: %d voices now (%d playing, %d waiting, %d ambient, peak %d), %d Unreal components in use of %d made; since the match began %d started, %d stopped, %d out of reach, %d refused by the slot rule, %d replaced; files: %d decoded (%.1f MB held), %d failed to decode, %d plays lost to them; listener at (%.0f, %.0f, %.0f)"),
 		Voices.Num(), Playing, Waiting, Ambient, PeakVoices, Sounding, Components.Num(), NumStarted, NumStopped, NumOutOfReach, NumRefused, NumStolen,
 		Cache.GetNumDecoded(), Cache.GetBytes() / (1024.0 * 1024.0), Cache.GetNumFailed(), NumFailedFiles, Listener.X, Listener.Y, Listener.Z);
+	TArray<FString> Notes;
+	OnSummary().Broadcast(Notes);
+	UE_CLOG(Notes.Num() > 0, LogOpenSCCT, Log, TEXT("Audio summary: also %s"), *FString::Join(Notes, TEXT("; ")));
 
 	// The engine's own listener must be where this subsystem takes it to be (the camera), or every 3D voice is
 	// panned and attenuated from somewhere else: said in the log when the two are apart.

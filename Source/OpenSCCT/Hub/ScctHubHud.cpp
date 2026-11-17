@@ -7,6 +7,7 @@
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "Hub/SScctHubHud.h"
+#include "Hub/ScctHubActivities.h"
 #include "Hub/ScctHubPads.h"
 #include "Hub/ScctHubSubsystem.h"
 #include "Misc/App.h"
@@ -321,7 +322,19 @@ void FScctHubHud::ReadTable(const FVector& Eye)
 			Model->QueueColour = Pads->GetQueueColour();
 			Model->Note = Pads->ReadText(EScctHubPadsText::Note);
 		}
+		if (const FScctHubActivities* Activities = Owner->GetActivities())
+		{
+			Model->Notices = Activities->GetNotices();
+			Model->BoardTitle = Activities->GetBoardTitle();
+			Model->BoardLines = Activities->GetBoardLines();
+		}
 		Model->bBusy = (State.Flags & (EScctHubSocialFlags::Running | EScctHubSocialFlags::InRound | EScctHubSocialFlags::OnPad)) != 0;
+	}
+
+	// The clock of a run or a round counts every frame.
+	if (const FScctHubActivities* Activities = Owner->GetActivities())
+	{
+		Model->Activity = Activities->GetActivity();
 	}
 
 	if (Model->bTravel || Model->Destinations.Num() != State.DestinationCount)

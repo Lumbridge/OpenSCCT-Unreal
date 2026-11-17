@@ -4,8 +4,13 @@
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
 #include "Hub/SScctHubLoadingScreen.h"
+#include "Hub/ScctHubActivities.h"
+#include "Hub/ScctHubAudio.h"
+#include "Hub/ScctHubEmotes.h"
 #include "Hub/ScctHubHud.h"
 #include "Hub/ScctHubPads.h"
+#include "Hub/ScctHubProps.h"
+#include "Hub/ScctHubVoice.h"
 #include "Engine/World.h"
 #include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
@@ -121,6 +126,11 @@ void UScctHubSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	Hud = MakeShared<FScctHubHud>(this);
 	Pads = MakeShared<FScctHubPads>(this);
+	Activities = MakeShared<FScctHubActivities>(this);
+	Props = MakeShared<FScctHubProps>(Activities);
+	Audio = MakeShared<FScctHubAudio>(Activities);
+	Emotes = MakeShared<FScctHubEmotes>(Activities);
+	Voice = MakeShared<FScctHubVoice>(this, Activities);
 
 	FScctSettingDesc Listed;
 	Listed.Key = HubListedSetting;
@@ -154,6 +164,12 @@ void UScctHubSubsystem::Deinitialize()
 		Pads->Stop();
 		Pads.Reset();
 	}
+	StopActivities();
+	Voice.Reset();
+	Emotes.Reset();
+	Audio.Reset();
+	Props.Reset();
+	Activities.Reset();
 	CloseCover();
 	if (Api != nullptr && GetState() != EScctHubState::Idle)
 	{
@@ -422,6 +438,34 @@ void UScctHubSubsystem::HandleFrame(float DeltaSeconds)
 	{
 		Pads->Tick(World, DeltaSeconds, LogEvery > 0.0f);
 	}
+	if (Activities.IsValid() && World != nullptr && GetState() == EScctHubState::InHub)
+	{
+		// The activities are read first: the props, the sounds, the emotes and the voice work from what was read.
+		const bool bVerbose = LogEvery > 0.0f;
+		Activities->Tick(World, DeltaSeconds, bVerbose);
+		Props->Tick(World, DeltaSeconds, bVerbose);
+		Audio->Tick(World, DeltaSeconds, bVerbose);
+		Emotes->Tick(World, DeltaSeconds, bVerbose);
+		Voice->Tick(World, DeltaSeconds, bVerbose);
+	}
+}
+
+void UScctHubSubsystem::StopActivities()
+{
+	if (Activities.IsValid())
+	{
+		Voice->Stop();
+		Emotes->Stop();
+		Audio->Stop();
+		Props->Stop();
+		Activities->Stop();
+	}
+}
+
+const TArray<FScctHubVoiceSpeaker>& UScctHubSubsystem::GetVoiceSpeakers() const
+{
+	static const TArray<FScctHubVoiceSpeaker> None;
+	return Voice.IsValid() ? Voice->GetSpeakers() : None;
 }
 
 float UScctHubSubsystem::GetVoiceVolume(const FString& PlayerName) const
@@ -487,6 +531,7 @@ void UScctHubSubsystem::TickVisit()
 	if (Pads.IsValid() && (!PresentedWorld.IsValid() || GetState() != EScctHubState::InHub))
 	{
 		Pads->Stop();
+		StopActivities();
 	}
 
 	const double Now = FPlatformTime::Seconds();

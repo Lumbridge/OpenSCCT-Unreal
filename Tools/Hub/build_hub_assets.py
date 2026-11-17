@@ -12,6 +12,11 @@ The materials go to /Game/OpenSCCT/Hub/ and are committed: they are ours, made f
   M_ScctHubPicture  the map's picture over a pad's sign: an opaque lit poster (the hub's light falls on it as on the
                     sign board) showing the texture parameter Picture, with a faint glow (Glow) so it is not black in
                     a shadow.
+  M_ScctHubProp     the activities' solid props (Source/OpenSCCT/Hub/ScctHubProps: posts, the jukebox, the laptops'
+                    desks, the goals, the targets, the ball): an opaque lit plain colour, Color, with Glow of it added
+                    as light of its own (the jukebox's panels, the laptop's screen, the player's own targets).
+  M_ScctHubGlow     the activities' see-through glowing marks (the gates' rings, the firing line, the laptop's floor
+                    square): translucent and unlit, Color times Glow as its light and Opacity, seen from both sides.
 An existing material is rebuilt only with --force.
 """
 import sys
@@ -159,6 +164,41 @@ def build_picture():
     finish(material)
 
 
+def build_prop():
+    material = new_material("M_ScctHubProp")
+    if not material:
+        return
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_OPAQUE)
+    material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
+    tint = colour(material, "Color", (0.5, 0.5, 0.5), -900, -100)
+    connect_output(tint, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    rough = lib.create_material_expression(material, unreal.MaterialExpressionConstant, -600, 60)
+    rough.set_editor_property("r", 0.6)
+    connect_output(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    glow = scalar(material, "Glow", 0.0, -900, 150)
+    lit = multiply(material, tint, glow, -600, 180)
+    connect_output(lit, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    finish(material)
+
+
+def build_glow():
+    material = new_material("M_ScctHubGlow")
+    if not material:
+        return
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property("two_sided", True)
+    tint = colour(material, "Color", (1.0, 1.0, 1.0), -900, -100)
+    glow = scalar(material, "Glow", 1.0, -900, 60)
+    lit = multiply(material, tint, glow, -600, -40)
+    connect_output(lit, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    opacity = scalar(material, "Opacity", 0.35, -900, 200)
+    connect_output(opacity, "", unreal.MaterialProperty.MP_OPACITY)
+    finish(material)
+
+
 build_pad()
 build_picture()
+build_prop()
+build_glow()
 log("hub assets done")

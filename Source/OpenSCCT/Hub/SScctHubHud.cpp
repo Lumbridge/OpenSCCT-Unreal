@@ -683,6 +683,55 @@ int32 SScctHubHud::PaintTexts(const FGeometry& Geometry, FSlateWindowElementList
 		Painter.SetOpacity(0.9f);
 		Painter.Text(FVector2f(Size.X * 0.5f, PanelBottom), Model->Note, ScctHudStyle::Font(EWeight::Regular, 13.5f), ScctHudStyle::Text(), FScctHudPainter::EAlign::Centre);
 		Painter.SetOpacity(1.0f);
+		PanelBottom += 24.0f;
+	}
+
+	// The activity's clock, top middle on glass (a course run's time and gates, a range round's score and time left),
+	// with the activities' notices under it (HubHud.Activities).
+	if (!Model->Activity.IsEmpty())
+	{
+		TArray<FString> Lines;
+		Model->Activity.ParseIntoArray(Lines, TEXT("\n"));
+		const FSlateFontInfo Big = ScctHudStyle::Font(EWeight::Bold, 20.0f);
+		const FSlateFontInfo Small = ScctHudStyle::Font(EWeight::Regular, 12.5f);
+		const float Top = PanelBottom + 4.0f;
+		const float Height = 30.0f + (Lines.Num() - 1) * 18.0f;
+		const float HalfWidth = 190.0f;
+		Painter.Glass(FBox2f(FVector2f(Size.X * 0.5f - HalfWidth, Top - 8.0f), FVector2f(Size.X * 0.5f + HalfWidth, Top + Height + 6.0f)), ScctHudStyle::Corner);
+		for (int32 Index = 0; Index < Lines.Num(); ++Index)
+		{
+			Painter.Text(FVector2f(Size.X * 0.5f, Top + (Index == 0 ? 0.0f : 12.0f + Index * 18.0f)), Lines[Index], Index == 0 ? Big : Small,
+				Index == 0 ? ScctHudStyle::Accent(Model->Team) : ScctHudStyle::Text(), FScctHudPainter::EAlign::Centre);
+		}
+		PanelBottom = Top + Height + 16.0f;
+	}
+	if (!Model->Notices.IsEmpty())
+	{
+		TArray<FString> Lines;
+		Model->Notices.ParseIntoArray(Lines, TEXT("\n"));
+		const FSlateFontInfo Font = ScctHudStyle::Font(EWeight::Regular, 14.0f);
+		Painter.SetOpacity(0.95f);
+		for (int32 Index = 0; Index < Lines.Num(); ++Index)
+		{
+			Painter.Text(FVector2f(Size.X * 0.5f, PanelBottom + Index * 20.0f), Lines[Index], Font, ScctHudStyle::Text(), FScctHudPainter::EAlign::Centre);
+		}
+		Painter.SetOpacity(1.0f);
+	}
+
+	// The nearest score board (the course's best times, the range's best scores, the ball's goals), a panel on the right.
+	if (!Model->BoardTitle.IsEmpty() && !Model->bPlayerList)
+	{
+		TArray<FString> Lines;
+		Model->BoardLines.ParseIntoArray(Lines, TEXT("\n"));
+		const FSlateFontInfo Font = ScctHudStyle::Font(EWeight::Regular, 12.5f);
+		constexpr float Width = 360.0f;
+		const FVector2f At(Size.X - ScctHudStyle::Margin - Width + 16.0f, 200.0f);
+		Painter.Glass(FBox2f(At - FVector2f(16.0f, 12.0f), At + FVector2f(Width - 16.0f, 30.0f + Lines.Num() * 19.0f)), ScctHudStyle::Corner);
+		Painter.Text(At, Model->BoardTitle.ToUpper(), ScctHudStyle::Label(10.0f), ScctHudStyle::Accent(Model->Team));
+		for (int32 Index = 0; Index < Lines.Num(); ++Index)
+		{
+			Painter.Text(At + FVector2f(0.0f, 26.0f + Index * 19.0f), Lines[Index], Font, ScctHudStyle::Text());
+		}
 	}
 
 	// What U does here, bottom middle.
