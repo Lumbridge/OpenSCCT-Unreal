@@ -25,6 +25,11 @@
     'smooth'        = @{ Map = 'AquaE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
     'play-hitch'    = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
     'first-use'     = @{ Map = 'AquaE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
+    # The play inspector (Test/ScctPlayInspectTest.cpp): about 40 s at the keys with three bots, failed on any issue of
+    # its areas (animation, feet, camera, audio, net, HUD, pause menu, input). -Extra '-ScctInspectShots' saves a picture
+    # at each step to Saved/ScctShots/<test>/; -Extra '-ScctTestFreezePose' stops every body's pose (Animation must fail).
+    'play-inspect'      = @{ Map = 'AquaE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
+    'play-inspect-merc' = @{ Map = 'AquaE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
     # The netcode checks (Test/ScctNetcodeTests.cpp): SteeE over a simulated 100/200 ms link with jitter, loss,
     # duplication and reordering; listen or dedicated server, tuned or stock net profile, walk, grab or co-op.
     # -Extra '-ScctTestFrames=10' saves a 10 fps picture sequence to Saved/ScctTestFrames/<test>/. The 300 ms ones are

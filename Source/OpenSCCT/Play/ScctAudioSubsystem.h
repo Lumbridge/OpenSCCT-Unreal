@@ -58,6 +58,10 @@ public:
 	/** Voices that sound or wait for their start, the ambient ones included. */
 	int32 GetNumVoices() const { return Voices.Num(); }
 
+	/** Voices started since the match began (counted with or without an audio device), and those whose file failed to load. */
+	int32 GetNumStarted() const { return NumStarted; }
+	int32 GetNumFailedFiles() const { return NumFailedFiles; }
+
 	/** The original's gain of a 3D source at Distance: 1 inside MinDistance, falling with distance beyond it (Radius is not used: there is no cut-off). */
 	static float DistanceGain(float Distance, float MinDistance, float Radius);
 

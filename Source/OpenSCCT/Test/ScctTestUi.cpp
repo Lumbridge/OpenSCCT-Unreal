@@ -1,6 +1,7 @@
 #include "Test/ScctTestUi.h"
 
 #include "Layout/Children.h"
+#include "Menu/ScctMenuKit.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/SWidget.h"
 #include "Widgets/Text/STextBlock.h"
@@ -8,6 +9,7 @@
 namespace
 {
 	const FName ButtonType(TEXT("SButton"));
+	const FName ScctButtonType(TEXT("SScctButton"));
 	const FName TextType(TEXT("STextBlock"));
 
 	bool IsShown(const SWidget& Widget)
@@ -44,11 +46,16 @@ namespace
 		{
 			return false;
 		}
-		if (Widget->GetType() == ButtonType)
+		if (Widget->GetType() == ButtonType || Widget->GetType() == ScctButtonType)
 		{
 			if (!Widget->IsEnabled())
 			{
 				return false;
+			}
+			// The menus' own button (Menu/ScctMenuKit.h) paints its caption itself and says it as the menu driver reads it.
+			if (const IScctDriven* Driven = IScctDriven::FindByWidget(&Widget.Get()))
+			{
+				return Visit(StaticCastSharedRef<SButton>(Widget), Driven->GetDrivenLabel().TrimStartAndEnd());
 			}
 			TArray<FString> Parts;
 			CollectLabel(Widget, Parts);

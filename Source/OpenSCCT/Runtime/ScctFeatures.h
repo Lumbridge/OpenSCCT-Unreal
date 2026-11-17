@@ -23,6 +23,7 @@
 #include "Runtime/ScctVoiceApi.h"
 #include "Runtime/ScctWorldApi.h"
 #include "Test/ScctGrabAreaApi.h"
+#include "Test/ScctInspectApi.h"
 #include "Test/ScctLessonApi.h"
 #include "Test/ScctTestApi.h"
 
@@ -68,6 +69,7 @@ SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);
 SCCT_FEATURE_TABLE(FScctGrabAreaApi, "GrabAreaExports", ScctGrabAreaApiVersion);
 SCCT_FEATURE_TABLE(FScctLessonApi, "LessonExports", ScctLessonApiVersion);
 SCCT_FEATURE_TABLE(FScctTestApi, "TestExports", ScctTestApiVersion);
+SCCT_FEATURE_TABLE(FScctInspectApi, "InspectExports", ScctInspectApiVersion);
 
 #undef SCCT_FEATURE_TABLE
 
