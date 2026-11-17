@@ -87,6 +87,23 @@ public sealed class WorldState
     /// <summary>The session's world state, made (and hooked to its ticks) on first use.</summary>
     public static WorldState Of(BridgeSession session) => session.Feature(s => new WorldState(s));
 
+    /// <summary>
+    /// The map name of the followed actor with this simulation ActorId (what a bullet mark's SurfaceActorId names),
+    /// or an empty string when it is not one of the map's followed actors.
+    /// </summary>
+    public string MapNameOfActor(int actorId)
+    {
+        foreach (Slot slot in _slots)
+        {
+            if (slot.Actor.ActorId == actorId && !slot.Actor.bDeleteMe)
+            {
+                return slot.Id;
+            }
+        }
+
+        return string.Empty;
+    }
+
     /// <summary>The render part's names (for the probe's cross-check).</summary>
     public MapRenderIndex Render => _render;
 

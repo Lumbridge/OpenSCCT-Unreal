@@ -15,7 +15,9 @@ class UScctMatchMenuWidget;
  *   ?Side=spy|merc      the local player's side (default spy)
  *   ?Bots=3             how many bots fill the match
  *   ?Difficulty=hard    the bots' skill: easy, normal, hard or expert (or 1 to 4); default normal
- *   ?Sidearms=1         the mercs carry OpenSCCT's sidearms
+ *   ?Sidearms=1         the mercs carry OpenSCCT's sidearms (G, SwapWeapon, draws it)
+ *   ?Sidearm=magnum44   the local merc's own: suppressed, automatic, magnum44, desert_eagle, unsuppressed (the
+ *                       default) or none
  *   ?Rifles=1           the mercs may pick OpenSCCT's additional rifles
  *   ?Practice=1         practice rules: no time limit, unlimited lives, 5 s respawn
  *   ?Name=Sam           the local player's name (Unreal's own player-name option; default "Player")
@@ -24,8 +26,9 @@ class UScctMatchMenuWidget;
  *                       starts a local match, and a visit that was under way is left.
  * A switch counts as on when it is given without a value or with anything but 0, false, no or off.
  *
- * Keys: none of its own. The in-match menu (Menu/ScctMatchMenuWidget.h) opens on the interface commands ShowMenu
- * and Quit as the player's bindings raise them (AScctPlayerController::OnLocalCommand; Escape and F11 by default).
+ * Keys: none of its own. The in-match menu (Menu/ScctMatchMenuWidget.h) opens on the interface command ShowMenu
+ * as the player's bindings raise it (AScctPlayerController::OnLocalCommand; Escape by default). Quit (F11) does
+ * nothing, as in OpenSCCT's Godot client: the way out of a match is the menu.
  * While it is open the controls hold the player's keys and mouse back, so the bindings raise nothing; the menu
  * then closes on the keys bound to ShowMenu, read from Unreal directly, and on Escape whatever is bound.
  *
