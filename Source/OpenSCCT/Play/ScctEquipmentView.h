@@ -58,12 +58,22 @@ struct FScctEquipmentView
 	/** The muzzle: the replacement's Muzzle socket, else the bone "FX". */
 	bool FindMuzzle(FTransform& OutWorld) const;
 
+	/**
+	 * -ScctWeaponProbe (unattended, off by default): every few seconds logs every bone of the original model in
+	 * the space of the weapon table row's gun bone (place, and where its X, Y and Z axes point), the hand bones
+	 * of Holder (the body the weapon is attached to, if any) in the same space, and the replacement's sockets in
+	 * the replacement's own space. These are the numbers a row's AttachOffset is worked out from: where the hands
+	 * are around the gun bone and which way the barrel runs.
+	 */
+	void LogProbe(const class USkinnedMeshComponent* Holder = nullptr);
+
 private:
 	TWeakObjectPtr<UPoseableMeshComponent> Body;
 	TArray<TWeakObjectPtr<UPoseableMeshComponent>> Followers;
 	TWeakObjectPtr<USkeletalMeshComponent> Replacement;
 	const FScctEquipmentModel* Model = nullptr;
 	const FScctWeaponPresentation* Row = nullptr;
+	double NextProbe = 0.0;
 };
 
 /**

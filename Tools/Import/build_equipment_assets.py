@@ -208,15 +208,39 @@ def build_weapon_set():
         if replacement:
             entry.set_editor_property("replacement_mesh", unreal.SoftObjectPath(replacement))
         entry.set_editor_property("first_person", first_person)
-        if replacement and first_person:
-            # The new rifle is modelled grip at the origin, barrel along +X, up +Z. The gun bone of the original
-            # first-person model is the right wrist, with the barrel along its -X, up along its +Y and the
-            # bore 16 cm above and 3 cm to the left of it; the new rifle's bore is 9.5 cm above its grip. This
-            # lays bore on bore with the grip at the wrist. Measured from the bones in a run; tune by eye.
-            entry.set_editor_property("attach_offset", unreal.Transform(
-                unreal.Vector(0.0, 6.6, -3.1), unreal.Rotator(roll=-90.0, pitch=0.0, yaw=180.0), unreal.Vector(1.0, 1.0, 1.0)))
-        # As others see it, the original gun's bone is the grip with the barrel along +X and up +Z: no offset.
+        if replacement:
+            entry.set_editor_property("attach_offset", rifle_offset(first_person))
         return entry
+
+    def rifle_offset(first_person):
+        """Where the new rifle sits on the original gun's bone. Worked out from the bones as a run logs them
+        with -ScctWeaponProbe (Source/OpenSCCT/Play/ScctEquipmentView.h), not by eye.
+
+        The new rifle is modelled with the middle of its pistol grip at the origin, the barrel along +X and up
+        +Z; its bore is 9.5 cm above the origin.
+
+        On a body (SWeaponFirst.M160) the gun bone "corps" is the right wrist with the original's barrel along
+        +X and up +Z, the bore 10.2 cm above it and 2.2 cm to the -Y side (bone "FX"). The right hand's fingers
+        close round a grip whose middle is 9 cm in front of the wrist. So the new rifle goes 9 cm forward, 2.2
+        to the side and 0.7 up: grip in the right hand, bore on the original's bore. The left hand of the
+        original animation holds the original's pump, 36 cm in front of the wrist: that is 27 cm in front of the
+        new grip, under the handguard at the light module, 12 cm ahead of the new rifle's short fore grip. The
+        hand cannot be brought back to the fore grip by an offset; that needs the arm posed.
+
+        In the merc's own view (SWeaponFirst.1DEF_01) the same gun is turned in the bone: the barrel (bone "FX")
+        runs along (-1.00, 0.10, 0.01), up is (0.10, 0.99, -0.08) and the gun's +Y is (0.01, 0.07, 1.00). The
+        same place in that frame would be (-11.05, 3.45, -2.65): the wrist is at (-2.1, 2.0, -0.5), the grip 9 cm
+        down the barrel from it. But in that view the right hand is below the picture and the left hand is the
+        one seen: its palm is 25 cm in front of the new grip and 1.7 cm under the light module, holding air. So
+        there the rifle sits 2 cm further forward and 1.7 cm lower, which lays the light module's underside in
+        the left palm; the bore is then 1.7 cm under the original's and the unseen right hand 2.6 cm off the grip."""
+        if not first_person:
+            return unreal.Transform(unreal.Vector(9.0, -2.2, 0.7), unreal.Rotator(0.0, 0.0, 0.0), unreal.Vector(1.0, 1.0, 1.0))
+        forward = unreal.Vector(-0.995, 0.100, 0.010)
+        right = unreal.Vector(0.010, 0.070, 0.997)
+        up = unreal.Vector(0.100, 0.992, -0.080)
+        rotation = unreal.MathLibrary.make_rotation_from_axes(forward, right, up)
+        return unreal.Transform(unreal.Vector(-13.21, 1.96, -2.49), rotation, unreal.Vector(1.0, 1.0, 1.0))
 
     weapons = asset_tools.create_asset("DA_ScctWeapons", FOLDER, unreal.ScctWeaponSet, unreal.DataAssetFactory())
     weapons.set_editor_property("weapons", [

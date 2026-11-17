@@ -148,6 +148,7 @@ void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentM
 		}
 		const int32 Bones = FMath::Clamp(Api.GetFirstPersonPose(Index, PoseBuffer.GetData(), PoseBuffer.Num()), 0, PoseBuffer.Num());
 		Drawn.ApplyPose(TConstArrayView<FScctBridgeBone>(PoseBuffer.GetData(), Bones));
+		Drawn.LogProbe();
 		Drawn.ForEachMesh([this, Cloak](UMeshComponent& Mesh) { CloakLook.Apply(Mesh, Cloak); });
 		bShown = true;
 

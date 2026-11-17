@@ -7,6 +7,8 @@
 #include "GameFramework/Actor.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "OpenSCCT.h"
 #include "Play/ScctEquipmentData.h"
 #include "Play/ScctEquipmentModels.h"
@@ -105,6 +107,56 @@ void FScctEquipmentView::Show(AActor& Owner, const FScctEquipmentModel* NewModel
 		*Model->Name, *Row->ReplacementMesh.ToString(), *Row->SimulationClass.ToString(), *Row->GunBone.ToString());
 }
 
+void FScctEquipmentView::LogProbe(const USkinnedMeshComponent* Holder)
+{
+	static const bool bProbe = FParse::Param(FCommandLine::Get(), TEXT("ScctWeaponProbe"));
+	UPoseableMeshComponent* Posed = Body.Get();
+	if (!bProbe || Posed == nullptr || Model == nullptr || FPlatformTime::Seconds() < NextProbe)
+	{
+		return;
+	}
+	NextProbe = FPlatformTime::Seconds() + 4.0;
+
+	const FName GunBoneName = Row != nullptr ? Row->GunBone : FName(TEXT("corps"));
+	const int32 GunBone = Model->MeshBoneByName(*GunBoneName.ToString());
+	const FTransform Gun = GunBone != INDEX_NONE ? Posed->GetBoneTransform(GunBone) : Posed->GetComponentTransform();
+	UE_LOG(LogOpenSCCT, Log, TEXT("Weapon probe: '%s', %d bones, in the space of bone '%s'%s (cm; where each bone's X, Y and Z axes point)"),
+		*Model->Name, Posed->GetNumBones(), *GunBoneName.ToString(), GunBone != INDEX_NONE ? TEXT("") : TEXT(" (NOT FOUND: the model's own space)"));
+	for (int32 Bone = 0; Bone < Posed->GetNumBones(); ++Bone)
+	{
+		const FTransform Local = Posed->GetBoneTransform(Bone).GetRelativeTransform(Gun);
+		const FVector At = Local.GetLocation();
+		const FVector X = Local.GetUnitAxis(EAxis::X);
+		const FVector Y = Local.GetUnitAxis(EAxis::Y);
+		const FVector Z = Local.GetUnitAxis(EAxis::Z);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Weapon probe:   bone %2d '%s' at (%.1f %.1f %.1f) X (%.2f %.2f %.2f) Y (%.2f %.2f %.2f) Z (%.2f %.2f %.2f)"),
+			Bone, *Posed->GetBoneName(Bone).ToString(), At.X, At.Y, At.Z, X.X, X.Y, X.Z, Y.X, Y.Y, Y.Z, Z.X, Z.Y, Z.Z);
+	}
+	for (int32 Bone = 0; Holder != nullptr && Bone < Holder->GetNumBones(); ++Bone)
+	{
+		const FString Name = Holder->GetBoneName(Bone).ToString();
+		if (Name.Contains(TEXT("Hand")) || Name.Contains(TEXT("Finger")) || Name.Contains(TEXT("Forearm")))
+		{
+			const FTransform Local = Holder->GetBoneTransform(Bone).GetRelativeTransform(Gun);
+			const FVector At = Local.GetLocation();
+			const FVector X = Local.GetUnitAxis(EAxis::X);
+			UE_LOG(LogOpenSCCT, Log, TEXT("Weapon probe:   holder's bone '%s' at (%.1f %.1f %.1f) X (%.2f %.2f %.2f)"), *Name, At.X, At.Y, At.Z, X.X, X.Y, X.Z);
+		}
+	}
+	if (const USkeletalMeshComponent* Other = Replacement.Get())
+	{
+		const FTransform Offset = Other->GetRelativeTransform();
+		UE_LOG(LogOpenSCCT, Log, TEXT("Weapon probe: replacement %s sits at (%.1f %.1f %.1f) rotation (pitch %.1f yaw %.1f roll %.1f) in the gun bone's space; its sockets in its own space:"),
+			*GetNameSafe(Other->GetSkeletalMeshAsset()), Offset.GetLocation().X, Offset.GetLocation().Y, Offset.GetLocation().Z,
+			Offset.Rotator().Pitch, Offset.Rotator().Yaw, Offset.Rotator().Roll);
+		for (const FName& Socket : Other->GetAllSocketNames())
+		{
+			const FVector At = Other->GetSocketTransform(Socket, RTS_Component).GetLocation();
+			UE_LOG(LogOpenSCCT, Log, TEXT("Weapon probe:   socket or bone '%s' at (%.1f %.1f %.1f)"), *Socket.ToString(), At.X, At.Y, At.Z);
+		}
+	}
+}
+
 void FScctEquipmentView::Destroy()
 {
 	if (Replacement.IsValid())
@@ -127,6 +179,7 @@ void FScctEquipmentView::Destroy()
 	Body.Reset();
 	Model = nullptr;
 	Row = nullptr;
+	NextProbe = 0.0;
 }
 
 void FScctEquipmentView::ApplyPose(TConstArrayView<FScctBridgeBone> Pose)
