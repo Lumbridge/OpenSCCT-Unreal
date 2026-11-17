@@ -425,6 +425,7 @@ void UScctSessionSubsystem::LogFeatureTables() const
 	LogFeatureTable<FScctOnlineApi>(TEXT("online"));
 	LogFeatureTable<FScctProjectionsApi>(TEXT("projections"));
 	LogFeatureTable<FScctSmokeApi>(TEXT("responsive smoke"));
+	LogFeatureTable<FScctSoftBodyApi>(TEXT("soft bodies"));
 }
 
 void UScctSessionSubsystem::TickAutoShots(float DeltaTime)

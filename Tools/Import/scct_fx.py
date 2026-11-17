@@ -805,8 +805,9 @@ def instance_tags(instance):
 
     The heat and electromagnetic values (what the thermal and EMF goggles draw): ScctHeat, ScctHeatOpacity,
     ScctEmf, ScctEmfOpacity, and ScctEmfOn when the device is running.
-    ScctSoftBody:<patch or strip> marks the original's cloth (flags, awnings, strip curtains): placed at rest,
-    waiting for a cloth simulation."""
+    ScctSoftBody:<patch or strip> marks the original's cloth (flags, awnings, strip curtains): placed at rest. In a
+    match Play/ScctLevelStateSoftBodies swaps it for a mesh the bridge's simulation moves, matching it to the
+    bridge's body by the actor's "Scct:" + map actor name tag, the instance's id that every placed mesh carries."""
     tags = []
     vision = instance.get("vision")
     if vision:

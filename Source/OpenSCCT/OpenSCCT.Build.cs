@@ -28,6 +28,8 @@ public class OpenSCCT : ModuleRules
 			// A sound wave class of our own (Play/ScctSoundWave) links against the audio proxy interfaces.
 			"AudioExtensions",
 			"Json",
+			// The map's soft bodies are meshes whose vertices are rewritten each frame (Play/ScctLevelStateSoftBodies).
+			"ProceduralMeshComponent",
 			"Projects",
 			"RenderCore",
 			"Slate",
