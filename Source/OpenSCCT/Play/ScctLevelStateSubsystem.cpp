@@ -99,7 +99,8 @@ namespace
 	FLinearColor ToLightColor(const FLinearColor& Display)
 	{
 		const FLinearColor Linear(FMath::Pow(FMath::Max(Display.R, 0.0f), 2.2f), FMath::Pow(FMath::Max(Display.G, 0.0f), 2.2f), FMath::Pow(FMath::Max(Display.B, 0.0f), 2.2f));
-		const float Grey = (Linear.R + Linear.G + Linear.B) / 3.0f;
+		// The importer's grey: the colour's own luminance, so the light keeps its strength as it pales.
+		const float Grey = 0.2126f * Linear.R + 0.7152f * Linear.G + 0.0722f * Linear.B;
 		return FLinearColor(Grey + (Linear.R - Grey) * LevelLightSaturation, Grey + (Linear.G - Grey) * LevelLightSaturation, Grey + (Linear.B - Grey) * LevelLightSaturation);
 	}
 
@@ -670,6 +671,10 @@ void UScctLevelStateSubsystem::RunDebugActions()
 		else if (Action.What == TEXT("props"))
 		{
 			Queued = Debug->BreakProps(View.X, View.Y, View.Z, 8);
+		}
+		else if (Action.What == TEXT("emitters"))
+		{
+			Queued = Debug->FireEmitters();
 		}
 		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: -ScctLevelDo '%s' at %.1f s (camera at %.0f, %.0f, %.0f): %s"), *Action.What, MatchSeconds, View.X, View.Y, View.Z,
 			Queued == 1 ? TEXT("handed to the server") : Queued == 0 ? TEXT("no local server to do it") : TEXT("not a known action"));

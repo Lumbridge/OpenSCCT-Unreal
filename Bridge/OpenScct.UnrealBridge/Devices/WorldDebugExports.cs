@@ -23,11 +23,13 @@ public unsafe struct WorldDebugApi
     public delegate* unmanaged[Cdecl]<int> FireLights;
     public delegate* unmanaged[Cdecl]<float, float, float, int, int> BreakLights;
     public delegate* unmanaged[Cdecl]<float, float, float, int, int> BreakProps;
+    public delegate* unmanaged[Cdecl]<int> FireEmitters;
 }
 
 public static unsafe class WorldDebugExports
 {
-    public const int ApiVersion = 1;
+    /// <summary>2: FireEmitters added.</summary>
+    public const int ApiVersion = 2;
 
     /// <summary>Fills <paramref name="api"/>. Returns the API version.</summary>
     [UnmanagedCallersOnly]
@@ -38,6 +40,7 @@ public static unsafe class WorldDebugExports
         api->FireLights = &FireLights;
         api->BreakLights = &BreakLights;
         api->BreakProps = &BreakProps;
+        api->FireEmitters = &FireEmitters;
         return ApiVersion;
     }
 
@@ -124,6 +127,23 @@ public static unsafe class WorldDebugExports
             }
         });
     }
+
+    /// <summary>
+    /// Fires the tag of every map Emitter, as the map's events would: the waiting ones start, the running ones
+    /// stop, the bursts fire. Returns 1 when queued.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int FireEmitters() => OnServer(static host =>
+    {
+        Level level = host.World.Level;
+        var tags = new HashSet<Name>();
+        foreach (Emitter emitter in level.AllActors<Emitter>())
+        {
+            tags.Add(emitter.Tag);
+        }
+
+        Fire(level, tags);
+    });
 
     private static void Fire(Level level, HashSet<Name> tags)
     {

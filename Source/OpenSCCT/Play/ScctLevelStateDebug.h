@@ -8,7 +8,8 @@
 // change both together. Only the level state's -ScctLevelDo switch uses it. Every entry returns 1 when the
 // action was handed to the server and 0 when there is no local server (an online round) or no match.
 
-constexpr int32 ScctWorldDebugApiVersion = 1;
+// Version 2: FireEmitters added.
+constexpr int32 ScctWorldDebugApiVersion = 2;
 
 struct FScctWorldDebugApi
 {
@@ -22,4 +23,6 @@ struct FScctWorldDebugApi
 	int32 (__cdecl* BreakLights)(float X, float Y, float Z, int32 Count);
 	/** Destroys the Count breakable props nearest the point (lamps, vents, glass panes). */
 	int32 (__cdecl* BreakProps)(float X, float Y, float Z, int32 Count);
+	/** Fires the tag of every map Emitter: the waiting ones start, the running ones stop, the bursts fire. */
+	int32 (__cdecl* FireEmitters)();
 };

@@ -59,7 +59,8 @@ struct FScctWorldDebugApi;
  *                              a player or the map's script would: "movers" fires every mover's tag (doors open),
  *                              "lights" fires every switched light's tag (each toggles), "breaklights" shoots out
  *                              the three lit switched lights nearest the camera, "props" breaks the eight
- *                              breakable props nearest the camera. Example: -ScctLevelDo="movers@8;breaklights@14"
+ *                              breakable props nearest the camera, "emitters" fires every map Emitter's tag
+ *                              (the waiting ones start, the running ones stop). Example: -ScctLevelDo="movers@8;breaklights@14"
  */
 UCLASS()
 class OPENSCCT_API UScctLevelStateSubsystem : public UWorldSubsystem
