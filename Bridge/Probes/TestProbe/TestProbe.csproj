@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A console check of the test table without Unreal: prints the sizes ScctTestApi.h asserts, runs the boot test's
+       simulation check, then hosts TestBox (the bridge's own fixture) with three bots through the function tables
+       as Unreal calls them, and checks every pawn is on the client and, once the server is stopped, within 100 uu of
+       where the server has it (exit 1 on any failure). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\OpenScct.UnrealBridge\OpenScct.UnrealBridge.csproj" />
+  </ItemGroup>
+</Project>
+

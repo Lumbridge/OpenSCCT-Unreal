@@ -27,4 +27,9 @@
   <ItemGroup>
     <Compile Include="$(OpenScctRoot)game\Scripts\Play\Session\*.cs" Link="Linked\PlaySession\%(Filename)%(Extension)" />
   </ItemGroup>
+  <!-- The TestBox fixture (OpenSCCT's synthetic test map, no original content) goes to maps/ next to the bridge, a map
+       root the bridge always searches, so the client's checks can host it whatever the content folder holds. -->
+  <ItemGroup>
+    <None Include="$(OpenScctRoot)fixtures\testbox\**\*" Link="maps\TestBox\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -117,7 +117,9 @@ public sealed class BridgeSession : IDisposable
     /// <summary>Sets the converted content folder (the one holding <c>svmap</c> and <c>shared</c>).</summary>
     public static void Configure(string contentRoot)
     {
-        ContentPaths.Configure(contentRoot, exeDir: null);
+        // The bridge's own folder stands for the exe's: its maps/ holds the maps shipped with the bridge (TestBox).
+        // The runtime Unreal hosts has no base directory of its own, so the default catalog cannot find them there.
+        ContentPaths.Configure(contentRoot, exeDir: Path.GetDirectoryName(typeof(BridgeSession).Assembly.Location));
     }
 
     /// <summary>Hosts <paramref name="map"/> locally and joins it. Blocks while the map loads.</summary>
