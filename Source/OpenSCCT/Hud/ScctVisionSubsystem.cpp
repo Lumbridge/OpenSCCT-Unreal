@@ -21,7 +21,7 @@ namespace
 		const TCHAR* Material;
 	};
 
-	const FVisionMode Modes[] = {
+	const FVisionMode VisionModes[] = {
 		{ 34, TEXT("/Game/OpenSCCT/UI/Vision/M_ScctVisionNight.M_ScctVisionNight") },
 		{ 36, TEXT("/Game/OpenSCCT/UI/Vision/M_ScctVisionThermal.M_ScctVisionThermal") },
 		{ 37, TEXT("/Game/OpenSCCT/UI/Vision/M_ScctVisionMotion.M_ScctVisionMotion") },
@@ -82,9 +82,9 @@ bool UScctVisionSubsystem::EnsureVolume()
 	}
 	bTriedMaterials = true;
 
-	static_assert(UE_ARRAY_COUNT(Modes) == ModeCount, "One material per mode");
+	static_assert(UE_ARRAY_COUNT(VisionModes) == ModeCount, "One material per mode");
 	TArray<UMaterialInterface*> Loaded;
-	for (const FVisionMode& Mode : Modes)
+	for (const FVisionMode& Mode : VisionModes)
 	{
 		UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, Mode.Material);
 		if (Material == nullptr)
@@ -129,7 +129,7 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 	}
 	ShownMode = VisionMode;
 	bool bAnyMode = false;
-	for (const FVisionMode& Mode : Modes)
+	for (const FVisionMode& Mode : VisionModes)
 	{
 		bAnyMode |= Mode.Mode == VisionMode;
 	}
@@ -152,7 +152,7 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 	bool bAnyShown = false;
 	for (int32 Index = 0; Index < ModeCount; ++Index)
 	{
-		const float Target = Modes[Index].Mode == VisionMode ? 1.0f : 0.0f;
+		const float Target = VisionModes[Index].Mode == VisionMode ? 1.0f : 0.0f;
 		float& Amount = Amounts[Index];
 		// Goggles come on fast and go off a little faster.
 		Amount = ScctHudStyle::Ease(Amount, Target, DeltaSeconds, Target > 0.5f ? 9.0f : 14.0f);
