@@ -46,6 +46,9 @@ param(
     # Join from the menus instead of -ScctJoin: a menu script (Source/OpenSCCT/Menu/ScctMenuDriver.h) that opens
     # the join-by-address page, types 127.0.0.1:<Port> and presses CONNECT, for example. Its shots go to the same folder.
     [string] $MenuDo = '',
+    # The game's picture size (the lobby and the results are worth a look at 1920x1080 as well).
+    [int] $ResX = 1280,
+    [int] $ResY = 720,
     # Anything else for the game's command line, as written.
     [string] $Extra = '',
     [string] $Engine = 'F:\UE_5.8'
@@ -104,7 +107,7 @@ try {
 
     $arguments = @(
         "`"$project\OpenSCCTUnreal.uproject`"",
-        '-game', '-RenderOffscreen', '-ResX=1280', '-ResY=720', '-unattended', '-nosplash', '-nosound',
+        '-game', '-RenderOffscreen', "-ResX=$ResX", "-ResY=$ResY", '-ForceRes', '-unattended', '-nosplash', '-nosound',
         "-ScctContent=`"$("$Content".Replace('\', '/'))`"",
         $(if ($MenuDo) { "-ScctMenuDo=`"$MenuDo`"" } else { "-ScctJoin=127.0.0.1:$Port" }), '-ScctName=UnrealCheck',
         $(if (-not $StayInLobby -and -not $MenuDo) { '-ScctAutoReady' }),
