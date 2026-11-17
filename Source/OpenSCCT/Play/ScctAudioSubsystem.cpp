@@ -37,6 +37,9 @@ namespace
 	// in the Godot client (SoundRules.DistanceGain).
 	constexpr float ReachPerRadius = 100.0f;
 
+	// How far past that reach a 3D voice's attenuation goes on (FindOrCreateAttenuation), as a multiple of it.
+	constexpr float HeardPastReach = 10.0f;
+
 	// How much of the local player's own sounds (his shots, steps, breath: the AtListener voices) goes to the
 	// room's reverb. They play without 3D, so no distance model sends them there; a gun that rings in the room for
 	// everyone else rang dry for the one who fired it.
@@ -850,7 +853,10 @@ USoundAttenuation* UScctAudioSubsystem::FindOrCreateAttenuation(float MinDistanc
 	const float Min = static_cast<float>(MinKey);
 	// A sound without a radius has no reach limit in the original; it is inaudible long before this.
 	const float Reach = RadiusKey > 0 ? ReachPerRadius * RadiusKey : 200.0f * Min;
-	const float Falloff = FMath::Max(Reach - Min, 1.0f);
+	// The settings reach well past the original's reach: Unreal does not start a sound of a second or less whose
+	// place lies beyond the attenuation's outer distance (au.SoundDistanceOptimizationLength), so with the outer
+	// distance at the reach the one-shots handed over from beyond it (Play) were counted as played and never heard.
+	const float Falloff = FMath::Max(Reach * HeardPastReach - Min, 1.0f);
 
 	Found = NewObject<USoundAttenuation>(this);
 	FSoundAttenuationSettings& Settings = Found->Attenuation;
@@ -861,9 +867,9 @@ USoundAttenuation* UScctAudioSubsystem::FindOrCreateAttenuation(float MinDistanc
 	Settings.FalloffDistance = Falloff;
 
 	// The original's curve, MinDistance / (MinDistance + 0.5 x (d - MinDistance)), sampled where it bends most
-	// (close to the source). It is not cut to nothing at the reach: the last key is the curve's own value there,
-	// which Unreal holds for anything further away (about 2% of full volume at 100 x a radius equal to the
-	// minimum distance).
+	// (close to the source). It is not cut to nothing at the reach: it goes on to the outer distance, and the last
+	// key is the curve's own value there, which Unreal holds for anything further away (about 2% of full volume at
+	// 100 x a radius equal to the minimum distance, 0.2% at 1000 x).
 	Settings.DistanceAlgorithm = EAttenuationDistanceModel::Custom;
 	FRichCurve* Curve = Settings.CustomAttenuationCurve.GetRichCurve();
 	Curve->Reset();
