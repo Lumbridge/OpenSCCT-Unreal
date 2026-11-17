@@ -314,7 +314,8 @@ public static class BridgeWorldEventKind
 
     /// <summary>
     /// A glass pane (SVitre) broke: X,Y,Z where it was hit and DX,DY,DZ the unit direction of the hit, both zero
-    /// when the simulation did not say (A is 1 when they are given).
+    /// when the simulation did not say (A is 1 when they are given), and B the pane's impact serial
+    /// (GlassImpactSerial, 0 when not given), which seeds the shape of its shards as in the Godot client's GlassBreakViews.
     /// </summary>
     public const int GlassBroken = 3;
 

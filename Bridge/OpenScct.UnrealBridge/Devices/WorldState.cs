@@ -1017,7 +1017,7 @@ public sealed class WorldState
                 if (broken && !_broken && !first && !pane.bDeleteMe)
                 {
                     bool hit = pane.GlassImpactSerial > 0;
-                    _world.Emit(BridgeWorldEventKind.GlassBroken, Slot.NameId, hit ? 1 : 0, 0,
+                    _world.Emit(BridgeWorldEventKind.GlassBroken, Slot.NameId, hit ? 1 : 0, hit ? pane.GlassImpactSerial : 0,
                         hit ? pane.GlassImpactLocation : _location, hit ? pane.GlassImpactDirection : default);
                 }
 

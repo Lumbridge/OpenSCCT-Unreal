@@ -184,7 +184,7 @@ namespace EScctWorldEventKind
 	/** A material slot changed (cracked screen, warning lamp). A: the slot, B: the skin's name id (0: back to the mesh's own material).
 	 *  Skins an actor already wears when it is first seen raise no event: read them with GetActorSkins. */
 	constexpr int32 SkinChanged = 2;
-	/** A glass pane (SVitre) broke. A: 1 when X,Y,Z is where it was hit and DX,DY,DZ the unit direction of the hit; 0 when only the pane's location is known. */
+	/** A glass pane (SVitre) broke. A: 1 when X,Y,Z is where it was hit and DX,DY,DZ the unit direction of the hit; 0 when only the pane's location is known. B: the pane's impact serial when A is 1 (it seeds the shards' shape), else 0. */
 	constexpr int32 GlassBroken = 3;
 	/** A switched light went on or off. A: 1 on / 0 off, B: the light type now. */
 	constexpr int32 LightSwitched = 4;

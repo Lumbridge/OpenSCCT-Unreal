@@ -564,7 +564,7 @@ public static unsafe class WorldDebugExports
     /// server's world belongs to that thread, so nothing of it is touched from here. A failure there is dropped: these
     /// are checks, and a failed one shows as nothing happening.
     /// </summary>
-    private static int OnServer(Action<ServerHost> action) => Exports.Current is { } session ? OnServer(session, action) : 0;
+    internal static int OnServer(Action<ServerHost> action) => Exports.Current is { } session ? OnServer(session, action) : 0;
 
     /// <summary>The last exception an entry threw on the server thread (for the probes); null when none did.</summary>
     public static Exception? LastFailure { get; private set; }

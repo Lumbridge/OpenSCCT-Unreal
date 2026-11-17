@@ -68,7 +68,9 @@ struct FScctWorldDebugApi;
  *                              nearest it (to see marks follow a door and go with a pane), "camnetoff" puts every
  *                              network camera out as a spy's shocker does (a spy must be playing), "modem" places a
  *                              PS2 sabotage modem (at the map's PS2 target, else on the wall ahead of the camera
- *                              with a stand-in mesh) and "modemhit" shoots every modem (its smoke and flash).
+ *                              with a stand-in mesh), "modemhit" shoots every modem (its smoke and flash) and
+ *                              "breakglass" breaks every pane drawn now with a hit off its middle from the
+ *                              camera's side (the log names a camera on each pane for -ScctCams).
  *                              Example: -ScctLevelDo="movers@8;breaklights@14"
  *   -ScctMarkTest              the same as -ScctLevelDo="shootmovers@4;shootprops@4.5;movers@9;props@15"
  */
@@ -255,6 +257,10 @@ private:
 	bool FollowBone(FLightState& State, const FScctWorldLight& Record);
 	void DrainEvents();
 	void RunDebugActions();
+	/** -ScctLevelDo "breakglass": every pane drawn now is broken on the local server, hit off its middle from the camera's side; returns 1 when any was queued. */
+	int32 BreakEveryPane(const FVector& Eye);
+	/** A pane broke: its glints, and its drawn mesh cut into shards (ScctGlassShards). */
+	void BreakPaneShards(const FScctWorldEvent& Event);
 
 	void FirstSight(FActorState& State, const FScctWorldActor& Record);
 	/** Takes a carried actor off its pawn's bone and back into the world. */

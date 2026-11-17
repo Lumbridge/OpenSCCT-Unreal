@@ -759,6 +759,10 @@ void UScctLevelStateSubsystem::RunDebugActions()
 			// From the camera, as the player's own shots go: each hole runs along the line of sight, a tunnel to see through.
 			Queued = Debug->ShootSmoke(View.X, View.Y, View.Z, 5);
 		}
+		else if (Action.What == TEXT("breakglass"))
+		{
+			Queued = BreakEveryPane(FVector(View.X, View.Y, View.Z));
+		}
 		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: -ScctLevelDo '%s' at %.1f s (camera at %.0f, %.0f, %.0f): %s"), *Action.What, MatchSeconds, View.X, View.Y, View.Z,
 			Queued == 1 ? TEXT("handed to the server") : Queued == 0 ? TEXT("no local server to do it") : TEXT("not a known action"));
 	}
@@ -1727,6 +1731,7 @@ void UScctLevelStateSubsystem::DrainEvents()
 				{
 					Effects->SpawnGlassBurst(At, Event.A != 0 ? FVector(Event.DX, Event.DY, Event.DZ) : FVector::ZeroVector);
 				}
+				BreakPaneShards(Event);
 				break;
 
 			case EScctWorldEventKind::LightSwitched:
