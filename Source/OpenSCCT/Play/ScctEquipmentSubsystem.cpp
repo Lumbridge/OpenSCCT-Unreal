@@ -247,6 +247,21 @@ bool UScctEquipmentSubsystem::FindMuzzle(int32 ActorId, FTransform& OutWorld) co
 	return Found != nullptr && Found->Slots[EScctAttachmentSlot::Weapon].View.FindMuzzle(OutWorld);
 }
 
+bool UScctEquipmentSubsystem::FindCasingPort(int32 ActorId, FTransform& OutWorld) const
+{
+	if (ActorId == FirstPerson.ActorId && IsValid(FirstPersonView) && FirstPersonView->IsShown())
+	{
+		return FirstPersonView->FindCasingPort(OutWorld);
+	}
+	const FPawnGear* Found = Gear.Find(ActorId);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	const FScctEquipmentView& Weapon = Found->Slots[EScctAttachmentSlot::Weapon].View;
+	return Weapon.IsShown() && Weapon.GetBody()->IsVisible() && Weapon.FindPoint(TEXT("EjectionPort"), TEXT("FX_DOUILLE"), OutWorld);
+}
+
 bool UScctEquipmentSubsystem::DrawsLocalMuzzleFlash() const
 {
 	return IsValid(FirstPersonView) && FirstPersonView->IsShown();

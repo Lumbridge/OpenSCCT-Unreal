@@ -181,6 +181,7 @@ void UScctEffectsSubsystem::ResetMatch()
 	}
 	ResetProjections();
 	ResetDevices();
+	ResetCasings();
 	SmokeVolumes.Reset();
 	Sprites.Clear();
 	MatchSeconds = 0.0f;
@@ -329,6 +330,7 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 	const float FxSeconds = DeltaSeconds * TimeScale;
 	DrainShots();
 	UpdateTracers(FxSeconds);
+	UpdateCasings(FxSeconds);
 	UpdateImpactMarks();
 	UpdateProjections();
 	SmokeVolumes.Update(DeltaSeconds);
@@ -464,6 +466,10 @@ void UScctEffectsSubsystem::DrainShots()
 
 			const bool bSticky = Shot.Kind == EScctShotKind::MuzzleSticky;
 			const bool bFirstPerson = Shot.Kind == EScctShotKind::FirstPersonMuzzle;
+			if ((Shot.Flags & EScctShotFlags::Casing) != 0)
+			{
+				SpawnCasing(Shot, Direction);
+			}
 			if (bFirstPerson)
 			{
 				// One owner for the local player's own flash: while the equipment draws a view model the flash
@@ -1364,7 +1370,7 @@ UScctEffectsSubsystem::EStyle UScctEffectsSubsystem::FindStyle(int32 ClassId)
 	// The class names are the original's (French and English mixed): the first word that fits decides.
 	static const TPair<const TCHAR*, EStyle> Words[] = {
 		{ TEXT("Ps2ModemEffect"), EStyle::Ps2Modem },
-		{ TEXT("Douille"), EStyle::None },        // shell casings: drawn with the gun, not here
+		{ TEXT("Douille"), EStyle::None },        // shell casings come with the shots (Play/ScctEffectsCasings.cpp)
 		{ TEXT("FootPrint"), EStyle::None },
 		{ TEXT("FlashBang"), EStyle::FlashBang },
 		{ TEXT("Explosion"), EStyle::Explosion },

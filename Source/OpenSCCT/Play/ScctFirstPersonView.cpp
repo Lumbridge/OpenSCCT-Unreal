@@ -230,6 +230,24 @@ bool AScctFirstPersonView::FindMuzzle(FTransform& OutWorld) const
 	return bShown && bHasMuzzle;
 }
 
+bool AScctFirstPersonView::FindCasingPort(FTransform& OutWorld) const
+{
+	if (!bShown)
+	{
+		return false;
+	}
+	// The merc's one model carries the gun; the spy's pistol has no port. A replacement gun's EjectionPort socket,
+	// else the original's bone, which the replacement is fixed to.
+	for (const FScctEquipmentView& Drawn : Parts)
+	{
+		if (Drawn.IsShown() && Drawn.GetBody()->IsVisible() && Drawn.FindPoint(TEXT("EjectionPort"), TEXT("FX_DOUILLE"), OutWorld))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 bool AScctFirstPersonView::FindLaserStart(FTransform& OutWorld) const
 {
 	OutWorld = bHasLaser ? Laser : Muzzle;

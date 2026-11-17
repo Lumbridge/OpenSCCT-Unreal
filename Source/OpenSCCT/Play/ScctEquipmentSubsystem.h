@@ -65,6 +65,13 @@ public:
 	bool FindMuzzle(int32 ActorId, FTransform& OutWorld) const;
 
 	/**
+	 * Where a pawn's gun throws its spent casing this frame, with the port's turn: a replacement model's
+	 * EjectionPort socket, else the original's bone FX_DOUILLE; on the view model for the local player while it is
+	 * drawn, else on the gun on the body. False when the gun has neither (the spy's pistol) or no gun is drawn.
+	 */
+	bool FindCasingPort(int32 ActorId, FTransform& OutWorld) const;
+
+	/**
 	 * The local player's own muzzle flash is this subsystem's while it draws a view model: the flash sits on that
 	 * model's muzzle. The match effects draw the local first-person flash only while this is false (no view model:
 	 * the equipment table is missing, -ScctNoViewModel, a tour camera).

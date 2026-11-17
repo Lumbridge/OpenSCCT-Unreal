@@ -4,6 +4,7 @@
 #include "Play/ScctEffectsParticles.h"
 #include "Play/ScctEffectsSmokeVolume.h"
 #include "Runtime/ScctEventsApi.h"
+#include "Runtime/ScctFxTraceApi.h"
 #include "Runtime/ScctProjectionsApi.h"
 #include "Runtime/ScctWorldApi.h"
 #include "Subsystems/WorldSubsystem.h"
@@ -26,7 +27,8 @@ class UTexture2D;
  *   - shots: a muzzle flash with its light where the shooter's barrel ends (asked of the equipment subsystem,
  *     which draws the guns), and tracers as fast thin streaks. The local player's own first-person flash is the
  *     equipment's while it draws a view model (UScctEquipmentSubsystem::DrawsLocalMuzzleFlash); only when there
- *     is no view model is it drawn here, at the simulation's muzzle estimate;
+ *     is no view model is it drawn here, at the simulation's muzzle estimate. A shot that throws a casing throws
+ *     it from the gun's ejection port, and it bounces, lies and goes (Play/ScctEffectsCasings.cpp);
  *   - impact marks: a decal per live mark and a burst of sparks, dust, splinters or spray by the surface. A mark
  *     on a map actor (a door, a lift, a pane of glass) moves with that actor and is hidden while it is hidden or
  *     gone; a mark on the level's own geometry stays where it landed;
@@ -50,7 +52,7 @@ class UTexture2D;
  *                          alternate fire every 6 s (a merc's grenade), so shots can be seen with nobody playing
  *   -ScctFxTimeScale=K     effects run at K times real speed (0.1: a flash lasts a second), so a screenshot
  *                          taken at any moment shows them
- *   -ScctFxLog             log every flash, tracer, impact and effect actor as it starts or ends
+ *   -ScctFxLog             log every flash, tracer, impact, casing and effect actor as it starts or ends
  * A camera fault ('camnet fault <name>') and a modem's destruction ('Ps2ModemEffect start') are always logged.
  */
 UCLASS()
@@ -184,6 +186,37 @@ private:
 	void ResetProjections();
 	/** The imported texture of a projection by the bridge's name id of its asset name; null when it is not imported. */
 	UTexture2D* FindProjectionTexture(int32 AssetId);
+
+	/**
+	 * A spent shell casing thrown from a gun's ejection port (SBase.SDouilleEmitter): one pooled mesh flying with the
+	 * emitter's velocity and spin under its gravity, bouncing off what a line trace meets, lying where it settles and
+	 * shrinking away at the end of its life. Play/ScctEffectsCasings.cpp.
+	 */
+	struct FCasing
+	{
+		FVector Location = FVector::ZeroVector;
+		FVector Velocity = FVector::ZeroVector;
+		/** The port's turn when it was thrown; the spin is added to it. */
+		FRotator Base = FRotator::ZeroRotator;
+		/** Degrees a second about the rotator's pitch, yaw and roll; stopped by the first bounce. */
+		FRotator Spin = FRotator::ZeroRotator;
+		/** How far it has turned so far. */
+		FRotator Turned = FRotator::ZeroRotator;
+		/** Its turn once it lies still. */
+		FQuat Rest = FQuat::Identity;
+		float Age = 0.0f;
+		float StartZ = 0.0f;
+		int32 Bounces = 0;
+		bool bResting = false;
+		bool bLive = false;
+	};
+
+	/** Throws a casing for a shot that has one, from the shooter's ejection port (else the drawn muzzle). */
+	void SpawnCasing(const FScctShot& Shot, const FVector& Direction);
+	void UpdateCasings(float DeltaSeconds);
+	void ResetCasings();
+	/** The casing mesh: the game's own imported, else a small brass cylinder (said once in the log). */
+	bool EnsureCasingMesh();
 
 	void UpdateEffectActors(float DeltaSeconds);
 	void UpdateLights(float DeltaSeconds);
@@ -326,6 +359,29 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> FaultLookPool;
+
+	/** The casings' meshes, one per slot of Casings, made as the pool first fills. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> CasingPool;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> CasingMesh;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> CasingStandInMaterial;
+
+	TArray<FCasing> Casings;
+	/** The client world's collision, which the casings bounce off (the level has no Unreal collision). */
+	const FScctFxTraceApi* FxTrace = nullptr;
+	/** The casing mesh's scale, its long axis (0 X, 1 Y, 2 Z) and half its thickness once scaled, in cm. */
+	FVector CasingScale = FVector::OneVector;
+	int32 CasingLongAxis = 0;
+	float CasingRadius = 0.5f;
+	bool bCasingMeshLooked = false;
+	int32 NextCasing = 0;
+	int32 NumCasings = 0;
+	int32 NumCasingsFromPort = 0;
+	int32 NumCasingBounces = 0;
 
 	const FScctWorldApi* WorldApi = nullptr;
 	TArray<FScctWorldMarker> DeviceMarkers;

@@ -54,6 +54,9 @@ public:
 	/** The muzzle in the world this frame, X along the barrel. False while no model with a muzzle is drawn. */
 	bool FindMuzzle(FTransform& OutWorld) const;
 
+	/** The ejection port of the gun drawn this frame (a replacement's EjectionPort socket, else bone FX_DOUILLE). */
+	bool FindCasingPort(FTransform& OutWorld) const;
+
 	/** Where the laser leaves the weapon this frame: the spy pistol's laser socket, else the muzzle. */
 	bool FindLaserStart(FTransform& OutWorld) const;
 
