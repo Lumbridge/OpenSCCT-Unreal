@@ -21,10 +21,11 @@ class UScctHudWidget;
  *   DisplaySessionStatus    the mission status page: the scoreboard with the mission's objectives under it. It
  *                           stays open and holds the player's keys back until the same key, Escape or Enter (F8)
  *   ToggleTeammateNames     names over the heads of the player's own side, seen through walls, kept per side in
- *                           the user's settings (N)
+ *                           the Hud page's options (N), with health and a nametag opacity there too
+ * PushToTalk, TeamPushToTalk and ToggleVoiceMute are the voice chat's, not the HUD's.
  * Talk and TeamTalk are the chat's (Hud/ScctChatSubsystem.h), which draws its composer and transcript over the HUD.
  * Not served, as in the Godot client, which lists both as legacy shortcuts with no handler: DisplayHud and Quit.
- * DisplayStrategicMap is not served either: the bridge has no table for the map's plan (see the log line).
+ * DisplayStrategicMap is the strategic map page's (Menu/ScctMatchCommands.h).
  *
  * Unattended switches (off by default; for runs with nobody at the keyboard):
  *   -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1;14 Scoreboard 0"
@@ -118,8 +119,13 @@ private:
 	/** Places the objective markers on the screen for this frame's camera. */
 	void ProjectMarkers();
 
-	/** Places the names over the local player's teammates for this frame's camera, while he has them on. */
+	// The teammate names (ScctHudNames.cpp): the Hud page's options (Hud.ShowTeammateNamesSpy/Merc, Hud.TeammateHealth,
+	// Hud.TeammateNamesOpacity), the N key flipping the played side's option, and the labels placed for this frame's
+	// camera from the bridge's teammate table (Runtime/ScctTeammateNamesApi.h).
+	void InitNames();
+	void ToggleTeammateNames();
 	void ProjectNames();
+	bool AreTeammateNamesOn(int32 Side) const;
 
 	/** Opens or closes the mission status page and holds the player's keys back while it is open. */
 	void SetStatusPage(bool bOpen);
@@ -258,9 +264,10 @@ private:
 	TArray<FKey> StatusCloseKeys;
 	bool bStatusKeysArmed = false;
 
-	/** ToggleTeammateNames, per side (0 spies, 1 mercs), as the user's settings keep it. */
-	bool bTeammateNames[2] = { false, false };
-	bool bStrategicMapNoted = false;
+	/** The timed command TeammateNames 1/0 per side (0 spies, 1 mercs) for this run, -1 where the user's option holds. */
+	int32 TeammateNamesForced[2] = { -1, -1 };
+	int32 LastNameCount = -1;    // the labels' count and marks as last logged
+	bool bNamesTableMissingLogged = false;
 
 	/** HoldScoreboard is down; ShowConnectedPlayers has switched the scoreboard on. */
 	bool bScoreboardKeyHeld = false;
