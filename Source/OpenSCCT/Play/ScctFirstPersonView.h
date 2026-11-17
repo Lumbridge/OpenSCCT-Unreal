@@ -55,6 +55,9 @@ public:
 	/** The muzzle in the world this frame, X along the barrel. False while no model with a muzzle is drawn. */
 	bool FindMuzzle(FTransform& OutWorld) const;
 
+	/** The ejection port of the gun drawn this frame (a replacement's EjectionPort socket, else bone FX_DOUILLE). */
+	bool FindCasingPort(FTransform& OutWorld) const;
+
 	/** Where the laser leaves the weapon this frame: the spy pistol's laser socket, else the muzzle. */
 	bool FindLaserStart(FTransform& OutWorld) const;
 
@@ -78,6 +81,13 @@ private:
 
 	bool bHasMuzzle = false;
 	bool bHasLaser = false;
+	/**
+	 * The spy eye view's muzzle and laser socket have a wall between them and the eye this frame (the bridge's trace,
+	 * Runtime/ScctPoseAimApi.h): the pistol stays drawn, but no flash or laser starts at a hidden socket.
+	 */
+	bool bMuzzleHidden = false;
+	bool bLaserHidden = false;
+	int32 LoggedHiddenSockets = 0;
 	FTransform Muzzle;
 	FTransform Laser;
 	FTransform LastCamera;

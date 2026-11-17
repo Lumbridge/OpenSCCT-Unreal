@@ -2,8 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "Play/ScctEffectsParticles.h"
+#include "Play/ScctEffectsSmokeVolume.h"
 #include "Runtime/ScctEventsApi.h"
+#include "Runtime/ScctFxTraceApi.h"
 #include "Runtime/ScctProjectionsApi.h"
+#include "Runtime/ScctWorldApi.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctEffectsSubsystem.generated.h"
 
@@ -24,7 +27,8 @@ class UTexture2D;
  *   - shots: a muzzle flash with its light where the shooter's barrel ends (asked of the equipment subsystem,
  *     which draws the guns), and tracers as fast thin streaks. The local player's own first-person flash is the
  *     equipment's while it draws a view model (UScctEquipmentSubsystem::DrawsLocalMuzzleFlash); only when there
- *     is no view model is it drawn here, at the simulation's muzzle estimate;
+ *     is no view model is it drawn here, at the simulation's muzzle estimate. A shot that throws a casing throws
+ *     it from the gun's ejection port, and it bounces, lies and goes (Play/ScctEffectsCasings.cpp);
  *   - impact marks: a decal per live mark and a burst of sparks, dust, splinters or spray by the surface. A mark
  *     on a map actor (a door, a lift, a pane of glass) moves with that actor and is hidden while it is hidden or
  *     gone; a mark on the level's own geometry stays where it landed;
@@ -33,7 +37,12 @@ class UTexture2D;
  *     out at the end of its life (Play/ScctEffectsProjections.cpp);
  *   - effect actors: grenades, mines and gadgets as their original meshes (imported by
  *     Tools/Effects/build_effect_assets.py; a small glowing stand-in shape where a mesh is missing), explosions,
- *     smoke, sparks, flares and trails as particles, and the lights the simulation gives them.
+ *     smoke, sparks, flares and trails as particles, and the lights the simulation gives them. The PS2 modem's
+ *     destruction preset (Ps2ModemEffect) is drawn as its own three emitters (Play/ScctEffectsDevices.cpp);
+ *   - responsive smoke: on a match that runs it, every cloud of the shared smoke field is a ray-marched volume over
+ *     the field's bounds, and a smoke grenade's own sprite cloud is not drawn (Play/ScctEffectsSmokeVolume.h);
+ *   - device faults: a network camera a spy's shocker has put out shows an orange cross on its lens with sparks and
+ *     smoke for as long as it is out, read from the level state's markers (Play/ScctEffectsDevices.cpp).
  *
  * Particles are the subsystem's own pooled sprites (see FScctFxSprites for why not Niagara); lights, meshes and
  * decals come from pools made once per world. Nothing is allocated per frame.
@@ -43,7 +52,8 @@ class UTexture2D;
  *                          alternate fire every 6 s (a merc's grenade), so shots can be seen with nobody playing
  *   -ScctFxTimeScale=K     effects run at K times real speed (0.1: a flash lasts a second), so a screenshot
  *                          taken at any moment shows them
- *   -ScctFxLog             log every flash, tracer, impact and effect actor as it starts or ends
+ *   -ScctFxLog             log every flash, tracer, impact, casing and effect actor as it starts or ends
+ * A camera fault ('camnet fault <name>') and a modem's destruction ('Ps2ModemEffect start') are always logged.
  */
 UCLASS()
 class OPENSCCT_API UScctEffectsSubsystem : public UWorldSubsystem
@@ -92,6 +102,7 @@ private:
 		Water,
 		Gas,
 		Puff,       // any other emitter: one small puff of dust
+		Ps2Modem,   // the PS2 modem's destruction preset: two smokes and a flash, once (Play/ScctEffectsDevices.cpp)
 	};
 
 	struct FActorFx
@@ -107,6 +118,18 @@ private:
 		int32 Light = INDEX_NONE; // index into Lights
 		uint32 SeenFrame = 0;
 		bool bStandIn = false;
+
+		// Rain on a pawn (SFlicFlocEmitter, Play/ScctEffectsFlicFloc.cpp): the script's restarts and puff triggers
+		// already applied, each sub-emitter's spawns owed and the spawn budget left since its restart.
+		bool bFlicFloc = false;
+		int32 FlicSplashStarts = 0;
+		int32 FlicDripStarts = 0;
+		int32 FlicPuffTriggers = 0;
+		int32 FlicSplashBudget = 0;
+		int32 FlicDripBudget = 0;
+		float FlicSplashDebt = 0.0f;
+		float FlicDripDebt = 0.0f;
+		bool bFlicSeen = false;
 	};
 
 	struct FLight
@@ -183,8 +206,71 @@ private:
 	/** The imported texture of a projection by the bridge's name id of its asset name; null when it is not imported. */
 	UTexture2D* FindProjectionTexture(int32 AssetId);
 
+	/**
+	 * A spent shell casing thrown from a gun's ejection port (SBase.SDouilleEmitter): one pooled mesh flying with the
+	 * emitter's velocity and spin under its gravity, bouncing off what a line trace meets, lying where it settles and
+	 * shrinking away at the end of its life. Play/ScctEffectsCasings.cpp.
+	 */
+	struct FCasing
+	{
+		FVector Location = FVector::ZeroVector;
+		FVector Velocity = FVector::ZeroVector;
+		/** The port's turn when it was thrown; the spin is added to it. */
+		FRotator Base = FRotator::ZeroRotator;
+		/** Degrees a second about the rotator's pitch, yaw and roll; stopped by the first bounce. */
+		FRotator Spin = FRotator::ZeroRotator;
+		/** How far it has turned so far. */
+		FRotator Turned = FRotator::ZeroRotator;
+		/** Its turn once it lies still. */
+		FQuat Rest = FQuat::Identity;
+		float Age = 0.0f;
+		float StartZ = 0.0f;
+		int32 Bounces = 0;
+		bool bResting = false;
+		bool bLive = false;
+	};
+
+	/** Throws a casing for a shot that has one, from the shooter's ejection port (else the drawn muzzle). */
+	void SpawnCasing(const FScctShot& Shot, const FVector& Direction);
+	void UpdateCasings(float DeltaSeconds);
+	void ResetCasings();
+	/** The casing mesh: the game's own imported, else a small brass cylinder (said once in the log). */
+	bool EnsureCasingMesh();
+
 	void UpdateEffectActors(float DeltaSeconds);
+	/**
+	 * Rain splashing on a pawn, as the Godot client's EffectViews.FlicFloc draws it: splashes spread over the drawn
+	 * body along the original's 11 bone segments while in the rain, drips from the head carrying the pawn's speed
+	 * after it, the puff on each trigger, following the script's rates, restarts and triggers. Play/ScctEffectsFlicFloc.cpp.
+	 * Returns false when the bridge has no table for it (the plain Water style is drawn then).
+	 */
+	bool UpdateFlicFloc(FActorFx& Fx, const FScctEffectActor& Record, const FVector& Head, bool bHidden, float DeltaSeconds);
 	void UpdateLights(float DeltaSeconds);
+
+	/**
+	 * A network camera a spy's shocker has put out, drawn as the Godot client's CamnetDisabledView draws it: an
+	 * orange cross on the lens that throbs, a few sparks every 1.6 s and a thin wisp of smoke, while the camera is
+	 * out. Play/ScctEffectsDevices.cpp.
+	 */
+	struct FCamnetFault
+	{
+		TWeakObjectPtr<UStaticMeshComponent> Bars[2];
+		TWeakObjectPtr<UMaterialInstanceDynamic> Look;
+		/** The level's actor for the camera, looked for when the fault starts; unset when the level has none. */
+		TWeakObjectPtr<AActor> Camera;
+		FString Name;
+		float Age = 0.0f;
+		float NextSpark = 0.0f;
+		float SmokeDebt = 0.0f;
+		uint32 SeenFrame = 0;
+		bool bOut = false;
+	};
+
+	/** The marked devices' own effects: the shocked network cameras' faults. Play/ScctEffectsDevices.cpp. */
+	void UpdateDevices(float DeltaSeconds);
+	void ResetDevices();
+	/** Ps2ModemEffect's three sprite emitters, as the original preset sets them, from At turned by Rotation. */
+	void SpawnPs2ModemEffect(const FVector& At, const FRotator& Rotation);
 
 	void StartActor(FActorFx& Fx, const FScctEffectActor& Record);
 	void EndActor(FActorFx& Fx, bool bKilled);
@@ -284,6 +370,7 @@ private:
 
 	const FScctEventsApi* Events = nullptr;
 	FScctFxSprites Sprites;
+	FScctSmokeVolumes SmokeVolumes;
 	FRandomStream Random;
 
 	TMap<int32, FActorFx> Actors;
@@ -308,6 +395,48 @@ private:
 	/** By the bridge's name id of the asset name; null for one that was looked for and not found. */
 	UPROPERTY(Transient)
 	TMap<int32, TObjectPtr<UTexture2D>> ProjectionTextures;
+
+	/** The bars of the network cameras' fault crosses, two per fault, kept for the next fault when one ends. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> FaultBarPool;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> FaultLookPool;
+
+	/** The casings' meshes, one per slot of Casings, made as the pool first fills. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> CasingPool;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> CasingMesh;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> CasingStandInMaterial;
+
+	TArray<FCasing> Casings;
+	/** The client world's collision, which the casings bounce off (the level has no Unreal collision). */
+	const FScctFxTraceApi* FxTrace = nullptr;
+	/** The rain-on-pawn table (Runtime/ScctFlicFlocApi.h), looked for once. */
+	const struct FScctFlicFlocApi* FlicFlocApi = nullptr;
+	bool bFlicFlocApiTried = false;
+	int32 NumFlicSplashes = 0;
+	int32 NumFlicDrips = 0;
+	int32 NumFlicPuffs = 0;
+	/** The casing mesh's scale, its long axis (0 X, 1 Y, 2 Z) and half its thickness once scaled, in cm. */
+	FVector CasingScale = FVector::OneVector;
+	int32 CasingLongAxis = 0;
+	float CasingRadius = 0.5f;
+	bool bCasingMeshLooked = false;
+	int32 NextCasing = 0;
+	int32 NumCasings = 0;
+	int32 NumCasingsFromPort = 0;
+	int32 NumCasingBounces = 0;
+
+	const FScctWorldApi* WorldApi = nullptr;
+	TArray<FScctWorldMarker> DeviceMarkers;
+	TMap<int32, FCamnetFault> CamnetFaults;
+	int32 NumCamnetFaults = 0;
+	int32 NumModemEffects = 0;
 
 	const FScctProjectionsApi* Projections = nullptr;
 	TArray<FProjectionSlot> ProjectionSlots;

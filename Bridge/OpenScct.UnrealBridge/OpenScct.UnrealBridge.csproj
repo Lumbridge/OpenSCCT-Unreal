@@ -43,4 +43,9 @@
          (Equipment/FirstPersonModels.cs, MercFirstPerson.DrawObserved); Godot-free like the session. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\Views\ObservedWeaponViewModel.cs" Link="Linked\Views\ObservedWeaponViewModel.cs" />
   </ItemGroup>
+  <!-- The TestBox fixture (OpenSCCT's synthetic test map, no original content) goes to maps/ next to the bridge, a map
+       root the bridge always searches, so the client's checks can host it whatever the content folder holds. -->
+  <ItemGroup>
+    <None Include="$(OpenScctRoot)fixtures\testbox\**\*" Link="maps\TestBox\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

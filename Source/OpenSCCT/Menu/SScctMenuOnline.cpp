@@ -1,10 +1,16 @@
-// Play online: the master's server list (sorted, filtered, with the chosen server's details) and joining by address.
+// Play online: the master's server list (sorted, filtered, with the chosen server's details), joining by address, and
+// the full browser (Menu/SScctServerBrowserPage.h: the master, a LAN search and the saved servers in one table with
+// measured pings, sorting, the side and connect path before JOIN). The browser tab is opened by the page name
+// "online/browser" (or "browser", "lan"), and by -ScctBrowserJoin.
 
 #include "Menu/ScctMenuPage.h"
 
 #include "Framework/Application/SlateApplication.h"
+#include "Menu/SScctServerBrowserPage.h"
 #include "Menu/ScctMenuSubsystem.h"
+#include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Misc/Parse.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -122,7 +128,7 @@ namespace
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 16.0f)
 				[
 					SAssignNew(Tabs, SScctTabBar)
-					.Tabs({ TEXT("Server list"), TEXT("Join by address") })
+					.Tabs({ TEXT("Server list"), TEXT("Join by address"), TEXT("LAN & saved servers") })
 					.Initial(bAddress ? 1 : 0)
 					.OnChanged(FSimpleDelegate::CreateLambda([this] { ShowTab(Tabs->GetTab()); }))
 				]
@@ -131,9 +137,18 @@ namespace
 					SAssignNew(Switcher, SWidgetSwitcher)
 					+ SWidgetSwitcher::Slot()[ BuildServers() ]
 					+ SWidgetSwitcher::Slot()[ BuildAddress() ]
+					// Made when first shown: it starts a LAN search and pings every server it lists.
+					+ SWidgetSwitcher::Slot()[ SAssignNew(BrowserBox, SBox) ]
 				]
 			];
-			ShowTab(bAddress ? 1 : 0);
+			// An unattended browser join (-ScctBrowserJoin) starts on the browser.
+			int32 BrowserJoin = -1;
+			const bool bBrowserJoin = FParse::Value(FCommandLine::Get(), TEXT("ScctBrowserJoin="), BrowserJoin) && BrowserJoin >= 0;
+			if (bBrowserJoin)
+			{
+				Tabs->SetTab(BrowserTab);
+			}
+			ShowTab(bBrowserJoin ? BrowserTab : bAddress ? 1 : 0);
 			if (UScctOnlineSubsystem* Visit = Host.Online.Get())
 			{
 				Visit->RequestServerList();
@@ -147,7 +162,8 @@ namespace
 
 		virtual void ShowSub(const FString& Sub) override
 		{
-			Tabs->SetTab(Sub.Equals(TEXT("address"), ESearchCase::IgnoreCase) || Sub.Equals(TEXT("join"), ESearchCase::IgnoreCase) ? 1 : 0);
+			const bool bBrowser = Sub.Equals(TEXT("browser"), ESearchCase::IgnoreCase) || Sub.Equals(TEXT("lan"), ESearchCase::IgnoreCase) || Sub.Equals(TEXT("saved"), ESearchCase::IgnoreCase);
+			Tabs->SetTab(bBrowser ? BrowserTab : Sub.Equals(TEXT("address"), ESearchCase::IgnoreCase) || Sub.Equals(TEXT("join"), ESearchCase::IgnoreCase) ? 1 : 0);
 		}
 
 		virtual bool HandleShortcut(const FKey& Key) override
@@ -174,8 +190,14 @@ namespace
 	private:
 		void ShowTab(int32 Tab)
 		{
+			if (Tab == BrowserTab && !Browser.IsValid())
+			{
+				BrowserBox->SetContent(SAssignNew(Browser, SScctServerBrowserPage)
+					.Online(Host.Online)
+					.OnBack(FSimpleDelegate::CreateLambda([this] { if (Host.Back) { Host.Back(); } })));
+			}
 			Switcher->SetActiveWidgetIndex(Tab);
-			DefaultFocus = Tab == 0 ? ServerFocus : AddressFocus;
+			DefaultFocus = Tab == 0 ? ServerFocus : Tab == 1 ? AddressFocus : TWeakPtr<SWidget>(Browser);
 			if (const TSharedPtr<SWidget> Focus = DefaultFocus.Pin())
 			{
 				FSlateApplication::Get().SetKeyboardFocus(Focus, EFocusCause::SetDirectly);
@@ -656,11 +678,16 @@ namespace
 			GConfig->SetString(OnlineMenuSection, TEXT("RecentAddresses"), *FString::Join(Addresses, TEXT(" ")), GGameUserSettingsIni);
 			GConfig->SetString(OnlineMenuSection, TEXT("LastAddress"), *Address, GGameUserSettingsIni);
 			GConfig->Flush(false, GGameUserSettingsIni);
+			// The browser's saved servers too, where it pings it and offers to remove it.
+			UScctOnlineSubsystem::AddSavedServer(Address);
 			const int32 Sides[] = { -1, 0, 1, 255 };
 			UE_LOG(LogOpenSCCT, Log, TEXT("Menu: joining %s"), *Address);
 			Visit->Join(Address, PasswordBox->GetText().ToString(), Sides[FMath::Clamp(JoinSide, 0, 3)]);
 		}
 
+		static constexpr int32 BrowserTab = 2;
+		TSharedPtr<SBox> BrowserBox;
+		TSharedPtr<SScctServerBrowserPage> Browser;
 		TSharedPtr<SScctTabBar> Tabs;
 		TSharedPtr<SWidgetSwitcher> Switcher;
 		TSharedPtr<SScctTable> Table;

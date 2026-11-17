@@ -19,10 +19,14 @@ public sealed class PlayCatalog
     private readonly Dictionary<string, PlayMapLoader> _loaders = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _gate = new();
 
-    /// <summary>A catalog over the configured content (<see cref="BridgeSession.Configure"/>) and the downloaded packs.</summary>
+    /// <summary>
+    /// A catalog over the configured content (<see cref="BridgeSession.Configure"/>), the downloaded packs and the
+    /// folders Unreal names (<see cref="MapFolders"/>).
+    /// </summary>
     public PlayCatalog()
     {
-        Maps = new MapCatalog([.. MapCatalog.CreateDefault().Roots]);
+        Revision = MapFolders.Revision;
+        Maps = new MapCatalog(MapFolders.AllRoots());
 
         // A map installed while the game runs plays through the same loader.
         Maps.FolderBuilder = (id, folder) => Directory.Exists(Path.Combine(folder, "render"))
@@ -40,6 +44,9 @@ public sealed class PlayCatalog
 
     /// <summary>The catalog the client sessions load with.</summary>
     public MapCatalog Maps { get; }
+
+    /// <summary>The <see cref="MapFolders.Revision"/> this catalog was made with.</summary>
+    public int Revision { get; }
 
     /// <summary>The play loader of a map (its SVMap parsed once).</summary>
     public PlayMapLoader Loader(string map)

@@ -218,6 +218,8 @@ public static class BridgeStartFlags
     /// <summary>Practice rules instead of the map's own: no time limit, unlimited lives, 5 s respawn.</summary>
     public const int OfflineRules = 4;
 
+    /// <summary>Responsive smoke: smoke grenades fill a shared simulated cloud that shots and blasts push through (SvmResponsiveSmoke).</summary>
+    public const int ResponsiveSmoke = 16;
     /// <summary>Visit a Map practice: unlimited gear, instant gear changes, the in-match menu's Switch Team.</summary>
     public const int UnlimitedGear = 8;
 }

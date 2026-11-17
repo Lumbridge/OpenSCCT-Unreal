@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Numerics;
 using OpenScct.Core;
 using OpenScct.Core.Engine;
+using OpenScct.Game.Camera;
 using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
 using OpenScct.Game.Svm;
 using OpenScct.Physics.Movement;
+using OpenScct.Server;
 using OpenScct.UnrealBridge.Pose;
 
 namespace OpenScct.UnrealBridge.Equipment;
@@ -35,6 +37,7 @@ internal sealed class MercFirstPerson
 
     private readonly ViewModelPose _pose = new();
     private readonly OpenScctGame.Views.ObservedWeaponViewModel _observed = new();
+    private readonly ViewModelClipRates _rates = new();
     private readonly Dictionary<string, Loaded?> _loaded = new(StringComparer.OrdinalIgnoreCase);
     private readonly string? _sharedRoot;
     private SWeaponDefense? _lastWeapon;
@@ -120,8 +123,10 @@ internal sealed class MercFirstPerson
         Name action = weapon.ViewAnim.Sequence(SWeaponDefense.ACTIONCHANNEL);
         bool customHandling = weapon is MercSidearm or MercRifle &&
             (weapon is MercSidearm { ReloadUntil: > 0 } || action == weapon.AFirstReloGrenSt || action == weapon.AFirstReloSt);
+        // A clip of an animation project bound to this model for gameplay runs at the project clip's frame rate.
+        _rates.Bind(weapon.XLevel?.GetService<AnimationWorld>()?.Project, weapon.Mesh.Path!);
         loaded.Applier.Apply(_pose.Update(weapon.ViewAnim, loaded.Model.Character, dt, alpha, exclusiveAction: customHandling,
-            blendLandingRecovery: weapon is MercSidearm));
+            blendLandingRecovery: weapon is MercSidearm, rates: _rates));
 
         Xform root = Xform.Identity;
         if (weapon is MercSidearm && loaded.SightOffset is { } sight)
@@ -200,14 +205,16 @@ internal sealed class MercFirstPerson
 /// in his right hand. While drawing or holstering both swing between a lowered place and the grip; the pistol plays
 /// its own draw clip.
 /// <para>A port of the placing and posing of OpenSCCT's game/Scripts/Views/SpyFirstPersonView.cs (the eye view is
-/// OpenSCCT's own). Not ported: the actions of an animation project's first-person profile (DrawStudioActions),
-/// lighting, cosmetics and outfits, and hiding the laser and muzzle sockets when a wall is between them and the
-/// eye.</para>
+/// OpenSCCT's own). With the eye of the frame it also traces from the eye to the laser and muzzle sockets
+/// (TryGetSocket): a socket with a wall between it and the eye is flagged hidden, and Unreal then starts neither the
+/// muzzle flash nor the laser there. Not ported: the actions of an animation project's first-person profile
+/// (DrawStudioActions), lighting, cosmetics and outfits.</para>
 /// </summary>
 internal sealed class SpyFirstPerson
 {
     private const string ArmsAsset = "SPerso.ATT_01_fp";
     private const string WeaponAsset = "SWeaponFirst.p190_fp";
+    private static readonly FVector s_probeExtent = new(1.25f, 1.25f, 1.25f);
 
     // X is forward, Y is up and Z is screen-right. Distances are metres from the eye.
     private static readonly Xform s_lowered = new(
@@ -292,8 +299,12 @@ internal sealed class SpyFirstPerson
     /// the next tick, and fills <paramref name="view"/>. False when it is not drawn (no pistol out, a move that
     /// hides it, the models missing).
     /// </summary>
-    public bool Draw(SPlayerController pc, SPawnAttaque pawn, float alpha, ref BridgeFirstPerson view)
+    public bool Draw(SPlayerController pc, SPawnAttaque pawn, float alpha, ref BridgeFirstPerson view,
+        (FVector Location, FRotator Rotation)? eye = null)
     {
+        MuzzleHidden = false;
+        LaserHidden = false;
+        MuzzleDistance = 0f;
         Preload();
         if (Arms is not { } arms || Weapon is not { } gun ||
             pawn is not { bDeleteMe: false, bHidden: false, Health: > 0 } || !ReferenceEquals(pc.Pawn, pawn))
@@ -321,7 +332,45 @@ internal sealed class SpyFirstPerson
         view.WeaponClass = EquipmentNames.ClassId(pistol);
         view.Part0 = FirstPersonParts.Part(arms, armsRoot, ArmPositions, ArmRotations, ArmScales);
         view.Part1 = FirstPersonParts.Part(gun, gunRoot, WeaponPositions, WeaponRotations, WeaponScales);
+        if (eye is { } camera)
+        {
+            MuzzleHidden = Behind(pawn, camera, gun, gunRoot, gun.MuzzleBone, out float muzzleDistance);
+            LaserHidden = Behind(pawn, camera, gun, gunRoot, gun.LaserBone, out _);
+            MuzzleDistance = muzzleDistance;
+        }
+
         return true;
+    }
+
+    /// <summary>True when the last <see cref="Draw"/> found a wall between the eye and the pistol's muzzle socket "FX".</summary>
+    public bool MuzzleHidden { get; private set; }
+
+    /// <summary>True when the last <see cref="Draw"/> found a wall between the eye and the pistol's laser socket "Laser".</summary>
+    public bool LaserHidden { get; private set; }
+
+    /// <summary>How far the muzzle socket was from the eye in the last <see cref="Draw"/>, in units.</summary>
+    public float MuzzleDistance { get; private set; }
+
+    /// <summary>
+    /// SpyFirstPersonView.TryGetSocket: whether the client world's collision (the camera's trace flags, a 1.25 unit
+    /// box) is between the eye and a socket of the pistol as drawn. Only the effects that start at the socket are
+    /// moved off it (the muzzle flash, the laser's start); the pistol itself stays fixed to the eye.
+    /// </summary>
+    private bool Behind(SPawnAttaque pawn, (FVector Location, FRotator Rotation) eye, EquipmentModel gun, in Xform root,
+        int bone, out float distance)
+    {
+        distance = 0f;
+        if (bone < 0 || pawn.XLevel?.PhysicsDriver is not PhysicsDriver physics)
+        {
+            return false;
+        }
+
+        // The camera's frame of the parts: metres, X forward, Y up, Z right.
+        Vector3 local = (root * gun.ActorToSkeleton * gun.Global(bone, WeaponPositions, WeaponRotations, WeaponScales)).Origin;
+        eye.Rotation.GetAxes(out FVector forward, out FVector right, out FVector up);
+        FVector socket = eye.Location + (((forward * local.X) + (up * local.Y) + (right * local.Z)) * RenderSpace.UnitsPerMetre);
+        distance = (socket - eye.Location).Size();
+        return physics.Collision.LineCheck(out _, null, socket, eye.Location, s_probeExtent, CameraK.CameraTraceFlags);
     }
 
     /// <summary>The moves during which the eye view shows no pistol: using objects, hacking, bombs, rolls, ladders, pipes, ledges.</summary>

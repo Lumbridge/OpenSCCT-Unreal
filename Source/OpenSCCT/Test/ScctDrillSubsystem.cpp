@@ -37,7 +37,7 @@ namespace
 		return !FMath::IsNaN(Value);
 	}
 
-	UWorld* GameWorld(UWorld* World)
+	UWorld* DrillGameWorld(UWorld* World)
 	{
 		if (World != nullptr && World->IsGameWorld())
 		{
@@ -63,7 +63,7 @@ namespace
 			Output.Log(TEXT("usage: scct.Drill vision-cancelling|spy-grab"));
 			return;
 		}
-		UWorld* Game = GameWorld(World);
+		UWorld* Game = DrillGameWorld(World);
 		if (Game == nullptr || !UScctDrillSubsystem::Launch(Game, Args[0]))
 		{
 			Output.Log(TEXT("drill: not in a game"));
@@ -74,7 +74,7 @@ namespace
 
 	void DrillActionCommand(const TArray<FString>& Args, UWorld* World, FOutputDevice& Output)
 	{
-		UWorld* Game = GameWorld(World);
+		UWorld* Game = DrillGameWorld(World);
 		UScctDrillSubsystem* Drill = Game != nullptr ? Game->GetSubsystem<UScctDrillSubsystem>() : nullptr;
 		if (Args.Num() != 1)
 		{

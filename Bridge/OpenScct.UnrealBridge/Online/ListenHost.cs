@@ -162,8 +162,8 @@ public sealed class ListenHost : IDisposable
                 Password = string.IsNullOrEmpty(request.Password) ? null : request.Password,
                 Setup = request.Setup,
                 Maps = maps,
-                // Unreal does not download maps from SCCT-Maps (yet): no map source is told to the players.
-                MapSource = null,
+                // Where a hosted map downloaded from SCCT-Maps came from, told to the players with the setup.
+                MapSource = MapSources.SourceOf,
                 Classes = classes,
                 HostKey = key,
                 Bots = OpenScct.Bots.OnlineServerBots.Factory(botNavigation),
