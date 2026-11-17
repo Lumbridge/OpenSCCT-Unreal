@@ -1,6 +1,7 @@
 #include "Hud/ScctHudElements.h"
 
 #include "Hud/ScctHudStyle.h"
+#include "Hud/ScctVisorEffects.h"
 
 // The blocks about the player: status, equipment, prompt, crosshair, scope and the washes over the picture.
 
@@ -26,7 +27,7 @@ namespace
 	}
 
 	/** Corner brackets just inside the edge of the picture: the frame of a vision mode or a gadget's camera. */
-	void Brackets(FScctHudPainter& Painter, float Inset, float Length, const FLinearColor& Colour)
+	void PlayerBrackets(FScctHudPainter& Painter, float Inset, float Length, const FLinearColor& Colour)
 	{
 		const FVector2f Size = Painter.Size();
 		const float Left = Inset, Top = Inset, Right = Size.X - Inset, Bottom = Size.Y - Inset;
@@ -59,6 +60,7 @@ bool ScctHudElements::ShowsPlayerHud(const FScctHudModel& Model)
 	return Model.bHasState
 		&& (Model.State.Flags & EScctHudFlags::HasPawn) != 0
 		&& (Model.State.Flags & (EScctHudFlags::HideHud | EScctHudFlags::Spectating | EScctHudFlags::GameEnded)) == 0
+		&& !ScctVisorEffects::IsHudShutDown(Model) // an EMP keeps the merc's HUD down for 12 s
 		&& Model.State.GadgetView == 0
 		// The spy's binocular page replaces his HUD, as P_BinocularsATT replaces P_HudATT in the original.
 		&& Model.State.BinocularMode != 1;
@@ -91,6 +93,13 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 	const FVector2f Size = Painter.Size();
 	const FBox2f Whole(FVector2f::ZeroVector, Size);
 
+	// The flash-bang after-image: the picture as it was at the flash, burnt in over the live one and fading
+	// with RemanenceBlendFactor. It belongs to the picture, so it goes under every wash.
+	if (Model.AfterImage != nullptr && Model.AfterImageAlpha > 0.0f)
+	{
+		Painter.Image(Whole, *Model.AfterImage, FLinearColor(1.0f, 1.0f, 1.0f, Model.AfterImageAlpha));
+	}
+
 	// The simulation's own washes: the value is an alpha of 0 to 255.
 	for (int32 Slot = 0; Slot < ScctHudSfxSlots; ++Slot)
 	{
@@ -107,10 +116,22 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 		case EScctHudSfx::Red:
 			EdgeWash(Painter, Danger(), Alpha * 0.6f);
 			break;
+		case EScctHudSfx::Flash:
+			// The slot drives the after-image above; its white-out is painted over the whole HUD
+			// (PaintFlashWhiteOut), as the merc page's Flash covers the page.
+			break;
+		case EScctHudSfx::CrossEye:
+		case EScctHudSfx::Smoke:
+			// Gas and smoke paint nothing on the HUD: the original's ProcessSFX only sets CrossEyedFactor from them,
+			// and the picture itself is doubled (UScctScreenEffectsSubsystem's double vision).
+			break;
 		default:
 			break;
 		}
 	}
+
+	// The merc's visor: EMP shutdown, perturbation, foam, droplets, the sticky shocker's arcs.
+	ScctVisorEffects::Paint(Painter, Model);
 
 	if ((State.EffectFlags & EScctHudEffectFlags::SleepScreen) != 0 && State.SleepingTextId != 0)
 	{
@@ -141,7 +162,7 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 	const FLinearColor Accent = ScctHudStyle::Accent(State.Side);
 	if (Model.VisionShown > 0.01f)
 	{
-		Brackets(Painter, 16.0f, 22.0f, Fade(Accent, 0.55f * Model.VisionShown));
+		PlayerBrackets(Painter, 16.0f, 22.0f, Fade(Accent, 0.55f * Model.VisionShown));
 	}
 }
 

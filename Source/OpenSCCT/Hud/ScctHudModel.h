@@ -69,6 +69,14 @@ struct FScctHudMarker
 	bool bInFront = false;
 };
 
+/** A teammate's name placed over his head for this frame (ToggleTeammateNames). */
+struct FScctHudNameLabel
+{
+	FString Name;
+	FVector2f Screen = FVector2f::ZeroVector; // in the full-screen layer's units: where the bottom of the name goes
+	float Metres = 0.0f;                      // from the local player
+};
+
 /**
  * Everything the HUD draws from: the bridge's snapshot of the last simulation tick, the messages still on screen
  * and the values that are in motion (a number easing to its new value, a pulse fading out). The HUD subsystem
@@ -90,6 +98,8 @@ public:
 	TArray<FScctHudScoreRow> Scores;
 	TArray<FScctHudMarker> Markers;
 
+	/** The names over the local player's teammates, drawn through walls; empty while the player has them off. */
+	TArray<FScctHudNameLabel> NameLabels;
 	/** The sticky cam menu (a spy) or the mine menu (a merc) while it is open; empty otherwise. */
 	TArray<FScctHudMenuLine> MenuLines;
 
@@ -192,6 +202,19 @@ public:
 	float ScoreboardShown = 0.0f; // 0..1
 	float EndAge = -1.0f;         // seconds since the round ended, negative before
 	bool bScoreboardHeld = false;
+
+	/** The mission status page (DisplaySessionStatus): the scoreboard with the objective list, open until closed. */
+	bool bStatusPage = false;
+	float StatusShown = 0.0f;     // 0..1
+
+	/** The chat's composer is open (UScctChatSubsystem): the log above it stays readable and is not faded. */
+	bool bChatOpen = false;
+	/** The flash-bang after-image: the frame frozen at the flash and how much of it covers the picture (UScctScreenEffectsSubsystem fills both). */
+	const struct FSlateBrush* AfterImage = nullptr;
+	float AfterImageAlpha = 0.0f;
+
+	/** The merc visor effects' latches (UScctScreenEffectsSubsystem owns them; Hud/ScctVisorEffects reads them). */
+	const struct FScctVisorState* Visor = nullptr;
 
 	/** Unattended look check only (-ScctHudCommands "PreviewEnd"): shows the end banner as if this team had won; -1 when off. */
 	int32 PreviewWinner = -1;

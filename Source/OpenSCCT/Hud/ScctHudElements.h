@@ -32,11 +32,18 @@ namespace ScctHudElements
 	 */
 	void PaintTeamPings(FScctHudPainter& Painter, const FScctHudModel& Model);
 
+	/** The names over the local player's teammates (ToggleTeammateNames), drawn through walls. */
+	void PaintTeammateNames(FScctHudPainter& Painter, const FScctHudModel& Model);
+
 	/** The crosshair with its spread and hit confirmation, what the laser holds, noise and hit arcs around it. */
 	void PaintCrosshair(FScctHudPainter& Painter, const FScctHudModel& Model);
 
 	/** The merc's rifle scope (BinocularMode 2); the spy's binoculars have their own page below. */
 	void PaintScope(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	// --- Blinding layer, above everything ------------------------------------------------------------------
+	/** The flash-bang white-out (Hud/ScctHudElementsFlash.cpp). */
+	void PaintFlashWhiteOut(FScctHudPainter& Painter, const FScctHudModel& Model);
 
 	/**
 	 * The spy's binocular page (BinocularMode 1), which replaces his HUD: the content's P_BinocularsATT (goggle frame,
@@ -127,7 +134,7 @@ namespace ScctHudElements
 	/** The map's name as the round starts, and who won as it ends. */
 	void PaintBanner(FScctHudPainter& Painter, const FScctHudModel& Model);
 
-	/** The scoreboard, while held. */
+	/** The scoreboard, while held; with the objective list under it as the mission status page (DisplaySessionStatus). */
 	void PaintScoreboard(FScctHudPainter& Painter, const FScctHudModel& Model);
 
 	// --- Shared by the elements ----------------------------------------------------------------------------

@@ -2,12 +2,24 @@
 
 #include "CoreMinimal.h"
 #include "OpenSCCT.h"
+#include "Runtime/ScctAudioCheckApi.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctEquipmentApi.h"
 #include "Runtime/ScctEventsApi.h"
+#include "Runtime/ScctHostApi.h"
+#include "Runtime/ScctHubApi.h"
+#include "Runtime/ScctHubSocialApi.h"
 #include "Runtime/ScctHudApi.h"
+#include "Runtime/ScctMenuApi.h"
+#include "Runtime/ScctMarkSurfaceApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Runtime/ScctPlayApi.h"
+#include "Runtime/ScctProjectionsApi.h"
+#include "Runtime/ScctVisionApi.h"
+#include "Runtime/ScctVoiceApi.h"
 #include "Runtime/ScctWorldApi.h"
+#include "Test/ScctGrabAreaApi.h"
+#include "Test/ScctLessonApi.h"
 
 // The bridge's feature tables by their C++ type: which bridge class hands each one over and which version the
 // header here mirrors. A feature subsystem asks for its table like this, at any time and as often as it likes
@@ -28,12 +40,24 @@ struct TScctFeatureInfo;
 		static constexpr int32 Version = VersionConstant; \
 	}
 
+SCCT_FEATURE_TABLE(FScctAudioCheckApi, "AudioCheckExports", ScctAudioCheckApiVersion);
 SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
 SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
+SCCT_FEATURE_TABLE(FScctHostApi, "HostExports", ScctHostApiVersion);
+SCCT_FEATURE_TABLE(FScctHubApi, "HubExports", ScctHubApiVersion);
+SCCT_FEATURE_TABLE(FScctHubSocialApi, "HubSocialExports", ScctHubSocialApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
+SCCT_FEATURE_TABLE(FScctMenuApi, "MenuExports", ScctMenuApiVersion);
+SCCT_FEATURE_TABLE(FScctMarkSurfaceApi, "MarkSurfaceExports", ScctMarkSurfaceApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
+SCCT_FEATURE_TABLE(FScctPlayApi, "PlayExports", ScctPlayApiVersion);
+SCCT_FEATURE_TABLE(FScctProjectionsApi, "ProjectionExports", ScctProjectionsApiVersion);
+SCCT_FEATURE_TABLE(FScctVisionApi, "VisionExports", ScctVisionApiVersion);
+SCCT_FEATURE_TABLE(FScctVoiceApi, "VoiceExports", ScctVoiceApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);
+SCCT_FEATURE_TABLE(FScctGrabAreaApi, "GrabAreaExports", ScctGrabAreaApiVersion);
+SCCT_FEATURE_TABLE(FScctLessonApi, "LessonExports", ScctLessonApiVersion);
 
 #undef SCCT_FEATURE_TABLE
 

@@ -80,6 +80,15 @@ void FScctHudPainter::Fill(const FBox2f& Box, const FLinearColor& Colour, float 
 	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Box), &Brush, ESlateDrawEffect::None, ScctHudStyle::Fade(Colour, Opacity));
 }
 
+void FScctHudPainter::Image(const FBox2f& Box, const FSlateBrush& Brush, const FLinearColor& Colour)
+{
+	if (Box.GetSize().GetMin() <= 0.0f)
+	{
+		return;
+	}
+	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Box), &Brush, ESlateDrawEffect::IgnoreTextureAlpha, ScctHudStyle::Fade(Colour, Opacity));
+}
+
 void FScctHudPainter::Gradient(const FBox2f& Box, const FLinearColor& From, const FLinearColor& To, bool bVertical, float Radius)
 {
 	if (Box.GetSize().GetMin() <= 0.0f)

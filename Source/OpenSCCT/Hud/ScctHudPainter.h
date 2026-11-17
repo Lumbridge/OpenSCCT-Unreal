@@ -42,6 +42,9 @@ public:
 	/** A filled box, with rounded corners and an outline when asked. */
 	void Fill(const FBox2f& Box, const FLinearColor& Colour, float Radius = 0.0f, const FLinearColor& Outline = FLinearColor::Transparent, float OutlineWidth = 0.0f);
 
+	/** A picture stretched over the box, tinted by the colour (its alpha fades it). The texture's own alpha is not used: a copied frame has none worth reading. */
+	void Image(const FBox2f& Box, const struct FSlateBrush& Brush, const FLinearColor& Colour = FLinearColor::White);
+
 	/** A box that runs from one colour to another, left to right or top to bottom. */
 	void Gradient(const FBox2f& Box, const FLinearColor& From, const FLinearColor& To, bool bVertical, float Radius = 0.0f);
 

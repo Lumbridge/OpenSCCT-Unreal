@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-Rebuilds the goggles' post-process materials (night, thermal, motion tracking, EMF) headless: no editor window.
+Rebuilds the goggles' post-process materials (night, thermal, motion tracking, EMF) and the gas/smoke double
+vision headless: no editor window.
 
 .DESCRIPTION
 Runs Tools\Materials\build_vision_materials.py in the editor's Python and writes
@@ -17,5 +18,5 @@ $ErrorActionPreference = 'Stop'
 $project = (Resolve-Path "$PSScriptRoot\..\..").Path
 
 . "$PSScriptRoot\..\EditorScript.ps1"
-Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'build-vision-materials' -Script (Fwd "$PSScriptRoot\build_vision_materials.py") -Show 'SCCT-VISION|Error:.*M_ScctVision' | Out-Null
+Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'build-vision-materials' -Script (Fwd "$PSScriptRoot\build_vision_materials.py") -Show 'SCCT-VISION|Error:.*M_Scct(Vision|DoubleVision)' | Out-Null
 Exit-ScctScripts

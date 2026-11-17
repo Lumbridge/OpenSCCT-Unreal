@@ -1,6 +1,8 @@
 #include "OpenSCCT.h"
 
+#include "Engine/Engine.h"
 #include "HAL/PlatformMisc.h"
+#include "Misc/CoreDelegates.h"
 #include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Parse.h"
@@ -22,6 +24,39 @@ namespace
 	// than the header here would write past it. They are fetched into a buffer with this much room after the
 	// table, the version is checked there, and only then is the table copied out.
 	constexpr int32 FeatureTableSlack = 4096;
+}
+
+namespace
+{
+	/**
+	 * A development build of the engine writes its own notices over the game's picture: "Preparing Shaders (120)",
+	 * "Preparing Textures", the texture streaming pool being over budget, the renderer's warnings. They are for
+	 * the people who build a level, and the log has every one of them; the game's picture is the player's. The
+	 * engine draws them all in one block (UEngine::DrawMapWarnings), which this switches off. The editor keeps
+	 * them. Messages the game puts on the screen itself (a match that could not start) are not part of that block.
+	 */
+	void HideDevelopmentNotices()
+	{
+		if (GEngine != nullptr && !GIsEditor)
+		{
+			GEngine->bSuppressMapWarnings = true;
+		}
+	}
+}
+
+void FOpenSCCTModule::StartupModule()
+{
+	FDefaultGameModuleImpl::StartupModule();
+
+	// The game module is loaded before the engine object exists.
+	if (GEngine != nullptr)
+	{
+		HideDevelopmentNotices();
+	}
+	else
+	{
+		FCoreDelegates::GetOnPostEngineInit().AddStatic(&HideDevelopmentNotices);
+	}
 }
 
 FOpenSCCTModule& FOpenSCCTModule::Get()

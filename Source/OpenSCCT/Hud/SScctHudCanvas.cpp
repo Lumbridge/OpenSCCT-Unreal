@@ -26,10 +26,15 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 
 	using namespace ScctHudElements;
 	FScctHudPainter Painter(OutDrawElements, AllottedGeometry, LayerId);
-	if (Layer == ELayer::FullScreen)
+	if (Layer == ELayer::Blinding)
+	{
+		PaintFlashWhiteOut(Painter, *Model);
+	}
+	else if (Layer == ELayer::FullScreen)
 	{
 		PaintScreenEffects(Painter, *Model);
 		PaintMarkers(Painter, *Model);
+		PaintTeammateNames(Painter, *Model);
 		PaintScope(Painter, *Model);
 		PaintSpyBinoculars(Painter, *Model);
 		PaintCameraPages(Painter, *Model);

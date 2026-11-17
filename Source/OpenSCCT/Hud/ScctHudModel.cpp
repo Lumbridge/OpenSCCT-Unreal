@@ -159,6 +159,13 @@ void FScctHudModel::AddMessage(const FScctHudMessage& Message)
 		return;
 	}
 
+	// A chat line comes with who said it; the log draws the name in his side's colour.
+	if (Message.Category == EScctHudMessageCategory::Chat || Message.Category == EScctHudMessageCategory::TeamChat)
+	{
+		Line.Actor = Text(Message.ActorNameId);
+		Line.ActorTeam = Message.ActorTeam;
+	}
+
 	// A line about a place that has no name starts with the original's bare separator (" : Objectives locked").
 	while (Line.Text.RemoveFromStart(TEXT(":")))
 	{
@@ -271,6 +278,7 @@ void FScctHudModel::Advance(float DeltaSeconds)
 	VisionShown = Ease(VisionShown, bVision ? 1.0f : 0.0f, DeltaSeconds, 10.0f);
 
 	ScoreboardShown = Ease(ScoreboardShown, bScoreboardHeld ? 1.0f : 0.0f, DeltaSeconds, 16.0f);
+	StatusShown = Ease(StatusShown, bStatusPage ? 1.0f : 0.0f, DeltaSeconds, 16.0f);
 
 	if (PreviewWinner >= 0)
 	{
