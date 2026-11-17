@@ -696,7 +696,7 @@ namespace
 			{
 				Failures.Add(FString::Printf(TEXT("%.1f fps with the cap at %d: not above 60 Hz, nothing to judge"), Times.Fps(), Cap));
 			}
-			const auto Check = [&Failures](const TCHAR* What, const FScctMotionStats& Stats, double JitterLimit)
+			const auto CheckSmoothMotion = [&Failures](const TCHAR* What, const FScctMotionStats& Stats, double JitterLimit)
 			{
 				if (Stats.Moving < 30)
 				{
@@ -711,11 +711,11 @@ namespace
 					Failures.Add(FString::Printf(TEXT("%s jitter p99 %.3f over %.2f"), What, Stats.P99Jitter, JitterLimit));
 				}
 			};
-			Check(TEXT("camera turn"), TurnStats, TurnJitterLimit);
-			Check(TEXT("camera move"), CameraMove, MoveJitterLimit);
-			Check(TEXT("body"), Body, MoveJitterLimit);
+			CheckSmoothMotion(TEXT("camera turn"), TurnStats, TurnJitterLimit);
+			CheckSmoothMotion(TEXT("camera move"), CameraMove, MoveJitterLimit);
+			CheckSmoothMotion(TEXT("body"), Body, MoveJitterLimit);
 			// The view model's clips play at their own pace (a walk bob speeds up and slows down): only that it advances.
-			Check(TEXT("view model"), ViewModel, 0.0);
+			CheckSmoothMotion(TEXT("view model"), ViewModel, 0.0);
 
 			if (!bScoped)
 			{
