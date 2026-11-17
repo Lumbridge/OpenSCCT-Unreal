@@ -22,7 +22,7 @@ namespace OpenScct.UnrealBridge.Events;
 /// </para>
 /// Everything here runs on Unreal's game thread, which is the thread the client world ticks on.
 /// </summary>
-public sealed class EventsFeature : ISimEventSink
+public sealed class EventsFeature : ISimEventSink, IDisposable
 {
     private const float RotatorToDegrees = 360f / 65536f;
 
@@ -39,6 +39,7 @@ public sealed class EventsFeature : ISimEventSink
     private readonly AmbientSounds? _ambient;
     private readonly EffectTracker _effects;
     private readonly BridgeSession _bridge;
+    private bool _ended;
     private long _lateTick = -1;
     private int _lateTaken;
 
@@ -117,7 +118,32 @@ public sealed class EventsFeature : ISimEventSink
     public void OnSimEvents(long tick, ReadOnlySpan<SimEvent> events)
     {
         _next?.OnSimEvents(tick, events);
-        Take(tick, events, late: false);
+        if (!_ended)
+        {
+            Take(tick, events, late: false);
+        }
+    }
+
+    /// <summary>
+    /// The session ended (BridgeSession disposes its features). A remote round's connection and world live on after
+    /// the round, so the feature takes itself off them: the tick hooks go and the world's event sink is put back as
+    /// it was (when another sink was chained over this one since, this one only passes events on from now).
+    /// </summary>
+    public void Dispose()
+    {
+        if (_ended)
+        {
+            return;
+        }
+
+        _ended = true;
+        ClientSession client = _session.Client;
+        client.BeforeWorldTick -= TakeLate;
+        _bridge.Ticked -= AfterTick;
+        if (ReferenceEquals(client.World.EventSink, this))
+        {
+            client.World.EventSink = _next;
+        }
     }
 
     /// <summary>PlayAudioRouter.TakeLate: the events raised since the last tick; they are presented with the next one.</summary>

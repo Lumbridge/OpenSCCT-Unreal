@@ -62,15 +62,8 @@ public sealed class OnlineBridge : IDisposable
 
     private static OnlineBridge? s_instance;
 
-    /// <summary>
-    /// Hands a round's play session to the bridge's main session slot, so the per-frame entries of the main table
-    /// (pawns, poses, view, input) and the other features read the online round. Exports sets it to wrap the play
-    /// session in a BridgeSession and make it the current one. This class keeps ticking the round either way.
-    /// </summary>
-    internal static Func<PlaySession, BridgeSession>? AdoptRound { get; set; }
-
-    /// <summary>Takes the session <see cref="AdoptRound"/> returned out of the main slot and disposes it.</summary>
-    internal static Action<BridgeSession>? ReleaseRound { get; set; }
+    /// <summary>The online bridge if one was made, without making one (the module's shutdown asks).</summary>
+    internal static OnlineBridge? Existing => s_instance;
 
     /// <summary>The player's visit, or null when not online. It stays after a failure so its error can be read.</summary>
     public OnlineClient? Client { get; private set; }
@@ -449,7 +442,7 @@ public sealed class OnlineBridge : IDisposable
         // start behind it and the driver would see time go backwards). Also when the main session slot adopted it:
         // the visit owns the connection, and a main table that stopped calling Update (it failed) must not starve
         // it until the server times the player out. The ticks run by the clock, so the main table's own Update
-        // right after this finds none due and only brings the frame's blend factor up to date.
+        // right after this finds none due: it brings the frame's blend factor up to date and reports the ticks run here.
         if (Round is { IsStopped: false } round)
         {
             round.Update();
@@ -511,7 +504,9 @@ public sealed class OnlineBridge : IDisposable
         client.SessionTickedElsewhere = true;
         Round = round;
         _loadReported = false;
-        _adopted = AdoptRound?.Invoke(round);
+        // The round goes into the bridge's main session slot, so the per-frame entries of the main table (pawns,
+        // poses, view, input) and the features read it as they read a local match. This class keeps ticking it.
+        _adopted = Exports.AdoptRemote(round);
         Touch();
     }
 
@@ -533,7 +528,7 @@ public sealed class OnlineBridge : IDisposable
             if (_adopted is { } adopted)
             {
                 _adopted = null;
-                ReleaseRound?.Invoke(adopted);
+                Exports.Release(adopted);
             }
 
             // A remote play session leaves the connection to the visit; disposing twice is harmless.

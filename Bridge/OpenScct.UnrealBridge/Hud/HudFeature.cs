@@ -71,7 +71,7 @@ public sealed class HudConsoleLines
 /// point, once a tick on Unreal's game thread.
 /// </para>
 /// </summary>
-public sealed class HudFeature
+public sealed class HudFeature : IDisposable
 {
     public const int ApiVersion = 2;
 
@@ -93,6 +93,8 @@ public sealed class HudFeature
     private readonly List<string> _seenQueue = new();
     private string _seenReticle = "";
 
+    private NetFunctionHandler? _fallback, _previousFallback;
+    private bool _ended;
     private SPlayerController? _lastController;
     private SHud? _lastHud;
     private float _aspect = 16f / 9f;
@@ -268,16 +270,42 @@ public sealed class HudFeature
     private void InstallReceiver(ClientSession client)
     {
         NetFunctionHandler? previous = client.Driver.Functions.Fallback;
-        client.Driver.Functions.Fallback = (self, function, args, from) =>
+        _previousFallback = previous;
+        _fallback = (self, function, args, from) =>
         {
-            if (!client.Driver.IsServer && self is PlayerController pc && Handle(pc, NetGameHost.ToGameCall(function, args)))
+            if (!_ended && !client.Driver.IsServer && self is PlayerController pc && Handle(pc, NetGameHost.ToGameCall(function, args)))
             {
                 return;
             }
 
             previous?.Invoke(self, function, args, from);
         };
+        client.Driver.Functions.Fallback = _fallback;
         client.ChatReceived += OnChat;
+    }
+
+    /// <summary>
+    /// The session ended (BridgeSession disposes its features). A remote round's connection lives on after its
+    /// round, through the results and to the next map, so the HUD takes itself off it: the tick and chat hooks go,
+    /// and the received-call fallback is put back as it was (when another wrapper was put over this one since, this
+    /// one only passes calls on from now).
+    /// </summary>
+    public void Dispose()
+    {
+        if (_ended)
+        {
+            return;
+        }
+
+        _ended = true;
+        ClientSession client = _session.Client;
+        client.BeforeWorldTick -= OnBeforeWorldTick;
+        client.ChatReceived -= OnChat;
+        _bridge.Ticked -= OnTicked;
+        if (ReferenceEquals(client.Driver.Functions.Fallback, _fallback))
+        {
+            client.Driver.Functions.Fallback = _previousFallback;
+        }
     }
 
     /// <summary>A call for <paramref name="pc"/>; false when it is not a HUD call.</summary>

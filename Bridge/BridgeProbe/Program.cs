@@ -12,7 +12,7 @@ double seconds = args.Length > 2 ? double.Parse(args[2], System.Globalization.Cu
 
 BridgeSession.Configure(content);
 var load = Stopwatch.StartNew();
-using BridgeSession session = BridgeSession.StartLocal(map, "Story", merc: false, bots: 3);
+BridgeSession session = BridgeSession.StartLocal(map, "Story", merc: false, bots: 3);
 Console.WriteLine($"{map} loaded in {load.Elapsed.TotalSeconds:F1} s");
 
 for (int kind = 0; kind < 2; kind++)
@@ -137,7 +137,10 @@ while (run.Elapsed.TotalSeconds < seconds)
     Thread.Sleep(4);
 }
 
-return 0;
+session.Dispose();
+bool tables = Tables.Run(content, map);
+Console.WriteLine(tables ? "PROBE OK" : "PROBE FAILED");
+return tables ? 0 : 1;
 
 static Quaternion Rotation(BridgeBone b) => new(b.Qx, b.Qy, b.Qz, b.Qw);
 
@@ -187,4 +190,136 @@ static void CheckSampler(GlbCharacter character)
     }
 
     Console.WriteLine($"   sampler check: {checkedClips} clips at time 0, {withTracks} bones on their first keys, {atRest} at rest, worst difference {worst:E1} (first use of the clips took {load.Elapsed.TotalMilliseconds:F1} ms)");
+}
+
+/// <summary>
+/// The main table as Unreal uses it (unmanaged function pointers, raw buffers): the safe hand-over, a start that
+/// fails and does not stick, a local match with the start options, the session id and the stops that honour it,
+/// teams and the hidden local body, and the shutdown stop.
+/// </summary>
+internal static unsafe class Tables
+{
+    public static bool Run(string content, string map)
+    {
+        Console.WriteLine();
+        Console.WriteLine("==== the main table through its exported entries");
+        (string Name, int Size, int Expected)[] sizes =
+        [
+            ("BridgePawn", sizeof(BridgePawn), 64),
+            ("BridgeBoneInfo", sizeof(BridgeBoneInfo), 132),
+            ("BridgeBone", sizeof(BridgeBone), 40),
+            ("BridgeView", sizeof(BridgeView), 40),
+            ("BridgeInput", sizeof(BridgeInput), 32),
+            ("BridgeSessionInfo", sizeof(BridgeSessionInfo), 80),
+            ("BridgeStartOptions", sizeof(BridgeStartOptions), 244),
+            ("BridgeApi", sizeof(BridgeApi), 8 + 17 * sizeof(void*)),
+        ];
+        bool ok = true;
+        foreach ((string name, int size, int expected) in sizes)
+        {
+            ok &= size == expected;
+            Console.WriteLine($"layout: {name} {size} bytes{(size == expected ? string.Empty : $" BUT ScctBridgeApi.h ASSERTS {expected}")}");
+        }
+
+        int version = ((delegate* unmanaged<int>)&Exports.GetApiVersion)();
+        BridgeApi api = default;
+        int filled = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApiSized)(&api, sizeof(BridgeApi));
+        Console.WriteLine($"GetApiVersion {version}, GetApi {filled}, table version {api.Version}");
+        ok &= version == BridgeSession.ApiVersion && filled == version && api.Version == version && api.Shutdown != null;
+
+        char* error = stackalloc char[2048];
+        fixed (char* c = content, missing = "NoSuchMap", mode = "Story")
+        {
+            // A start that fails: the state is Failed with a reason, and the next start is judged on its own.
+            int failedStart = api.StartLocal(missing, mode, 0, 0);
+            int failedState = api.GetState();
+            api.LastError(error, 2048);
+            string reason = new string(error);
+            Console.WriteLine($"a start on a map that does not exist: returned {failedStart}, state {(BridgeState)failedState}, session {api.GetSession(null)}, error '{reason[..Math.Min(reason.Length, 90)].Replace("\r", string.Empty).Replace("\n", " ")}...'");
+            ok &= failedStart == 0 && failedState == (int)BridgeState.Failed && reason.Length > 0;
+            api.Stop();
+            ok &= api.GetState() == (int)BridgeState.Idle;
+            int configured = api.Configure(c);
+            Console.WriteLine($"after Stop: state {(BridgeState)api.GetState()}; Configure again: {configured}");
+            ok &= configured == 1;
+        }
+
+        BridgeStartOptions options = default;
+        options.Size = sizeof(BridgeStartOptions);
+        options.Merc = 1;
+        options.Bots = 3;
+        options.Flags = BridgeStartFlags.Sidearms;
+        map.AsSpan(0, Math.Min(map.Length, BridgeStartOptions.MapCapacity - 1)).CopyTo(new Span<char>(options.Map, BridgeStartOptions.MapCapacity));
+        "ProbeMerc".AsSpan().CopyTo(new Span<char>(options.PlayerName, BridgeStartOptions.NameCapacity));
+        int id = api.StartLocalEx(&options);
+        BridgeSessionInfo info;
+        int asked = api.GetSession(&info);
+        api.LastError(error, 2048);
+        Console.WriteLine($"StartLocalEx (merc, 3 bots, sidearms): session {id}; GetSession {asked}: state {(BridgeState)info.State}, map '{new string(info.Map)}', remote {(info.Flags & BridgeSessionFlags.Remote) != 0}, merc {(info.Flags & BridgeSessionFlags.Merc) != 0}{(id == 0 ? ", error: " + new string(error) : string.Empty)}");
+        ok &= id != 0 && asked == id && info.State == (int)BridgeState.Playing && (info.Flags & BridgeSessionFlags.Remote) == 0 &&
+            (info.Flags & BridgeSessionFlags.Merc) != 0 && string.Equals(new string(info.Map), map, StringComparison.OrdinalIgnoreCase);
+        if (id == 0)
+        {
+            return false;
+        }
+
+        BridgePawn* pawns = stackalloc BridgePawn[64];
+        int ticks = 0, frames = 0, count = 0, hidden = 0, flagged = 0, wrongTeams = 0, spies = 0, mercs = 0, staleUpdates = 0;
+        float worstAngle = 0f;
+        BridgeView view = default;
+        var run = Stopwatch.StartNew();
+        while (run.Elapsed.TotalSeconds < 6)
+        {
+            // A world that holds another session's id drives nothing.
+            staleUpdates += api.UpdateSession(id + 1000) == -1 ? 0 : 1;
+            ticks += api.UpdateSession(id);
+            frames++;
+            count = api.GetPawns(pawns, 64);
+            api.GetView(&view);
+            hidden += view.HideLocalBody;
+            worstAngle = MathF.Max(worstAngle, MathF.Max(MathF.Abs(view.Yaw), MathF.Max(MathF.Abs(view.Pitch), MathF.Abs(view.Roll))));
+            int frameSpies = 0, frameMercs = 0;
+            for (int i = 0; i < count; i++)
+            {
+                BridgePawn p = pawns[i];
+                wrongTeams += p.Team == p.Kind ? 0 : 1;
+                frameSpies += p.Kind == 0 ? 1 : 0;
+                frameMercs += p.Kind == 1 ? 1 : 0;
+                worstAngle = MathF.Max(worstAngle, MathF.Abs(p.Yaw));
+                bool first = (p.Flags & BridgePawnFlags.FirstPerson) != 0;
+                flagged += first ? 1 : 0;
+                // The flag is the view's rule on the local pawn, and on no other.
+                ok &= first == ((p.Flags & BridgePawnFlags.Local) != 0 && view.HideLocalBody != 0);
+            }
+
+            spies = Math.Max(spies, frameSpies);
+            mercs = Math.Max(mercs, frameMercs);
+            Thread.Sleep(4);
+        }
+
+        api.GetSession(&info);
+        Console.WriteLine($"6 s through UpdateSession({id}): {ticks} ticks over {frames} frames (GetSession says {info.Ticks}), {count} pawns (at most {spies} spies and {mercs} mercs at once), pawns whose team is not their side's: {wrongTeams}, largest angle {worstAngle:F0} deg");
+        Console.WriteLine($"   the local merc's body hidden in {hidden} of {frames} frames (first-person flag on a pawn in {flagged}); updates taken for another session's id: {staleUpdates}");
+        ok &= ticks > 300 && Math.Abs(info.Ticks - ticks) <= 2 && spies == 2 && mercs == 2 && wrongTeams == 0 && worstAngle <= 180.01f &&
+            hidden > 0 && flagged == hidden && staleUpdates == 0;
+
+        int stale = api.StopSession(id + 1000);
+        bool alive = api.GetSession(null) == id;
+        int own = api.StopSession(id);
+        Console.WriteLine($"StopSession for another id: {stale}, session still playing {alive}; StopSession({id}): {own}, state {(BridgeState)api.GetState()}, session {api.GetSession(null)}");
+        ok &= stale == 0 && alive && own == 1 && api.GetState() == (int)BridgeState.Idle && api.GetSession(null) == 0;
+
+        // The module's shutdown with a match still running.
+        fixed (char* m = map, mode = "Story")
+        {
+            int again = api.StartLocal(m, mode, 0, 1);
+            int second = api.GetSession(null);
+            var stop = Stopwatch.StartNew();
+            int shut = api.Shutdown(5000);
+            Console.WriteLine($"a second match: StartLocal {again}, session {second} (a new id: {second != id && second != 0}); Shutdown: {shut} in {stop.Elapsed.TotalMilliseconds:F0} ms, state {(BridgeState)api.GetState()}, a second Shutdown: {api.Shutdown(5000)}");
+            ok &= again == 1 && second != 0 && second != id && shut == 1 && api.GetState() == (int)BridgeState.Idle;
+        }
+
+        return ok;
+    }
 }

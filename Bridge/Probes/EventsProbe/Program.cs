@@ -306,9 +306,9 @@ static unsafe int NativeTable(string content, string map, bool merc)
 {
     BridgeApi bridge = default;
     EventsApi api = default;
-    delegate* unmanaged<BridgeApi*, int> getBridge = &Exports.GetApi;
+    delegate* unmanaged<BridgeApi*, int, int> getBridge = &Exports.GetApiSized;
     delegate* unmanaged<EventsApi*, int> getEvents = &EventsExports.GetApi;
-    int bridgeVersion = getBridge(&bridge);
+    int bridgeVersion = getBridge(&bridge, sizeof(BridgeApi));
     int version = getEvents(&api);
     int nullTable = getEvents(null);
     Console.WriteLine();

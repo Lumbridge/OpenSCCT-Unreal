@@ -108,7 +108,11 @@ public sealed class EquipmentModel
             {
                 try
                 {
-                    model = new EquipmentModel(asset, path, GlbCharacter.Load(path), ReadSkeletonFrame(path));
+                    GlbCharacter character = GlbCharacter.Load(path);
+                    // A weapon file has a few dozen clips at most: their keys are read now, not in the frame of the
+                    // first shot, reload or draw.
+                    character.PreloadClips();
+                    model = new EquipmentModel(asset, path, character, character.SkeletonFrame);
                 }
                 catch (Exception e)
                 {
@@ -183,91 +187,6 @@ public sealed class EquipmentModel
 
         // Content outside the configured root (a map's own shared folder): the full path.
         return full.Replace('\\', '/');
-    }
-
-    /// <summary>
-    /// The transform of the nodes above the skeleton's root joint. The converter writes the game's own meshes with the
-    /// skeleton at the scene's top (identity here); OpenSCCT's own pistols keep theirs under a placed node
-    /// ("MercPistolFrame"), which <see cref="GlbCharacter"/> does not read. Only the nodes' rest transforms are
-    /// read: a clip that moves one of these nodes (the pistols' "Root") is not followed.
-    /// </summary>
-    private static Xform ReadSkeletonFrame(string path)
-    {
-        using FileStream file = File.OpenRead(path);
-        Span<byte> header = stackalloc byte[20];
-        file.ReadExactly(header);
-        if (BinaryPrimitives.ReadUInt32LittleEndian(header) != 0x46546C67 || BinaryPrimitives.ReadUInt32LittleEndian(header[16..]) != 0x4E4F534A)
-        {
-            throw new InvalidDataException($"{path}: not a glb with a JSON chunk first.");
-        }
-
-        byte[] json = new byte[BinaryPrimitives.ReadInt32LittleEndian(header[12..])];
-        file.ReadExactly(json);
-        using JsonDocument document = JsonDocument.Parse(json);
-        JsonElement root = document.RootElement;
-        var nodes = new List<JsonElement>();
-        foreach (JsonElement node in root.GetProperty("nodes").EnumerateArray())
-        {
-            nodes.Add(node);
-        }
-
-        var parent = new int[nodes.Count];
-        Array.Fill(parent, -1);
-        for (int n = 0; n < nodes.Count; n++)
-        {
-            if (nodes[n].TryGetProperty("children", out JsonElement children))
-            {
-                foreach (JsonElement child in children.EnumerateArray())
-                {
-                    parent[child.GetInt32()] = n;
-                }
-            }
-        }
-
-        var joints = new HashSet<int>();
-        int first = -1;
-        foreach (JsonElement joint in root.GetProperty("skins")[0].GetProperty("joints").EnumerateArray())
-        {
-            joints.Add(joint.GetInt32());
-            first = first < 0 ? joint.GetInt32() : first;
-        }
-
-        // Up from the first joint to the top of the skeleton, then on through the nodes that are not joints.
-        int at = first;
-        while (at >= 0 && parent[at] >= 0 && joints.Contains(parent[at]))
-        {
-            at = parent[at];
-        }
-
-        Xform frame = Xform.Identity;
-        for (int n = at < 0 ? -1 : parent[at]; n >= 0; n = parent[n])
-        {
-            frame = NodeTransform(nodes[n]) * frame;
-        }
-
-        return frame;
-    }
-
-    private static Xform NodeTransform(JsonElement node)
-    {
-        if (node.TryGetProperty("matrix", out JsonElement m))
-        {
-            // glTF matrices are column-major: three basis columns, then the translation.
-            return new Xform(
-                new Basis3(
-                    new Vector3(m[0].GetSingle(), m[1].GetSingle(), m[2].GetSingle()),
-                    new Vector3(m[4].GetSingle(), m[5].GetSingle(), m[6].GetSingle()),
-                    new Vector3(m[8].GetSingle(), m[9].GetSingle(), m[10].GetSingle())),
-                new Vector3(m[12].GetSingle(), m[13].GetSingle(), m[14].GetSingle()));
-        }
-
-        Vector3 position = node.TryGetProperty("translation", out JsonElement t)
-            ? new Vector3(t[0].GetSingle(), t[1].GetSingle(), t[2].GetSingle()) : Vector3.Zero;
-        Quaternion rotation = node.TryGetProperty("rotation", out JsonElement r)
-            ? Quaternion.Normalize(new Quaternion(r[0].GetSingle(), r[1].GetSingle(), r[2].GetSingle(), r[3].GetSingle())) : Quaternion.Identity;
-        Vector3 scale = node.TryGetProperty("scale", out JsonElement s)
-            ? new Vector3(s[0].GetSingle(), s[1].GetSingle(), s[2].GetSingle()) : Vector3.One;
-        return Xform.FromTrs(position, rotation, scale);
     }
 }
 
