@@ -45,6 +45,97 @@ EXPOSURE_BOUNDS = (0.08, 16.0)
 FLOAT1 = unreal.CustomMaterialOutputType.CMOT_FLOAT1
 FLOAT2 = unreal.CustomMaterialOutputType.CMOT_FLOAT2
 FLOAT3 = unreal.CustomMaterialOutputType.CMOT_FLOAT3
+FLOAT4 = unreal.CustomMaterialOutputType.CMOT_FLOAT4
+
+# The items a MaterialSequence can hold here; the stock maps' longest has 9 (ClarD's war monitors).
+SEQUENCE_SLOTS = 9
+
+# UV animation modes, in the W of the animation's second vector (import_map.py, uv_anim_vectors):
+# 1 panner (A.xy: UV per second), 2 oscillator, 3 rotator.
+UV_ANIM_PANNER, UV_ANIM_OSCILLATOR, UV_ANIM_ROTATOR = 1, 2, 3
+
+
+def uv_anim_code(uv, a, b, c, t):
+    """HLSL that moves `uv` as one UE2 texture modifier does at scene time `t`, after the Godot client's
+    svm_anim (game/Shaders/svm_world.gdshaderinc) and the original's GetMatrix of each:
+      panner      UTexPanner / UTexFriendlyPanner: the offset wraps, frac(t x speed).
+      oscillator  UTexOscillator, per axis with p = frac(t x rate): OT_Pan (0) offsets by amp sin(2 pi (p + phase)),
+                  OT_Stretch (1) scales by 1 + amp sin(2 pi (p + phase)), OT_StretchRepeat (2) by
+                  1 + amp sin(2 pi phase + p pi / 2), about the pivot (UOffset / USize, VOffset / VSize); OT_Jitter
+                  (3, random, no map uses it) stays still. A = (U amp, U rate, U type, U phase),
+                  B = (V amp, V rate, V type, mode), C = (V phase, 0, pivot U, pivot V).
+      rotator     UTexRotator, constantly rotating: A.x radians per second about the pivot C.zw (UOffset / USize,
+                  VOffset / VSize, the centre of a UE2 texture for its stock 64 or 128 offsets)."""
+    return (" { float mode_ = {b}.w;"
+            " if (mode_ > 2.5) {"
+            " float r_ = {a}.x * {t}; float2 d_ = {uv} - {c}.zw; float cs_ = cos(r_); float sn_ = sin(r_);"
+            " {uv} = {c}.zw + float2(d_.x * cs_ - d_.y * sn_, d_.x * sn_ + d_.y * cs_); }"
+            " else if (mode_ > 1.5) {"
+            " float2 p_ = frac(float2({a}.y, {b}.y) * {t}); float2 amp_ = float2({a}.x, {b}.x);"
+            " float2 kind_ = float2({a}.z, {b}.z); float2 ph_ = float2({a}.w, {c}.x);"
+            " float2 s_ = amp_ * sin(6.2831853 * (p_ + ph_));"
+            " float2 sr_ = amp_ * sin(6.2831853 * ph_ + p_ * 1.5707964);"
+            " float2 st_ = ({uv} - {c}.zw) * (1.0 + lerp(s_, sr_, step(1.5, kind_))) + {c}.zw;"
+            " float2 pan_ = {uv} + s_;"
+            " {uv}.x = kind_.x > 2.5 ? {uv}.x : (kind_.x > 0.5 ? st_.x : pan_.x);"
+            " {uv}.y = kind_.y > 2.5 ? {uv}.y : (kind_.y > 0.5 ? st_.y : pan_.y); }"
+            " else if (mode_ > 0.5) { {uv} += frac({a}.xy * {t}); } }"
+            ).replace("{uv}", uv).replace("{a}", a).replace("{b}", b).replace("{c}", c).replace("{t}", t)
+
+
+# MaterialSequence.PreSetMaterial (Godot: MaterialSequenceClock.cs): the scene time runs through the items' times,
+# looping (or held on the last item); an item whose action is MSA_FadeToMaterial blends from the item before it
+# over its time, in the byte steps of the original's ConstantColor alpha; a paused sequence shows its first item.
+# Info = (count, total time, loop, paused); Tk / Fk the items' times and fade flags, four to a vector.
+# Returns (item faded from, item shown, blend).
+SEQUENCE_CLOCK_CODE = """
+float durs[12] = { T0.x, T0.y, T0.z, T0.w, T1.x, T1.y, T1.z, T1.w, T2.x, T2.y, T2.z, T2.w };
+float fades[12] = { F0.x, F0.y, F0.z, F0.w, F1.x, F1.y, F1.z, F1.w, F2.x, F2.y, F2.z, F2.w };
+int count = (int)clamp(Info.x, 1.0, %d.0);
+float total = max(Info.y, 1e-4);
+float t = Info.w > 0.5 ? 0.0 : (Info.z > 0.5 ? fmod(Time, total) : min(Time, total));
+float3 picked = float3(0.0, 0.0, 1.0);
+float start = 0.0;
+[loop] for (int i = 0; i < %d; i++)
+{
+    if (i >= count) break;
+    float d = max(durs[i], 0.0);
+    float e = start + d;
+    if (t >= start && (t < e || i == count - 1))
+    {
+        bool fade = fades[i] > 0.5 && d > 0.0 && t < e && Info.w < 0.5;
+        float blend = fade ? clamp(floor((t - start) / d * 255.0 + 0.5), 0.0, 255.0) / 255.0 : 1.0;
+        picked = float3(fade ? (float)((i + count - 1) %% count) : (float)i, (float)i, blend);
+        break;
+    }
+    start = e;
+}
+return picked;""" % (SEQUENCE_SLOTS, SEQUENCE_SLOTS)
+
+
+def sequence_colour(g, time):
+    """The colour of a MaterialSequence: each item is its own texture with its own modifier (AnimA/B/C, as
+    uv_anim_code) and AnimNext flipbook (SeqFlip = columns, rows, frames, fps), sampled with the material's own
+    sampling (so mip selection works on every kind of mesh), and the clock picks the two items to show and blends
+    them. The items' textures are SeqTex0..8 (white when unused)."""
+    clock = g.custom(SEQUENCE_CLOCK_CODE, FLOAT3, Time=time, Info=g.vector4("SeqInfo", (1, 0, 1, 0)),
+                     T0=g.vector4("SeqTimes0", (0, 0, 0, 0)), T1=g.vector4("SeqTimes1", (0, 0, 0, 0)),
+                     T2=g.vector4("SeqTimes2", (0, 0, 0, 0)), F0=g.vector4("SeqFades0", (0, 0, 0, 0)),
+                     F1=g.vector4("SeqFades1", (0, 0, 0, 0)), F2=g.vector4("SeqFades2", (0, 0, 0, 0)))
+    texcoord = g.node(unreal.MaterialExpressionTextureCoordinate)
+    samples = {}
+    for slot in range(SEQUENCE_SLOTS):
+        uv = g.custom("float2 uv = UV;" + uv_anim_code("uv", "A", "B", "C", "T") +
+                      " if (Flip.z > 1.5) {"
+                      " float frame = floor(fmod(T * Flip.w, Flip.z));"
+                      " uv = (frac(uv) + float2(fmod(frame, Flip.x), floor(frame / Flip.x))) / Flip.xy; }"
+                      " return uv;", FLOAT2, UV=texcoord, T=time,
+                      A=g.vector4("Seq%dAnimA" % slot, (0, 0, 0, 0)), B=g.vector4("Seq%dAnimB" % slot, (0, 0, 0, 0)),
+                      C=g.vector4("Seq%dAnimC" % slot, (0, 0, 0, 0)), Flip=g.vector4("Seq%dFlip" % slot, (1, 1, 1, 0)))
+        samples["S%d" % slot] = (g.texture("SeqTex%d" % slot, "/Engine/EngineResources/WhiteSquareTexture", uvs=uv), "RGBA")
+    pick = "float4 s[%d] = { %s }; int a = (int)(W.x + 0.5); int b = (int)(W.y + 0.5); return lerp(s[a], s[b], W.z);" % (
+        SEQUENCE_SLOTS, ", ".join("S%d" % slot for slot in range(SEQUENCE_SLOTS)))
+    return g.custom(pick, FLOAT4, W=clock, **samples)
 
 
 class Graph:
@@ -77,6 +168,10 @@ class Graph:
     def colour(self, name, default):
         return self.node(unreal.MaterialExpressionVectorParameter, parameter_name=name, default_value=unreal.LinearColor(*default))
 
+    def vector4(self, name, default):
+        """A vector parameter as all four of its channels (its plain output is only the colour's three)."""
+        return (self.colour(name, default), "RGBA")
+
     def texture(self, name, default, sampler=None, uvs=None):
         properties = {"parameter_name": name, "texture": unreal.load_asset(default)}
         if sampler is not None:
@@ -99,6 +194,16 @@ class Graph:
             node, output = source if isinstance(source, tuple) else (source, "")
             self.link(node, expression, name, output)
         return expression
+
+    def static_switch(self, name, when_on, when_off):
+        """A static switch parameter (off by default): an instance that turns it on compiles `when_on`, every other
+        instance `when_off` alone. Each is a node or (node, output name)."""
+        switch = self.node(unreal.MaterialExpressionStaticSwitchParameter, parameter_name=name, default_value=False)
+        for source, pins in ((when_on, ("True", "A")), (when_off, ("False", "B"))):
+            node, output = source if isinstance(source, tuple) else (source, "")
+            if not any(lib.connect_material_expressions(node, output, switch, pin) for pin in pins):
+                raise RuntimeError("could not connect static switch '%s' in %s" % (name, self.path))
+        return switch
 
     def in_the_picture(self, light, amount=None):
         """`light` as a brightness in the finished picture instead of in the scene: divided by the exposure the
@@ -163,18 +268,27 @@ def build_surface():
     material.set_editor_property("used_with_skeletal_mesh", True)
     material.set_editor_property("used_with_nanite", True)
 
-    # ---- the original texture, with the original's scrolling ("panner") where it had one
-    # and its flipbooks (caustics, rain): BaseColor is then the sheet of frames, played at the original's rate.
-    uv = g.custom("float2 uv = UV + T * float2(U, V);"
+    # ---- the original texture, moved as the original moved it: its scrolling ("panner"), its oscillator or
+    # rotator (UV_ANIM_CODE: AnimA/B/C, the converter's one modifier per layer, its static TexScaler and fixed
+    # rotations being baked into the mesh's UVs already), then its flipbook (caustics, rain): BaseColor is then
+    # the sheet of frames, played at the original's rate.
+    time = g.node(unreal.MaterialExpressionTime)
+    uv = g.custom("float2 uv = UV + frac(T * float2(U, V));" + uv_anim_code("uv", "A", "B", "C", "T") +
                   " if (Cols * Rows > 1.5) {"
                   " float frame = floor(fmod(T * Fps, max(Frames, 1.0)));"
                   " uv = (frac(uv) + float2(fmod(frame, Cols), floor(frame / Cols))) / float2(Cols, Rows); }"
                   " return uv;", FLOAT2,
-                  UV=g.node(unreal.MaterialExpressionTextureCoordinate), T=g.node(unreal.MaterialExpressionTime),
+                  UV=g.node(unreal.MaterialExpressionTextureCoordinate), T=time,
                   U=g.scalar("PanU", 0.0), V=g.scalar("PanV", 0.0),
+                  A=g.vector4("AnimA", (0, 0, 0, 0)), B=g.vector4("AnimB", (0, 0, 0, 0)), C=g.vector4("AnimC", (0, 0, 0, 0)),
                   Cols=g.scalar("FlipColumns", 1.0), Rows=g.scalar("FlipRows", 1.0),
                   Fps=g.scalar("FlipRate", 0.0), Frames=g.scalar("FlipFrames", 1.0))
-    base = g.texture("BaseColor", "/Engine/EngineMaterials/DefaultDiffuse", uvs=uv)
+    sampled = g.texture("BaseColor", "/Engine/EngineMaterials/DefaultDiffuse", uvs=uv)
+    # A MaterialSequence (screens, alarm signs, blinking lamps) replaces the texture with its timeline when the
+    # instance turns "Sequence" on; every other instance compiles without it.
+    picked = g.static_switch("Sequence", sequence_colour(g, time), (sampled, "RGBA"))
+    base_rgb = g.custom("return P.rgb;", FLOAT3, P=picked)
+    base = {"RGB": base_rgb, "G": g.custom("return P.g;", FLOAT1, P=picked), "A": g.custom("return P.a;", FLOAT1, P=picked)}
     tint = g.colour("Tint", (1, 1, 1, 1))
 
     # ---- the surface normal: the map derived from the original texture, turned into world space
@@ -237,7 +351,7 @@ def build_surface():
         "float fade = lerp(1.0, 0.35, saturate((Depth - 500.0) / 2500.0));"
         " float grain = clamp(1.0 + (D.b * 2.0 - 1.0) * Amount * fade, 0.45, 1.6);"
         " return Base * Tint * grain * lerp(1.0, D.r, AO * 0.5 * fade);", FLOAT3,
-        Base=(base, "RGB"), Tint=tint, D=packed, Amount=g.scalar("DetailColour", 0.0), AO=occlusion_amount,
+        Base=base["RGB"], Tint=tint, D=packed, Amount=g.scalar("DetailColour", 0.0), AO=occlusion_amount,
         Depth=g.node(unreal.MaterialExpressionPixelDepth))
     g.output(colour, unreal.MaterialProperty.MP_BASE_COLOR)
 
@@ -245,7 +359,7 @@ def build_surface():
     # as worn, smoother material); the set adds scratches, pores and smears around it.
     roughness = g.custom("return saturate(lerp(Dark, Bright, G) + (D.g - 0.5) * 2.0 * Amount);", FLOAT1,
                          Dark=g.scalar("RoughnessDark", 0.85), Bright=g.scalar("RoughnessBright", 0.45),
-                         G=(base, "G"), D=packed, Amount=g.scalar("DetailRoughness", 0.0))
+                         G=base["G"], D=packed, Amount=g.scalar("DetailRoughness", 0.0))
     g.output(roughness, unreal.MaterialProperty.MP_ROUGHNESS)
     g.output(g.scalar("Metallic", 0.0), unreal.MaterialProperty.MP_METALLIC)
     g.output(g.scalar("Specular", 0.5), unreal.MaterialProperty.MP_SPECULAR)
@@ -279,7 +393,7 @@ def build_surface():
     # Graph.in_the_picture): 1 is the texture as painted, whatever the exposure. The baked light is light in the
     # scene like any lamp's and stays that.
     glow = g.custom("return Base * Tint * Whole + Lit * Mask * Strength;", FLOAT3,
-                    Base=(base, "RGB"), Tint=tint, Whole=g.scalar("Emissive", 0.0),
+                    Base=base["RGB"], Tint=tint, Whole=g.scalar("Emissive", 0.0),
                     Lit=(self_lit, "RGB"), Mask=(self_mask, "A"), Strength=g.scalar("SelfIllum", 0.0))
     # ---- the least light. The original never drew a lit surface black: every zone had an ambient light, and its
     # darkest rooms were dim shapes, not a black screen. Real lights and real shadows have no such floor, and a room
@@ -290,12 +404,12 @@ def build_surface():
     # the picture like the glows: Lumen gathers every surface's glow without the eye's exposure, and a whole
     # level glowing "the same at any exposure" lit itself up like a lamp.)
     least = g.custom("return Base * Tint * Floor * (0.55 + 0.45 * saturate(N.z * 0.5 + 0.5)) * AO;", FLOAT3,
-                     Base=(base, "RGB"), Tint=tint, Floor=g.scalar("AmbientFloor", 0.0), N=normal, AO=occlusion)
+                     Base=base["RGB"], Tint=tint, Floor=g.scalar("AmbientFloor", 0.0), N=normal, AO=occlusion)
     emissive = g.custom("return Glow + Least + Base * Tint * Baked;", FLOAT3, Glow=g.in_the_picture(glow, g.scalar("GlowInPicture", 1.0)),
-                        Least=least, Base=(base, "RGB"), Tint=tint, Baked=baked)
+                        Least=least, Base=base["RGB"], Tint=tint, Baked=baked)
     g.output(emissive, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
-    alpha = g.custom("return A * O;", FLOAT1, A=(base, "A"), O=g.scalar("Opacity", 1.0))
+    alpha = g.custom("return A * O;", FLOAT1, A=base["A"], O=g.scalar("Opacity", 1.0))
     g.output(alpha, unreal.MaterialProperty.MP_OPACITY)
 
     # The mask: the texture's alpha (AlphaMask 0 ignores it: a body's texture keeps other things in its alpha),

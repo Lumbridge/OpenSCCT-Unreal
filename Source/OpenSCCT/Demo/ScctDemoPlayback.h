@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Demo/ScctDemoXRay.h"
 #include "Runtime/ScctDemoPlayApi.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "ScctDemoPlayback.generated.h"
@@ -29,6 +30,7 @@ class UScctSessionSubsystem;
  *   -ScctDemoPlayer=N         watch the Nth player (1 based)
  *   -ScctDemoPause=S          pause S seconds after it starts playing
  *   -ScctDemoLeaveAfter=S     press Back to demos after S seconds
+ *   -ScctDemoXRay[=0|1]       start with X-ray on (Demo/ScctDemoXRay.h), as the playback bar's X-RAY
  */
 UCLASS()
 class OPENSCCT_API UScctDemoPlayback : public UGameInstanceSubsystem
@@ -68,6 +70,10 @@ public:
 	/** The front end asks once when it is shown: true when it should open the Demos page (back from a demo). */
 	bool TakeReturnToDemos();
 
+	/** X-ray: every player outlined in his team's colour through walls (Demo/ScctDemoXRay.h). Kept across seeks and demos. */
+	bool IsXRay() const { return bXRay; }
+	void SetXRay(bool bOn);
+
 	/** A text of the playback (EScctDemoPlayText). */
 	static FString PlayText(EScctDemoPlayText Kind);
 
@@ -95,6 +101,9 @@ private:
 	TWeakObjectPtr<UScctSessionSubsystem> PresentingSession;
 	FDelegateHandle BeforeTicksHandle;
 	FDelegateHandle CleanupHandle;
+
+	bool bXRay = false;
+	FScctDemoXRay XRay;
 
 	TSharedPtr<SScctDemoHud> Hud;
 	TSharedPtr<SWidget> HudRoot;

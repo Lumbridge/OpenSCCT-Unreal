@@ -9,6 +9,7 @@
 #include "Online/ScctOnlineSubsystem.h"
 #include "Online/ScctRejoinSubsystem.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -50,6 +51,7 @@ namespace
 				[
 					SAssignNew(Made, SScctButton)
 					.Look(EScctButtonLook::Menu)
+					.Compact(true)
 					.Text(FText::FromString(Caption.ToUpper()))
 					.SubText(FText::FromString(Sub))
 					.Description(FText::FromString(Description))
@@ -79,6 +81,7 @@ namespace
 					[
 						SNew(SScctButton)
 						.Look(EScctButtonLook::Menu)
+						.Compact(true)
 						.Text(TAttribute<FText>::CreateLambda([WeakRejoin]
 						{
 							FScctRejoinChoice Choice;
@@ -105,6 +108,9 @@ namespace
 			Entry(TEXT("Hub"), TEXT("Meet other players between matches"),
 				TEXT("The hubs the master lists, joining one by its address, or hosting a hub on this PC."),
 				[this] { Host.Open(TEXT("hub")); });
+			Entry(ScctUi::GameText(TEXT("Tutorials_Page"), TEXT("TitlePage"), TEXT("Tutorials")), TEXT("The HUD, tips, gadgets and the tutorial maps"),
+				TEXT("The HUD and keyboard pictures, every tip and gadget of both sides, the spy and mercenary tutorial maps with your progress, and visiting a map alone with its help paths."),
+				[this] { Host.Open(TEXT("tutorials")); });
 			Entry(TEXT("Maps & Content"), TEXT("Download maps and shared content"),
 				TEXT("The maps of OpenSCCT-Content with what this PC has: download, update or remove a map, follow each download, and open the downloads folder."),
 				[this] { Host.Open(TEXT("content")); });
@@ -165,9 +171,17 @@ namespace
 						[
 							SNew(SBox).WidthOverride(64.0f).HAlign(HAlign_Left)[ SNew(SBox).WidthOverride(64.0f)[ ScctUi::Rule(0.5f) ] ]
 						]
-						+ SVerticalBox::Slot().AutoHeight().Padding(-24.0f, 0.0f, 0.0f, 0.0f)
+						// The entries take the height left above the key hints and scroll (following the focus) when they
+						// need more, as with REJOIN shown or on a short window.
+						+ SVerticalBox::Slot().FillHeight(1.0f).Padding(-24.0f, 0.0f, 0.0f, 0.0f)
 						[
-							SNew(SBox).WidthOverride(480.0f)[ Entries ]
+							SNew(SBox).WidthOverride(480.0f)
+							[
+								SNew(SScrollBox)
+								.ScrollBarVisibility(EVisibility::Collapsed)
+								.ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll)
+								+ SScrollBox::Slot()[ Entries ]
+							]
 						]
 					]
 				]
