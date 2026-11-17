@@ -177,6 +177,15 @@ const FScctMenuMapInfo* UScctMenuSubsystem::FindMap(const FString& Id)
 	return Found != nullptr ? Found : PlayableMaps.FindByPredicate(Same);
 }
 
+void UScctMenuSubsystem::RefreshMaps()
+{
+	if (const FScctMenuApi* Menu = Connect())
+	{
+		Menu->RefreshMaps();
+	}
+	bMapsLoaded = false;
+}
+
 FString UScctMenuSubsystem::GetMapTitle(const FString& Id)
 {
 	const FScctMenuMapInfo* Map = FindMap(Id);

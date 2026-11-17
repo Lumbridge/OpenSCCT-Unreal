@@ -65,8 +65,8 @@ TArray<FScctHostMap> ScctHostSetup::Maps()
 	for (const FString& Line : Lines(Text(EScctSetupText::Maps, FString())))
 	{
 		const TArray<FString> Parts = Fields(Line);
-		// Only maps whose level was imported can be shown here; a round on any other would sit the host out.
-		if (Parts.Num() < 4 || !FPackageName::DoesPackageExist(UScctOnlineSubsystem::LevelOf(Parts[0])))
+		// Only maps this game can draw (an imported level, or render files for the runtime level) can be shown here; a round on any other would sit the host out.
+		if (Parts.Num() < 4 || !UScctOnlineSubsystem::IsPlayable(Parts[0]))
 		{
 			continue;
 		}

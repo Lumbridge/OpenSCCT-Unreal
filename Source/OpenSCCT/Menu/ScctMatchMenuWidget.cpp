@@ -7,6 +7,7 @@
 #include "Menu/SScctGearPage.h"
 #include "Menu/SScctMatchMenu.h"
 #include "Menu/SScctPlayErrorPage.h"
+#include "Menu/SScctRoundWaitList.h"
 #include "OpenSCCT.h"
 #include "Menu/SScctStrategicMapPage.h"
 #include "Menu/ScctMenuStyle.h"
@@ -21,9 +22,11 @@
 namespace Ui = ScctMenuStyle;
 
 /**
- * The layers of the match overlay: what the visit is waiting for (the loading page as a cover), the menu with the
- * round's results (Menu/SScctMatchMenu.h), and the play error page over everything. Nothing here takes the mouse
- * while the menu is closed and no error is shown: the cover and the results only show.
+ * The layers of the match overlay: what the visit is waiting for (the loading page as a cover while travelling and
+ * joining; once a network round waits for its players, the server's loading picture under the list of players it
+ * waits for, Menu/SScctRoundWaitList.h, in its place), the menu with the round's results (Menu/SScctMatchMenu.h), and
+ * the play error page over everything. Nothing here takes the mouse while the menu is closed and no error is shown:
+ * the cover, the waiting list and the results only show.
  */
 class SScctMatchOverlay : public SCompoundWidget
 {
@@ -54,6 +57,12 @@ public:
 			[
 				SAssignNew(CoverBox, SBox)
 				.Visibility(EVisibility::Collapsed)
+			]
+
+			// The round's waiting list while a network round loads.
+			+ SOverlay::Slot()
+			[
+				SAssignNew(WaitList, SScctRoundWaitList).Online(Online)
 			]
 
 			// The in-match menu and the round's results.
@@ -114,7 +123,8 @@ private:
 	FString GetCoverStatus() const
 	{
 		const UScctOnlineSubsystem* Visit = Online.Get();
-		if (!bOnlineLevel || Visit == nullptr || ErrorPage.IsValid())
+		// The waiting list (with the server's loading picture) takes the cover's place once it shows.
+		if (!bOnlineLevel || Visit == nullptr || ErrorPage.IsValid() || (WaitList.IsValid() && WaitList->IsShowing()))
 		{
 			return FString();
 		}
@@ -167,6 +177,7 @@ private:
 	TWeakObjectPtr<UScctOnlineSubsystem> Online;
 	TWeakObjectPtr<UWorld> World;
 	TSharedPtr<SScctMatchMenu> Menu;
+	TSharedPtr<SScctRoundWaitList> WaitList;
 	TSharedPtr<SBox> CoverBox;
 	TSharedPtr<SBox> ErrorBox;
 	TSharedPtr<SScctPlayErrorPage> ErrorPage;

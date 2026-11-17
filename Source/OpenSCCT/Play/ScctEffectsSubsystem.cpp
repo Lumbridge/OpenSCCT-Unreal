@@ -126,6 +126,7 @@ void UScctEffectsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	// Flashes are scaled by the picture's exposure (Play/ScctExposure.h).
 	FScctExposure::Start();
+	FScctSmokeVolumes::RegisterSettings();
 
 	bLog = FParse::Param(FCommandLine::Get(), TEXT("ScctFxLog"));
 	bAutoFire = FParse::Param(FCommandLine::Get(), TEXT("ScctAutoFire"));
@@ -163,8 +164,8 @@ void UScctEffectsSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 {
 	if (OldId != 0)
 	{
-		UE_LOG(LogOpenSCCT, Log, TEXT("Effects summary: %d muzzle flashes, %d tracers, %d impacts, %d effect actors (%d drawn as stand-in shapes), at most %d sprites at once"),
-			NumFlashes, NumTracers, NumImpacts, NumActors, NumStandIns, PeakSprites);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Effects summary: %d muzzle flashes, %d tracers, %d impacts, %d effect actors (%d drawn as stand-in shapes), at most %d sprites at once; rain on bodies: %d splashes, %d drips, %d puffs"),
+			NumFlashes, NumTracers, NumImpacts, NumActors, NumStandIns, PeakSprites, NumFlicSplashes, NumFlicDrips, NumFlicPuffs);
 	}
 	// Actor ids are reused by the next match: nothing drawn may carry over.
 	ResetMatch();
@@ -201,10 +202,14 @@ void UScctEffectsSubsystem::ResetMatch()
 		Surface = FMarkSurface();
 	}
 	ResetProjections();
+	ResetDevices();
+	ResetCasings();
+	SmokeVolumes.Reset();
 	Sprites.Clear();
 	MatchSeconds = 0.0f;
 	bFireHeld = bAltFireHeld = false;
 	NumFlashes = NumFlashesLeftToViewModel = NumTracers = NumImpacts = NumActors = NumStandIns = PeakSprites = 0;
+	NumFlicSplashes = NumFlicDrips = NumFlicPuffs = 0;
 }
 
 void UScctEffectsSubsystem::HandleMatchStarted()
@@ -272,6 +277,7 @@ bool UScctEffectsSubsystem::EnsureScene()
 	// The edge is mostly sheen: light that grazes the cloth towards the camera.
 	BodyRim = MakeBodyLight(BodyRimRadius, 1.0f);
 
+	SmokeVolumes.Init(Host);
 	MeshUsed.Init(false, MaxMeshes);
 	MeshPool.SetNum(MaxMeshes);
 
@@ -336,9 +342,12 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 	const float FxSeconds = DeltaSeconds * TimeScale;
 	DrainShots();
 	UpdateTracers(FxSeconds);
+	UpdateCasings(FxSeconds);
 	UpdateImpactMarks();
 	UpdateProjections();
+	SmokeVolumes.Update(DeltaSeconds);
 	UpdateEffectActors(FxSeconds);
+	UpdateDevices(FxSeconds);
 	UpdateLights(FxSeconds);
 	UpdateBodyFill(DeltaSeconds);
 	UpdateBodyFade();
@@ -530,6 +539,10 @@ void UScctEffectsSubsystem::DrainShots()
 
 			const bool bSticky = Shot.Kind == EScctShotKind::MuzzleSticky;
 			const bool bFirstPerson = Shot.Kind == EScctShotKind::FirstPersonMuzzle;
+			if ((Shot.Flags & EScctShotFlags::Casing) != 0)
+			{
+				SpawnCasing(Shot, Direction);
+			}
 			if (bFirstPerson)
 			{
 				// One owner for the local player's own flash: while the equipment draws a view model the flash
@@ -765,7 +778,12 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 			}
 		}
 
-		if (!bHidden && Fx->Style != EStyle::None && Record.Kind == EScctEffectKind::Emitter)
+		// A smoke grenade's cloud is the responsive smoke volume when the match runs it, not sprites.
+		const bool bVolumeSmoke = (Fx->Style == EStyle::Smoke || Fx->Style == EStyle::Gas)
+			&& SmokeVolumes.CoversEmitter(Record.ActorId, GetName(Fx->ClassId).Contains(TEXT("SmokeEmitter")), Fx->Age);
+		// Rain on a pawn spreads over the drawn body (Play/ScctEffectsFlicFloc.cpp); without its table, a plain splash.
+		const bool bFlicDrawn = Fx->bFlicFloc && UpdateFlicFloc(*Fx, Record, Fx->Location, bHidden, DeltaSeconds);
+		if (!bHidden && !bVolumeSmoke && !bFlicDrawn && Fx->Style != EStyle::None && Record.Kind == EScctEffectKind::Emitter)
 		{
 			Emit(Fx->Style, Fx->Location, FVector(Record.VelX, Record.VelY, Record.VelZ), DeltaSeconds, Fx->EmitDebt);
 		}
@@ -820,6 +838,7 @@ void UScctEffectsSubsystem::StartActor(FActorFx& Fx, const FScctEffectActor& Rec
 	Fx.Location = FVector(Record.X, Record.Y, Record.Z);
 	Fx.Style = Record.Kind == EScctEffectKind::Emitter ? FindStyle(Record.ClassId) : EStyle::None;
 	Fx.TrailStyle = Record.TrailClassId != 0 ? FindStyle(Record.TrailClassId) : EStyle::None;
+	Fx.bFlicFloc = Record.Kind == EScctEffectKind::Emitter && GetName(Record.ClassId).Contains(TEXT("FlicFloc"));
 
 	const bool bDrawsMesh = Record.Kind == EScctEffectKind::Projectile || Record.Kind == EScctEffectKind::Mine || Record.Kind == EScctEffectKind::Gadget
 		|| Record.Kind == EScctEffectKind::Beam || Record.Kind == EScctEffectKind::Decal;
@@ -901,6 +920,9 @@ void UScctEffectsSubsystem::StartActor(FActorFx& Fx, const FScctEffectActor& Rec
 		break;
 	case EStyle::Puff:
 		SpawnDust(Fx.Location, FVector::UpVector, 5, FLinearColor(0.35f, 0.33f, 0.3f, 0.35f), 30.0f);
+		break;
+	case EStyle::Ps2Modem:
+		SpawnPs2ModemEffect(Fx.Location, FRotator(Record.Pitch, Record.Yaw, Record.Roll));
 		break;
 	default:
 		break;
@@ -1445,7 +1467,8 @@ UScctEffectsSubsystem::EStyle UScctEffectsSubsystem::FindStyle(int32 ClassId)
 
 	// The class names are the original's (French and English mixed): the first word that fits decides.
 	static const TPair<const TCHAR*, EStyle> Words[] = {
-		{ TEXT("Douille"), EStyle::None },        // shell casings: drawn with the gun, not here
+		{ TEXT("Ps2ModemEffect"), EStyle::Ps2Modem },
+		{ TEXT("Douille"), EStyle::None },        // shell casings come with the shots (Play/ScctEffectsCasings.cpp)
 		{ TEXT("FootPrint"), EStyle::None },
 		{ TEXT("FlashBang"), EStyle::FlashBang },
 		{ TEXT("Explosion"), EStyle::Explosion },

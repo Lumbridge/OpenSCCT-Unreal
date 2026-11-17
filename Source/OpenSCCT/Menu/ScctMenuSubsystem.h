@@ -63,6 +63,9 @@ public:
 	/** Any catalog map by folder name, playable here or not; null when the content does not have it. */
 	const FScctMenuMapInfo* FindMap(const FString& Id);
 
+	/** Reads the map list again on next use: a map was downloaded or removed (Menu/SScctMenuContent.cpp). */
+	void RefreshMaps();
+
 	/** The name the pages show for a map ("ENHANCED AQUARIUS"), its folder name in capitals when unknown. */
 	FString GetMapTitle(const FString& Id);
 

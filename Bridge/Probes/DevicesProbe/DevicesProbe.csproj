@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A console check of the device effects without Unreal: hosts a map as a spy, puts the network cameras out and
+       places, then shoots, a PS2 sabotage modem through the game's -ScctLevelDo entries, and prints what the world
+       state's markers and followed actors and the events feature's effect actors say about them. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\OpenScct.UnrealBridge\OpenScct.UnrealBridge.csproj" />
+  </ItemGroup>
+</Project>

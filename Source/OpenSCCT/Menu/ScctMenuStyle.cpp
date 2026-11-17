@@ -12,6 +12,22 @@
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
 
+const FSlateBrush* SScctRingButton::GetFocusBrush() const
+{
+	// Just outside the button's own 4-unit corner.
+	static const FSlateRoundedBoxBrush Ring(FLinearColor::Transparent, 5.0f, ScctHudStyle::Fade(ScctHudStyle::Accent(0), 0.95f), 1.5f);
+	return &Ring;
+}
+
+FReply SScctRingButton::OnFocusReceived(const FGeometry& MyGeometry, const FFocusEvent& InFocusEvent)
+{
+	if (OnFocused)
+	{
+		OnFocused();
+	}
+	return SButton::OnFocusReceived(MyGeometry, InFocusEvent);
+}
+
 namespace ScctMenuStyle
 {
 	namespace
@@ -111,12 +127,13 @@ namespace ScctMenuStyle
 
 	TSharedRef<SButton> Button(const TAttribute<FText>& Label, FOnClicked OnClicked, const TAttribute<bool>& Selected, const FLinearColor& Colour, float MinWidth)
 	{
-		TSharedRef<SButton> Made = SNew(SButton)
+		// Focusable, so the controller reaches every button of the pages built from these (Menu/ScctMenuNav.h).
+		TSharedRef<SButton> Made = SNew(SScctRingButton)
 			.ButtonStyle(&ButtonStyle())
 			.OnClicked(OnClicked)
 			.HAlign(HAlign_Center)
 			.VAlign(VAlign_Center)
-			.IsFocusable(false)
+			.IsFocusable(true)
 			[
 				SNew(SBox)
 				.MinDesiredWidth(MinWidth)
@@ -134,7 +151,7 @@ namespace ScctMenuStyle
 		Made->SetBorderBackgroundColor(TAttribute<FSlateColor>::CreateLambda([Weak, Selected, Colour]
 		{
 			const TSharedPtr<SButton> Pinned = Weak.Pin();
-			const bool bHovered = Pinned.IsValid() && Pinned->IsHovered();
+			const bool bHovered = Pinned.IsValid() && (Pinned->IsHovered() || Pinned->HasKeyboardFocus());
 			const bool bPressed = Pinned.IsValid() && Pinned->IsPressed();
 			if (Selected.Get())
 			{

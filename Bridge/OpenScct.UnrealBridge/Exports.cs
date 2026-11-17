@@ -329,6 +329,7 @@ public static unsafe class Exports
             Sidearms = (o.Flags & BridgeStartFlags.Sidearms) != 0,
             Rifles = (o.Flags & BridgeStartFlags.Rifles) != 0,
             OfflineRules = (o.Flags & BridgeStartFlags.OfflineRules) != 0,
+            ResponsiveSmoke = (o.Flags & BridgeStartFlags.ResponsiveSmoke) != 0,
             UnlimitedGear = (o.Flags & BridgeStartFlags.UnlimitedGear) != 0,
             TimeLimit = o.TimeLimitPlusOne - 1,
             SpyLives = o.SpyLivesPlusOne - 1,
@@ -346,7 +347,7 @@ public static unsafe class Exports
             ClearFailure();
             // The player's demo-saving choice records the match (Demo/DemoSaving.cs).
             match = match with { DemoFolder = match.DemoFolder ?? Demo.DemoSaving.OfflineFolder() };
-            BridgeSession started = Adopt(BridgeSession.StartLocal(Test.LessonLaunch.Apply(match)));
+            BridgeSession started = Adopt(BridgeSession.StartLocal(Test.NetLinkLaunch.Apply(Test.LessonLaunch.Apply(match))));
             Demo.DemoSaving.Started(started);
             return started.Id;
         }

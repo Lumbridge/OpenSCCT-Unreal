@@ -5,10 +5,24 @@
 #include "Framework/SlateDelegates.h"
 #include "Input/Reply.h"
 #include "Styling/SlateTypes.h"
+#include "Widgets/Input/SButton.h"
 #include "Widgets/SWidget.h"
 
-class SButton;
 class SEditableTextBox;
+
+/**
+ * A plain Slate button the controller can reach: it takes the focus (D-pad, stick) and shows where the focus is with
+ * a ring of the accent instead of Slate's dotted rectangle. OnFocused hears it take the focus (a tile shows its
+ * details as it does under the pointer). Built as SNew(SScctRingButton) with SButton's arguments.
+ */
+class SScctRingButton : public SButton
+{
+public:
+	virtual const FSlateBrush* GetFocusBrush() const override;
+	virtual FReply OnFocusReceived(const FGeometry& MyGeometry, const FFocusEvent& InFocusEvent) override;
+
+	TFunction<void()> OnFocused;
+};
 
 // The menus' widgets, in the HUD's visual language (Hud/ScctHudStyle.h): glass panels that blur what is behind
 // them, thin type, small spaced capitals for labels, cyan for the spies and amber for the mercenaries. Everything

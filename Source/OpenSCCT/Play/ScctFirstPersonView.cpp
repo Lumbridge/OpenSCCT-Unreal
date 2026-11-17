@@ -4,6 +4,7 @@
 #include "Components/PoseableMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/World.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -11,6 +12,8 @@
 #include "Play/ScctEquipmentData.h"
 #include "Play/ScctEquipmentModels.h"
 #include "Play/ScctExposure.h"
+#include "Play/ScctPoseAim.h"
+#include "Runtime/ScctPoseAimApi.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -21,6 +24,8 @@ namespace
 	// crack of light and not a glow. Its light outlasts it by a little, as the eye's impression does.
 	constexpr float FlashSeconds = 0.05f;
 	constexpr float FlashLightSeconds = 0.085f;
+	// How far in front of the muzzle the flash's light is (cm), FlashLightPlace.
+	constexpr double FlashLightAhead = 40.0;
 	// The light's strength is every muzzle flash's (FScctExposure::MuzzleFlashCandelas), scaled by the picture's
 	// exposure when it fires, so the flash does not white out the screen when the eye is open for the dark.
 
@@ -79,7 +84,10 @@ AScctFirstPersonView::AScctFirstPersonView()
 	FlashLight->SetAttenuationRadius(900.0f);
 	FlashLight->SetSourceRadius(3.0f);
 	FlashLight->SetLightColor(FLinearColor(1.0f, 0.74f, 0.42f));
-	FlashLight->SetCastShadows(true);
+	// No shadows: the player's own body, unseen at the real place of the arms, stood between the light and the arms
+	// as drawn (nearer the eye) and laid hard black bands across the sleeves. A flash is too short for its shadows
+	// in the room to be missed, and FlashLightPlace keeps it on this side of a wall.
+	FlashLight->SetCastShadows(false);
 	// A flash is too short to hang in the air: almost none of it scatters in the fog.
 	FlashLight->SetVolumetricScatteringIntensity(0.2f);
 	FlashLight->SetVisibility(false);
@@ -227,6 +235,25 @@ void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentM
 		}
 	}
 
+	// A wall between the eye and the spy pistol's sockets: the pistol stays where it is drawn, but its flash and laser
+	// do not start inside or beyond the wall (SpyFirstPersonView.TryGetSocket of the Godot client).
+	const int32 Hidden = bShown && View.Kind == EScctFirstPersonKind::Spy ? ScctPoseAim::ReadHiddenSockets() : 0;
+	bMuzzleHidden = (Hidden & EScctHiddenSocket::Muzzle) != 0;
+	bLaserHidden = (Hidden & EScctHiddenSocket::Laser) != 0;
+	if (Hidden != LoggedHiddenSockets)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("First person: %s (muzzle socket %.1f cm from the eye)"),
+			Hidden == 0 ? TEXT("the pistol's sockets are clear of walls again")
+				: Hidden == (EScctHiddenSocket::Muzzle | EScctHiddenSocket::Laser) ? TEXT("muzzle and laser sockets hidden behind a wall")
+				: (Hidden & EScctHiddenSocket::Muzzle) != 0 ? TEXT("muzzle socket hidden behind a wall") : TEXT("laser socket hidden behind a wall"),
+			ScctPoseAim::LastMuzzleDistance());
+		LoggedHiddenSockets = Hidden;
+	}
+	if (bShown && View.Kind == EScctFirstPersonKind::Merc)
+	{
+		ScctPoseAim::LogViewModelClipRates();
+	}
+
 	if (bShown != bWasShown)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("First person: view model %s (kind %d, %d parts); muzzle %.1f cm from the eye"),
@@ -272,6 +299,8 @@ void AScctFirstPersonView::Hide(float DeltaSeconds)
 	bShown = false;
 	bHasMuzzle = false;
 	bHasLaser = false;
+	bMuzzleHidden = false;
+	bLaserHidden = false;
 	for (FScctEquipmentView& Drawn : Parts)
 	{
 		if (Drawn.IsShown() && Drawn.GetBody()->IsVisible())
@@ -285,18 +314,39 @@ void AScctFirstPersonView::Hide(float DeltaSeconds)
 bool AScctFirstPersonView::FindMuzzle(FTransform& OutWorld) const
 {
 	OutWorld = Muzzle;
-	return bShown && bHasMuzzle;
+	return bShown && bHasMuzzle && !bMuzzleHidden;
+}
+
+bool AScctFirstPersonView::FindCasingPort(FTransform& OutWorld) const
+{
+	if (!bShown)
+	{
+		return false;
+	}
+	// The merc's one model carries the gun; the spy's pistol has no port. A replacement gun's EjectionPort socket,
+	// else the original's bone, which the replacement is fixed to.
+	for (const FScctEquipmentView& Drawn : Parts)
+	{
+		if (Drawn.IsShown() && Drawn.GetBody()->IsVisible() && Drawn.FindPoint(TEXT("EjectionPort"), TEXT("FX_DOUILLE"), OutWorld))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 bool AScctFirstPersonView::FindLaserStart(FTransform& OutWorld) const
 {
-	OutWorld = bHasLaser ? Laser : Muzzle;
-	return bShown && (bHasLaser || bHasMuzzle);
+	// A socket a wall hides from the eye is not a start: the laser then starts where the simulation puts it.
+	const bool bLaserClear = bHasLaser && !bLaserHidden;
+	const bool bMuzzleClear = bHasMuzzle && !bMuzzleHidden;
+	OutWorld = bLaserClear ? Laser : Muzzle;
+	return bShown && (bLaserClear || bMuzzleClear);
 }
 
 void AScctFirstPersonView::PlayMuzzleFlash()
 {
-	if (!bShown || !bHasMuzzle)
+	if (!bShown || !bHasMuzzle || bMuzzleHidden)
 	{
 		return;
 	}
@@ -336,10 +386,28 @@ void AScctFirstPersonView::PlayMuzzleFlash()
 	FlashAge = 0.0f;
 	FlashExposureScale = FScctExposure::FlashScale();
 	++FlashesPlayed;
-	UE_LOG(LogOpenSCCT, Log, TEXT("First person: muzzle flash %d at (%.0f %.0f %.0f), %.1f cm from the eye, its light %.0f cd (exposure scale %.2f)"), FlashesPlayed,
+	UE_LOG(LogOpenSCCT, Log, TEXT("First person: muzzle flash %d at (%.0f %.0f %.0f), %.1f cm from the eye, its light %.0f cd (exposure scale %.2f) %.1f cm from the eye"), FlashesPlayed,
 		Muzzle.GetLocation().X, Muzzle.GetLocation().Y, Muzzle.GetLocation().Z, FVector::Dist(Muzzle.GetLocation(), LastCamera.GetLocation()),
-		FScctExposure::MuzzleFlashCandelas() * FlashExposureScale, FlashExposureScale);
+		FScctExposure::MuzzleFlashCandelas() * FlashExposureScale, FlashExposureScale, FVector::Dist(FlashLightPlace(), LastCamera.GetLocation()));
 	TickFlash(0.0f);
+}
+
+FVector AScctFirstPersonView::FlashLightPlace() const
+{
+	// The light is out in the flash's plume, FlashLightAhead in front of the muzzle. The view model is drawn pulled
+	// in towards the eye (to 0.42 of its distance), so from there the arms as drawn are most of a metre away and
+	// take a little of its light, not all of it: from a place 60% of the way to the muzzle, a hand's width from
+	// the drawn sleeves, it burned them white. Only the level's own geometry between the eye and that place holds
+	// it back, 10 cm in front of the wall, so it never lights the far side of a wall instead of this one.
+	const FVector Eye = LastCamera.GetLocation();
+	const FVector At = Muzzle.GetLocation() + Muzzle.GetRotation().GetForwardVector() * FlashLightAhead;
+	FHitResult Hit;
+	FCollisionQueryParams Query(TEXT("ScctMuzzleFlash"), false, this);
+	if (GetWorld()->LineTraceSingleByObjectType(Hit, Eye, At, FCollisionObjectQueryParams(ECC_WorldStatic), Query) && !Hit.bStartPenetrating)
+	{
+		return Eye + (At - Eye).GetSafeNormal() * FMath::Max(Hit.Distance - 10.0, 0.0);
+	}
+	return At;
 }
 
 void AScctFirstPersonView::TickFlash(float DeltaSeconds)
@@ -358,15 +426,12 @@ void AScctFirstPersonView::TickFlash(float DeltaSeconds)
 		return FMath::Max(Seconds, 0.0f);
 	}();
 	const float Age = FMath::Max(FlashAge - Hold, 0.0f);
-	const bool bGunShown = bShown && bHasMuzzle;
+	const bool bGunShown = bShown && bHasMuzzle && !bMuzzleHidden;
 	const float Fade = bGunShown ? 1.0f - FMath::Square(FMath::Clamp(Age / FlashSeconds, 0.0f, 1.0f)) : 0.0f;
 	if (bGunShown)
 	{
 		FlashRoot->SetWorldLocationAndRotation(Muzzle.GetLocation(), Muzzle.GetRotation());
-		// The light sits short of the muzzle, so it is never on the far side of a wall the barrel would reach
-		// through, and ahead of the view model as it is drawn (pulled in towards the eye), so it rakes the gun
-		// from the front without burning it white.
-		FlashLight->SetWorldLocation(FMath::Lerp(LastCamera.GetLocation(), Muzzle.GetLocation(), 0.6));
+		FlashLight->SetWorldLocation(FlashLightPlace());
 	}
 	for (int32 Index = 0; Index < FlashShapes.Num(); ++Index)
 	{

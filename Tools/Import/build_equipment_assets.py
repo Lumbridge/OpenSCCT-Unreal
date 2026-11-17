@@ -269,20 +269,19 @@ def build_weapon_set():
         the thumb up (the hand bones' X runs to the fingers, -Y out of the palm, -Z to the thumb). The wrist is
         8.5 cm to the left of the grip's middle, 3 cm in front of it and 3.5 cm under the socket.
 
-        In the merc's own view the fore grip is out of the picture (it is 40 degrees under the eye) and the view
-        model's hand is one rigid piece with open fingers. The hand that is seen is the left one under the light
-        module (rifle_offset): the animation has its wrist at (-10.5, -4.3, -4.0) from the module's lens socket,
-        the fingers up the module's left side but held off it. It keeps its turn and is brought 1.5 cm forward,
-        1.1 cm in and 1.5 cm up, so the palm and fingers lie against the module and the handguard above it."""
+        In the merc's own view the hand is on the fore grip too. The view model's hand is one rigid piece with open
+        fingers, so it is laid against the grip's left side, the side the eye sees: fingers forward and 37 degrees
+        to the right round the grip's front, the palm on the grip, the thumb up. The wrist is 5.5 cm to the left of
+        the grip's middle, 3.5 cm behind it and 1.5 cm under it. With the rifle as rifle_offset holds it there the
+        hand is inside the bottom of the picture. The animation's wrist is 2 cm in front of the grip and 3 cm to its
+        left, so the arm is bent only a little."""
         arm = ("Bip01-L-UpperArm", "Bip01-L-Forearm", "Bip01-L-Hand") if first_person else ("B-L-UpperArm", "B-L-ForeArm", "B-L-Hand")
         for name, bone in zip(("left_upper_arm_bone", "left_forearm_bone", "left_hand_bone"), arm):
             entry.set_editor_property(name, bone)
         if first_person:
             entry.set_editor_property("original_left_hand", unreal.Vector(-32.5, 3.6, -6.2))
-            entry.set_editor_property("left_hand_socket", "LightModule")
-            entry.set_editor_property("left_hand_keeps_turn", True)
             entry.set_editor_property("left_hand_in_socket", unreal.Transform(
-                unreal.Vector(-9.0, -3.2, -2.5), unreal.Rotator(0.0, 0.0, 0.0), unreal.Vector(1.0, 1.0, 1.0)))
+                unreal.Vector(-3.5, -5.5, -1.5), unreal.Rotator(roll=180.0, pitch=0.0, yaw=36.9), unreal.Vector(1.0, 1.0, 1.0)))
         else:
             entry.set_editor_property("original_left_hand", unreal.Vector(33.5, -9.7, 0.4))
             entry.set_editor_property("left_hand_in_socket", unreal.Transform(
@@ -306,17 +305,19 @@ def build_weapon_set():
         In the merc's own view (SWeaponFirst.1DEF_01) the same gun is turned in the bone: the barrel (bone "FX")
         runs along (-1.00, 0.10, 0.01), up is (0.10, 0.99, -0.08) and the gun's +Y is (0.01, 0.07, 1.00). The
         same place in that frame would be (-11.05, 3.45, -2.65): the wrist is at (-2.1, 2.0, -0.5), the grip 9 cm
-        down the barrel from it. But in that view the right hand is below the picture and the left hand is the
-        one seen: its palm is 25 cm in front of the new grip and 1.7 cm under the light module, holding air. So
-        there the rifle sits 2 cm further forward and 1.7 cm lower, which lays the light module's underside in
-        the left palm; the bore is then 1.7 cm under the original's and the unseen right hand 2.6 cm off the grip."""
+        down the barrel from it. But in that view the right hand is below the picture (2 cm in front of the eye)
+        and the left hand is the one seen, and with the rifle there its fore grip, where the left hand goes
+        (rifle_left_hand), is about 40 degrees under the eye, at the bottom edge of the picture, and the hand on it
+        went out of the picture. So there the rifle slides 6 cm further along its own barrel: bore on the original's
+        bore line, the fore grip and the hand on it inside the picture, and the unseen right hand 6 cm behind the
+        pistol grip."""
         if not first_person:
             return unreal.Transform(unreal.Vector(9.0, -2.2, 0.7), unreal.Rotator(0.0, 0.0, 0.0), unreal.Vector(1.0, 1.0, 1.0))
         forward = unreal.Vector(-0.995, 0.100, 0.010)
         right = unreal.Vector(0.010, 0.070, 0.997)
         up = unreal.Vector(0.100, 0.992, -0.080)
         rotation = unreal.MathLibrary.make_rotation_from_axes(forward, right, up)
-        return unreal.Transform(unreal.Vector(-13.21, 1.96, -2.49), rotation, unreal.Vector(1.0, 1.0, 1.0))
+        return unreal.Transform(unreal.Vector(-17.02, 4.05, -2.59), rotation, unreal.Vector(1.0, 1.0, 1.0))
 
     weapons = asset_tools.create_asset("DA_ScctWeapons", FOLDER, unreal.ScctWeaponSet, unreal.DataAssetFactory())
     weapons.set_editor_property("weapons", [

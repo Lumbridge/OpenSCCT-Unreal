@@ -1,4 +1,5 @@
 #include "Menu/SScctHubLaptopPage.h"
+#include "Menu/ScctMenuNav.h"
 
 #include "Engine/Texture2D.h"
 #include "Hub/ScctHubPads.h"
@@ -138,7 +139,7 @@ void SScctHubLaptopPage::Construct(const FArguments& InArgs)
 
 FReply SScctHubLaptopPage::OnKeyDown(const FGeometry& Geometry, const FKeyEvent& Key)
 {
-	if (Key.GetKey() == EKeys::Escape)
+	if (ScctMenuNav::IsBackKey(Key.GetKey()))
 	{
 		if (const TSharedPtr<FScctHubPads> Shared = Pads.Pin())
 		{

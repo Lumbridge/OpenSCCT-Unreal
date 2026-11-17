@@ -20,6 +20,7 @@ class UScctMatchMenuWidget;
  *                       default) or none
  *   ?Rifles=1           the mercs may pick OpenSCCT's additional rifles
  *   ?Practice=1         practice rules: no time limit, unlimited lives, 5 s respawn
+ *   ?ResponsiveSmoke=1  smoke grenades fill the shared simulated cloud (Play/ScctEffectsSmokeVolume.cpp draws it)
  *   ?UnlimitedGear=1    Visit a Map practice: unlimited gear, instant gear changes, Switch Team in the menu
  *   ?Name=Sam           the local player's name (Unreal's own player-name option; default "Player")
  *   ?TimeLimit=10       the player's own rules over the map's: minutes (0 for none), ?SpyLives=3 and ?MercLives=3
@@ -82,6 +83,9 @@ private:
 
 	/** The level was opened for the online visit's round. */
 	bool bOnline = false;
+
+	/** The level plays a demo (Demo/ScctDemoPlayback.h): no match, no match menu; the playback bar has the input. */
+	bool bDemo = false;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UScctMatchMenuWidget> MatchMenu;

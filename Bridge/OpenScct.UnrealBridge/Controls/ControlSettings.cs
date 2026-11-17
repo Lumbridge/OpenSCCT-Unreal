@@ -182,8 +182,17 @@ public sealed class PadTuning
     [JsonPropertyName("look_scale")]
     public float LookScale { get; set; } = 1f;
 
+    /// <summary>Controller vibration (Reloaded's controller_rumble_enabled, off on a first run). Not in the controls struct: PadExports.</summary>
+    [JsonPropertyName("rumble")]
+    public bool Rumble { get; set; }
+
+    /// <summary>The vibration's strength, 0 to 1 (controller_rumble_strength).</summary>
+    [JsonPropertyName("rumble_strength")]
+    public float RumbleStrength { get; set; } = 1f;
+
     internal void Clamp()
     {
+        RumbleStrength = LookSettings.Range(RumbleStrength, 0f, 1f);
         DeadzoneLeft = LookSettings.Range(DeadzoneLeft, 0f, 0.9f);
         DeadzoneRight = LookSettings.Range(DeadzoneRight, 0f, 0.9f);
         VerticalScale = LookSettings.Range(VerticalScale, 0.1f, 3f);

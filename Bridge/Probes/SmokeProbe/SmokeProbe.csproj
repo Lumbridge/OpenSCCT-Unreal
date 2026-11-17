@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A console check of responsive smoke without Unreal: hosts a map with SvmResponsiveSmoke, pops a smoke grenade
+       ahead of the player through the game's -ScctLevelDo entry and prints what the smoke table says of the client's
+       cloud: its box, its density grid at each quality's size, how long a grid takes to sample, and the gap a shot
+       through it leaves. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\OpenScct.UnrealBridge\OpenScct.UnrealBridge.csproj" />
+  </ItemGroup>
+</Project>

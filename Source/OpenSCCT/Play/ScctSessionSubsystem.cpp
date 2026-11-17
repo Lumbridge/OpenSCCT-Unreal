@@ -12,6 +12,7 @@
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
 #include "Play/ScctPawnProxy.h"
+#include "Play/ScctPoseAim.h"
 #include "Play/ScctViewPawn.h"
 #include "Runtime/ScctFeatures.h"
 #include "UnrealClient.h"
@@ -111,6 +112,7 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 	Start.Flags = (Options.bSidearms ? EScctStartFlags::Sidearms : 0)
 		| (Options.bRifles ? EScctStartFlags::Rifles : 0)
 		| (Options.bOfflineRules ? EScctStartFlags::OfflineRules : 0)
+		| (Options.bResponsiveSmoke ? EScctStartFlags::ResponsiveSmoke : 0)
 		| (Options.bUnlimitedGear ? EScctStartFlags::UnlimitedGear : 0);
 	Start.Difficulty = FMath::Clamp(Options.Difficulty, 0, 4);
 	CopyText(Start.Map, Options.Map);
@@ -128,9 +130,9 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 		Play->SetSidearm(Options.Sidearm);
 	}
 
-	UE_LOG(LogOpenSCCT, Log, TEXT("Starting %s (%s) as %s with %d bots (difficulty %d, sidearms %d (own sidearm %d), rifles %d, practice rules %d, name '%s'; own rules: time %d, spy lives %d, merc lives %d, respawn %d; -1 keeps the map's)"),
+	UE_LOG(LogOpenSCCT, Log, TEXT("Starting %s (%s) as %s with %d bots (difficulty %d, sidearms %d (own sidearm %d), rifles %d, practice rules %d, responsive smoke %d, name '%s'; own rules: time %d, spy lives %d, merc lives %d, respawn %d; -1 keeps the map's)"),
 		*Options.Map, *Options.Mode, Options.bMerc ? TEXT("merc") : TEXT("spy"), Start.Bots, Start.Difficulty,
-		Options.bSidearms ? 1 : 0, Options.Sidearm, Options.bRifles ? 1 : 0, Options.bOfflineRules ? 1 : 0, *Options.PlayerName,
+		Options.bSidearms ? 1 : 0, Options.Sidearm, Options.bRifles ? 1 : 0, Options.bOfflineRules ? 1 : 0, Options.bResponsiveSmoke ? 1 : 0, *Options.PlayerName,
 		Options.TimeLimit, Options.SpyLives, Options.MercLives, Options.RespawnSeconds);
 
 	// The player's demo-saving choice as it is now, so the match records (or not) on it (Demo/ScctDemoSubsystem.h).
@@ -356,6 +358,18 @@ void UScctSessionSubsystem::UpdatePawns()
 		}
 	}
 
+	// The local spy's body aims at the view this frame draws (the mouse turn not yet simulated included), handed over
+	// before any pose is read.
+	int32 AimingActorId = 0;
+	for (int32 Index = 0; Index < PawnCount; ++Index)
+	{
+		if ((PawnBuffer[Index].Flags & EScctPawnFlags::Local) != 0)
+		{
+			AimingActorId = PawnBuffer[Index].ActorId;
+		}
+	}
+	ScctPoseAim::FeedDrawnView(*GetWorld(), AimingActorId);
+
 	TSet<int32, DefaultKeyFuncs<int32>, TInlineSetAllocator<MaxPawns>> Seen;
 	for (int32 Index = 0; Index < PawnCount; ++Index)
 	{
@@ -380,6 +394,7 @@ void UScctSessionSubsystem::UpdatePawns()
 			Proxy->Present(Pawn, GetSkeleton(Pawn.Kind), TConstArrayView<FScctBridgeBone>(PoseBuffer.GetData(), Bones));
 		}
 	}
+	ScctPoseAim::LogAimProbe(*GetWorld(), AimingActorId, GetWorld()->GetDeltaSeconds());
 
 	for (auto It = Proxies.CreateIterator(); It; ++It)
 	{
@@ -542,6 +557,8 @@ void UScctSessionSubsystem::LogFeatureTables() const
 	LogFeatureTable<FScctOnlineApi>(TEXT("online"));
 	LogFeatureTable<FScctVoiceApi>(TEXT("voice"));
 	LogFeatureTable<FScctProjectionsApi>(TEXT("projections"));
+	LogFeatureTable<FScctSmokeApi>(TEXT("responsive smoke"));
+	LogFeatureTable<FScctSoftBodyApi>(TEXT("soft bodies"));
 }
 
 void UScctSessionSubsystem::TickAutoShots(float DeltaTime)

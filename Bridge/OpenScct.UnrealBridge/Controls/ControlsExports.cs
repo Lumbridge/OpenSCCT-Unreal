@@ -512,6 +512,9 @@ public static class ControlsMarshal
                 RunThreshold = b.PadRunThreshold,
                 TriggerThreshold = b.PadTriggerThreshold,
                 LookScale = b.PadLookScale,
+                // The vibration is not in the struct: PadExports sets it.
+                Rumble = basis.Pad?.Rumble ?? false,
+                RumbleStrength = basis.Pad?.RumbleStrength ?? 1f,
             },
         };
         s.Clamp();

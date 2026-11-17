@@ -1,5 +1,6 @@
 #include "Menu/ScctMenuKit.h"
 
+#include "Menu/ScctMenuNav.h"
 #include "Brushes/SlateColorBrush.h"
 #include "Brushes/SlateNoResource.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
@@ -328,11 +329,13 @@ namespace ScctUi
 
 	int32 AdjustDirection(const FKey& Key)
 	{
-		if (Key == EKeys::Left || Key == EKeys::Gamepad_DPad_Left || Key == EKeys::Gamepad_LeftStick_Left)
+		// The left stick is not here: it reaches a row as Slate's analog navigation (OnNavigation), and its key copies
+		// (Gamepad_LeftStick_Left) would step the value a second time.
+		if (Key == EKeys::Left || Key == EKeys::Gamepad_DPad_Left)
 		{
 			return -1;
 		}
-		if (Key == EKeys::Right || Key == EKeys::Gamepad_DPad_Right || Key == EKeys::Gamepad_LeftStick_Right)
+		if (Key == EKeys::Right || Key == EKeys::Gamepad_DPad_Right)
 		{
 			return 1;
 		}
@@ -641,6 +644,12 @@ int32 SScctButton::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeom
 	{
 		// The keyboard's and the controller's place: a second, outer line.
 		Painter.Box(FVector2D(-3.0, -3.0), Size + FVector2D(6.0, 6.0), OutlineBrush(ScctUi::Corner + 3.0f), ScctHudStyle::Fade(Look == EScctButtonLook::Primary ? FLinearColor::White : Colour, 0.75f * Lit), 1);
+	}
+	else if (bFocused && ScctUi::IsPadActive())
+	{
+		// A menu entry reached with the controller: its wash and bar look as under the pointer, so the controller's
+		// place gets a hairline round the entry as well (there is no pointer to say where it is).
+		Painter.Box(FVector2D::ZeroVector, Size, OutlineBrush(), ScctHudStyle::Fade(Colour, 0.55f * Lit), 1);
 	}
 	return SButton::OnPaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId + 2, InWidgetStyle, bParentEnabled);
 }
@@ -1480,13 +1489,14 @@ void SScctDialogLayer::Show(const FScctDialog& Dialog)
 	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
 	Box->AddSlot().AutoHeight()[ ScctUi::Text(ScctUi::ToText(Dialog.Title.ToUpper()), ScctUi::H2()) ];
 	Box->AddSlot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 0.0f)[ ScctUi::Rule() ];
-	if (!Dialog.Body.IsEmpty() || Dialog.Timeout > 0.0f)
+	if (!Dialog.Body.IsEmpty() || Dialog.Timeout > 0.0f || Dialog.LiveBody)
 	{
 		Box->AddSlot().AutoHeight().Padding(0.0f, 18.0f, 0.0f, 0.0f)
 		[
 			ScctUi::Text(TAttribute<FText>::CreateLambda([this]
 			{
-				return FText::FromString(Current.Timeout > 0.0f ? FString::Printf(TEXT("%s %d"), *Current.Body, FMath::CeilToInt32(TimeLeft)) : Current.Body);
+				const FString Shown = Current.LiveBody ? Current.LiveBody() : Current.Body;
+				return FText::FromString(Current.Timeout > 0.0f ? FString::Printf(TEXT("%s %d"), *Shown, FMath::CeilToInt32(TimeLeft)) : Shown);
 			}), ScctUi::Body(), FSlateColor(ScctHudStyle::TextDim()), true)
 		];
 	}
@@ -1563,7 +1573,7 @@ FReply SScctDialogLayer::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent&
 		return FReply::Unhandled();
 	}
 	const FKey Key = InKeyEvent.GetKey();
-	if (Key == EKeys::Escape || Key == EKeys::Gamepad_FaceButton_Right)
+	if (ScctMenuNav::IsBackKey(Key))
 	{
 		ScctUi::Play(EScctUiSound::Back);
 		Answer(Current.CancelButton);

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A console check of the pawn looks without Unreal: hosts a map with bots, puts looks on the local server, and prints each pawn's look as the client draws it, the map's outfits and the posed skeleton. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\OpenScct.UnrealBridge\OpenScct.UnrealBridge.csproj" />
+  </ItemGroup>
+</Project>
+
