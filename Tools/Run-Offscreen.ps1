@@ -13,6 +13,8 @@ param(
     [string] $Options = '',
     # Camera tour: "x,y,z,yaw,pitch;x,y,z,yaw,pitch" (one per screenshot) instead of the player's view.
     [string] $Cams = '',
+    # Console commands to run at start, comma separated (look experiments: "r.ExposureOffset 2").
+    [string] $Exec = '',
     [string] $Engine = 'F:\UE_5.8'
 )
 
@@ -23,7 +25,7 @@ $contentDir = $Content.Replace('\', '/')
 
 & "$Engine\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "$project\OpenSCCTUnreal.uproject" "/Game/Imported/Maps/$Map/$Map$Options" `
     -game -RenderOffscreen -ResX=1920 -ResY=1080 -unattended -nosplash -nosound `
-    "-ScctContent=$contentDir" "-ScctShots=$Shots" "-ScctShotEvery=$Every" "-ScctShotDir=$shotDir" "-ScctCams=$Cams" "-abslog=$log" *> $null
+    "-ScctContent=$contentDir" "-ScctShots=$Shots" "-ScctShotEvery=$Every" "-ScctShotDir=$shotDir" "-ScctCams=$Cams" "-ExecCmds=$Exec" "-abslog=$log" *> $null
 "exit code $LASTEXITCODE"
 
 Select-String -Path $log -Pattern 'LogOpenSCCT' |

@@ -388,9 +388,12 @@ def main():
     sky.set_folder_path("Atmosphere")
     sky_component = sky.light_component
     sky_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    # A faint, even night-sky fill: open areas are never pitch black, and Lumen keeps it out of closed rooms.
     try_set(sky_component, "real_time_capture", False)
-    sky_component.set_intensity(0.05)
-    sky_component.set_light_color(unreal.LinearColor(0.35, 0.45, 0.7, 1.0))
+    try_set(sky_component, "source_type", unreal.SkyLightSourceType.SLS_SPECIFIED_CUBEMAP)
+    try_set(sky_component, "cubemap", unreal.load_asset("/Engine/MapTemplates/Sky/DaylightAmbientCubemap"))
+    sky_component.set_intensity(1.2)
+    sky_component.set_light_color(unreal.LinearColor(0.30, 0.42, 0.75, 1.0))
 
     fog = spawn(unreal.ExponentialHeightFog, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
     fog.set_folder_path("Atmosphere")
@@ -408,9 +411,10 @@ def main():
     settings = post.get_editor_property("settings")
     for name, value in [
         ("auto_exposure_method", unreal.AutoExposureMethod.AEM_HISTOGRAM),
-        # A narrow range: the eye adapts a little, but dark rooms stay dark. This is a stealth game.
-        ("auto_exposure_min_brightness", 0.7),
-        ("auto_exposure_max_brightness", 1.6),
+        # In EV100 (the project extends the luminance range). The eye adapts well into the dark, so shadows
+        # stay readable when you stand in them, but not far up, so bright rooms do not grey out.
+        ("auto_exposure_min_brightness", -2.5),
+        ("auto_exposure_max_brightness", 2.0),
         ("auto_exposure_bias", 0.0),
         ("bloom_intensity", 0.9),
         ("bloom_threshold", -1.0),
