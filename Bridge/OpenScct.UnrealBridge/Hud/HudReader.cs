@@ -953,6 +953,10 @@ public sealed class HudReader
         }
 
         ref HudState s = ref f.State;
+        // Exit (the menu's own way back) is always usable, so it never counts as something to use.
+        int things = 0;
+        int onlyThing = -1;
+        bool exitSelected = false;
         for (int i = 0; i < manager.NbObjects && i < manager.Interactions.Length; i++)
         {
             if (manager.Interactions[i] is { bDeleteMe: false } entry && entry.CanUse(pc))
@@ -961,6 +965,12 @@ public sealed class HudReader
                 if (selected)
                 {
                     s.SelectedInteraction = f.Interactions.Count;
+                    exitSelected = entry is SLeaveInteraction;
+                }
+
+                if (entry is not SLeaveInteraction)
+                {
+                    onlyThing = things++ == 0 ? f.Interactions.Count : -1;
                 }
 
                 f.Interactions.Add(new HudInteraction
@@ -978,8 +988,10 @@ public sealed class HudReader
         flags |= f.Interactions.Count >= 2 && canInteract ? HudFlags.ShowInteractions : 0;
         if (canInteract && f.Interactions.Count > 0)
         {
-            // What Use acts on: the selection, or the only entry there is.
-            int use = s.SelectedInteraction >= 0 ? s.SelectedInteraction : f.Interactions.Count == 1 ? 0 : -1;
+            // What Use acts on: the selection (Exit only while the menu is held open on it), or the only thing
+            // there is to use. With nothing in reach there is no prompt.
+            bool selection = s.SelectedInteraction >= 0 && (!exitSelected || pc.bUsing != 0);
+            int use = selection ? s.SelectedInteraction : onlyThing;
             s.UsePromptId = use >= 0 ? f.Interactions.Span[use].DescriptionId : 0;
         }
     }

@@ -288,7 +288,8 @@ public unsafe struct HudState
     public int SelectedInteraction;
 
     /// <summary>
-    /// What Use does now, as the interaction's own text: the selected entry, or the only usable one. 0 when there is
+    /// What Use does now, as the interaction's own text: the selected entry, or the only usable one (the menu's own
+    /// Exit entry, which is always usable, is not one unless the menu is held open on it). 0 when there is
     /// nothing to use.
     /// </summary>
     public int UsePromptId;
