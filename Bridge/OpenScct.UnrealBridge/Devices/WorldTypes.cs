@@ -235,6 +235,13 @@ public static class BridgeWorldMarkerKind
 
     /// <summary>SDisk: a Disk Hunt dog tag (hidden in the other modes).</summary>
     public const int Disk = 10;
+
+    /// <summary>
+    /// SCamNetwork: a globe camera of the merc camera ring. State 1 while a spy's sticky shocker has it out (flag
+    /// <see cref="BridgeWorldMarkerFlags.Disabled"/> too), 0 while it works; TimeLeft is the seconds until it works
+    /// again and Progress how far through the outage it is.
+    /// </summary>
+    public const int CamNetwork = 11;
 }
 
 /// <summary>One gameplay object a client marks in the world (<c>GetMarkers</c>).</summary>
@@ -288,6 +295,9 @@ public static class BridgeWorldMarkerFlags
 
     /// <summary>The actor is not on this client now (out of network relevancy): the values are the last known.</summary>
     public const int Gone = 64;
+
+    /// <summary>The device is out of order (a network camera shot with the sticky shocker: SCamNetwork.IsShotDisabled).</summary>
+    public const int Disabled = 128;
 }
 
 /// <summary>What happened (<see cref="BridgeWorldEvent.Kind"/>).</summary>
@@ -304,7 +314,8 @@ public static class BridgeWorldEventKind
 
     /// <summary>
     /// A glass pane (SVitre) broke: X,Y,Z where it was hit and DX,DY,DZ the unit direction of the hit, both zero
-    /// when the simulation did not say (A is 1 when they are given).
+    /// when the simulation did not say (A is 1 when they are given), and B the pane's impact serial
+    /// (GlassImpactSerial, 0 when not given), which seeds the shape of its shards as in the Godot client's GlassBreakViews.
     /// </summary>
     public const int GlassBroken = 3;
 

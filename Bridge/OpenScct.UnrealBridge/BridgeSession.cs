@@ -44,6 +44,8 @@ public sealed record LocalMatch
     /// </summary>
     public bool OfflineRules { get; init; }
 
+    /// <summary>Responsive smoke: smoke grenades fill the shared simulated cloud (the match option SvmResponsiveSmoke).</summary>
+    public bool ResponsiveSmoke { get; init; }
     /// <summary>Visit a Map practice: unlimited ammunition and gadgets, instant gear changes, and Switch Team in the menu.</summary>
     public bool UnlimitedGear { get; init; }
     /// <summary>The player's own rules over the map's (and over the practice rules): minutes (0 for no limit), lives of
@@ -175,6 +177,7 @@ public sealed class BridgeSession : IDisposable
             OfflineRules = match.OfflineRules,
             // The map folders Unreal names (-ScctMaps, maps next to the game) and the content's maps.
             MapRoots = Online.MapFolders.ExtraRoots(),
+            ResponsiveSmoke = match.ResponsiveSmoke,
             UnlimitedGear = match.OfflineRules || match.UnlimitedGear,
             StartAt = match.StartAt,
             Rules = match.PlayLevel ? PlayRules.PlayLevel : PlayRules.MapSettings,
@@ -426,11 +429,21 @@ public sealed class BridgeSession : IDisposable
     }
 
     /// <summary>
-    /// The character file of a pawn kind (0 spy <c>SPerso.ATT_01</c>, 1 merc <c>SPerso.DEF_01</c>: the teams' stock
-    /// meshes, as the Godot client's PawnOutfits.StockAsset) from the shared content of the session's map, or null
-    /// when the content does not have it.
+    /// The character file posed and drawn for a pawn kind: the model of the map's outfit for that team when its
+    /// render/outfits.json gives one (<see cref="Outfits"/>), else the team's stock mesh (0 spy <c>SPerso.ATT_01</c>,
+    /// 1 merc <c>SPerso.DEF_01</c>, as the Godot client's PawnOutfits.StockAsset) from the shared content of the
+    /// session's map; null when the content does not have it. GetSkeleton, the poses and the equipment's bones all
+    /// follow it.
     /// </summary>
-    public GlbCharacter? Character(int kind) => CharacterOf(kind, SharedContent.FindRoot(_session.MapFolder));
+    public GlbCharacter? Character(int kind) => Outfits.Character(kind);
+
+    /// <summary>The team's stock character file whatever the map's outfits (its clips pose an outfit's model).</summary>
+    public GlbCharacter? StockCharacter(int kind) => CharacterOf(kind, SharedContent.FindRoot(_session.MapFolder));
+
+    /// <summary>The map's outfits (render/outfits.json), read on first use.</summary>
+    public PawnOutfits Outfits => _outfits ??= PawnOutfits.For(_session.MapFolder, SharedContent.FindRoot(_session.MapFolder));
+
+    private PawnOutfits? _outfits;
 
     /// <summary>The same for the configured content, for a caller with no session yet.</summary>
     public static GlbCharacter? ConfiguredCharacter(int kind) => CharacterOf(kind, ContentPaths.Shared);
@@ -639,13 +652,15 @@ public sealed class BridgeSession : IDisposable
             return poser;
         }
 
-        if (Character(pawn is SPAWNDEFENSE ? 1 : 0) is not { } character)
+        int kind = pawn is SPAWNDEFENSE ? 1 : 0;
+        if (Character(kind) is not { } character)
         {
             _posers.Remove(pawn.ActorId);
             return null;
         }
 
-        poser = new PawnPoser(pawn, character);
+        // Under a map outfit the model's skeleton is posed with the team's stock clips.
+        poser = new PawnPoser(pawn, character, StockCharacter(kind));
         _posers[pawn.ActorId] = poser;
         return poser;
     }

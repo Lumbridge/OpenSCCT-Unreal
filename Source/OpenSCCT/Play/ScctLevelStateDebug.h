@@ -8,8 +8,9 @@
 // change both together. Only the level state's -ScctLevelDo switch uses it. Every entry returns 1 when the
 // action was handed to the server and 0 when there is no local server (an online round) or no match.
 
-// Version 2: FireEmitters added. 3: ShootNear added. 4: ThrowFlare and DirtyFeet added.
-constexpr int32 ScctWorldDebugApiVersion = 4;
+// Version 2: FireEmitters added. 3: ShootNear added. 4: ThrowFlare and DirtyFeet added. 5: CamnetOff, PlaceModem and
+// ShootModems added. 6: PopSmoke and ShootSmoke added.
+constexpr int32 ScctWorldDebugApiVersion = 6;
 
 struct FScctWorldDebugApi
 {
@@ -40,4 +41,24 @@ struct FScctWorldDebugApi
 	 * on any floor (the dirt is not replicated: each machine prints its own copies' steps). Returns the pawn count.
 	 */
 	int32 (__cdecl* DirtyFeet)();
+	/**
+	 * Puts every network camera of the merc camera ring out as a spy's sticky shocker does (30 seconds, replicated).
+	 * Needs a spy pawn on the server.
+	 */
+	int32 (__cdecl* CamnetOff)();
+	/**
+	 * Places a PS2 sabotage modem as the spy's modem gadget does: at the map's PS2 bomb target with its own modem
+	 * mesh, or, on a map without one, on the wall ahead of the point along the direction with the shared pack's
+	 * sabotage bomb as a stand-in mesh.
+	 */
+	int32 (__cdecl* PlaceModem)(float X, float Y, float Z, float DirX, float DirY, float DirZ);
+	/** Shoots every PS2 modem once: each leaves its destruction smoke and flash and goes. */
+	int32 (__cdecl* ShootModems)();
+	/**
+	 * Pops a spy smoke grenade on the floor ahead of the point along the direction (short of a wall in the way), as a
+	 * thrown one pops where it lands. With responsive smoke on its cloud is the shared simulated field.
+	 */
+	int32 (__cdecl* PopSmoke)(float X, float Y, float Z, float DirX, float DirY, float DirZ);
+	/** Fires Shots shots from the point through every responsive smoke cloud, fanned across its middle: each leaves a hole that refills. */
+	int32 (__cdecl* ShootSmoke)(float X, float Y, float Z, int32 Shots);
 };
