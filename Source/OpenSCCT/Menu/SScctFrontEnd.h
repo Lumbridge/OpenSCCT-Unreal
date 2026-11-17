@@ -24,6 +24,7 @@ class UScctOnlineSubsystem;
  *   Servers   the master's list, refresh, sign in
  *   Options   the Options screen (Menu/SScctOptionsPage.h), from the home page or the lobby; a visit does not
  *             take the screen from it
+ *   Host      Create Session: map, rules and hosting choices, create (Menu/SScctHostPage.h)
  *   Visit     shown instead of the above while UScctOnlineSubsystem::IsVisiting
  */
 class SScctFrontEnd : public SCompoundWidget
@@ -57,6 +58,7 @@ private:
 		Servers,
 		Visit,
 		Options,
+		Host,
 	};
 
 	/** What the visit page is showing; a change rebuilds it. */
