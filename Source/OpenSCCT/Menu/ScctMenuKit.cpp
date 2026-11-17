@@ -1386,7 +1386,7 @@ FReply SScctDialogLayer::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent&
 	if (Key == EKeys::Escape || Key == EKeys::Gamepad_FaceButton_Right)
 	{
 		ScctUi::Play(EScctUiSound::Back);
-		Answer(-1);
+		Answer(Current.CancelButton);
 	}
 	// Nothing under an open dialog hears a key.
 	return FReply::Handled();
@@ -1439,7 +1439,7 @@ void SScctDialogLayer::Tick(const FGeometry& AllottedGeometry, const double InCu
 			TimeLeft -= InDeltaTime;
 			if (TimeLeft <= 0.0f)
 			{
-				Answer(-1);
+				Answer(Current.CancelButton);
 			}
 		}
 	}

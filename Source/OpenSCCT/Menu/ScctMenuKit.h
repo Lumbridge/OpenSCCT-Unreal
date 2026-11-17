@@ -528,7 +528,7 @@ struct FScctDialogButton
 	TFunction<void(const FString&)> OnPressed;
 };
 
-/** What a dialog asks. The last button is the one Escape and B press. */
+/** What a dialog asks. */
 struct FScctDialog
 {
 	FString Title;
@@ -542,6 +542,8 @@ struct FScctDialog
 	float Timeout = 0.0f;
 	/** The button that has the focus when the dialog opens. */
 	int32 FocusButton = 0;
+	/** The button Escape and B press; negative: the last one. */
+	int32 CancelButton = -1;
 };
 
 /**
