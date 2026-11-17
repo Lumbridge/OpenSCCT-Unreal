@@ -26,8 +26,8 @@ set is in `Tools/Import/surface_classes.json`.
 | Rock030 | https://ambientcg.com/a/Rock030 | natural rock |
 | Marble006 | https://ambientcg.com/a/Marble006 | polished stone |
 | SurfaceImperfections001 | https://ambientcg.com/a/SurfaceImperfections001 | smudges on glazed tiles and glossy surfaces |
-| Metal032 | https://ambientcg.com/a/Metal032 | worn bare metal, gratings |
-| Metal009 | https://ambientcg.com/a/Metal009 | imported, not assigned to a class yet (cleaner metal) |
+| Metal032 | https://ambientcg.com/a/Metal032 | imported, not assigned to a class (too clean to show as a detail layer) |
+| Metal009 | https://ambientcg.com/a/Metal009 | bare metal and gratings (brushed, scratched) |
 | PaintedMetal007 | https://ambientcg.com/a/PaintedMetal007 | painted metal |
 | Rust004 | https://ambientcg.com/a/Rust004 | rusted metal |
 | Wood049 | https://ambientcg.com/a/Wood049 | wood |

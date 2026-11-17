@@ -89,6 +89,19 @@ def pack_set(name, zip_path, out):
         normal.convert("RGB").save(normal_path, quality=95, subsampling=0)
 
 
+def measure_set(name, out):
+    """How much a packed set varies. Sets differ wildly (a clean metal's roughness barely moves, gravel's normal
+    swings hard), so the importer scales each one to a common strength from these numbers; without that a
+    surface class's "how much of the set shows" would mean something different for every set."""
+    packed = np.asarray(Image.open(os.path.join(out, "T_%s_ORD.jpg" % name)).resize((512, 512)), dtype=np.float32) / 255.0
+    normal = np.asarray(Image.open(os.path.join(out, "T_%s_N.jpg" % name)).resize((512, 512)), dtype=np.float32) / 127.5 - 1.0
+    return {
+        "normal_rms": round(float(np.sqrt((normal[..., :2] ** 2).sum(axis=-1).mean())), 3),
+        "rough_std": round(float(packed[..., 1].std()), 3),
+        "luma_std": round(float(packed[..., 2].std()), 3),
+    }
+
+
 def read_hdr(path):
     """A Radiance .hdr (run-length encoded RGBE) as float32 RGB."""
     with open(path, "rb") as f:
@@ -177,13 +190,23 @@ def water_normal(target, size=512):
 
 def main():
     downloads, out = sys.argv[1], sys.argv[2]
-    catalogue = json.load(open(os.path.join(HERE, "pbr_sets.json")))
+    catalogue_path = os.path.join(HERE, "pbr_sets.json")
+    catalogue = json.load(open(catalogue_path))
     os.makedirs(out, exist_ok=True)
+    measured = False
     for name, record in catalogue["sets"].items():
         zip_path = os.path.join(downloads, name, name + ".zip")
         download(record["url"], zip_path)
         pack_set(name, zip_path, out)
+        stats = measure_set(name, out)
+        if record.get("stats") != stats:
+            record["stats"], measured = stats, True
         print("set ready: " + name)
+    if measured:
+        # The measurements are committed with the catalogue: the map import needs them and has only the uassets.
+        with open(catalogue_path, "w", newline="\n") as f:
+            json.dump(catalogue, f, indent=2)
+            f.write("\n")
     for name, record in catalogue["hdris"].items():
         hdr_path = os.path.join(downloads, name, name + ".hdr")
         download(record["url"], hdr_path)

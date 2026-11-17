@@ -22,6 +22,9 @@ WATER_NORMAL = MATERIALS + "/T_WaterNormal"
 # Custom primitive data slot 0 on a mesh component: 1 = sample the detail layer in the mesh's own space, so the
 # grain travels with a door or a lift instead of sliding across it. import_map.py sets it on everything movable.
 LOCAL_DETAIL_SLOT = 0
+# Custom primitive data slot 1: 1 = this mesh's vertex colours are the original's baked light (see "baked light"
+# in build_surface). import_map.py sets it on the meshes the map lists as vertex lit.
+BAKED_VERTEX_SLOT = 1
 
 asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
 editor_assets = unreal.EditorAssetLibrary
@@ -197,7 +200,7 @@ def build_surface():
     occlusion_amount = g.scalar("DetailOcclusion", 0.0)
     colour = g.custom(
         "float fade = lerp(1.0, 0.35, saturate((Depth - 500.0) / 2500.0));"
-        " float grain = lerp(1.0, saturate(D.b * 2.0), Amount * fade);"
+        " float grain = clamp(1.0 + (D.b * 2.0 - 1.0) * Amount * fade, 0.45, 1.6);"
         " return Base * Tint * grain * lerp(1.0, D.r, AO * 0.5 * fade);", FLOAT3,
         Base=(base, "RGB"), Tint=tint, D=packed, Amount=g.scalar("DetailColour", 0.0), AO=occlusion_amount,
         Depth=g.node(unreal.MaterialExpressionPixelDepth))
@@ -219,8 +222,23 @@ def build_surface():
     # glass, screens, lit windows), so Lumen spreads that light into the room.
     self_lit = g.texture("SelfIllumTexture", "/Engine/EngineResources/Black", uvs=uv)
     self_mask = g.texture("SelfIllumMask", "/Engine/EngineResources/WhiteSquareTexture", uvs=uv)
-    emissive = g.custom("return Base * Tint * Whole + Lit * Mask * Strength;", FLOAT3,
-                        Base=(base, "RGB"), Tint=tint, Whole=g.scalar("Emissive", 0.0),
+
+    # ---- baked light. The original lit its levels with lightmaps (on the level's own surfaces, second UV set)
+    # and baked vertex colours (on placed meshes), and many of the lights those were baked from are not in the
+    # map file any more. A share of that baked light is given back as a faint glow of the surface's own colour:
+    # rooms the artists lit stay lit where no lamp survives, and because Lumen bounces a glow like any light it
+    # also reaches characters and furniture. Both were stored at half strength and multiplied the texture in
+    # display space, hence the doubling and the power.
+    lightmap_uv = g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1)
+    lightmap = g.texture("Lightmap", "/Engine/EngineResources/Black", uvs=lightmap_uv)
+    baked_vertex = g.node(unreal.MaterialExpressionScalarParameter, parameter_name="BakedVertexLight", default_value=0.0,
+                          use_custom_primitive_data=True, primitive_data_index=BAKED_VERTEX_SLOT)
+    baked = g.custom("float3 vertex = pow(saturate(VC.rgb) * 2.0, 2.2) * saturate(UseVC);"
+                     " return (min(LM * 4.6, 4.6) + vertex) * Fill;", FLOAT3,
+                     LM=(lightmap, "RGB"), VC=g.node(unreal.MaterialExpressionVertexColor), UseVC=baked_vertex,
+                     Fill=g.scalar("BakedFill", 0.0))
+    emissive = g.custom("return Base * Tint * (Whole + Baked) + Lit * Mask * Strength;", FLOAT3,
+                        Base=(base, "RGB"), Tint=tint, Whole=g.scalar("Emissive", 0.0), Baked=baked,
                         Lit=(self_lit, "RGB"), Mask=(self_mask, "A"), Strength=g.scalar("SelfIllum", 0.0))
     g.output(emissive, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
@@ -277,7 +295,7 @@ def build_water():
     # neighbouring water polygons join up whatever their texture mapping.
     time = g.node(unreal.MaterialExpressionTime)
     position = g.node(unreal.MaterialExpressionWorldPosition)
-    scale, speed = g.scalar("RippleScale", 0.004), g.scalar("RippleSpeed", 0.03)
+    scale, speed = g.scalar("RippleScale", 0.0025), g.scalar("RippleSpeed", 0.03)
     ripples = unreal.load_asset(WATER_NORMAL)
     samples = []
     for index, code in enumerate(("return P.xy * S + T * V * float2(1.0, 0.35);",
@@ -288,10 +306,10 @@ def build_water():
         samples.append(sample)
     # The ripples tilt whatever way the surface faces; on the usual level water that is straight up.
     normal = g.custom("float2 r = (A.xy + B.xy) * S; return normalize(N + float3(r, 0.0) * (1.0 - 0.7 * abs(N.x + N.y)));", FLOAT3,
-                      A=(samples[0], "RGB"), B=(samples[1], "RGB"), S=g.scalar("RippleStrength", 0.35),
+                      A=(samples[0], "RGB"), B=(samples[1], "RGB"), S=g.scalar("RippleStrength", 0.25),
                       N=g.node(unreal.MaterialExpressionVertexNormalWS))
     g.output(normal, unreal.MaterialProperty.MP_NORMAL)
-    g.output(g.scalar("Roughness", 0.04), unreal.MaterialProperty.MP_ROUGHNESS)
+    g.output(g.scalar("Roughness", 0.07), unreal.MaterialProperty.MP_ROUGHNESS)
     g.output(g.scalar("Specular", 1.0), unreal.MaterialProperty.MP_SPECULAR)
     fresnel = g.node(unreal.MaterialExpressionFresnel, exponent=5.0, base_reflect_fraction=0.02)
     g.link(normal, fresnel, "Normal")

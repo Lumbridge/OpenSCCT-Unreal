@@ -96,7 +96,7 @@ WEAK_NAME_CLASSES = {"wood", "metal", "concrete", "plastic", "paper", "lamp", "s
 
 
 def picture_stats(path):
-    """Mean brightness, mean saturation and how much of the picture is see-through."""
+    """Mean brightness and saturation, how much the brightness varies, and how much of the picture is see-through."""
     try:
         image = Image.open(path).convert("RGBA")
     except Exception:  # pylint: disable=broad-except
@@ -108,8 +108,10 @@ def picture_stats(path):
     saturation = np.where(brightest > 0.02, (brightest - darkest) / np.maximum(brightest, 1e-3), 0.0)
     mean = rgb.reshape(-1, 3).mean(axis=0)
     hue = colorsys.rgb_to_hsv(float(mean[0]), float(mean[1]), float(mean[2]))[0]
+    luma = rgb @ np.array([0.299, 0.587, 0.114])
     return {
-        "brightness": float((rgb @ np.array([0.299, 0.587, 0.114])).mean()),
+        "brightness": float(luma.mean()),
+        "contrast": float(luma.std()),
         "saturation": float(saturation.mean()),
         "hue": hue,
         "clear": float((alpha < 0.5).mean()),
@@ -120,7 +122,7 @@ def classify(source, surface_type, flags, stats):
     """Returns (class, why)."""
     name = source.rsplit(".", 1)[-1].lower()
     surface = SURFACE_TYPES[surface_type] if surface_type is not None and surface_type < len(SURFACE_TYPES) else None
-    stats = stats or {"brightness": 0.4, "saturation": 0.2, "hue": 0.0, "clear": 0.0}
+    stats = stats or {"brightness": 0.4, "contrast": 0.1, "saturation": 0.2, "hue": 0.0, "clear": 0.0}
     saturated = stats["saturation"] > 0.32
 
     from_name = None
@@ -161,6 +163,10 @@ def classify(source, surface_type, flags, stats):
     if cls == "lamp" and not (flags.get("self_illum") or flags.get("unlit")):
         # A lamp housing: what the surface type says, or painted metal.
         cls, why = from_type if from_type not in (None, "glossy") else "metal", "lamp housing"
+    if cls == "lamp" and flags.get("unlit") and (stats["brightness"] < 0.6 or stats["saturation"] > 0.45):
+        # A lit picture, not a lamp's glass: an arcade screen, an advert, an exit sign, a lamp drawn together with
+        # its housing. It glows like a screen; at a lamp's strength it would be a white rectangle.
+        cls, why = "screen", "self-lit picture"
     if cls == "foliage" and not (flags.get("masked") or flags.get("translucent")):
         cls, why = from_type or "generic", "plant by name, drawn solid"
     if cls == "grass" and flags.get("masked"):
@@ -170,7 +176,11 @@ def classify(source, surface_type, flags, stats):
 
     # The picture splits painted from bare.
     if cls == "metal":
-        cls = "metal_painted" if saturated else "metal_bare"
+        # Bare metal is grey, mid-toned and even. A colourful, very pale or busy picture on a metal object is paint,
+        # enamel, a sign, a sticker or an instrument panel: shaded as a mirror-like metal those go dark and lose
+        # their print, so they are painted metal.
+        painted = saturated or stats["brightness"] > 0.7 or stats["contrast"] > 0.2
+        cls = "metal_painted" if painted else "metal_bare"
     elif cls == "concrete":
         cls = "concrete_painted" if saturated or stats["brightness"] > 0.62 else "concrete_bare"
     elif cls == "plaster" and saturated:

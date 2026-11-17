@@ -22,13 +22,33 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import scct_materials  # noqa: E402  pylint: disable=wrong-import-position
 
-# Light conversion. The original lights were tuned for baked lightmaps with hand-placed fill lights; these
-# factors bring them to physical units under Lumen. Tuned by eye on AquaE.
+# Light conversion. The original's lights are not physical: a light fades as 1 - (d / R)^2 and is gone at its
+# radius R, and the artists placed them for that (a lamp sits a hand's width under its ceiling and still lights the
+# whole room evenly). A physical inverse-square light at the same spot burns a white patch into the ceiling and
+# leaves the far half of the room black, so the lights keep the original's kind of falloff, a little tighter so
+# that pools of light and shadow read. Everything after that is real: shadows, bounce light, reflections.
 RADIUS_UNITS = 25.0          # world radius = 25 * (LightRadius + 1), as the original engine
-CANDELAS_PER_BRIGHTNESS = 0.45
-EMISSIVE_UNLIT = 2.0      # screens, lamps and signs that were unlit in the original
+LIGHT_FALLOFF = 1.6          # light = (1 - (d / R)^2) ^ this; the original's is 1
+# Light arriving right at a LightBrightness 255 lamp. This sets where lit rooms sit against the night sky, the moon
+# and the glowing surfaces below (all in the same units), inside the exposure range of the post-process volume.
+LIGHT_PER_BRIGHTNESS = 5.0 / 255.0
+# The map's light colours are strong (they multiplied 2005 textures in display space). Under bounce lighting a
+# strongly coloured lamp turns a whole room one hue, so part of the colour is given up toward white.
+LIGHT_SATURATION = 0.7
+EMISSIVE_UNLIT = 1.2      # screens, lamps and signs that were unlit in the original
 EMISSIVE_ADDITIVE = 0.4   # flare and glow sprites: bloom does the rest
 EMISSIVE_SELF_ILLUM = 4.0  # the self-lit part of a lit surface whose class names no strength of its own
+
+# What a detail set is scaled to before a surface class's amounts apply (see fetch_assets.measure_set): the
+# variation a set with real character has. A weaker set is brought up to it, at most this many times (beyond that
+# only its JPEG noise would grow); a stronger one is left as it is.
+DETAIL_TARGETS = {"normal_rms": 0.15, "rough_std": 0.10, "luma_std": 0.08}
+DETAIL_MAX_GAIN = 5.0
+
+# How much of the original's baked light (lightmaps, baked vertex colours) glows from the surfaces that carried it,
+# in the units of the lights above: about 1.6 would be all of it. It is a fill under the real lights, which do the
+# shadows and the shine, so it stays well below that.
+BAKED_FILL = 0.35
 
 asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
 editor_assets = unreal.EditorAssetLibrary
@@ -97,6 +117,11 @@ def load_surface_classes():
     fallback = document.get("fallback", "generic")
     sets = json.load(open(os.path.join(HERE, "pbr_sets.json")))["sets"]
 
+    for record in sets.values():
+        stats = record.get("stats", {})
+        record["gain"] = {name: min(DETAIL_MAX_GAIN, max(1.0, target / max(stats.get(name, target), 1e-4)))
+                          for name, target in DETAIL_TARGETS.items()}
+
     def look_of(source):
         name = chosen.get(source, fallback)
         return name, classes.get(name) or classes[fallback]
@@ -120,6 +145,8 @@ def build_materials(material_doc):
     additive = {key(entry["key"]) for entry in material_doc.get("additive", []) if "key" in entry}
     additive |= {key(entry["name"]) for entry in material_doc.get("additive", []) if "name" in entry}
     look_of, sets = load_surface_classes()
+    # The level surfaces' lightmap page, by material (the converter makes one material per texture and page).
+    lightmap_of = {key(entry["name"]): entry["lightmap"] for entry in material_doc.get("lightmapped", [])}
     parents = {name: unreal.load_asset(path) for name, path in
                (("surface", scct_materials.SURFACE), ("glass", scct_materials.GLASS), ("water", scct_materials.WATER))}
     if not all(parents.values()):
@@ -223,9 +250,10 @@ def build_materials(material_doc):
                 texture("DetailNormal", unreal.load_asset(detail_folder % (detail, "N")))
                 texture("DetailORD", unreal.load_asset(detail_folder % (detail, "ORD")))
                 scalar("DetailTiling", 1.0 / look.get("tile_cm", sets[detail]["tile_cm"]))
-                scalar("DetailNormalStrength", look.get("detail_normal", 1.0))
-                scalar("DetailRoughness", look.get("detail_rough", 0.5))
-                scalar("DetailColour", look.get("detail_colour", 0.5))
+                gain = sets[detail]["gain"]
+                scalar("DetailNormalStrength", look.get("detail_normal", 1.0) * gain["normal_rms"])
+                scalar("DetailRoughness", look.get("detail_rough", 0.5) * gain["rough_std"])
+                scalar("DetailColour", look.get("detail_colour", 0.5) * gain["luma_std"])
                 scalar("DetailOcclusion", look.get("detail_ao", 0.5))
 
             # Light given off: whole-surface for what the original drew unlit, masked for its self-illumination.
@@ -237,6 +265,17 @@ def build_materials(material_doc):
                 mask = flags.get("self_illum_mask")
                 texture("SelfIllumMask", texture_of(mask) if isinstance(mask, str) else None)
                 scalar("SelfIllum", glow or EMISSIVE_SELF_ILLUM)
+
+            if not unlit:
+                scalar("BakedFill", BAKED_FILL)
+                page = lightmap_of.get(key(imported))
+                page = texture_of(page) if page else None
+                if page:
+                    # Display values, like the colour textures (the glTF import took the page for a data map).
+                    if not page.get_editor_property("srgb"):
+                        page.set_editor_property("srgb", True)
+                        page.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_DEFAULT)
+                    texture("Lightmap", page)
 
             pan_u, pan_v = pan_speed(flags.get("uv_anim"))
             scalar("PanU", pan_u)
@@ -334,7 +373,7 @@ def main():
         transform = unreal.Transform(location, rotation, unreal.Vector(1, 1, 1))
         return unreal.ScctImportLibrary.spawn_actor_in_world(world, cls, transform)
 
-    def place_mesh(mesh, label, location, rotation, scale, folder, movable=False):
+    def place_mesh(mesh, label, location, rotation, scale, folder, movable=False, baked_colours=False):
         actor = spawn(unreal.StaticMeshActor, location, rotation)
         actor.static_mesh_component.set_static_mesh(mesh)
         actor.set_actor_scale3d(scale)
@@ -347,6 +386,8 @@ def main():
             component.set_mobility(unreal.ComponentMobility.MOVABLE)
             # The surface material's detail layer is world-aligned; on something that moves it must travel along.
             component.set_default_custom_primitive_data_float(scct_materials.LOCAL_DETAIL_SLOT, 1.0)
+        if baked_colours:
+            component.set_default_custom_primitive_data_float(scct_materials.BAKED_VERTEX_SLOT, 1.0)
         return actor
 
     for node in gltf["nodes"]:
@@ -378,7 +419,8 @@ def main():
             offset = unreal.Vector(pivot[0] * scale.x, pivot[1] * scale.y, pivot[2] * scale.z)
             location = location - unreal.MathLibrary.greater_greater_vector_rotator(offset, rotation)
         mover = instance.get("kind") == "mover"
-        place_mesh(mesh, instance["actor"], location, rotation, scale, "Geometry/Movers" if mover else "Geometry/Meshes", movable=mover or bool(instance.get("gameplay")))
+        place_mesh(mesh, instance["actor"], location, rotation, scale, "Geometry/Movers" if mover else "Geometry/Meshes", movable=mover or bool(instance.get("gameplay")),
+                   baked_colours=bool(instance.get("vertexLit")))
         placed += 1
     log("placed %d meshes, %d without a mesh asset" % (placed, missing))
 
@@ -400,13 +442,15 @@ def main():
         component = actor.light_component
         component.set_mobility(unreal.ComponentMobility.MOVABLE)
         radius = RADIUS_UNITS * (light["radius"] + 1.0)
-        component.set_editor_property("intensity_units", unreal.LightUnits.CANDELAS)
-        candelas = light["brightness"] * CANDELAS_PER_BRIGHTNESS * (radius / 500.0) ** 2
-        component.set_intensity(candelas)
+        component.set_editor_property("use_inverse_squared_falloff", False)
+        component.set_editor_property("light_falloff_exponent", LIGHT_FALLOFF)
+        component.set_intensity(light["brightness"] * LIGHT_PER_BRIGHTNESS)
         # The map's colours come from hue and saturation, in display (gamma) space.
         colour = [channel ** 2.2 for channel in light["color"]]
+        grey = 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2]
+        colour = [grey + (channel - grey) * LIGHT_SATURATION for channel in colour]
         component.set_light_color(unreal.LinearColor(colour[0], colour[1], colour[2], 1.0))
-        component.set_attenuation_radius(radius * 1.5)
+        component.set_attenuation_radius(radius)
         component.set_source_radius(6.0)
         component.set_soft_source_radius(12.0)
         component.set_cast_shadows(True)
@@ -489,9 +533,10 @@ def main():
     fog = spawn(unreal.ExponentialHeightFog, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
     fog.set_folder_path("Atmosphere")
     fog_component = fog.component
-    try_set(fog_component, "fog_density", 0.006)
+    fog_look = sky_look.get("fog", {"density": 0.006, "colour": [0.02, 0.03, 0.05]})
+    try_set(fog_component, "fog_density", fog_look["density"])
     try_set(fog_component, "fog_height_falloff", 0.02)
-    try_set(fog_component, "fog_inscattering_luminance", unreal.LinearColor(0.02, 0.03, 0.05, 1.0))
+    try_set(fog_component, "fog_inscattering_luminance", unreal.LinearColor(fog_look["colour"][0], fog_look["colour"][1], fog_look["colour"][2], 1.0))
     try_set(fog_component, "enable_volumetric_fog", True)
     try_set(fog_component, "volumetric_fog_scattering_distribution", 0.6)
     try_set(fog_component, "volumetric_fog_extinction_scale", 1.2)
@@ -505,13 +550,17 @@ def main():
         # In EV100 (the project extends the luminance range). The eye adapts well into the dark, so shadows
         # stay readable when you stand in them, but not far up, so bright rooms do not grey out.
         ("auto_exposure_min_brightness", -2.5),
-        ("auto_exposure_max_brightness", 2.0),
+        ("auto_exposure_max_brightness", 3.0),
         ("auto_exposure_bias", 0.0),
-        ("bloom_intensity", 0.9),
+        # Local exposure: a lit doorway seen from a dark room keeps its detail and the dark room keeps its shapes,
+        # instead of one burning out or the other going black.
+        ("local_exposure_highlight_contrast_scale", 0.75),
+        ("local_exposure_shadow_contrast_scale", 0.75),
+        ("bloom_intensity", 0.6),
         ("bloom_threshold", -1.0),
         ("vignette_intensity", 0.45),
         ("film_grain_intensity", 0.12),
-        ("scene_fringe_intensity", 0.25),
+        ("scene_fringe_intensity", 0.1),
         ("lens_flare_intensity", 0.4),
         ("ambient_occlusion_intensity", 0.6),
         ("motion_blur_amount", 0.35),
