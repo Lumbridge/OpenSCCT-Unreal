@@ -2,12 +2,14 @@
 
 #include "CoreMinimal.h"
 #include "OpenSCCT.h"
+#include "Runtime/ScctAudioCheckApi.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctEquipmentApi.h"
 #include "Runtime/ScctEventsApi.h"
 #include "Runtime/ScctHudApi.h"
 #include "Runtime/ScctOnlineApi.h"
 #include "Runtime/ScctVisionApi.h"
+#include "Runtime/ScctVoiceApi.h"
 #include "Runtime/ScctWorldApi.h"
 
 // The bridge's feature tables by their C++ type: which bridge class hands each one over and which version the
@@ -29,12 +31,14 @@ struct TScctFeatureInfo;
 		static constexpr int32 Version = VersionConstant; \
 	}
 
+SCCT_FEATURE_TABLE(FScctAudioCheckApi, "AudioCheckExports", ScctAudioCheckApiVersion);
 SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
 SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
 SCCT_FEATURE_TABLE(FScctVisionApi, "VisionExports", ScctVisionApiVersion);
+SCCT_FEATURE_TABLE(FScctVoiceApi, "VoiceExports", ScctVoiceApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);
 
 #undef SCCT_FEATURE_TABLE

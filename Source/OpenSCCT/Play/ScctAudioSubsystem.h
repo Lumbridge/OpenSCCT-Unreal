@@ -9,6 +9,7 @@
 class AScctPawnProxy;
 class UAudioComponent;
 class UReverbEffect;
+class UScctAudioMix;
 class UScctSessionSubsystem;
 class UScctSoundWave;
 class USoundAttenuation;
@@ -23,6 +24,8 @@ class USoundAttenuation;
  *     MinDistance / (MinDistance + 0.5 x (d - MinDistance)) beyond it, nothing past 100 x Radius), follows its
  *     actor or its bone on the drawn pawn, and sends to the reverb more the further away it is;
  *   - the local player's own sounds and flat sounds play without 3D; music is one cross-faded track;
+ *   - every voice plays in its volume category's sound class (Play/ScctAudioMix: the match's effects, the round's
+ *     music, the objective jingles), so the Audio options set its gain; at objective volume 0 a jingle is not played;
  *   - the ambient loops of the map play while they are in reach (3D sources), while the listener is in their
  *     zone (zone beds, one voice per sound) or by distance (other flat sources, the loudest of each sound);
  *   - the reverb is the EAX environment of the zone the listener stands in, read from the map's audio table
@@ -34,6 +37,10 @@ class USoundAttenuation;
  * Unattended switches (off by default):
  *   -ScctAudioLog          log every voice that starts or stops, with file, place, distance and gains
  *   -ScctAudioSummary=S    log the voice counts every S seconds (default 10; 0 never)
+ *   -ScctAudioMusic=Song[@S]  start Song as the round's music S seconds into the match (default 3), through the
+ *                          bridge's PlayMusic path, so the music's volume can be checked on a map whose script
+ *                          plays none early ("Amb_Aqua.Ambiances.aqua_musicA")
+ * Play/ScctAudioMix has the volume switches (-ScctAudioVolume, -ScctAudioPeaks).
  */
 UCLASS()
 class OPENSCCT_API UScctAudioSubsystem : public UWorldSubsystem
@@ -99,6 +106,8 @@ private:
 		bool bLoop = false;
 		bool bMusic = false;
 		bool bNoOverride = false;
+		/** Its volume category (EScctAudioCategory): the sound class and submix it plays through. */
+		uint8 Category = 0;
 		bool bSeen = false;     // ambient: listed and audible this frame
 		TWeakObjectPtr<UAudioComponent> Component;
 	};
@@ -155,6 +164,10 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UScctSessionSubsystem> Session;
 
+	/** The volume categories' classes and gains (Play/ScctAudioMix); null outside a game instance. */
+	UPROPERTY(Transient)
+	TObjectPtr<UScctAudioMix> Mix;
+
 	/** Playable waves by file id and loop setting; they share the cache's samples. */
 	UPROPERTY(Transient)
 	TMap<int64, TObjectPtr<UScctSoundWave>> Waves;
@@ -196,6 +209,10 @@ private:
 	int32 ActiveZone = -2;
 	int32 ListenerZone = INDEX_NONE;
 
+	/** -ScctAudioMusic: the song to start and the seconds into the match it starts at (negative: done). */
+	FString CheckSong;
+	float CheckSongIn = -1.0f;
+
 	float SummaryEvery = 10.0f;
 	float SummaryTimer = 0.0f;
 	float TrimTimer = 0.0f;
@@ -207,5 +224,6 @@ private:
 	int32 NumRefused = 0;
 	int32 NumStolen = 0;
 	int32 NumFailedFiles = 0;
+	int32 NumObjectiveSkipped = 0;
 	int32 PeakVoices = 0;
 };
