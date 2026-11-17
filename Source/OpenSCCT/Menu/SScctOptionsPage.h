@@ -54,8 +54,10 @@ struct FScctOptionsSection
  *
  * Unattended switches (for screenshots):
  *   -ScctOptions=<Page>                 open the screen on that page (front end, or with -ScctMatchMenu in a match)
- *   -ScctSettingSet=<Key>=<Value>[;...]  edit options as if the player had, when the screen opens (not applied);
- *                                        the key PlayerName edits the name
+ *   -ScctOptionsEdit=<Key>=<Value>[;...] edit options as if the player had, when the screen opens (not applied);
+ *                                        the key PlayerName edits the name. (-ScctSettingSet forces options for the
+ *                                        whole run instead: Settings/ScctSettingsForced.h)
+ *   -ScctBrightness                      open the brightness pattern over the screen once it has opened
  *   -ScctOptionsSearch=<Text>            type that into the search box
  *   -ScctOptionsSave                     press SAVE once the screen has opened (once per run)
  *   -ScctOptionsDemo                     register a few test options on the Display, Hud and Audio pages, so the
@@ -125,7 +127,7 @@ private:
 	void ResetAll();
 	void Close();
 
-	/** Reads -ScctSettingSet and -ScctOptionsSave. */
+	/** Reads -ScctOptionsEdit, -ScctOptionsSearch, -ScctBrightness and -ScctOptionsSave. */
 	void RunUnattendedSwitches();
 
 	TWeakObjectPtr<UScctOnlineSubsystem> Online;

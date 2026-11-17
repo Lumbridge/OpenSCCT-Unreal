@@ -2,6 +2,7 @@
 
 #include "Algo/StableSort.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Menu/SScctBrightnessPage.h"
 #include "Menu/SScctConfirm.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/CommandLine.h"
@@ -81,6 +82,10 @@ namespace
 	/** A number as the slider's value text shows it: as many decimals as the step needs. */
 	FString FormatNumber(const FScctSettingDesc& Desc, float Value)
 	{
+		if (Desc.FormatValue)
+		{
+			return Desc.FormatValue(Value);
+		}
 		if (Desc.Type == EScctSettingType::Int)
 		{
 			return FString::FromInt(FMath::RoundToInt(Value));
@@ -471,7 +476,7 @@ TSharedRef<SWidget> SScctOptionsPage::MakeControl(const FScctSettingDesc& Desc)
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.0f, 0.0f, 0.0f, 0.0f)
 			[
-				SNew(SBox).WidthOverride(64.0f).HAlign(HAlign_Right)
+				SNew(SBox).WidthOverride(130.0f).HAlign(HAlign_Right)
 				[
 					Ui::Text(TAttribute<FText>::CreateLambda([Key, Current]
 					{
@@ -727,7 +732,7 @@ void SScctOptionsPage::Close()
 void SScctOptionsPage::RunUnattendedSwitches()
 {
 	FString Sets;
-	if (FParse::Value(FCommandLine::Get(), TEXT("ScctSettingSet="), Sets, false))
+	if (FParse::Value(FCommandLine::Get(), TEXT("ScctOptionsEdit="), Sets, false))
 	{
 		TArray<FString> Pairs;
 		Sets.ParseIntoArray(Pairs, TEXT(";"));
@@ -738,17 +743,17 @@ void SScctOptionsPage::RunUnattendedSwitches()
 			{
 				EditedName = Value.TrimStartAndEnd();
 				NameBox->SetText(Ui::ToText(EditedName));
-				UE_LOG(LogOpenSCCT, Log, TEXT("-ScctSettingSet: player name edited to '%s' (stored '%s')"), *EditedName, *PlayerName(Online.Get()));
+				UE_LOG(LogOpenSCCT, Log, TEXT("-ScctOptionsEdit: player name edited to '%s' (stored '%s')"), *EditedName, *PlayerName(Online.Get()));
 				continue;
 			}
 			const FScctSettingDesc* Desc = Pair.Split(TEXT("="), &Key, &Value) ? FScctSettings::Find(FName(*Key.TrimStartAndEnd())) : nullptr;
 			if (Desc == nullptr)
 			{
-				UE_LOG(LogOpenSCCT, Warning, TEXT("-ScctSettingSet: no option '%s'"), *Pair);
+				UE_LOG(LogOpenSCCT, Warning, TEXT("-ScctOptionsEdit: no option '%s'"), *Pair);
 				continue;
 			}
 			Edit(*Desc, Value.TrimStartAndEnd());
-			UE_LOG(LogOpenSCCT, Log, TEXT("-ScctSettingSet: %s edited to %s (stored %s)"), *Desc->Key.ToString(), *ValueOf(*Desc), *FScctSettings::GetString(Desc->Key));
+			UE_LOG(LogOpenSCCT, Log, TEXT("-ScctOptionsEdit: %s edited to %s (stored %s)"), *Desc->Key.ToString(), *ValueOf(*Desc), *FScctSettings::GetString(Desc->Key));
 		}
 	}
 
@@ -759,6 +764,12 @@ void SScctOptionsPage::RunUnattendedSwitches()
 		Search = Typed.TrimStartAndEnd();
 		RebuildTabs();
 		RebuildBody();
+	}
+
+	if (FParse::Param(FCommandLine::Get(), TEXT("ScctBrightness")))
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("-ScctBrightness: opening the brightness pattern"));
+		SScctBrightnessPage::Open();
 	}
 
 	static bool bSaved = false;

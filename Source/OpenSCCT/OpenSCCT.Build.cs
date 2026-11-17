@@ -25,6 +25,8 @@ public class OpenSCCT : ModuleRules
 		{
 			// The effect meshes are imported on the player's machine and found by looking (Play/ScctEffectsSubsystem).
 			"AssetRegistry",
+			// The monitors' list and work areas for the display settings (Settings/ScctDisplaySettings).
+			"ApplicationCore",
 			// A sound wave class of our own (Play/ScctSoundWave) links against the audio proxy interfaces.
 			"AudioExtensions",
 			"Json",

@@ -45,6 +45,11 @@ struct OPENSCCT_API FScctSettingDesc
 	int32 Order = 0;
 	/** False hides the option from the Options screen (a value only code or the console sets). */
 	bool bVisible = true;
+	/**
+	 * For Float and Int: how the Options screen writes a value beside its slider ("Unlimited", "+10%"); unset writes
+	 * the number. Asked each time the value is drawn, so it may read the moment (the monitor's refresh rate).
+	 */
+	TFunction<FString(float)> FormatValue;
 };
 
 namespace FScctSettings
@@ -60,7 +65,10 @@ namespace FScctSettings
 	/** Every page that has at least one visible option, in the Options screen's order. */
 	OPENSCCT_API TArray<FName> Pages();
 
-	/** The stored text, or the default when the player never set it (empty for an unknown key). */
+	/**
+	 * The stored text, or the default when the player never set it (empty for an unknown key). A value forced for
+	 * the run with -ScctSettingSet (Settings/ScctSettingsForced.h) comes before both until the option is set.
+	 */
 	OPENSCCT_API FString GetString(FName Key);
 	OPENSCCT_API bool GetBool(FName Key);
 	OPENSCCT_API float GetFloat(FName Key);
