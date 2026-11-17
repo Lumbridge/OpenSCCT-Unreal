@@ -249,6 +249,7 @@ void UScctHudSubsystem::ReadSnapshot()
 			const FScctHudMessage& Message = Messages[Index];
 			UE_LOG(LogOpenSCCT, Log, TEXT("HUD message t=%.1f category %d kind %d cause %d flags %d for %.1f s: \"%s\""),
 				Message.Time, Message.Category, Message.Kind, Message.Cause, Message.Flags, Message.Duration, Message.Text);
+			OnMessage.Broadcast(Message);
 			M.AddMessage(Message);
 		}
 	} while (Count == UE_ARRAY_COUNT(Messages));

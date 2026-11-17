@@ -174,6 +174,10 @@ void FScctHudModel::AddMessage(const FScctHudMessage& Message)
 	case EScctHudMessageCategory::Reticle:
 		// Shown under the crosshair from the snapshot (ReticleMessageId) for as long as the original shows it.
 		break;
+	case EScctHudMessageCategory::Chat:
+	case EScctHudMessageCategory::TeamChat:
+		// The chat panel (Hud/ScctChatSubsystem) shows players' lines, with their history; the log would repeat them.
+		break;
 	default:
 		Line.Life = FMath::Clamp(Message.Duration, 3.5f, 7.0f);
 		AddLine(Log, MoveTemp(Line), 5);

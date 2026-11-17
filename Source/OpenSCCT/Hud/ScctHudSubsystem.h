@@ -40,6 +40,13 @@ public:
 	/** What the HUD shows this frame. */
 	const FScctHudModel& GetModel() const { return *Model; }
 
+	/**
+	 * Every message drained from the bridge, as it is drained (once each, oldest first), before the model files it.
+	 * The chat takes the Chat and TeamChat lines from here; the model leaves those to it.
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FMessageEvent, const FScctHudMessage& /*Message*/);
+	FMessageEvent OnMessage;
+
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 

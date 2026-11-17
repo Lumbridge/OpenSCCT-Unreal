@@ -46,7 +46,7 @@ namespace ScctHudElements
 	/** Under the clock: briefings and objective headlines. */
 	void PaintHeadlines(FScctHudPainter& Painter, const FScctHudModel& Model);
 
-	/** Above the status block: the player's own state lines, zones and chat. */
+	/** Above the status block: the player's own state lines, zones and console lines (chat has its own panel). */
 	void PaintLog(FScctHudPainter& Painter, const FScctHudModel& Model);
 
 	/** Bottom centre while dead or visiting: who is watched, the wait for the respawn and the team's tip. */
