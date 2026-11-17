@@ -48,6 +48,13 @@ public sealed record LocalMatch
     public bool ResponsiveSmoke { get; init; }
     /// <summary>Visit a Map practice: unlimited ammunition and gadgets, instant gear changes, and Switch Team in the menu.</summary>
     public bool UnlimitedGear { get; init; }
+
+    /// <summary>
+    /// The player count the map's match-size rules lay the match out for (PlaySettings.MatchPlayers, the Godot
+    /// client's --players), 0 for this match's own: the bots and the local player.
+    /// </summary>
+    public int MatchPlayers { get; init; }
+
     /// <summary>The player's own rules over the map's (and over the practice rules): minutes (0 for no limit), lives of
     /// each spy and merc (0 for unlimited) and the respawn's seconds; negative keeps what the rules gave.</summary>
     public int TimeLimit { get; init; } = -1;
@@ -179,6 +186,7 @@ public sealed class BridgeSession : IDisposable
             MapRoots = Online.MapFolders.ExtraRoots(),
             ResponsiveSmoke = match.ResponsiveSmoke,
             UnlimitedGear = match.OfflineRules || match.UnlimitedGear,
+            MatchPlayers = Math.Clamp(match.MatchPlayers, 0, OpenScct.Core.Match.MatchRuleSet.MostPlayers),
             StartAt = match.StartAt,
             Rules = match.PlayLevel ? PlayRules.PlayLevel : PlayRules.MapSettings,
             HostMode = match.InlineHost || match.SimLink is not null ? PlayHostMode.Inline : PlayHostMode.Thread,

@@ -24,6 +24,9 @@ namespace
 	const int32 PlayTimeChoices[] = { -1, 0, 3, 5, 8, 10, 15, 20, 30, 45, 60 };
 	const int32 PlayLivesChoices[] = { -1, 0, 1, 2, 3, 4, 5, 6, 8, 10 };
 	const int32 PlayRespawnChoices[] = { -1, 1, 2, 3, 5, 8, 10, 15 };
+	// The match-size rules' range (MatchRuleSet.MostPlayers is 24); 0 is the match's own count.
+	constexpr int32 PlayMatchPlayersMin = 2;
+	constexpr int32 PlayMatchPlayersMax = 24;
 
 	class SScctMenuPlay : public SScctMenuPage
 	{
@@ -144,6 +147,15 @@ namespace
 				if (Found != INDEX_NONE)
 				{
 					SelectMap(Found);
+					// The map's own row takes the focus, so the saved map's row taking it later does not choose that one again.
+					if (MapItems.IsValidIndex(Found) && MapItems[Found].IsValid())
+					{
+						DefaultFocus = MapItems[Found].Pin();
+						if (HasFocusedDescendants())
+						{
+							FSlateApplication::Get().SetKeyboardFocus(DefaultFocus.Pin(), EFocusCause::SetDirectly);
+						}
+					}
 				}
 			}
 		}
@@ -486,7 +498,7 @@ namespace
 				.Set([this](int32 Value) { Respawn = PlayRespawnChoices[Value]; }));
 			Add(SNew(SScctToggle)
 				.Label(FText::FromString(TEXT("Practice rules")))
-				.Description(FText::FromString(TEXT("No time limit, unlimited lives and a 5 second respawn, unless set above. For learning a map.")))
+				.Description(FText::FromString(TEXT("No time limit, unlimited lives and a 5 second respawn, unless set above, with unlimited ammunition, gadgets and mask air, instant gear changes and Switch Team in the match menu. For learning a map.")))
 				.Get([this] { return bPractice; })
 				.Set([this](bool bValue) { bPractice = bValue; }));
 			Add(SNew(SScctStepper)
@@ -501,6 +513,24 @@ namespace
 				.Description(FText::FromString(TEXT("The mercenaries may pick OpenSCCT's additional rifles.")))
 				.Get([this] { return bRifles; })
 				.Set([this](bool bValue) { bRifles = bValue; }));
+			Add(SNew(SScctToggle)
+				.Label(FText::FromString(TEXT("Responsive smoke")))
+				.Description(FText::FromString(TEXT("Smoke grenades fill a shared simulated cloud that walls hold back and that shots and blasts push through, instead of the original's smoke.")))
+				.Get([this] { return bResponsiveSmoke; })
+				.Set([this](bool bValue) { bResponsiveSmoke = bValue; }));
+			Add(SNew(SScctStepper)
+				.Label(FText::FromString(TEXT("Match size")))
+				.Description(FText::FromString(TEXT("The player count the map lays its objectives, doors and starts out for (its match-size rules). Auto: the bots and you. A larger count plays a small match on the full map.")))
+				.Wrap(false)
+				.GetOptions([this]
+				{
+					TArray<FString> Out;
+					Out.Add(FString::Printf(TEXT("Auto (%d)"), FMath::Max(Bots, 0) + 1));
+					for (int32 Count = PlayMatchPlayersMin; Count <= PlayMatchPlayersMax; ++Count) { Out.Add(FString::Printf(TEXT("%d players"), Count)); }
+					return Out;
+				})
+				.Get([this] { return MatchPlayers <= 0 ? 0 : MatchPlayers - PlayMatchPlayersMin + 1; })
+				.Set([this](int32 Value) { MatchPlayers = Value <= 0 ? 0 : Value + PlayMatchPlayersMin - 1; }));
 			return Rows;
 		}
 
@@ -537,7 +567,10 @@ namespace
 			// AScctGameMode reads these (Play/ScctGameMode.h). A name with the URL's own separator would cut the options.
 			FString Url = FString::Printf(TEXT("%s?Mode=%s?Side=%s?Bots=%d?Difficulty=%d"), *UScctOnlineSubsystem::LevelOf(MapIds[MapIndex]),
 				UScctMenuSubsystem::ModeKey(ModeIndex), bMerc || IsMercDeathmatch() ? TEXT("merc") : TEXT("spy"), Bots, Skill + 1);
-			if (bPractice) { Url += TEXT("?Practice=1"); }
+			// Practice is the Godot client's --practice (PlayConfig.FromOptions): the offline rules and unlimited gear.
+			if (bPractice) { Url += TEXT("?Practice=1?UnlimitedGear=1"); }
+			if (bResponsiveSmoke) { Url += TEXT("?ResponsiveSmoke=1"); }
+			if (MatchPlayers > 0) { Url += FString::Printf(TEXT("?MatchPlayers=%d"), MatchPlayers); }
 			// AScctGameMode's ?Sidearms and ?Sidearm: the match allows sidearms and the local merc carries this one.
 			static const TCHAR* const SidearmKeys[] = { TEXT(""), TEXT("unsuppressed"), TEXT("suppressed"), TEXT("automatic"), TEXT("magnum44"), TEXT("desert_eagle") };
 			if (SidearmIndex > 0 && SidearmIndex < UE_ARRAY_COUNT(SidearmKeys)) { Url += FString::Printf(TEXT("?Sidearms=1?Sidearm=%s"), SidearmKeys[SidearmIndex]); }
@@ -570,6 +603,9 @@ namespace
 			GConfig->GetBool(PlaySection, TEXT("Practice"), bPractice, Ini);
 			GConfig->GetInt(PlaySection, TEXT("Sidearm"), SidearmIndex, Ini);
 			GConfig->GetBool(PlaySection, TEXT("Rifles"), bRifles, Ini);
+			GConfig->GetBool(PlaySection, TEXT("ResponsiveSmoke"), bResponsiveSmoke, Ini);
+			GConfig->GetInt(PlaySection, TEXT("MatchPlayers"), MatchPlayers, Ini);
+			MatchPlayers = MatchPlayers < PlayMatchPlayersMin ? 0 : FMath::Min(MatchPlayers, PlayMatchPlayersMax);
 			ModeIndex = FMath::Clamp(ModeIndex, 0, 3);
 			Bots = FMath::Clamp(Bots, 0, 15);
 			Skill = FMath::Clamp(Skill, 0, 3);
@@ -594,6 +630,8 @@ namespace
 			GConfig->SetBool(PlaySection, TEXT("Practice"), bPractice, Ini);
 			GConfig->SetInt(PlaySection, TEXT("Sidearm"), SidearmIndex, Ini);
 			GConfig->SetBool(PlaySection, TEXT("Rifles"), bRifles, Ini);
+			GConfig->SetBool(PlaySection, TEXT("ResponsiveSmoke"), bResponsiveSmoke, Ini);
+			GConfig->SetInt(PlaySection, TEXT("MatchPlayers"), MatchPlayers, Ini);
 			GConfig->Flush(false, Ini);
 		}
 
@@ -611,6 +649,8 @@ namespace
 		bool bPractice = false;
 		int32 SidearmIndex = 0;
 		bool bRifles = false;
+		bool bResponsiveSmoke = false;
+		int32 MatchPlayers = 0;
 
 		TSharedPtr<SBox> HeroBox;
 		TWeakPtr<SWidget> FirstOption;

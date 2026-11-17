@@ -137,6 +137,10 @@ struct FScctLocalMatchOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	bool bUnlimitedGear = false;
 
+	/** The player count the map's match-size rules lay the match out for (2 to 24); 0 for the bots and the local player. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	int32 MatchPlayers = 0;
+
 	/** Empty: "Player". */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	FString PlayerName;
