@@ -32,6 +32,10 @@ namespace
 			// A posed mesh's bounds are those of its rest pose; arms that swing far from it must not be culled
 			// while they are in the middle of the screen.
 			Primitive.SetBoundsScale(4.0f);
+			// Arms and gun are drawn pulled in towards the eye, at a place the shadow maps do not have them: they
+			// throw no shadow, on the world or on themselves (a muzzle flash a hand's width away striped the
+			// sleeves black and white), as Godot's view model leaves them out of the shadow cameras.
+			Primitive.SetCastShadow(false);
 		}
 	}
 

@@ -4,6 +4,7 @@
 #include "Components/PoseableMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/World.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -21,6 +22,8 @@ namespace
 	// crack of light and not a glow. Its light outlasts it by a little, as the eye's impression does.
 	constexpr float FlashSeconds = 0.05f;
 	constexpr float FlashLightSeconds = 0.085f;
+	// How far in front of the muzzle the flash's light is (cm), FlashLightPlace.
+	constexpr double FlashLightAhead = 40.0;
 	// The light's strength is every muzzle flash's (FScctExposure::MuzzleFlashCandelas), scaled by the picture's
 	// exposure when it fires, so the flash does not white out the screen when the eye is open for the dark.
 
@@ -79,7 +82,10 @@ AScctFirstPersonView::AScctFirstPersonView()
 	FlashLight->SetAttenuationRadius(900.0f);
 	FlashLight->SetSourceRadius(3.0f);
 	FlashLight->SetLightColor(FLinearColor(1.0f, 0.74f, 0.42f));
-	FlashLight->SetCastShadows(true);
+	// No shadows: the player's own body, unseen at the real place of the arms, stood between the light and the arms
+	// as drawn (nearer the eye) and laid hard black bands across the sleeves. A flash is too short for its shadows
+	// in the room to be missed, and FlashLightPlace keeps it on this side of a wall.
+	FlashLight->SetCastShadows(false);
 	// A flash is too short to hang in the air: almost none of it scatters in the fog.
 	FlashLight->SetVolumetricScatteringIntensity(0.2f);
 	FlashLight->SetVisibility(false);
@@ -336,10 +342,28 @@ void AScctFirstPersonView::PlayMuzzleFlash()
 	FlashAge = 0.0f;
 	FlashExposureScale = FScctExposure::FlashScale();
 	++FlashesPlayed;
-	UE_LOG(LogOpenSCCT, Log, TEXT("First person: muzzle flash %d at (%.0f %.0f %.0f), %.1f cm from the eye, its light %.0f cd (exposure scale %.2f)"), FlashesPlayed,
+	UE_LOG(LogOpenSCCT, Log, TEXT("First person: muzzle flash %d at (%.0f %.0f %.0f), %.1f cm from the eye, its light %.0f cd (exposure scale %.2f) %.1f cm from the eye"), FlashesPlayed,
 		Muzzle.GetLocation().X, Muzzle.GetLocation().Y, Muzzle.GetLocation().Z, FVector::Dist(Muzzle.GetLocation(), LastCamera.GetLocation()),
-		FScctExposure::MuzzleFlashCandelas() * FlashExposureScale, FlashExposureScale);
+		FScctExposure::MuzzleFlashCandelas() * FlashExposureScale, FlashExposureScale, FVector::Dist(FlashLightPlace(), LastCamera.GetLocation()));
 	TickFlash(0.0f);
+}
+
+FVector AScctFirstPersonView::FlashLightPlace() const
+{
+	// The light is out in the flash's plume, FlashLightAhead in front of the muzzle. The view model is drawn pulled
+	// in towards the eye (to 0.42 of its distance), so from there the arms as drawn are most of a metre away and
+	// take a little of its light, not all of it: from a place 60% of the way to the muzzle, a hand's width from
+	// the drawn sleeves, it burned them white. Only the level's own geometry between the eye and that place holds
+	// it back, 10 cm in front of the wall, so it never lights the far side of a wall instead of this one.
+	const FVector Eye = LastCamera.GetLocation();
+	const FVector At = Muzzle.GetLocation() + Muzzle.GetRotation().GetForwardVector() * FlashLightAhead;
+	FHitResult Hit;
+	FCollisionQueryParams Query(TEXT("ScctMuzzleFlash"), false, this);
+	if (GetWorld()->LineTraceSingleByObjectType(Hit, Eye, At, FCollisionObjectQueryParams(ECC_WorldStatic), Query) && !Hit.bStartPenetrating)
+	{
+		return Eye + (At - Eye).GetSafeNormal() * FMath::Max(Hit.Distance - 10.0, 0.0);
+	}
+	return At;
 }
 
 void AScctFirstPersonView::TickFlash(float DeltaSeconds)
@@ -363,10 +387,7 @@ void AScctFirstPersonView::TickFlash(float DeltaSeconds)
 	if (bGunShown)
 	{
 		FlashRoot->SetWorldLocationAndRotation(Muzzle.GetLocation(), Muzzle.GetRotation());
-		// The light sits short of the muzzle, so it is never on the far side of a wall the barrel would reach
-		// through, and ahead of the view model as it is drawn (pulled in towards the eye), so it rakes the gun
-		// from the front without burning it white.
-		FlashLight->SetWorldLocation(FMath::Lerp(LastCamera.GetLocation(), Muzzle.GetLocation(), 0.6));
+		FlashLight->SetWorldLocation(FlashLightPlace());
 	}
 	for (int32 Index = 0; Index < FlashShapes.Num(); ++Index)
 	{
