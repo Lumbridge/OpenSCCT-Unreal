@@ -101,6 +101,7 @@ struct FScctLocalMatchOptions
  * Unattended switches (off by default; for runs with nobody at the keyboard, used with -RenderOffscreen):
  *   -ScctShots=N -ScctShotEvery=S -ScctShotDir=<folder>   save N screenshots S seconds apart, then quit
  *   -ScctCams="x,y,z,yaw,pitch;..."                       take each screenshot from a fixed point instead
+ *   -ScctShotUI                                           the screenshots include the HUD
  *   -ScctCheckFeatures                                    fetch all six feature tables when a match starts and
  *                                                         log each one's version (or why it is missing)
  *   -ScctShowLocalBody                                    draw the local player's body even when the view is from

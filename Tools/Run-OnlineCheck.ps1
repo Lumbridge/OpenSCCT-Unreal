@@ -1,0 +1,133 @@
+<#
+.SYNOPSIS
+Proves the game against a real OpenSCCT dedicated server, with nobody at the keyboard and no window.
+
+.DESCRIPTION
+Starts OpenSCCT's own dedicated server (src/OpenScct.Server.Cli of an OpenSCCT checkout, as Bridge/Probes/OnlineProbe
+does: loopback only, a port of its own, bots filling the sides), then starts the game off-screen at its front end
+with -ScctJoin so it connects, says ready, travels into the round and plays. Screenshots go to
+Saved\ScctShots\<Tag>\ and the log to Saved\Logs\online-<Tag>.log (the server's output to online-<Tag>.server.txt).
+Only the server process this script started is stopped at the end.
+
+The server project must have been built once: dotnet build -c Release --no-dependencies src/OpenScct.Server.Cli
+
+.EXAMPLE
+Tools\Run-OnlineCheck.ps1 -Content C:\path\to\.content -OpenScct C:\path\to\OpenSCCT -Map AquaE -Side spy
+
+.EXAMPLE
+# A join that cannot work: no server is started and the port is one nothing listens on.
+Tools\Run-OnlineCheck.ps1 -Content C:\path\to\.content -NoServer -Port 28999 -Tag fail -Shots 3 -Every 6
+#>
+param(
+    [string] $Content = $env:SVM_CONTENT,
+    [string] $OpenScct = '',
+    [string] $Map = 'AquaE',
+    [string] $SecondMap = 'ClubE',
+    [ValidateSet('spy', 'merc', 'watch', '')] [string] $Side = 'spy',
+    [int] $Port = 28961,
+    # Minutes a round lasts on the server (its results and the way back to the lobby follow).
+    [int] $TimeLimit = 10,
+    [int] $Shots = 6,
+    [double] $Every = 6,
+    # Seconds into the first round at which the game leaves the server (0: it stays).
+    [double] $LeaveAfter = 0,
+    # Seconds after the game was started at which the server is stopped under it (0: it runs to the end): the
+    # game must come back to the front end and say why.
+    [double] $KillServerAfter = 0,
+    [string] $Tag = 'join',
+    # Join without starting a server (the failure check).
+    [switch] $NoServer,
+    # Do not say ready: the game stays in the lobby (for a look at it).
+    [switch] $StayInLobby,
+    # Anything else for the game's command line, as written.
+    [string] $Extra = '',
+    [string] $Engine = 'F:\UE_5.8'
+)
+
+$ErrorActionPreference = 'Stop'
+$project = (Resolve-Path "$PSScriptRoot\..").Path
+$logs = Join-Path $project 'Saved\Logs'
+New-Item -ItemType Directory -Force $logs | Out-Null
+$shotDir = (Join-Path $project "Saved\ScctShots\$Tag").Replace('\', '/')
+$log = (Join-Path $logs "online-$Tag.log").Replace('\', '/')
+$serverLog = Join-Path $logs "online-$Tag.server.txt"
+
+$server = $null
+$work = $null
+try {
+    if (-not $NoServer) {
+        if (-not $OpenScct) { throw 'Pass -OpenScct <OpenSCCT checkout> (its src/OpenScct.Server.Cli built in Release).' }
+        $work = Join-Path ([IO.Path]::GetTempPath()) "scct-online-check-$PID"
+        New-Item -ItemType Directory -Force $work | Out-Null
+        $config = Join-Path $work 'svm-server.json'
+        # A dedicated server as an operator runs it: a config file and commands on standard input.
+        @{
+            name = 'Unreal online check'; port = $Port; lanPort = 0; loopbackOnly = $true; maxPlayers = 4
+            maps = (Join-Path $Content 'svmap')
+            rotation = @(@{ map = $Map; mode = 'Story'; timeLimit = $TimeLimit }, @{ map = $SecondMap; mode = 'Story' })
+            minPlayersToLaunch = 1; launchCountdownSeconds = 2; resultsSeconds = 6; bansFile = $null; matchLog = $null
+        } | ConvertTo-Json -Depth 4 | Set-Content -Path $config -Encoding utf8
+
+        # The server's output goes straight to a file (cmd's redirection), so nothing here has to keep reading it;
+        # its standard input stays a pipe, for the console commands below.
+        $start = [Diagnostics.ProcessStartInfo]::new('cmd.exe')
+        $start.WorkingDirectory = $work
+        $start.RedirectStandardInput = $true
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        # --no-build: the OpenSCCT projects are shared with other work and are never rebuilt from here.
+        $cli = Join-Path $OpenScct 'src\OpenScct.Server.Cli'
+        $start.Arguments = "/c dotnet run --no-build -c Release --project `"$cli`" -- --config `"$config`" > `"$serverLog`" 2>&1"
+        $start.Environment['SVM_CONTENT'] = $Content
+        Set-Content -Path $serverLog -Value ''
+        $server = [Diagnostics.Process]::Start($start)
+
+        # "on UDP port" is the server's sign of being up.
+        $deadline = (Get-Date).AddSeconds(90)
+        while (-not (Select-String -Path $serverLog -SimpleMatch 'on UDP port' -Quiet)) {
+            if ($server.HasExited -or (Get-Date) -gt $deadline) { throw "The server did not come up (see $serverLog)." }
+            Start-Sleep -Milliseconds 300
+        }
+
+        # The original has no bots in a network session; ours fill the empty places of both sides.
+        $server.StandardInput.WriteLine('set bots fill')
+        $server.StandardInput.WriteLine('set botskill normal')
+        "server up on 127.0.0.1:$Port (process $($server.Id))"
+    }
+
+    $arguments = @(
+        "`"$project\OpenSCCTUnreal.uproject`"",
+        '-game', '-RenderOffscreen', '-ResX=1280', '-ResY=720', '-unattended', '-nosplash', '-nosound',
+        "-ScctContent=`"$("$Content".Replace('\', '/'))`"",
+        "-ScctJoin=127.0.0.1:$Port", '-ScctName=UnrealCheck',
+        $(if (-not $StayInLobby) { '-ScctAutoReady' }),
+        $(if ($Side) { "-ScctSide=$Side" }),
+        $(if ($LeaveAfter -gt 0) { "-ScctLeaveAfter=$LeaveAfter" }),
+        "-ScctShots=$Shots", "-ScctShotEvery=$Every", '-ScctShotUI', "-ScctShotDir=`"$shotDir`"",
+        "-abslog=`"$log`"",
+        $Extra
+    ) -join ' '
+    $run = Start-Process -FilePath "$Engine\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" -ArgumentList $arguments `
+        -NoNewWindow -PassThru `
+        -RedirectStandardOutput (Join-Path $logs "online-$Tag.stdout.txt") `
+        -RedirectStandardError (Join-Path $logs "online-$Tag.stderr.txt")
+    if ($server -and $KillServerAfter -gt 0 -and -not $run.WaitForExit([int]($KillServerAfter * 1000))) {
+        $server.Kill($true)
+        "server stopped under the game after $KillServerAfter s"
+    }
+    $run.WaitForExit()
+    "game exit code $($run.ExitCode)"
+}
+finally {
+    if ($server -and -not $server.HasExited) {
+        # Give the server a moment to log the player's leave, then stop it and what it started (dotnet run's child).
+        Start-Sleep -Seconds 2
+        $server.Kill($true)
+        $server.WaitForExit(5000) | Out-Null
+        'server stopped'
+    }
+    if ($work) { Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue }
+}
+
+Select-String -Path $log -Pattern 'LogOpenSCCT: (Online|Session|Level|Menu|-Scct)|LogOpenSCCT: (Error|Warning)' |
+    ForEach-Object { $_.Line -replace '^\[[^\]]+\]\[[^\]]+\]', '' } | Select-Object -First 120

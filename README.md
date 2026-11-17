@@ -48,6 +48,18 @@ the `SVM_CONTENT` variable, else `ContentRoot` under `[OpenSCCT]` in the game in
 `Tools\Run-Offscreen.ps1 -Map AquaE -Content <folder> -Shots 3` plays a level with no window, saves
 screenshots to `Saved\ScctShots` and quits.
 
+## Front end and online play
+
+The game starts in the front end (`/Game/OpenSCCT/Maps/L_FrontEnd`, built by `Tools\Menu\Build-FrontEnd.ps1`;
+the menu is C++ in `Source/OpenSCCT/Menu`): play offline, join a server by address, or pick one from the master
+server's list. The servers are OpenSCCT's own: the bridge speaks their protocol, so the Unreal game joins the
+same dedicated and listen servers as the Godot client (`Source/OpenSCCT/Online/ScctOnlineSubsystem.h` describes
+the flow: lobby in the front end, each round in the imported level of its map). The master server and invite
+key are under `[OpenSCCT.Online]` in `Config/DefaultGame.ini`.
+
+`Tools\Run-OnlineCheck.ps1 -Content <folder> -OpenScct <OpenSCCT checkout>` starts a real dedicated server on
+localhost with bots, joins it with the game off-screen, plays a round and saves screenshots and logs.
+
 ## Packaging
 
 The bridge is staged with the game as loose files (`RuntimeDependencies` in `OpenSCCT.Build.cs`), so build
