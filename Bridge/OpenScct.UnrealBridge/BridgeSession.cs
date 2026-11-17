@@ -43,6 +43,18 @@ public sealed record LocalMatch
     /// level's PracticeRules on (unlimited ammunition, charges and mask air, instant gear changes, the practice aids).
     /// </summary>
     public bool OfflineRules { get; init; }
+
+    /// <summary>
+    /// Where the local player first spawns instead of a PlayerStart (the map editor's Play From Camera; a TestRange
+    /// drill's ledge or lane, Test/LessonLaunch.cs), or null. Later spawns use the map's starts.
+    /// </summary>
+    public (FVector Location, FRotator Rotation)? StartAt { get; init; }
+
+    /// <summary>The editor's Play Level rules (unlimited lives, no time limit) instead of the map's settings.</summary>
+    public bool PlayLevel { get; init; }
+
+    /// <summary>The server ticks on the caller's thread just before the client (the drills read it between ticks).</summary>
+    public bool InlineHost { get; init; }
 }
 
 /// <summary>
@@ -128,6 +140,9 @@ public sealed class BridgeSession : IDisposable
             Rifles = match.Rifles,
             OfflineRules = match.OfflineRules,
             UnlimitedGear = match.OfflineRules,
+            StartAt = match.StartAt,
+            Rules = match.PlayLevel ? PlayRules.PlayLevel : PlayRules.MapSettings,
+            HostMode = match.InlineHost ? PlayHostMode.Inline : PlayHostMode.Thread,
         }.ForLocalLaunch();
         return Wrap(new PlaySession(settings, new StopwatchClock()));
     }

@@ -66,6 +66,9 @@ An imported level starts a local match with bots when it opens. Game URL options
 lives, unlimited gear and the practice aids such as `scct.GrabArea`), `?Name=Sam`, `?ScctMap=AquaE`. The converted content folder comes from `-ScctContent=<folder>`, else
 the `SVM_CONTENT` variable, else `ContentRoot` under `[OpenSCCT]` in the game ini.
 
+The TestRange drills (`scct.Drill vision-cancelling|spy-grab`, or TestRange with `?Drill=<kind>`) need the fixture
+level: `Tools\Test\Import-Fixtures.ps1 -Content <folder>` imports it.
+
 `Tools\Run-Offscreen.ps1 -Map AquaE -Content <folder> -Shots 3` plays a level with no window, saves
 screenshots to `Saved\ScctShots` and quits.
 
