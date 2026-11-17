@@ -79,6 +79,19 @@ public sealed class OnlineMaster : IDisposable
         _list = null;
         _join = null;
         Url = null;
+
+        // Answers of the old master's client are not waited for: they would arrive as failures of a disposed
+        // client and show as a refused account or sign-in on the new master. A sign-in in progress starts over.
+        _account = null;
+        _linkStart = null;
+        _linkPoll = null;
+        _link = null;
+        if (AccountState is OnlineAccountState.SigningIn or OnlineAccountState.Failed)
+        {
+            AccountState = OnlineAccountState.SignedOut;
+            AccountError = null;
+        }
+
         try
         {
             _client = new MasterClient(url, string.IsNullOrEmpty(inviteKey) ? null : inviteKey) { SessionToken = token };

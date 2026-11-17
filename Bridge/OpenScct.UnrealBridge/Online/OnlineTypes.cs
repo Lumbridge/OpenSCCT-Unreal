@@ -362,6 +362,15 @@ public enum OnlineText
 
     /// <summary>The master's message of the day from the last list, or empty.</summary>
     MasterMotd = 18,
+
+    /// <summary>
+    /// The lobby's setup as an options line ("?MapName=AquaE?GameMode=5?TimeLimit=20..."): the names and values
+    /// <c>SetSetupOptions</c> takes.
+    /// </summary>
+    SetupOptions = 19,
+
+    /// <summary>The maps a round can be played on here (folder names such as AquaE), one per line.</summary>
+    InstalledMaps = 20,
 }
 
 /// <summary>Copies of text into the fixed fields and buffers that cross to C++.</summary>

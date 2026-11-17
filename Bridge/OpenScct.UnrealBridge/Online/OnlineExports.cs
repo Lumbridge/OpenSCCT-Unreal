@@ -42,6 +42,10 @@ public unsafe struct OnlineApi
     public delegate* unmanaged[Cdecl]<char*, void> SetAccountToken;
     public delegate* unmanaged[Cdecl]<void> BeginSignIn;
     public delegate* unmanaged[Cdecl]<void> SignOut;
+
+    // Version 2.
+    public delegate* unmanaged[Cdecl]<char*, int, int> SetMatch;
+    public delegate* unmanaged[Cdecl]<char*, int> SetSetupOptions;
 }
 
 public static unsafe class OnlineExports
@@ -52,6 +56,11 @@ public static unsafe class OnlineExports
     [UnmanagedCallersOnly]
     public static int GetApi(OnlineApi* api)
     {
+        if (api == null)
+        {
+            return OnlineBridge.ApiVersion;
+        }
+
         api->Version = OnlineBridge.ApiVersion;
         api->SetIdentity = &SetIdentity;
         api->Join = &Join;
@@ -77,6 +86,8 @@ public static unsafe class OnlineExports
         api->SetAccountToken = &SetAccountToken;
         api->BeginSignIn = &BeginSignIn;
         api->SignOut = &SignOut;
+        api->SetMatch = &SetMatch;
+        api->SetSetupOptions = &SetSetupOptions;
         return OnlineBridge.ApiVersion;
     }
 
@@ -143,6 +154,11 @@ public static unsafe class OnlineExports
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int GetStatus(OnlineStatus* status)
     {
+        if (status == null)
+        {
+            return 0;
+        }
+
         try
         {
             *status = Status(Online);
@@ -150,9 +166,13 @@ public static unsafe class OnlineExports
         }
         catch (Exception e)
         {
-            *status = default;
             Failed(e);
-            return 0;
+            *status = default;
+            status->LocalId = -1;
+            status->LocalTeam = -1;
+            status->LoadingPictureSeed = -1;
+            status->State = (int)OnlineState.Failed;
+            return status->State;
         }
     }
 
@@ -326,6 +346,44 @@ public static unsafe class OnlineExports
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void SignOut() => Guard(() => Online.Master.SignOut());
 
+    /// <summary>
+    /// In the lobby, for whoever may change the setup (the status's CanControl): the next match is this map and mode
+    /// with the map's own untouched settings. A null or empty map keeps the map, a negative mode the mode. Returns 1
+    /// when the request was sent (the server answers with the new setup: the revision moves), 0 when the map is not
+    /// installed here or the visit is not in the lobby.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int SetMatch(char* map, int mode)
+    {
+        try
+        {
+            return Online.SetMatch(Text(map), mode) ? 1 : 0;
+        }
+        catch (Exception e)
+        {
+            Failed(e);
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// In the lobby, for whoever may change the setup: changes the values named in an options line as the
+    /// SetupOptions text gives it ("?TimeLimit=5?SvmBots=2"); the others keep their values. Returns 1 when sent.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int SetSetupOptions(char* options)
+    {
+        try
+        {
+            return Online.SetSetupOptions(Text(options)) ? 1 : 0;
+        }
+        catch (Exception e)
+        {
+            Failed(e);
+            return 0;
+        }
+    }
+
     // ---- the managed side of the reads (the probe calls these too) ----------------------------------------------
 
     /// <summary>The visit's status as <c>GetStatus</c> writes it.</summary>
@@ -334,16 +392,16 @@ public static unsafe class OnlineExports
         OnlineClient? client = online.Client;
         LobbyState? lobby = client?.Lobby;
         LobbySetup? setup = lobby?.Setup;
-        LobbyPlayer? local = lobby?.Local;
+        OnlineBridge.LobbyFacts facts = online.Facts;
         int flags = 0;
         if (lobby is not null)
         {
             flags |= lobby.Dedicated ? OnlineStatusFlags.Dedicated : 0;
             flags |= lobby.PreparingBots ? OnlineStatusFlags.PreparingBots : 0;
-            flags |= lobby.CanControl ? OnlineStatusFlags.CanControl : 0;
-            flags |= lobby.CanLaunch ? OnlineStatusFlags.CanLaunch : 0;
-            flags |= lobby.CanStart ? OnlineStatusFlags.CanStart : 0;
-            flags |= local?.Ready == true ? OnlineStatusFlags.LocalReady : 0;
+            flags |= facts.CanControl ? OnlineStatusFlags.CanControl : 0;
+            flags |= facts.CanLaunch ? OnlineStatusFlags.CanLaunch : 0;
+            flags |= facts.CanStart ? OnlineStatusFlags.CanStart : 0;
+            flags |= facts.LocalReady ? OnlineStatusFlags.LocalReady : 0;
             flags |= setup!.Practice ? OnlineStatusFlags.Practice : 0;
             flags |= setup.Revenge ? OnlineStatusFlags.Revenge : 0;
         }
@@ -366,7 +424,7 @@ public static unsafe class OnlineExports
             Flags = flags,
             Revision = online.Revision,
             LocalId = lobby?.LocalId ?? -1,
-            LocalTeam = local?.Team ?? -1,
+            LocalTeam = facts.LocalTeam,
             PlayerCount = lobby?.Players.Count ?? 0,
             MaxPlayers = lobby?.MaxPlayers ?? 0,
             Mode = setup is null ? 0 : (int)setup.Mode,
@@ -439,8 +497,31 @@ public static unsafe class OnlineExports
             OnlineText.AccountError => online.Master.AccountError,
             OnlineText.ResultsMap => client?.Results?.Map,
             OnlineText.MasterMotd => online.Master.Motd,
+            OnlineText.SetupOptions => client?.Lobby.Setup.ToOptions(),
+            OnlineText.InstalledMaps => InstalledMaps(online),
             _ => null,
         } ?? string.Empty;
+    }
+
+    /// <summary>The maps a round can be played on here (their folder names), one per line, in the catalog's order.</summary>
+    private static string InstalledMaps(OnlineBridge online)
+    {
+        var text = new System.Text.StringBuilder();
+        PlayCatalog catalog = online.Catalog;
+        foreach (MapListEntry entry in catalog.Maps.ListMaps())
+        {
+            if (!MapCatalog.IsMenuMap(entry.Id) && catalog.CanPlay(entry.Id))
+            {
+                if (text.Length > 0)
+                {
+                    text.Append('\n');
+                }
+
+                text.Append(entry.Id);
+            }
+        }
+
+        return text.ToString();
     }
 
     /// <summary>Writes a chat or system line as <c>TakeChat</c> does.</summary>

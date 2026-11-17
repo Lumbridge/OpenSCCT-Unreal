@@ -24,7 +24,7 @@ namespace OpenScct.UnrealBridge.Online;
 /// </summary>
 public sealed class OnlineBridge : IDisposable
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     /// <summary>When the caller falls further behind than this (a stall, a map load), the backlog is dropped.</summary>
     private const int MaxCatchUpTicks = 5;
@@ -35,16 +35,18 @@ public sealed class OnlineBridge : IDisposable
     private readonly StopwatchClock _clock = new();
     private readonly Queue<SessionMessage> _chat = new();
     private PlayCatalog? _catalog;
+    private string? _catalogRoot;
     private NetClassRegistry? _classes;
     private long _start;
     private long _ticks;
     private bool _loadReported;
     private ClientSession? _roundRefused;
-    private ClientSession? _roundEnded;
     private BridgeSession? _adopted;
     private string? _error;
     private OnlineState _stateOverride = OnlineState.Idle;
     private int _revision;
+    private int _factsRevision = -1;
+    private LobbyFacts _facts;
 
     private string _playerName = "Player";
     private string _installId = NewInstallId();
@@ -62,9 +64,8 @@ public sealed class OnlineBridge : IDisposable
 
     /// <summary>
     /// Hands a round's play session to the bridge's main session slot, so the per-frame entries of the main table
-    /// (pawns, poses, view, input) read the online round, and that table's Update ticks it. Exports sets it to wrap
-    /// the play session in a BridgeSession and make it the current one; while it is null this class ticks and
-    /// disposes the round itself.
+    /// (pawns, poses, view, input) and the other features read the online round. Exports sets it to wrap the play
+    /// session in a BridgeSession and make it the current one. This class keeps ticking the round either way.
     /// </summary>
     internal static Func<PlaySession, BridgeSession>? AdoptRound { get; set; }
 
@@ -80,8 +81,24 @@ public sealed class OnlineBridge : IDisposable
     /// <summary>The master's list, listed joins and the account.</summary>
     public OnlineMaster Master { get; }
 
-    /// <summary>The maps this client plays (every installed map with its play loader), read on first use.</summary>
-    public PlayCatalog Catalog => _catalog ??= new PlayCatalog();
+    /// <summary>
+    /// The maps this client plays (every installed map with its play loader), read on first use. It is read again
+    /// when the content folder was configured or changed since (Unreal may ask for the server list before it sets
+    /// the content), but never during a visit: the visit's sessions load through the catalog it started with.
+    /// </summary>
+    public PlayCatalog Catalog
+    {
+        get
+        {
+            if (_catalog is null || (Client is null && !string.Equals(_catalogRoot, ContentPaths.Root, StringComparison.OrdinalIgnoreCase)))
+            {
+                _catalogRoot = ContentPaths.Root;
+                _catalog = new PlayCatalog();
+            }
+
+            return _catalog;
+        }
+    }
 
     /// <summary>The replicated classes; their hash is this build's network protocol.</summary>
     public NetClassRegistry Classes => _classes ??= NetClasses.Create();
@@ -164,8 +181,12 @@ public sealed class OnlineBridge : IDisposable
     // ---- joining and leaving ------------------------------------------------------------------------------------
 
     /// <summary>Joins the server at a typed "host", "host:port" or "[v6]:port" address (port 28888 when none is given).</summary>
-    public void Join(string address, string? password = null, int preferredTeam = -1, bool loopbackOnly = false) =>
+    public void Join(string address, string? password = null, int preferredTeam = -1, bool loopbackOnly = false)
+    {
+        // A listed join still waiting for the master would otherwise replace this visit when its answer arrives.
+        Master.CancelJoin();
         Join(JoinTarget.FromAddress(address), password, ticket: null, preferredTeam, loopbackOnly);
+    }
 
     /// <summary>
     /// Starts a visit (OnlineService.JoinPrepared and StartVisit). <paramref name="ticket"/> is the master's ticket
@@ -178,6 +199,8 @@ public sealed class OnlineBridge : IDisposable
         EndVisit();
         _error = null;
         _stateOverride = OnlineState.Idle;
+        // Read after the old visit ended, so a content folder set since then is seen.
+        PlayCatalog catalog = Catalog;
         var settings = new OnlineClientSettings
         {
             PlayerName = PlayerName,
@@ -186,7 +209,7 @@ public sealed class OnlineBridge : IDisposable
             Password = string.IsNullOrEmpty(password) ? null : password,
             Ticket = ticket,
             PreferredTeam = preferredTeam,
-            Maps = Catalog.Maps,
+            Maps = catalog.Maps,
             Classes = Classes,
             LoopbackOnly = loopbackOnly,
             // The play loaders install the gameplay services with each map, as for a local match.
@@ -247,7 +270,6 @@ public sealed class OnlineBridge : IDisposable
         client.Dispose();
         Client = null;
         _roundRefused = null;
-        _roundEnded = null;
         _chat.Clear();
     }
 
@@ -263,6 +285,73 @@ public sealed class OnlineBridge : IDisposable
 
     /// <summary>Host or admin: everyone back to the lobby.</summary>
     public void BackToLobby() => Client?.BackToLobby();
+
+    /// <summary>
+    /// Whoever may change the setup (the host, an admin, anyone on an open dedicated server) picks the next match:
+    /// the map's own untouched settings for that map and mode, as the lobby page's map and mode lists do
+    /// (OnlineLobby.DefaultsFor in the Godot client). A null or empty map keeps the map, a negative mode the mode.
+    /// False when the map is not installed here or the visit is not in the lobby.
+    /// </summary>
+    public bool SetMatch(string? map, int mode)
+    {
+        if (Client is not { State: OnlineClientState.Lobby } client)
+        {
+            return false;
+        }
+
+        LobbySetup now = client.Lobby.Setup;
+        string id = string.IsNullOrWhiteSpace(map) ? now.Map : map.Trim();
+        if (client.Maps.FindMap(id) is not { } entry || MapCatalog.IsMenuMap(entry.Id))
+        {
+            return false;
+        }
+
+        EGameMode picked = mode < 0 ? now.Mode : (EGameMode)(byte)mode;
+        client.SetSetup(LobbySetup.ForMap(entry.Id, picked, client.Maps.GetMapSettings(entry.Id), now.MaxPlayers) with
+        {
+            Revenge = now.Revenge,
+            GamesInARow = now.GamesInARow,
+        });
+        return true;
+    }
+
+    /// <summary>
+    /// Changes single values of the setup: <paramref name="options"/> is an options line as the SetupOptions text
+    /// gives it ("?TimeLimit=5?SvmBots=2"); the values it leaves out keep the lobby's. The server clamps and checks.
+    /// False when the visit is not in the lobby.
+    /// </summary>
+    public bool SetSetupOptions(string? options)
+    {
+        if (Client is not { State: OnlineClientState.Lobby } client || string.IsNullOrWhiteSpace(options))
+        {
+            return false;
+        }
+
+        client.SetSetup(LobbySetup.FromOptions(options, client.Lobby.Setup));
+        return true;
+    }
+
+    /// <summary>
+    /// What the status says about the local player and the launch. The lobby model's own properties search the
+    /// player list with a new delegate on every read, so they are read once per change, not once per frame.
+    /// </summary>
+    internal LobbyFacts Facts
+    {
+        get
+        {
+            if (_factsRevision != _revision)
+            {
+                _factsRevision = _revision;
+                LobbyState? lobby = Client?.Lobby;
+                LobbyPlayer? local = lobby?.Local;
+                _facts = new LobbyFacts(local?.Team ?? -1, local?.Ready == true, lobby?.CanControl == true, lobby?.CanLaunch == true, lobby?.CanStart == true);
+            }
+
+            return _facts;
+        }
+    }
+
+    internal readonly record struct LobbyFacts(int LocalTeam, bool LocalReady, bool CanControl, bool CanLaunch, bool CanStart);
 
     /// <summary>Logs in as an admin of a dedicated server.</summary>
     public void Admin(string password) => Client?.Admin(password);
@@ -324,6 +413,21 @@ public sealed class OnlineBridge : IDisposable
             return 0;
         }
 
+        if (Round is { } drawn)
+        {
+            if (drawn.IsStopped)
+            {
+                // The main table stopped the round under the visit (its Stop, or a local match was started): nothing
+                // would tick the connection any more and the server would time the player out. The player left.
+                Leave();
+                return 0;
+            }
+
+            // The frame drawn since the last call, as PlayRoot reports it after drawing: the server traces this
+            // player's shots at the time the other players were shown at (lag compensation).
+            drawn.Client.ReportRenderedFrame(drawn.Alpha);
+        }
+
         long now = _clock.NowMicroseconds;
         long due = (now - _start) * Sim.Hz / 1_000_000;
         if (due - _ticks > MaxCatchUpTicks)
@@ -341,9 +445,12 @@ public sealed class OnlineBridge : IDisposable
 
         FollowState(client);
 
-        // Not adopted by the main session slot: the round is ticked here, on the same clock the visit ticked the
-        // connection on so far (a fresh clock would start behind it and the driver would see time go backwards).
-        if (Round is { IsStopped: false } round && _adopted is null)
+        // The round is ticked here, on the same clock the visit ticked the connection on so far (a fresh clock would
+        // start behind it and the driver would see time go backwards). Also when the main session slot adopted it:
+        // the visit owns the connection, and a main table that stopped calling Update (it failed) must not starve
+        // it until the server times the player out. The ticks run by the clock, so the main table's own Update
+        // right after this finds none due and only brings the frame's blend factor up to date.
+        if (Round is { IsStopped: false } round)
         {
             round.Update();
         }
@@ -356,8 +463,7 @@ public sealed class OnlineBridge : IDisposable
     {
         switch (client.State)
         {
-            case OnlineClientState.Loading or OnlineClientState.Match
-                when Round is null && client.Session is { } session && !ReferenceEquals(session, _roundEnded):
+            case OnlineClientState.Loading or OnlineClientState.Match when Round is null && client.Session is { } session:
                 EnterRound(client, session);
                 break;
 
@@ -367,7 +473,6 @@ public sealed class OnlineBridge : IDisposable
             case OnlineClientState.Lobby or OnlineClientState.Travelling or OnlineClientState.Failed or OnlineClientState.Left:
                 if (Round is not null)
                 {
-                    _roundEnded = client.Session;
                     StopRound();
                 }
 
@@ -397,7 +502,7 @@ public sealed class OnlineBridge : IDisposable
         var settings = new PlaySettings
         {
             Map = map,
-            Side = client.Lobby.Local?.Team == 1 ? PlaySide.Merc : PlaySide.Spy,
+            Side = Facts.LocalTeam == 1 ? PlaySide.Merc : PlaySide.Spy,
             Mode = MapCatalog.ModeKey(client.Lobby.Setup.Mode),
             PlayerName = PlayerName,
             MapRoots = [.. Catalog.Maps.Roots],

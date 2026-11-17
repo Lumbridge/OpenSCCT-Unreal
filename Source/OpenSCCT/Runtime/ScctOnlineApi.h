@@ -9,13 +9,16 @@
 // Fetch the table once, next to the main one:
 //   Host.GetFunction(TEXT("OpenScct.UnrealBridge.OnlineExports"), TEXT("GetApi"), Error)   // int32(__stdcall*)(FScctOnlineApi*)
 //
-// Every frame, on the game thread: Online.Update() first, then the main table's Update().
+// Every frame, on the game thread: Online.Update() first, then the main table's Update(). Online.Update() runs the
+// round's simulation ticks itself (the visit owns the connection), so during an online round the main Update()
+// usually returns 0 ticks and only brings the frame's blend factor up to date; keep calling both.
+// Calling the main table's Stop or StartLocal during a visit ends the visit (the player leaves the server).
 // A visit goes Connecting -> Lobby -> Travelling -> Loading -> Match -> Results -> (Travelling -> Lobby or the next
 // round), and ends Failed (GetText(Error)) or, after Leave, Idle. While the RoundActive flag is set the main table's
 // pawns, poses, view and input work on the online round as they do on a local match.
 // Text is UTF-16, zero terminated; fixed text fields are cut to their size.
 
-constexpr int32 ScctOnlineApiVersion = 1;
+constexpr int32 ScctOnlineApiVersion = 2;
 
 /** Where the online visit is. */
 enum class EScctOnlineState : int32
@@ -200,6 +203,8 @@ enum class EScctOnlineText : int32
 	AccountError = 16,
 	ResultsMap = 17,
 	MasterMotd = 18,
+	SetupOptions = 19,    // the lobby's setup as an options line ("?MapName=AquaE?GameMode=5?TimeLimit=20..."), the names SetSetupOptions takes
+	InstalledMaps = 20,   // the maps a round can be played on here (folder names), one per line (LF between them)
 };
 
 struct FScctOnlineApi
@@ -275,4 +280,23 @@ struct FScctOnlineApi
 	void (__cdecl* BeginSignIn)();
 
 	void (__cdecl* SignOut)();
+
+	// Version 2. New entries are added at the end, so the ones above keep their places.
+
+	/** Lobby, when CanControl is set: the next match is Map (null or empty: keep) in Mode (EGameMode, negative: keep) with that map's own default settings. Returns 1 when sent, 0 when the map is not installed here or the visit is not in the lobby. */
+	int32 (__cdecl* SetMatch)(const TCHAR* Map, int32 Mode);
+
+	/** Lobby, when CanControl is set: changes the values named in an options line (see EScctOnlineText::SetupOptions, e.g. "?TimeLimit=5?SvmBots=2"); the others keep their values. Returns 1 when sent. */
+	int32 (__cdecl* SetSetupOptions)(const TCHAR* Options);
 };
+
+// The layouts above must match the C# structs byte for byte (all fields are 4 bytes wide or UTF-16 text, so there is
+// no padding). A mismatch here means one side was changed without the other.
+static_assert(sizeof(TCHAR) == 2, "The bridge's text is UTF-16");
+static_assert(sizeof(FScctOnlineStatus) == 88, "FScctOnlineStatus does not match OnlineStatus");
+static_assert(sizeof(FScctOnlinePlayer) == 120, "FScctOnlinePlayer does not match OnlinePlayer");
+static_assert(sizeof(FScctOnlineChatLine) == 620, "FScctOnlineChatLine does not match OnlineChatLine");
+static_assert(sizeof(FScctOnlineResults) == 24, "FScctOnlineResults does not match OnlineResults");
+static_assert(sizeof(FScctOnlineResultRow) == 120, "FScctOnlineResultRow does not match OnlineResultRow");
+static_assert(sizeof(FScctOnlineServerEntry) == 424, "FScctOnlineServerEntry does not match OnlineServerEntry");
+static_assert(sizeof(FScctOnlineApi) == 8 + 26 * sizeof(void*), "FScctOnlineApi does not match OnlineApi");

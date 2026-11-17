@@ -3,427 +3,754 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
-using OpenScct.Core;
-using OpenScct.Game.SBase;
-using OpenScct.Server.Online;
 using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Online;
 using OpenScctGame.Play.Session;
 
-// OnlineProbe <content root> <OpenSCCT checkout> [map] [seconds in the match] [port] [master url] [invite key]
+// OnlineProbe <content root> <OpenSCCT checkout> [first map] [second map] [seconds in the second match] [port] [master url] [invite key]
 //
 // Starts a real dedicated server (svm-server, the OpenSCCT checkout's src/OpenScct.Server.Cli) on localhost with
-// bots filling the sides, joins it through OnlineBridge exactly as Unreal would (Update once a frame, the same reads
-// the exported table does), goes through the lobby, the travel and the loading gate into a round, and prints the
-// pawns as the network moves them. With a master url it also asks that master for its server list.
+// bots filling the sides, and visits it the way Unreal does: through the function table OnlineExports.GetApi fills
+// (the same unmanaged entries, called through their pointers), once a frame. It checks, in this order:
+//   1. the struct sizes the C++ header asserts;
+//   2. a join that cannot work ends as Failed with a reason, and Leave clears it;
+//   3. lobby, chat, side, ready, travel, the load gate and a whole round on the first map (one minute, to its time
+//      limit), read through a BridgeSession around the remote round as the main table reads a local match;
+//   4. the results, the way back to the lobby, a setup change, and a second round on another map;
+//   5. the main table stopping the round under the visit (the visit leaves), a second visit, and the server
+//      closing under it (Failed with a reason).
+// With a master url it also asks that master for its server list.
+//
+// Two things are not the exported path, and only these: the join itself goes through OnlineBridge.Join with a
+// loopback-only socket (the exported Join binds every interface, which can raise a firewall prompt on a test
+// machine), and the BridgeSession around the round is made by reflection, standing in for the adoption hook that
+// Exports.cs gets on integration (BridgeSession's constructor is private).
+return Probe.Run(args);
 
-string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
-string openScct = args.Length > 1 ? args[1] : @"C:\Users\ryans\source\repos\OSC-unreal-bridge";
-string map = args.Length > 2 ? args[2] : "AquaE";
-double matchSeconds = args.Length > 3 ? double.Parse(args[3], CultureInfo.InvariantCulture) : 15;
-int port = args.Length > 4 ? int.Parse(args[4], CultureInfo.InvariantCulture) : 28931;
-string? masterUrl = args.Length > 5 ? args[5] : null;
-string? inviteKey = args.Length > 6 ? args[6] : null;
-
-BridgeSession.Configure(content);
-OnlineBridge online = OnlineBridge.Instance;
-online.SetIdentity("UnrealProbe", null, null);
-Console.WriteLine($"identity: name '{online.PlayerName}', install id {online.InstallId}, public key {PlayerKey.Short(online.Key.PublicKey)}...");
-
-string work = Path.Combine(Path.GetTempPath(), "osu-online-probe-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
-Directory.CreateDirectory(work);
-Process? server = null;
-int exit = 1;
-try
+internal static unsafe class Probe
 {
-    if (masterUrl is not null)
-    {
-        ListServers(online, masterUrl, inviteKey);
-    }
+    private static OnlineApi s_api;
+    private static BridgeSession? s_adopted;
+    private static int s_adoptions, s_releases;
+    private static readonly Stopwatch s_run = new();
 
-    server = StartServer(openScct, content, work, map, port);
-    exit = Play(online, server, map, port, matchSeconds);
-}
-finally
-{
-    online.Dispose();
-    if (server is { HasExited: false })
+    public static int Run(string[] args)
     {
-        // "close" tells the players and stops the server; the kill covers a server that did not take it.
+        string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+        string openScct = args.Length > 1 ? args[1] : @"C:\Users\ryans\source\repos\OSC-unreal-bridge";
+        string firstMap = args.Length > 2 ? args[2] : "AquaE";
+        string secondMap = args.Length > 3 ? args[3] : "ClubE";
+        double secondMatchSeconds = args.Length > 4 ? double.Parse(args[4], CultureInfo.InvariantCulture) : 10;
+        int port = args.Length > 5 ? int.Parse(args[5], CultureInfo.InvariantCulture) : 28931;
+        string? masterUrl = args.Length > 6 ? args[6] : null;
+        string? inviteKey = args.Length > 7 ? args[7] : null;
+
+        if (!CheckLayout())
+        {
+            Console.WriteLine("PROBE FAILED");
+            return 1;
+        }
+
+        // The server list is asked for before the content folder is set, as a menu may do: the catalog must still
+        // see the content once it is configured (the has-map flags below and the join after it).
+        OnlineApi api = default;
+        delegate* unmanaged<OnlineApi*, int> getApi = &OnlineExports.GetApi;
+        int version = getApi(&api);
+        s_api = api;
+        Console.WriteLine($"table: version {version} (header expects {OnlineBridge.ApiVersion}), {sizeof(OnlineApi)} bytes");
+        Console.WriteLine($"installed maps before the content is configured: '{Text(OnlineText.InstalledMaps).Replace("\n", " ", StringComparison.Ordinal)}'");
+        BridgeSession.Configure(content);
+        string installed = Text(OnlineText.InstalledMaps);
+        Console.WriteLine($"installed maps after: {installed.Split('\n').Length} ({(installed.Length > 60 ? installed[..60].Replace("\n", " ", StringComparison.Ordinal) + "..." : installed)})");
+
+        AdoptRoundsLikeExports();
+        fixed (char* name = "UnrealProbe")
+        {
+            s_api.SetIdentity(name, null, null);
+        }
+
+        Console.WriteLine($"identity: name '{Text(OnlineText.PlayerName)}', install id {Text(OnlineText.InstallId)}, private key of {Text(OnlineText.PrivateKey).Length} characters (not printed)");
+
+        string work = Path.Combine(Path.GetTempPath(), "osu-online-probe-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(work);
+        Process? server = null;
+        bool ok = false;
+        s_run.Start();
         try
         {
-            server.StandardInput.WriteLine("close");
-            if (!server.WaitForExit(4000))
+            if (masterUrl is not null)
             {
-                server.Kill(entireProcessTree: true);
+                ListServers(masterUrl, inviteKey);
+            }
+
+            server = StartServer(openScct, content, work, firstMap, secondMap, port);
+            ok = FailedJoin(port + 1) && Visit(server, firstMap, secondMap, port, secondMatchSeconds) && ServerCloses(server, port);
+        }
+        finally
+        {
+            OnlineBridge.Instance.Dispose();
+            if (server is { HasExited: false })
+            {
+                // "close" tells the players and stops the server; the kill covers a server that did not take it.
+                try
+                {
+                    server.StandardInput.WriteLine("close");
+                    if (!server.WaitForExit(4000))
+                    {
+                        server.Kill(entireProcessTree: true);
+                    }
+                }
+                catch (Exception e) when (e is IOException or InvalidOperationException)
+                {
+                    server.Kill(entireProcessTree: true);
+                }
+            }
+
+            server?.Dispose();
+            try
+            {
+                Directory.Delete(work, recursive: true);
+            }
+            catch (IOException)
+            {
+                // The server may still hold a file for a moment; the folder is in the temp directory.
             }
         }
-        catch (Exception e) when (e is IOException or InvalidOperationException)
+
+        Console.WriteLine($"rounds adopted {s_adoptions}, released {s_releases}");
+        ok &= s_adoptions == 2 && s_releases == 2;
+        Console.WriteLine(ok ? "PROBE OK" : "PROBE FAILED");
+        return ok ? 0 : 1;
+    }
+
+    // ---- 1. layouts ---------------------------------------------------------------------------------------------
+
+    /// <summary>The sizes ScctOnlineApi.h asserts for its mirrors.</summary>
+    private static bool CheckLayout()
+    {
+        (string Name, int Size, int Expected)[] sizes =
+        [
+            ("OnlineStatus", sizeof(OnlineStatus), 88),
+            ("OnlinePlayer", sizeof(OnlinePlayer), 120),
+            ("OnlineChatLine", sizeof(OnlineChatLine), 620),
+            ("OnlineResults", sizeof(OnlineResults), 24),
+            ("OnlineResultRow", sizeof(OnlineResultRow), 120),
+            ("OnlineServerEntry", sizeof(OnlineServerEntry), 424),
+            ("OnlineApi", sizeof(OnlineApi), 8 + 26 * sizeof(void*)),
+        ];
+        bool ok = true;
+        foreach ((string name, int size, int expected) in sizes)
         {
-            server.Kill(entireProcessTree: true);
+            ok &= size == expected;
+            Console.WriteLine($"layout: {name} {size} bytes{(size == expected ? string.Empty : $" BUT THE HEADER ASSERTS {expected}")}");
         }
+
+        return ok;
     }
 
-    server?.Dispose();
-    try
-    {
-        Directory.Delete(work, recursive: true);
-    }
-    catch (IOException)
-    {
-        // The server may still hold a file for a moment; the folder is in the temp directory.
-    }
-}
+    // ---- the main table's part, as Exports does it after integration --------------------------------------------
 
-Console.WriteLine(exit == 0 ? "PROBE OK" : "PROBE FAILED");
-return exit;
-
-// The master's list, as the server browser asks for it.
-static void ListServers(OnlineBridge online, string url, string? key)
-{
-    online.Master.Configure(url, key);
-    online.Master.RequestList();
-    var wait = Stopwatch.StartNew();
-    while (online.Master.State == OnlineMasterState.Busy && wait.Elapsed.TotalSeconds < 12)
+    /// <summary>
+    /// Sets OnlineBridge.AdoptRound and ReleaseRound as Exports.GetApi will: a BridgeSession around each round's
+    /// play session, so the pawns, poses and the view are read the way the main table reads them.
+    /// </summary>
+    private static void AdoptRoundsLikeExports()
     {
-        online.Update();
-        Thread.Sleep(10);
-    }
-
-    if (online.Master.State != OnlineMasterState.Ready)
-    {
-        Console.WriteLine($"master {url}: {online.Master.State}: {online.Master.Error}");
-        return;
-    }
-
-    var servers = new OnlineServerEntry[32];
-    int count = OnlineExports.Servers(online, servers);
-    Console.WriteLine($"master {url}: {count} server(s) in {wait.Elapsed.TotalMilliseconds:F0} ms");
-    for (int i = 0; i < count && i < servers.Length; i++)
-    {
-        OnlineServerEntry s = servers[i];
-        Console.WriteLine($"   [{i}] '{ServerName(s)}' map {ServerMap(s)} mode {s.Mode} phase {s.Phase} players {s.Players}/{s.MaxPlayers} flags {Flags(s.Flags)}");
-    }
-}
-
-static string Flags(int flags)
-{
-    var names = new List<string>();
-    void Add(int bit, string name)
-    {
-        if ((flags & bit) != 0)
+        const BindingFlags Hidden = BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
+        ConstructorInfo make = typeof(BridgeSession).GetConstructor(Hidden, [typeof(PlaySession)])
+            ?? throw new InvalidOperationException("BridgeSession has no constructor taking a PlaySession.");
+        Func<PlaySession, BridgeSession> adopt = play =>
         {
-            names.Add(name);
+            s_adoptions++;
+            return s_adopted = (BridgeSession)make.Invoke([play]);
+        };
+        Action<BridgeSession> release = session =>
+        {
+            s_releases++;
+            if (ReferenceEquals(s_adopted, session))
+            {
+                s_adopted = null;
+            }
+
+            session.Dispose();
+        };
+        typeof(OnlineBridge).GetProperty("AdoptRound", Hidden)!.SetValue(null, adopt);
+        typeof(OnlineBridge).GetProperty("ReleaseRound", Hidden)!.SetValue(null, release);
+    }
+
+    /// <summary>One frame as Unreal runs it: the online table's Update, then the main table's.</summary>
+    private static OnlineStatus Frame()
+    {
+        s_api.Update();
+        s_adopted?.Update();
+        OnlineStatus status;
+        s_api.GetStatus(&status);
+        return status;
+    }
+
+    // ---- the master ---------------------------------------------------------------------------------------------
+
+    private static void ListServers(string url, string? key)
+    {
+        fixed (char* u = url, k = key)
+        {
+            s_api.SetMaster(u, k);
         }
-    }
 
-    Add(OnlineServerFlags.Password, "password");
-    Add(OnlineServerFlags.Dedicated, "dedicated");
-    Add(OnlineServerFlags.RequireAccounts, "accounts-only");
-    Add(OnlineServerFlags.Trusted, "trusted");
-    Add(OnlineServerFlags.Practice, "practice");
-    Add(OnlineServerFlags.SameBuild, "same-build");
-    Add(OnlineServerFlags.HasMap, "has-map");
-    Add(OnlineServerFlags.SameMapVersion, "same-map-version");
-    Add(OnlineServerFlags.Full, "full");
-    return string.Join(",", names);
-}
-
-// A dedicated server as an operator runs it: a config file, the map folder, and commands on standard input.
-static Process StartServer(string openScct, string content, string work, string map, int port)
-{
-    string config = Path.Combine(work, "svm-server.json");
-    File.WriteAllText(config, $$"""
+        s_api.RequestServerList();
+        var wait = Stopwatch.StartNew();
+        OnlineStatus status = Frame();
+        while (status.MasterState == (int)OnlineMasterState.Busy && wait.Elapsed.TotalSeconds < 12)
         {
-          "name": "OnlineProbe server",
-          "port": {{port}},
-          "lanPort": 0,
-          "loopbackOnly": true,
-          "maxPlayers": 4,
-          "maps": {{System.Text.Json.JsonSerializer.Serialize(Path.Combine(content, "svmap"))}},
-          "rotation": [ { "map": "{{map}}", "mode": "Story" } ],
-          "minPlayersToLaunch": 1,
-          "launchCountdownSeconds": 2,
-          "bansFile": null,
-          "matchLog": null
+            Thread.Sleep(10);
+            status = Frame();
         }
-        """);
-    var start = new ProcessStartInfo("dotnet")
-    {
-        WorkingDirectory = work,
-        RedirectStandardInput = true,
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-        CreateNoWindow = true,
-    };
-    // --no-build: the probe never rebuilds the OpenSCCT projects other work shares; build the CLI once beforehand
-    // (dotnet build -c Release --no-dependencies src/OpenScct.Server.Cli).
-    foreach (string arg in new[]
-    {
-        "run", "--no-build", "-c", "Release", "--project", Path.Combine(openScct, "src", "OpenScct.Server.Cli"), "--",
-        "--config", config,
-    })
-    {
-        start.ArgumentList.Add(arg);
-    }
 
-    start.Environment["SVM_CONTENT"] = content;
-    Process server = Process.Start(start) ?? throw new InvalidOperationException("Could not start the server.");
-    var up = new ManualResetEventSlim();
-    void Line(string? line)
-    {
-        if (line is null)
+        if (status.MasterState != (int)OnlineMasterState.Ready)
         {
+            Console.WriteLine($"master {url}: state {(OnlineMasterState)status.MasterState}: {Text(OnlineText.MasterError)}");
             return;
         }
 
-        Console.WriteLine("   [server] " + line);
-        if (line.Contains("on UDP port", StringComparison.Ordinal))
+        var servers = new OnlineServerEntry[32];
+        int count;
+        fixed (OnlineServerEntry* s = servers)
         {
-            up.Set();
+            count = s_api.GetServers(s, servers.Length);
+        }
+
+        Console.WriteLine($"master {url}: {count} server(s) in {wait.Elapsed.TotalMilliseconds:F0} ms (status says {status.ServerCount})");
+        for (int i = 0; i < count && i < servers.Length; i++)
+        {
+            OnlineServerEntry s = servers[i];
+            Console.WriteLine($"   [{i}] '{new string(s.Name)}' map {new string(s.Map)} mode {s.Mode} phase {s.Phase} players {s.Players}/{s.MaxPlayers} flags {ServerFlags(s.Flags)}");
         }
     }
 
-    server.OutputDataReceived += (_, e) => Line(e.Data);
-    server.ErrorDataReceived += (_, e) => Line(e.Data);
-    server.BeginOutputReadLine();
-    server.BeginErrorReadLine();
-    if (!up.Wait(TimeSpan.FromSeconds(60)) || server.HasExited)
+    private static string ServerFlags(int flags)
     {
-        throw new InvalidOperationException("The server did not come up.");
+        var names = new List<string>();
+        void Add(int bit, string name)
+        {
+            if ((flags & bit) != 0)
+            {
+                names.Add(name);
+            }
+        }
+
+        Add(OnlineServerFlags.Password, "password");
+        Add(OnlineServerFlags.Dedicated, "dedicated");
+        Add(OnlineServerFlags.RequireAccounts, "accounts-only");
+        Add(OnlineServerFlags.Trusted, "trusted");
+        Add(OnlineServerFlags.Practice, "practice");
+        Add(OnlineServerFlags.SameBuild, "same-build");
+        Add(OnlineServerFlags.HasMap, "has-map");
+        Add(OnlineServerFlags.SameMapVersion, "same-map-version");
+        Add(OnlineServerFlags.Full, "full");
+        return string.Join(",", names);
     }
 
-    // The original has no bots in a network session; ours fill the empty places of both sides.
-    server.StandardInput.WriteLine("set bots fill");
-    server.StandardInput.WriteLine("set botskill normal");
-    return server;
-}
+    // ---- the server ---------------------------------------------------------------------------------------------
 
-static int Play(OnlineBridge online, Process server, string map, int port, double matchSeconds)
-{
-    var run = Stopwatch.StartNew();
-    online.Join("127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture), password: null, preferredTeam: 0, loopbackOnly: true);
-
-    var players = new OnlinePlayer[32];
-    var seen = new Dictionary<int, Track>();
-    OnlineState shown = OnlineState.Idle;
-    int shownRevision = -1;
-    bool readied = false, chatted = false, reported = false, launched = false;
-    double lobbySince = -1, matchSince = -1, roundSince = -1, nextPawns = 0, leftAt = -1;
-    int framesInRound = 0, ticksInRound = 0;
-    string? mapToLoad = null;
-
-    while (run.Elapsed.TotalSeconds < 240)
+    // A dedicated server as an operator runs it: a config file, the map folder, and commands on standard input.
+    private static Process StartServer(string openScct, string content, string work, string firstMap, string secondMap, int port)
     {
-        online.Update();
-        OnlineStatus status = OnlineExports.Status(online);
-        var state = (OnlineState)status.State;
-        double t = run.Elapsed.TotalSeconds;
-
-        if (state != shown)
-        {
-            shown = state;
-            Console.WriteLine($"t={t:F1} state {state} (server phase {status.Phase}), current map '{OnlineExports.TextOf(online, OnlineText.CurrentMap)}', map to load '{OnlineExports.TextOf(online, OnlineText.MapToLoad)}'");
-            if (state == OnlineState.Lobby && lobbySince < 0)
+        string config = Path.Combine(work, "svm-server.json");
+        File.WriteAllText(config, $$"""
             {
-                lobbySince = t;
-                Console.WriteLine("   connect log: " + OnlineExports.TextOf(online, OnlineText.ConnectLog).Replace("\n", " | ", StringComparison.Ordinal));
+              "name": "OnlineProbe server",
+              "port": {{port}},
+              "lanPort": 0,
+              "loopbackOnly": true,
+              "maxPlayers": 4,
+              "maps": {{System.Text.Json.JsonSerializer.Serialize(Path.Combine(content, "svmap"))}},
+              "rotation": [ { "map": "{{firstMap}}", "mode": "Story", "timeLimit": 1 }, { "map": "{{secondMap}}", "mode": "Story" } ],
+              "minPlayersToLaunch": 1,
+              "launchCountdownSeconds": 2,
+              "resultsSeconds": 6,
+              "bansFile": null,
+              "matchLog": null
+            }
+            """);
+        var start = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = work,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        // --no-build: the probe never rebuilds the OpenSCCT projects other work shares; build the CLI once beforehand
+        // (dotnet build -c Release --no-dependencies src/OpenScct.Server.Cli).
+        foreach (string arg in new[]
+        {
+            "run", "--no-build", "-c", "Release", "--project", Path.Combine(openScct, "src", "OpenScct.Server.Cli"), "--",
+            "--config", config,
+        })
+        {
+            start.ArgumentList.Add(arg);
+        }
+
+        start.Environment["SVM_CONTENT"] = content;
+        Process server = Process.Start(start) ?? throw new InvalidOperationException("Could not start the server.");
+        var up = new ManualResetEventSlim();
+        void Line(string? line)
+        {
+            if (line is null)
+            {
+                return;
+            }
+
+            Console.WriteLine("   [server] " + line);
+            if (line.Contains("on UDP port", StringComparison.Ordinal))
+            {
+                up.Set();
             }
         }
 
-        if (state == OnlineState.Failed)
+        server.OutputDataReceived += (_, e) => Line(e.Data);
+        server.ErrorDataReceived += (_, e) => Line(e.Data);
+        server.BeginOutputReadLine();
+        server.BeginErrorReadLine();
+        if (!up.Wait(TimeSpan.FromSeconds(60)) || server.HasExited)
         {
-            Console.WriteLine("FAILED: " + OnlineExports.TextOf(online, OnlineText.Error));
-            return 1;
+            throw new InvalidOperationException("The server did not come up.");
         }
 
-        if (server.HasExited && leftAt < 0)
+        // The original has no bots in a network session; ours fill the empty places of both sides.
+        server.StandardInput.WriteLine("set bots fill");
+        server.StandardInput.WriteLine("set botskill normal");
+        return server;
+    }
+
+    // ---- 2. a join that cannot work -----------------------------------------------------------------------------
+
+    private static bool FailedJoin(int deadPort)
+    {
+        double from = Now;
+        OnlineBridge.Instance.Join("127.0.0.1:" + deadPort.ToString(CultureInfo.InvariantCulture), password: null, preferredTeam: 0, loopbackOnly: true);
+        OnlineStatus status = Frame();
+        Console.WriteLine($"t={Now:F1} joining a port nobody listens on: state {(OnlineState)status.State}");
+        while (status.State == (int)OnlineState.Connecting && Now - from < 20)
         {
-            Console.WriteLine("FAILED: the server stopped.");
-            return 1;
+            Thread.Sleep(8);
+            status = Frame();
         }
 
-        // The lobby as a menu would redraw it: only when the revision moved.
-        if (state is OnlineState.Lobby && status.Revision != shownRevision && t - lobbySince > 0.5)
+        string error = Text(OnlineText.Error);
+        Console.WriteLine($"t={Now:F1} state {(OnlineState)status.State} after {Now - from:F1} s, error: '{error}'");
+        Console.WriteLine("   connect log: " + Text(OnlineText.ConnectLog).Replace("\n", " | ", StringComparison.Ordinal));
+        s_api.Leave();
+        OnlineStatus after = Frame();
+        Console.WriteLine($"t={Now:F1} after Leave: state {(OnlineState)after.State}, error '{Text(OnlineText.Error)}'");
+        return status.State == (int)OnlineState.Failed && error.Length > 0 && after.State == (int)OnlineState.Idle;
+    }
+
+    // ---- 3 and 4. the visit: two rounds on two maps -------------------------------------------------------------
+
+    private static bool Visit(Process server, string firstMap, string secondMap, int port, double secondMatchSeconds)
+    {
+        OnlineBridge.Instance.Join("127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture), password: null, preferredTeam: 0, loopbackOnly: true);
+
+        var players = new OnlinePlayer[32];
+        var pawns = new BridgePawn[32];
+        var bones = new BridgeBone[256];
+        var rounds = new List<RoundSeen>();
+        RoundSeen? round = null;
+        var shown = (OnlineState)(-1);
+        int shownRevision = -1, lobbies = 0;
+        bool readied = false, chatted = false, launched = false, setupAsked = false, results = false, travelShown = false, backInLobby = false;
+        double lobbySince = -1, nextReport = 0;
+        int timeLimitBefore = -1;
+        double deadline = Now + 280;
+
+        while (Now < deadline)
         {
-            shownRevision = status.Revision;
-            int count = OnlineExports.Players(online, players);
-            Console.WriteLine($"t={t:F1} lobby '{OnlineExports.TextOf(online, OnlineText.ServerName)}': {OnlineExports.TextOf(online, OnlineText.SetupDescription)}");
-            Console.WriteLine($"   local id {status.LocalId} team {status.LocalTeam}, {count}/{status.MaxPlayers} players, countdown {status.Countdown:F1} s, flags {status.Flags}");
-            for (int i = 0; i < count && i < players.Length; i++)
+            OnlineStatus status = Frame();
+            var state = (OnlineState)status.State;
+            double t = Now;
+            bool roundActive = (status.Flags & OnlineStatusFlags.RoundActive) != 0;
+
+            if (state != shown)
             {
-                OnlinePlayer p = players[i];
-                Console.WriteLine($"   #{p.Id} '{PlayerName(p)}' team {p.Team} flags {(SessionPlayerFlags)p.Flags} ping {p.PingMs} map {(MapState)p.MapState}");
-            }
-        }
-
-        if (state == OnlineState.Lobby && t - lobbySince > 1.0 && !chatted)
-        {
-            chatted = true;
-            online.Chat("hello from the Unreal bridge", teamOnly: false);
-        }
-
-        if (state == OnlineState.Lobby && t - lobbySince > 2.0 && !readied)
-        {
-            readied = true;
-            online.SetTeam(0);
-            online.SetReady(true);
-            Console.WriteLine($"t={t:F1} picked the spies and reported ready");
-        }
-
-        // A dedicated lobby launches on its own once enough people are ready; ask if it has not.
-        if (state == OnlineState.Lobby && readied && !launched && t - lobbySince > 6.0 && status.Countdown <= 0f &&
-            (status.Flags & OnlineStatusFlags.PreparingBots) == 0)
-        {
-            launched = true;
-            online.Launch();
-            Console.WriteLine($"t={t:F1} asked for the launch");
-        }
-
-        var line = default(OnlineChatLine);
-        while (online.TakeChat(out SessionMessage message))
-        {
-            OnlineExports.Write(message, ref line);
-            Console.WriteLine($"t={t:F1} chat {(line.System != 0 ? "[system]" : $"<{ChatSender(line)}> team {line.Team}")} {ChatText(line)}");
-        }
-
-        if (state == OnlineState.Travelling && mapToLoad is null)
-        {
-            mapToLoad = OnlineExports.TextOf(online, OnlineText.MapToLoad);
-            Console.WriteLine($"t={t:F1} travel: Unreal must load '{mapToLoad}' (loading picture seed {status.LoadingPictureSeed})");
-        }
-
-        if (online.Round is { } round)
-        {
-            if (roundSince < 0)
-            {
-                roundSince = t;
-                Console.WriteLine($"t={t:F1} round entered on '{round.Settings.Map}' as {round.Settings.Side}, mode {round.Settings.Mode}; remote session: {round.IsRemote}; waiting for the level load report: {(status.Flags & OnlineStatusFlags.NeedsLoadReport) != 0}");
-            }
-
-            // Unreal's level streams in for a moment, then it reports.
-            if (!reported && t - roundSince > 1.0)
-            {
-                reported = true;
-                online.ReportLoaded();
-                Console.WriteLine($"t={t:F1} reported the level loaded");
-            }
-
-            framesInRound++;
-            ticksInRound = (int)round.TicksRun;
-            if (state == OnlineState.Match)
-            {
-                if (matchSince < 0)
+                shown = state;
+                Console.WriteLine($"t={t:F1} state {state} (server phase {status.Phase}), current map '{Text(OnlineText.CurrentMap)}', map to load '{Text(OnlineText.MapToLoad)}', round active {roundActive}");
+                if (state == OnlineState.Lobby)
                 {
-                    matchSince = t;
-                    Console.WriteLine($"t={t:F1} the match started ({(status.Flags & OnlineStatusFlags.ReportedWaiting) != 0}: the server knew this player was waiting)");
+                    lobbies++;
+                    lobbySince = t;
+                    readied = launched = false;
+                    travelShown = false;
+                    if (lobbies == 1)
+                    {
+                        Console.WriteLine("   connect log: " + Text(OnlineText.ConnectLog).Replace("\n", " | ", StringComparison.Ordinal));
+                    }
+                    else
+                    {
+                        backInLobby = true;
+                        // The rotation's next setup starts without the console's bot fill.
+                        server.StandardInput.WriteLine("set bots fill");
+                    }
+                }
+            }
+
+            if (state == OnlineState.Failed)
+            {
+                Console.WriteLine("FAILED: " + Text(OnlineText.Error));
+                return false;
+            }
+
+            if (server.HasExited)
+            {
+                Console.WriteLine("FAILED: the server stopped.");
+                return false;
+            }
+
+            // The lobby as a menu would redraw it: only when the revision moved.
+            if (state == OnlineState.Lobby && status.Revision != shownRevision && t - lobbySince > 0.5)
+            {
+                shownRevision = status.Revision;
+                int count;
+                fixed (OnlinePlayer* p = players)
+                {
+                    count = s_api.GetPlayers(p, players.Length);
                 }
 
-                // Walk forward for a while: the local pawn moves by prediction and the server's corrections.
-                round.Input.Set(LocalInput.ButtonNames[0], t - matchSince is > 3.0 and < 9.0);
-                Sample(round, seen);
-                if (t >= nextPawns)
+                Console.WriteLine($"t={t:F1} lobby '{Text(OnlineText.ServerName)}': {Text(OnlineText.SetupDescription)}");
+                Console.WriteLine($"   setup map '{Text(OnlineText.SetupMap)}' mode {status.Mode} '{Text(OnlineText.ModeName)}' time {status.TimeLimit} min, bots {status.Bots}; local id {status.LocalId} team {status.LocalTeam}, {count}/{status.MaxPlayers} players, countdown {status.Countdown:F1} s, flags {StatusFlags(status.Flags)}");
+                for (int i = 0; i < count && i < players.Length; i++)
                 {
-                    nextPawns = t + 2.5;
-                    Report(round, seen, t, framesInRound, ticksInRound);
+                    OnlinePlayer p = players[i];
+                    Console.WriteLine($"   #{p.Id} '{new string(p.Name)}' team {p.Team} flags {(OpenScct.Server.Online.SessionPlayerFlags)p.Flags} ping {p.PingMs} map state {p.MapState}");
+                }
+            }
+
+            if (state == OnlineState.Lobby && t - lobbySince > 1.0 && !chatted)
+            {
+                chatted = true;
+                fixed (char* text = "hello from the Unreal bridge")
+                {
+                    s_api.SendChat(text, 0);
+                }
+            }
+
+            // Back in the lobby: a setup change, if this player may make one (anyone may on an open dedicated server).
+            if (state == OnlineState.Lobby && lobbies == 2 && t - lobbySince > 1.0 && !setupAsked)
+            {
+                setupAsked = true;
+                timeLimitBefore = status.TimeLimit;
+                int sent;
+                fixed (char* options = "?TimeLimit=7")
+                {
+                    sent = s_api.SetSetupOptions(options);
                 }
 
-                if (t - matchSince >= matchSeconds)
+                Console.WriteLine($"t={t:F1} asked for a 7 minute time limit (was {timeLimitBefore}); sent {sent}; may change the setup: {(status.Flags & OnlineStatusFlags.CanControl) != 0}");
+                Console.WriteLine($"   setup options before: {Text(OnlineText.SetupOptions)}");
+            }
+
+            if (state == OnlineState.Lobby && t - lobbySince > 2.5 && !readied)
+            {
+                readied = true;
+                if (setupAsked)
                 {
-                    break;
+                    Console.WriteLine($"t={t:F1} the lobby's time limit is now {status.TimeLimit} min");
                 }
+
+                s_api.SetTeam(0);
+                s_api.SetReady(1);
+                Console.WriteLine($"t={t:F1} picked the spies and reported ready");
+            }
+
+            // A dedicated lobby launches on its own once enough people are ready; ask if it has not.
+            if (state == OnlineState.Lobby && readied && !launched && t - lobbySince > 7.0 && status.Countdown <= 0f &&
+                (status.Flags & OnlineStatusFlags.PreparingBots) == 0)
+            {
+                launched = true;
+                s_api.Launch();
+                Console.WriteLine($"t={t:F1} asked for the launch");
+            }
+
+            OnlineChatLine line;
+            while (s_api.TakeChat(&line) != 0)
+            {
+                Console.WriteLine($"t={t:F1} chat {(line.System != 0 ? "[system]" : $"<{new string(line.Sender)}> team {line.Team}")} {new string(line.Text)}");
+            }
+
+            if (state == OnlineState.Travelling && !travelShown)
+            {
+                travelShown = true;
+                Console.WriteLine($"t={t:F1} travel: Unreal must load '{Text(OnlineText.MapToLoad)}' (loading picture seed {status.LoadingPictureSeed})");
+            }
+
+            if (roundActive && s_adopted is { } adopted)
+            {
+                if (round is null)
+                {
+                    round = new RoundSeen { Map = Text(OnlineText.MapToLoad), Since = t };
+                    rounds.Add(round);
+                    Console.WriteLine($"t={t:F1} round entered on '{round.Map}' as {adopted.Session.Settings.Side}; remote session: {adopted.Session.IsRemote}; needs the load report: {(status.Flags & OnlineStatusFlags.NeedsLoadReport) != 0}");
+                }
+
+                // Unreal's level streams in for a moment, then it reports.
+                if (!round.Reported && t - round.Since > 1.0)
+                {
+                    round.Reported = true;
+                    s_api.ReportLoaded();
+                    Console.WriteLine($"t={t:F1} reported the level loaded");
+                }
+
+                round.Frames++;
+                round.Ticks = adopted.Session.TicksRun;
+                if (state == OnlineState.Match)
+                {
+                    if (round.MatchSince < 0)
+                    {
+                        round.MatchSince = t;
+                        Console.WriteLine($"t={t:F1} the match started; the server knew this player was waiting: {(status.Flags & OnlineStatusFlags.ReportedWaiting) != 0}");
+                    }
+
+                    // Walk forward for a while: the local pawn moves by prediction and the server's corrections.
+                    BridgeInput input = default;
+                    input.Buttons[0] = (byte)(t - round.MatchSince is > 3.0 and < 9.0 ? 1 : 0);
+                    adopted.SetInput(in input);
+
+                    int count = adopted.GetPawns(pawns);
+                    round.Sample(pawns.AsSpan(0, count));
+                    BridgeView view = adopted.GetView();
+                    round.ViewValid |= view.Valid != 0;
+                    foreach (BridgePawn pawn in pawns.AsSpan(0, count))
+                    {
+                        round.PoseBones = Math.Max(round.PoseBones, adopted.GetPawnPose(pawn.ActorId, bones));
+                    }
+
+                    if (t >= nextReport)
+                    {
+                        nextReport = t + 10;
+                        round.Report(t, view);
+                    }
+
+                    if (rounds.Count == 2 && t - round.MatchSince >= secondMatchSeconds)
+                    {
+                        round.Report(t, view);
+                        break;
+                    }
+                }
+            }
+            else if (round is not null)
+            {
+                Console.WriteLine($"t={t:F1} the round on '{round.Map}' was released after {round.Ticks} client ticks over {round.Frames} frames (state {state})");
+                round.Report(t, default);
+                round = null;
+                nextReport = 0;
+            }
+
+            if (!results && (status.Flags & OnlineStatusFlags.ResultsReady) != 0)
+            {
+                results = true;
+                var rows = new OnlineResultRow[32];
+                OnlineResults head;
+                int count;
+                fixed (OnlineResultRow* r = rows)
+                {
+                    count = s_api.GetResults(&head, r, rows.Length);
+                }
+
+                Console.WriteLine($"t={t:F1} results of '{Text(OnlineText.ResultsMap)}': winning team {head.WinningTeam}, reason {head.WinningReason}, objectives {head.ObjectivesTaken}/{head.ObjectivesNeeded}, games left {head.GamesLeft}, {count} rows (head says {head.RowCount}); next in {status.Countdown:F1} s");
+                for (int i = 0; i < count && i < rows.Length; i++)
+                {
+                    OnlineResultRow r = rows[i];
+                    Console.WriteLine($"   #{r.Id} '{new string(r.Name)}' team {r.Team} score {r.Score} kills {r.Kills} deaths {r.Deaths} lives {r.Lives}");
+                }
+
+                results = count > 0;
+            }
+
+            Thread.Sleep(4);
+        }
+
+        bool ok = rounds.Count == 2 && results && backInLobby;
+        foreach (RoundSeen seen in rounds)
+        {
+            (int moved, int others) = seen.Moved();
+            Console.WriteLine($"round on '{seen.Map}': {seen.Pawns.Count} pawns seen, {moved} moved more than a metre ({others} of them other players, replicated from the server), view valid {seen.ViewValid}, pose bones {seen.PoseBones}");
+            ok &= others > 0 && seen.ViewValid && seen.PoseBones > 0 && seen.MatchSince >= 0;
+        }
+
+        ok &= rounds.Count == 2 && !string.Equals(rounds[0].Map, rounds[1].Map, StringComparison.OrdinalIgnoreCase);
+        if (!ok)
+        {
+            Console.WriteLine($"FAILED: rounds {rounds.Count}, results {results}, back in the lobby {backInLobby}");
+        }
+
+        // The main table's Stop in the middle of the round (the player quit to the menu and Unreal only stopped its
+        // session): it disposes the adopted session. The visit must notice and leave the server, not sit there
+        // unticked until the server times the player out.
+        s_adopted?.Dispose();
+        OnlineStatus left = Frame();
+        Console.WriteLine($"t={Now:F1} the main table stopped the round; state {(OnlineState)left.State}, round active {(left.Flags & OnlineStatusFlags.RoundActive) != 0}, players {left.PlayerCount}, chat waiting {left.ChatWaiting}");
+        return ok && left.State == (int)OnlineState.Idle && s_adopted is null;
+    }
+
+    // ---- 5. a second visit, and the server closing under it -----------------------------------------------------
+
+    private static bool ServerCloses(Process server, int port)
+    {
+        OnlineBridge.Instance.Join("127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture), password: null, preferredTeam: -1, loopbackOnly: true);
+        double from = Now;
+        OnlineStatus status = Frame();
+        while (status.State is (int)OnlineState.Connecting && Now - from < 30)
+        {
+            Thread.Sleep(8);
+            status = Frame();
+        }
+
+        Console.WriteLine($"t={Now:F1} second visit: state {(OnlineState)status.State} (server phase {status.Phase}), local id {status.LocalId}, {status.PlayerCount} players, current map '{Text(OnlineText.CurrentMap)}'");
+        if (status.State is (int)OnlineState.Failed or (int)OnlineState.Connecting)
+        {
+            Console.WriteLine("FAILED: " + Text(OnlineText.Error));
+            return false;
+        }
+
+        server.StandardInput.WriteLine("close");
+        from = Now;
+        while (status.State != (int)OnlineState.Failed && Now - from < 30)
+        {
+            Thread.Sleep(8);
+            status = Frame();
+        }
+
+        OnlineChatLine line;
+        while (s_api.TakeChat(&line) != 0)
+        {
+            Console.WriteLine($"   chat {(line.System != 0 ? "[system]" : $"<{new string(line.Sender)}>")} {new string(line.Text)}");
+        }
+
+        string error = Text(OnlineText.Error);
+        Console.WriteLine($"t={Now:F1} the server closed: state {(OnlineState)status.State} after {Now - from:F1} s, kicked {(status.Flags & OnlineStatusFlags.Kicked) != 0}, error: '{error}'");
+        s_api.Leave();
+        OnlineStatus after = Frame();
+        Console.WriteLine($"t={Now:F1} after Leave: state {(OnlineState)after.State}");
+        return status.State == (int)OnlineState.Failed && error.Length > 0 && after.State == (int)OnlineState.Idle;
+    }
+
+    // ---- helpers ------------------------------------------------------------------------------------------------
+
+    private static double Now => s_run.Elapsed.TotalSeconds;
+
+    /// <summary>A text through the exported GetText, with the buffer grown to the length it reports.</summary>
+    private static string Text(OnlineText kind)
+    {
+        char* small = stackalloc char[256];
+        int length = s_api.GetText((int)kind, small, 256);
+        if (length < 256)
+        {
+            return new string(small, 0, length);
+        }
+
+        char[] large = new char[length + 1];
+        fixed (char* buffer = large)
+        {
+            s_api.GetText((int)kind, buffer, large.Length);
+            return new string(buffer, 0, length);
+        }
+    }
+
+    private static string StatusFlags(int flags)
+    {
+        var names = new List<string>();
+        void Add(int bit, string name)
+        {
+            if ((flags & bit) != 0)
+            {
+                names.Add(name);
             }
         }
 
-        Thread.Sleep(4);
+        Add(OnlineStatusFlags.Dedicated, "dedicated");
+        Add(OnlineStatusFlags.Kicked, "kicked");
+        Add(OnlineStatusFlags.RoundActive, "round-active");
+        Add(OnlineStatusFlags.PreparingBots, "preparing-bots");
+        Add(OnlineStatusFlags.CanControl, "can-control");
+        Add(OnlineStatusFlags.CanLaunch, "can-launch");
+        Add(OnlineStatusFlags.CanStart, "can-start");
+        Add(OnlineStatusFlags.NeedsLoadReport, "needs-load-report");
+        Add(OnlineStatusFlags.ReportedWaiting, "reported-waiting");
+        Add(OnlineStatusFlags.ResultsReady, "results-ready");
+        Add(OnlineStatusFlags.LocalReady, "local-ready");
+        Add(OnlineStatusFlags.RoundRefused, "round-refused");
+        Add(OnlineStatusFlags.Practice, "practice");
+        Add(OnlineStatusFlags.Revenge, "revenge");
+        return string.Join(",", names);
     }
-
-    if (matchSince < 0)
-    {
-        Console.WriteLine("FAILED: the visit never reached a match.");
-        return 1;
-    }
-
-    if (online.Round is { } last)
-    {
-        Report(last, seen, run.Elapsed.TotalSeconds, framesInRound, ticksInRound);
-    }
-
-    int moved = 0, remoteMoved = 0;
-    foreach (Track track in seen.Values)
-    {
-        if (track.Path > 100f)
-        {
-            moved++;
-            remoteMoved += track.Local ? 0 : 1;
-        }
-    }
-
-    Console.WriteLine($"{seen.Count} pawns seen, {moved} moved more than a metre ({remoteMoved} of them other players, replicated from the server)");
-    online.Leave();
-    leftAt = run.Elapsed.TotalSeconds;
-    Console.WriteLine($"t={leftAt:F1} left; state {online.State}");
-    return remoteMoved > 0 && online.State == OnlineState.Idle ? 0 : 1;
 }
 
-// Every frame: where each pawn of the client's world is, and how far it has gone.
-static void Sample(PlaySession round, Dictionary<int, Track> seen)
+/// <summary>What the probe saw of one round, from the pawns as the main table would hand them to Unreal.</summary>
+internal sealed class RoundSeen
 {
-    SBasePawn? local = round.LocalPawn;
-    foreach (SBasePawn pawn in round.Client.World.Level.AllActors<SBasePawn>())
+    public string Map = string.Empty;
+    public double Since, MatchSince = -1;
+    public bool Reported, ViewValid;
+    public int Frames, PoseBones;
+    public long Ticks;
+    public readonly Dictionary<int, Track> Pawns = new();
+
+    /// <summary>Every frame: where each drawn pawn is, and how far it has gone.</summary>
+    public void Sample(ReadOnlySpan<BridgePawn> pawns)
     {
-        if (pawn.bDeleteMe)
+        foreach (BridgePawn pawn in pawns)
         {
-            continue;
+            if (!Pawns.TryGetValue(pawn.ActorId, out Track? track))
+            {
+                track = Pawns[pawn.ActorId] = new Track { X = pawn.X, Y = pawn.Y, Z = pawn.Z };
+            }
+
+            float dx = pawn.X - track.X, dy = pawn.Y - track.Y, dz = pawn.Z - track.Z;
+            float step = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
+            // A step of metres in one frame is a respawn, not walking.
+            track.Path += step < 300f ? step : 0f;
+            (track.X, track.Y, track.Z) = (pawn.X, pawn.Y, pawn.Z);
+            track.Local = (pawn.Flags & BridgePawnFlags.Local) != 0;
+            track.Merc = pawn.Kind == 1;
+            track.Health = pawn.Health;
+            track.Team = pawn.Team;
+            track.Yaw = pawn.Yaw;
+        }
+    }
+
+    public void Report(double t, BridgeView view)
+    {
+        Console.WriteLine($"t={t:F1} round on '{Map}': {Ticks} client ticks over {Frames} frames; view valid={view.Valid} at ({view.X:F0},{view.Y:F0},{view.Z:F0}) yaw {view.Yaw:F0} fov {view.Fov:F0}");
+        foreach (KeyValuePair<int, Track> pair in Pawns)
+        {
+            Track p = pair.Value;
+            Console.WriteLine($"   #{pair.Key} {(p.Merc ? "merc" : "spy ")} team {p.Team} {(p.Local ? "LOCAL " : "remote")} hp {p.Health} at ({p.X:F0},{p.Y:F0},{p.Z:F0}) yaw {p.Yaw:F0} walked {p.Path / 100f:F1} m so far");
+        }
+    }
+
+    public (int Moved, int Others) Moved()
+    {
+        int moved = 0, others = 0;
+        foreach (Track track in Pawns.Values)
+        {
+            if (track.Path > 100f)
+            {
+                moved++;
+                others += track.Local ? 0 : 1;
+            }
         }
 
-        FVector at = pawn.Location;
-        if (!seen.TryGetValue(pawn.ActorId, out Track? track))
-        {
-            track = seen[pawn.ActorId] = new Track { Last = at };
-        }
-
-        float dx = at.X - track.Last.X, dy = at.Y - track.Last.Y, dz = at.Z - track.Last.Z;
-        float step = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
-        // A step of metres in one frame is a respawn, not walking.
-        track.Path += step < 300f ? step : 0f;
-        track.Last = at;
-        track.Local = ReferenceEquals(pawn, local);
-        track.Merc = pawn is SPAWNDEFENSE;
-        track.Health = pawn.Health;
-        track.Team = SGameInfo.TeamIndexOf(pawn.Controller);
-        track.Name = pawn.PlayerReplicationInfo?.PlayerName ?? string.Empty;
+        return (moved, others);
     }
 }
-
-static void Report(PlaySession round, Dictionary<int, Track> seen, double t, int frames, int ticks)
-{
-    ViewSample view = round.View;
-    Console.WriteLine($"t={t:F1} round: {ticks} client ticks over {frames} frames, alpha {round.Alpha:F2}; view valid={view.Valid} at ({view.Location.X:F0},{view.Location.Y:F0},{view.Location.Z:F0}) fov {view.Fov:F0}");
-    foreach (KeyValuePair<int, Track> pair in seen)
-    {
-        Track p = pair.Value;
-        Console.WriteLine($"   #{pair.Key} {(p.Merc ? "merc" : "spy ")} '{p.Name}' {(p.Local ? "LOCAL " : "remote")} hp {p.Health} at ({p.Last.X:F0},{p.Last.Y:F0},{p.Last.Z:F0}) walked {p.Path / 100f:F1} m so far");
-    }
-}
-
-static unsafe string PlayerName(OnlinePlayer p) => new(p.Name);
-
-static unsafe string ChatSender(OnlineChatLine l) => new(l.Sender);
-
-static unsafe string ChatText(OnlineChatLine l) => new(l.Text);
-
-static unsafe string ServerName(OnlineServerEntry s) => new(s.Name);
-
-static unsafe string ServerMap(OnlineServerEntry s) => new(s.Map);
 
 internal sealed class Track
 {
-    public FVector Last;
-    public float Path;
+    public float X, Y, Z, Yaw, Path;
     public bool Local, Merc;
     public int Health, Team;
-    public string Name = string.Empty;
 }
