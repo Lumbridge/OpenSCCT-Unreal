@@ -151,13 +151,23 @@ void AScctGameMode::Tick(float DeltaSeconds)
 	// it are read here.
 	if (MatchMenu->IsMenuOpen())
 	{
+		// The press that opened the menu must not close it again: whether this actor ticks before or after the
+		// player controller is not fixed, so that press can still read as "just pressed" in the next frame. A
+		// close key counts once every close key has been seen up since the menu opened.
+		bool bAnyDown = false;
+		bool bAnyPressed = false;
 		for (const FKey& Key : CloseKeys)
 		{
-			if (Player->WasInputKeyJustPressed(Key))
-			{
-				SetMenuOpen(false);
-				break;
-			}
+			bAnyDown |= Player->IsInputKeyDown(Key);
+			bAnyPressed |= Player->WasInputKeyJustPressed(Key);
+		}
+		if (bCloseKeysArmed && bAnyPressed)
+		{
+			SetMenuOpen(false);
+		}
+		else if (!bAnyDown && !bAnyPressed)
+		{
+			bCloseKeysArmed = true;
 		}
 	}
 	if (OpenMenuIn >= 0.0f)
@@ -230,6 +240,7 @@ void AScctGameMode::SetMenuOpen(bool bOpen)
 	{
 		CloseKeys = ScctPlayer != nullptr ? ScctPlayer->FindKeysBoundTo(TEXT("ShowMenu")) : TArray<FKey>();
 		CloseKeys.AddUnique(EKeys::Escape);
+		bCloseKeysArmed = false;
 	}
 	MatchMenu->SetMenuOpen(bOpen);
 	if (ScctPlayer != nullptr)

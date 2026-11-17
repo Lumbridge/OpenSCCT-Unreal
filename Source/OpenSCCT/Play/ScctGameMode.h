@@ -68,6 +68,9 @@ private:
 	/** The keys that close the open menu: those bound to ShowMenu when it opened, and Escape. */
 	TArray<FKey> CloseKeys;
 
+	/** Every close key has been up since the menu opened, so the next press of one closes it. */
+	bool bCloseKeysArmed = false;
+
 	/** The controller whose interface commands are listened to. */
 	TWeakObjectPtr<class AScctPlayerController> CommandSource;
 
