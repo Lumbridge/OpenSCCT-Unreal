@@ -21,6 +21,11 @@
 #include "Windows/AllowWindowsPlatformTypes.h"
 #include <Xinput.h>
 #include "Windows/HideWindowsPlatformTypes.h"
+// The Windows headers rename LoadImage to LoadImageW, which breaks FImageUtils::LoadImage in a file that shares this
+// one's unity build (the strategic map's pictures).
+#ifdef LoadImage
+#undef LoadImage
+#endif
 #endif
 
 namespace
