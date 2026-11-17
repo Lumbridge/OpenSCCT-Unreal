@@ -231,14 +231,15 @@ void FScctVisionObjects::Update(UWorld* World, int32 Mode, const FScctVisionData
 		AActor* Actor = nullptr;
 		UPrimitiveComponent* Single = nullptr;
 		bool bEmitter = false;
-		const FString* Name = nullptr;
+		// A copy: the level state's name list can grow (and move) on the next GetName, the class name's in the log.
+		FString Name;
 		if (Row.NameId != 0 && Level != nullptr)
 		{
-			Name = &Level->GetName(Row.NameId);
-			Actor = Level->FindLevelActor(*Name);
+			Name = Level->GetName(Row.NameId);
+			Actor = Level->FindLevelActor(Name);
 			// A map Emitter's particles keep HeatOpacity of their strength in thermal.
 			TArray<TWeakObjectPtr<UNiagaraComponent>, TInlineAllocator<4>> Found;
-			Emitters.MultiFind(*Name, Found);
+			Emitters.MultiFind(Name, Found);
 			bEmitter = Found.Num() > 0;
 			if (bThermal && Opacity < 0.99f)
 			{
@@ -269,7 +270,7 @@ void FScctVisionObjects::Update(UWorld* World, int32 Mode, const FScctVisionData
 				{
 					ReportedMissing.Add(Row.ActorId);
 					UE_LOG(LogOpenSCCT, Log, TEXT("Vision:   actor #%d %s '%s' has vision values but nothing drawn for it"),
-						Row.ActorId, Level != nullptr ? *Level->GetName(Row.ClassId) : TEXT(""), Name != nullptr ? **Name : TEXT(""));
+						Row.ActorId, Level != nullptr ? *Level->GetName(Row.ClassId) : TEXT(""), *Name);
 				}
 			}
 			continue;
@@ -286,7 +287,7 @@ void FScctVisionObjects::Update(UWorld* World, int32 Mode, const FScctVisionData
 				Listed.Add(Row.ActorId);
 				UE_LOG(LogOpenSCCT, Log, TEXT("Vision:   %s marks #%d %s '%s' at (%.0f, %.0f, %.0f): level %.2f, opacity %.2f"),
 					bThermal ? TEXT("thermal") : TEXT("EMF"), Row.ActorId, Level != nullptr ? *Level->GetName(Row.ClassId) : TEXT(""),
-					Name != nullptr ? **Name : TEXT(""), Row.X, Row.Y, Row.Z, Intensity, Opacity);
+					*Name, Row.X, Row.Y, Row.Z, Intensity, Opacity);
 			}
 		}
 	}
@@ -351,9 +352,13 @@ void FScctVisionObjects::Update(UWorld* World, int32 Mode, const FScctVisionData
 			Entry.Tint = Component->GetOverrideParameters().GetParameterValueOrDefault<FLinearColor>(Tint, FLinearColor::White);
 			Entry.bVisible = Component->IsVisible();
 			Original = &Thinned.Add(Key, Entry);
+		}
+		if (Original->Applied != Pair.Value)
+		{
 			// Every channel, alpha included: the sprite system multiplies the whole particle colour by Tint, so an
-			// alpha-blended sprite thins and an additive one dims.
-			Component->SetVariableLinearColor(TintParameter, Entry.Tint * Pair.Value);
+			// alpha-blended sprite thins and an additive one dims. Again whenever the simulation's opacity moves.
+			Original->Applied = Pair.Value;
+			Component->SetVariableLinearColor(TintParameter, Original->Tint * Pair.Value);
 		}
 		const bool bVisible = Original->bVisible && Pair.Value > 0.01f;
 		if (Component->IsVisible() != bVisible)

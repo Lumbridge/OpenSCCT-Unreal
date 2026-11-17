@@ -14,7 +14,6 @@
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
 #include "Play/ScctExposure.h"
-#include "Play/ScctExposure.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Play/ScctViewPawn.h"
@@ -93,7 +92,8 @@ void UScctPawnSkinsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Super::Initialize(Collection);
 
 	UScctSessionSubsystem* Match = Collection.InitializeDependency<UScctSessionSubsystem>();
-	// The HUD refreshes the vision rows on its OnFrame; initialised first, it is handed the frame first.
+	// The HUD refreshes the vision rows on its OnFrame. A multicast delegate calls its last binding first, so the
+	// skins, bound after the HUD, read the rows of the HUD's previous refresh: a skin goes on or off one frame late.
 	Collection.InitializeDependency<UScctHudSubsystem>();
 	if (Match == nullptr)
 	{
