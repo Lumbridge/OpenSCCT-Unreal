@@ -21,6 +21,8 @@ class UScctOnlineSubsystem;
  *   online    the server list and joining by address (Menu/SScctMenuOnline.cpp)
  *   settings  video, audio, controls, bindings, game, profile (Menu/SScctSettingsPanel.cpp)
  *   credits   the people and the licences (Menu/SScctMenuCredits.cpp)
+ *   account   sign-in, the claimed name, rank, XP, prestige, titles and career (Menu/SScctMenuSocial.cpp)
+ *   password  a friend's or the website's join to a server with a password (Menu/SScctMenuSocial.cpp)
  *   the visit connecting, the lobby (Menu/SScctMenuLobby.cpp), travelling to a round, a failure
  */
 class SScctFrontEnd : public SCompoundWidget
@@ -80,6 +82,13 @@ private:
 
 	/** The other views of the visit (connecting, travelling, a failure). */
 	TSharedPtr<SScctMenuPage> VisitPage;
+
+	/** Per page of the stack, the name it was opened by ("online", "hub"), for the Discord status. */
+	TArray<FString> StackNames;
+
+	/** Tells UScctSocialSubsystem which page is shown, and takes a friend's join's password prompt or page to open. */
+	void TickSocial();
+	void ReportSocialPage();
 
 	EVisitView VisitView = EVisitView::None;
 	float Shown = 0.0f;

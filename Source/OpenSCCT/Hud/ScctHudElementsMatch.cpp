@@ -160,7 +160,9 @@ void ScctHudElements::PaintRound(FScctHudPainter& Painter, const FScctHudModel& 
 
 void ScctHudElements::PaintObjectives(FScctHudPainter& Painter, const FScctHudModel& Model)
 {
+	// Not over the spy binocular page, which replaces the player page this panel belongs to.
 	if (!Model.bHasRound || !Model.bHasState || (Model.State.Flags & EScctHudFlags::HideHud) != 0 || Model.ObjectiveLines.Num() == 0
+		|| Model.State.BinocularMode == 1
 		|| ScctVisorEffects::IsHudShutDown(Model)) // the merc page's objectives go down with an EMP
 	{
 		return;
@@ -169,7 +171,7 @@ void ScctHudElements::PaintObjectives(FScctHudPainter& Painter, const FScctHudMo
 	const FScctHudState& State = Model.State;
 	const FLinearColor Accent = ScctHudStyle::Accent(State.Side);
 	constexpr float Width = 316.0f, Pad = 18.0f, TextLeft = 22.0f;
-	const float X = Margin, Y = Margin;
+	const float X = Margin, Y = Margin + RadarReservedHeight(Model);
 	const FSlateFontInfo LineFont = Font(EWeight::Regular, 10.0f);
 	const float LineHeight = Painter.Measure(TEXT("Ag"), LineFont).Y + 2.0f;
 	const float TextWidth = Width - Pad * 2.0f - TextLeft;
@@ -204,9 +206,8 @@ void ScctHudElements::PaintObjectives(FScctHudPainter& Painter, const FScctHudMo
 	Painter.Glass(HudBox(X, Y, Width, Height), Corner);
 	Painter.GlowLine(FVector2f(X + 1.0f, Y + 12.0f), FVector2f(X + 1.0f, Y + 26.0f), Accent, 2.0f);
 
-	// Header: the map, and where the player is in it.
+	// Header: the map (where the player is in it is the place name above the radar, shown in every mode).
 	Painter.Text(FVector2f(X + Pad, Y + 13.0f), Model.Text(Model.Round.MapTitleId).ToUpper(), Label(8.0f), TextDim());
-	Painter.Text(FVector2f(X + Width - Pad, Y + 13.0f), Model.Text(State.LocationNameId).ToUpper(), Label(8.0f), Fade(Accent, 0.9f), EAlign::Right);
 	Painter.Line(FVector2f(X + Pad, Y + 32.0f), FVector2f(X + Width - Pad, Y + 32.0f), Fade(Text(), 0.10f), 1.0f);
 
 	float RowY = Y + 41.0f;

@@ -134,6 +134,11 @@ void SScctSettingsPanel::Construct(const FArguments& InArgs, const FScctMenuHost
 {
 	Host = InHost;
 	UScctControlSettings::Get()->EnsureLoaded();
+	// The bindings open on the side being played (the spy's with no match running).
+	if (const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>())
+	{
+		bBindMerc = Controls->GetSide() == 1;
+	}
 	if (UGameUserSettings* Engine = EngineSettings())
 	{
 		PendingMode = static_cast<int32>(Engine->GetFullscreenMode());
@@ -588,6 +593,9 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildAudio()
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Match")) ];
 	Volume(TEXT("Objective sounds volume"), TEXT("The jingles that mark an objective. At OFF they are not played at all."), &Settings->ObjectiveVolume);
 	Volume(TEXT("Voice chat volume"), TEXT("Other players' voices."), &Settings->VoiceVolume);
+	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Hub")) ];
+	Volume(TEXT("Jukebox music"), TEXT("How loud the hub's jukebox plays when you stand near it."), &Settings->HubJukeboxVolume);
+	Volume(TEXT("Activity chimes"), TEXT("How loud the chimes of the hub's courses, aim range and ball game play."), &Settings->HubChimesVolume);
 	for (const FName Page : RegistryPagesOfTab(1))
 	{
 		AddRegistryRows(Rows, Page);
