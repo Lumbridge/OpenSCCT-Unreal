@@ -25,7 +25,7 @@ class UScctHudWidget;
  * PushToTalk, TeamPushToTalk and ToggleVoiceMute are the voice chat's, not the HUD's.
  * Talk and TeamTalk are the chat's (Hud/ScctChatSubsystem.h), which draws its composer and transcript over the HUD.
  * Not served, as in the Godot client, which lists both as legacy shortcuts with no handler: DisplayHud and Quit.
- * DisplayStrategicMap is not served either: the bridge has no table for the map's plan (see the log line).
+ * DisplayStrategicMap is the strategic map page's (Menu/ScctMatchCommands.h).
  *
  * Unattended switches (off by default; for runs with nobody at the keyboard):
  *   -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1;14 Scoreboard 0"
@@ -268,7 +268,6 @@ private:
 	int32 TeammateNamesForced[2] = { -1, -1 };
 	int32 LastNameCount = -1;    // the labels' count and marks as last logged
 	bool bNamesTableMissingLogged = false;
-	bool bStrategicMapNoted = false;
 
 	/** HoldScoreboard is down; ShowConnectedPlayers has switched the scoreboard on. */
 	bool bScoreboardKeyHeld = false;

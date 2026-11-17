@@ -183,11 +183,6 @@ void UScctHudSubsystem::HandleLocalCommand(FName Name, int32 Arg, bool bPressed)
 	{
 		ToggleTeammateNames();
 	}
-	else if (bPressed && Name == TEXT("DisplayStrategicMap") && !bStrategicMapNoted)
-	{
-		bStrategicMapNoted = true;
-		UE_LOG(LogOpenSCCT, Warning, TEXT("HUD: DisplayStrategicMap is not served: the bridge hands over no plan of the map (its picture, scale and the live positions on it)"));
-	}
 }
 
 void UScctHudSubsystem::SetStatusPage(bool bOpen)
