@@ -5,6 +5,7 @@
 #include "Runtime/ScctAcousticApi.h"
 #include "Runtime/ScctAudioViewApi.h"
 #include "Runtime/ScctEventsApi.h"
+#include "Runtime/ScctReverbRoomApi.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctAudioSubsystem.generated.h"
 
@@ -15,6 +16,8 @@ class UScctAudioMix;
 class UScctSessionSubsystem;
 class UScctSoundWave;
 class USoundAttenuation;
+class USoundSubmix;
+class USubmixEffectReverbPreset;
 
 /**
  * Plays the match's sound. The simulation decides what sounds and the bridge resolves each call to a file, a
@@ -58,7 +61,17 @@ class USoundAttenuation;
  *   -ScctAudioZoom=F       force the scope's audio zoom factor F for the run (the scope's steps are 0.33, 0.66 and 1)
  *                          and log every 3D voice's zoom gain once a second
  *   -ScctAudioDoppler      log the Doppler pitch of moving 3D voices, and the pitch 1 of the listener-bound ones
+ *   -ScctAudioListener=x,y,z[;x,y,z...]  hold the listener (for every sound rule, not the engine's panning) at each place
+ *                          in turn, -ScctAudioListenerEvery=S seconds each (default 8), from the match's start
+ *   -ScctAudioRooms=0|log  0: no source-room or adaptive reverb (one listener reverb, as before); log: log every 3D
+ *                          voice's room routing once a second (the -ScctAudioProbe emitters always are)
  * Play/ScctAudioMix has the volume switches (-ScctAudioVolume, -ScctAudioPeaks).
+ *
+ * Rooms (Play/ScctAudioRooms.cpp): a 3D voice whose source is in another zone than the listener's sends its reverb to
+ * that zone's own reverb (one of four source-room submixes, Godot's ReverbBuses.SourceRooms), turned by what the way
+ * through the openings keeps; the listener's zone keeps the main reverb, and a voice cross-fades between the two when
+ * either moves, so tails carry across zone changes. The main reverb and each field also move toward the room size the
+ * bridge's geometry probe measures (Godot's AdaptiveReverb, ReverbBuses.Geometry).
  *
  * The listener's view (Play/ScctAudioView.cpp): through a scope or binoculars every 3D voice near the aim line gets
  * louder and the rest quieter (the original's SetAudioZoom), and every 3D voice's pitch carries the Doppler shift of
@@ -162,6 +175,47 @@ private:
 		bool bViewLogged = false;
 		float ZoomLogIn = 0.0f;
 		float DopplerLogIn = 0.0f;
+
+		// Source-room reverb (Play/ScctAudioRooms.cpp): the BSP zone its source is in, the source-room field it sends to
+		// (INDEX_NONE: the main reverb only), how far it has cross-faded from the main reverb to that field, and what its
+		// component was last given (the main reverb's share and the send to the field).
+		int32 RoomZone = 0;
+		/** Where its reverb is going: a field, INDEX_NONE for the main reverb, -2 before its first routing. */
+		int32 RoomTarget = -2;
+		int32 AppliedRoomField = INDEX_NONE;
+		int32 RoomField = INDEX_NONE;
+		float RoomMix = 0.0f;
+		float AppliedRoomMix = 0.0f;
+		float AppliedRoomSend = 0.0f;
+		float RoomSend = 0.0f;
+		float RoomLogIn = 0.0f;
+	};
+
+	/**
+	 * A source-room reverb field (Play/ScctAudioRooms.cpp, Godot's ReverbBuses.SourceRoomField): a submix of its own
+	 * with a reverb set from one zone's EAX environment, which the voices whose source is in that zone (and not in the
+	 * listener's) send to; its output is turned by what the way from the room to the listener keeps.
+	 */
+	struct FRoomField
+	{
+		/** The BSP zone it carries (0: free). */
+		int32 ZoneIndex = 0;
+		/** Its reverb: an index into Zones, INDEX_NONE for the default room. */
+		int32 Zone = INDEX_NONE;
+		double LastUsed = -1000.0;
+		double ClaimedAt = -1000.0;
+		float Gain = 0.0f;
+		float HF = 1.0f;
+		float TailSeconds = 2.0f;
+		bool bReservedForGameplay = false;
+		/** Where its geometry probe stands: the first source that claimed it, moved to the nearest source of each frame. */
+		FVector Anchor = FVector::ZeroVector;
+		FVector Candidate = FVector::ZeroVector;
+		bool bCandidate = false;
+		/** The adaptive reverb's latest estimate and whether the field's reverb follows it yet. */
+		FScctReverbGeometry Geometry = {};
+		bool bAdapted = false;
+		float LogIn = 0.0f;
 	};
 
 	/** A zone of the map's audio table that has a reverb. */
@@ -216,6 +270,31 @@ private:
 	/** Reads -ScctAudioZoom and -ScctAudioDoppler and fetches the audio view table at the match's start. */
 	void ReadAudioViewSwitches();
 	void LogAudioViewSummary() const;
+
+	/**
+	 * Source-room and adaptive reverb (Play/ScctAudioRooms.cpp): finds the zone of the listener and of every routed 3D
+	 * voice through the bridge's reverb room table, gives a voice in another room a source-room field and cross-fades its
+	 * reverb between the main one and that field, turns each field by the way to it, and moves the main reverb and the
+	 * fields toward the room size the geometry probes measure.
+	 */
+	void UpdateRooms(float DeltaSeconds);
+	/** Makes the source-room fields' submixes and reverbs on the world's audio device (none without one). */
+	void CreateRoomFields();
+	void ReleaseRoomFields();
+	/** Reads -ScctAudioListener, -ScctAudioListenerEvery and -ScctAudioRooms at the match's start. */
+	void ReadRoomSwitches();
+	/** -ScctAudioListener: puts the listener at the forced place of this moment. */
+	void UpdateForcedListener(float DeltaSeconds);
+	/** The field that carries ZoneIndex (claiming a free one if needed), or INDEX_NONE. */
+	int32 FindRoomField(int32 ZoneIndex, int32 Zone, bool bAmbient, bool bPathValid, float Reflected, const FVector& Anchor);
+	/** Puts a voice's main reverb share and its field send on its component. */
+	void ApplyRoomRouting(FVoice& Voice, float HeardDistance, float InputDistance);
+	/** The adaptive reverb's packets: the main reverb and each field toward its room's measured geometry. */
+	void UpdateRoomGeometry(float DeltaSeconds);
+	/** The index into Zones of a located room (INDEX_NONE: a zone without its own reverb). */
+	int32 ZoneOfRoom(const FScctReverbRoom& Room) const;
+	FString RoomName(int32 Zone) const;
+	void LogRoomSummary() const;
 
 public:
 	/** Puts "Sound through walls" on the Audio page (called by Play/ScctAudioMix with the other audio options). */
@@ -337,6 +416,50 @@ private:
 	int32 NumDopplerShifted = 0;
 	float PeakDopplerPitch = 1.0f;
 	float LowDopplerPitch = 1.0f;
+
+	// Source-room and adaptive reverb (Play/ScctAudioRooms.cpp).
+	const FScctReverbRoomApi* RoomApi = nullptr;
+	TArray<FRoomField> RoomFields;
+	TArray<FVector> RoomPoints;
+	TArray<FScctReverbRoom> RoomResults;
+	TArray<int32> RoomVoiceIndices;
+	/** The field submixes, their reverb presets and the reverb settings each is given (one per field, on the world's device). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<USoundSubmix>> RoomSubmixes;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<USubmixEffectReverbPreset>> RoomPresets;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UReverbEffect>> RoomEffects;
+	/** The adaptive main reverb's two settings, used in turn so the engine sees each packet as a change. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UReverbEffect>> AdaptiveMainEffects;
+	int32 NextAdaptiveMain = 0;
+	/** The listener's BSP zone (kept through zone 0, as rule 23 keeps it) and when it last changed (RoomClock). */
+	int32 ListenerZoneIndex = 0;
+	/** The listener's zone's reverb as this table found it (an index into Zones, INDEX_NONE for the default room). */
+	int32 ListenerRoomZone = INDEX_NONE;
+	double ListenerZoneChangedAt = -1000.0;
+	FScctReverbGeometry ListenerGeometry = {};
+	bool bListenerAdapted = false;
+	double RoomClock = 0.0;
+	double NextGeometryPacket = 0.0;
+	double LastGeometryPacket = 0.0;
+	int32 NextGeometrySlot = 0;
+	/** False with -ScctAudioRooms=0: every voice keeps the main reverb and nothing adapts (as before this was ported). */
+	bool bRoomsEnabled = true;
+	bool bAdaptiveEnabled = true;
+	/** -ScctAudioRooms=log: log every voice's room routing once a second (probe emitters always are). */
+	bool bLogRooms = false;
+	/** -ScctAudioListener: forced listener places, how long each is held and the time into the match. */
+	TArray<FVector> ForcedListenerPlaces;
+	float ForcedListenerEvery = 8.0f;
+	float ForcedListenerClock = 0.0f;
+	int32 ForcedListenerAt = INDEX_NONE;
+	// Counters for the summary line.
+	int32 NumRoomCrossfades = 0;
+	int32 NumRoomFieldClaims = 0;
+	int32 NumRoomRefused = 0;
+	int32 NumGeometryPackets = 0;
 
 	/** -ScctAudioMusic: the song to start and the seconds into the match it starts at (negative: done). */
 	FString CheckSong;
