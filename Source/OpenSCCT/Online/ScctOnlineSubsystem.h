@@ -128,6 +128,31 @@ public:
 	/** With CanControl: the next match is played on Map (its own default settings). False when not sent. */
 	bool SetMatchMap(const FString& Map);
 
+	// ---- the lobby's setup, for the menus' match settings (Menu/SScctMenuLobby.cpp) ---------------------------
+
+	/**
+	 * With CanControl: the next match is Map (empty: keep) in Mode (EGameMode; negative: keep), with that map's
+	 * own rules for the mode. False when not sent (not in the lobby, or the map is not installed here).
+	 */
+	bool SetMatch(const FString& Map, int32 Mode);
+
+	/** With CanControl: changes the values an options line names ("?TimeLimit=5?SvmBots=2"); the rest stay. */
+	bool SetSetupOptions(const FString& Options);
+
+	/** The setup as an options line, as of the last revision; one value of it, or Fallback. */
+	const FString& GetSetupOptions() const { return SetupOptions; }
+	int32 GetSetupOption(const TCHAR* Name, int32 Fallback) const;
+
+	/** The master's message of the day, empty when it has none. */
+	const FString& GetMotd() const { return Motd; }
+
+	/** A dedicated server's admin password, and a command of its console (the answers arrive as system chat lines). */
+	void AdminLogin(const FString& Password);
+	void AdminCommand(const FString& Command);
+
+	/** Host or admin: everyone back to the lobby. */
+	void BackToLobby();
+
 	// ---- identity, master, account ---------------------------------------------------------------------------
 
 	const FString& GetPlayerName() const { return PlayerName; }
@@ -140,6 +165,9 @@ public:
 	const TArray<FScctOnlineServerEntry>& GetServers() const { return Servers; }
 	const FString& GetMasterError() const { return MasterError; }
 	bool HasMaster() const { return bMasterSet; }
+
+	/** Starts the bridge's online half now (it starts on first use otherwise), so HasMaster and the name are known. */
+	void EnsureConnected() { Connect(); }
 
 	/** Starts a sign-in in the player's browser (the official servers take signed-in players only). */
 	void BeginSignIn();
@@ -206,7 +234,7 @@ private:
 	TArray<FScctOnlinePlayer> Players;
 	TArray<FScctOnlineServerEntry> Servers;
 	TArray<FScctOnlineChatEntry> Chat;
-	FString ServerName, SetupMap, ModeName, SetupDescription, ConnectLog, MapToLoad;
+	FString ServerName, SetupMap, ModeName, SetupDescription, ConnectLog, MapToLoad, SetupOptions, Motd;
 	FString MasterError, AccountName, AccountError, SignInCode;
 	FString Notice;
 

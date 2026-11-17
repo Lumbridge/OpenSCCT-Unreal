@@ -329,6 +329,10 @@ public static unsafe class Exports
             Sidearms = (o.Flags & BridgeStartFlags.Sidearms) != 0,
             Rifles = (o.Flags & BridgeStartFlags.Rifles) != 0,
             OfflineRules = (o.Flags & BridgeStartFlags.OfflineRules) != 0,
+            TimeLimit = o.TimeLimitPlusOne - 1,
+            SpyLives = o.SpyLivesPlusOne - 1,
+            MercLives = o.MercLivesPlusOne - 1,
+            RespawnSeconds = o.RespawnPlusOne - 1,
         });
     }
 

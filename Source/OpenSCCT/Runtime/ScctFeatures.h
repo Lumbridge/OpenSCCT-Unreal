@@ -6,6 +6,7 @@
 #include "Runtime/ScctEquipmentApi.h"
 #include "Runtime/ScctEventsApi.h"
 #include "Runtime/ScctHudApi.h"
+#include "Runtime/ScctMenuApi.h"
 #include "Runtime/ScctOnlineApi.h"
 #include "Runtime/ScctPlayApi.h"
 #include "Runtime/ScctWorldApi.h"
@@ -33,6 +34,7 @@ SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
 SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
+SCCT_FEATURE_TABLE(FScctMenuApi, "MenuExports", ScctMenuApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
 SCCT_FEATURE_TABLE(FScctPlayApi, "PlayExports", ScctPlayApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);

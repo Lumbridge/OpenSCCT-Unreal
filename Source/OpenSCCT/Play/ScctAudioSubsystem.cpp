@@ -7,6 +7,7 @@
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
 #include "GameFramework/WorldSettings.h"
+#include "Menu/ScctUserSettings.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
@@ -20,6 +21,16 @@
 #include "Serialization/JsonSerializer.h"
 #include "Sound/ReverbEffect.h"
 #include "Sound/SoundAttenuation.h"
+
+namespace
+{
+	/** The settings' volume of a voice's kind (Menu/ScctUserSettings.h); the master volume is the engine's own. */
+	float AudioSettingsGain(bool bMusic, bool bAmbient)
+	{
+		const UScctUserSettings* Settings = UScctUserSettings::Get();
+		return Settings == nullptr ? 1.0f : Settings->GetGain(bMusic ? EScctSoundKind::Music : bAmbient ? EScctSoundKind::Ambient : EScctSoundKind::Effects);
+	}
+}
 
 namespace
 {
@@ -650,10 +661,12 @@ void UScctAudioSubsystem::UpdateVoices(float DeltaSeconds)
 					Voice.Location = FindVoiceLocation(Voice);
 					Component->SetWorldLocation(Voice.Location);
 				}
-				if (Voice.AmbientId != 0 && !FMath::IsNearlyEqual(Voice.AppliedVolume, Voice.Volume, 0.005f))
+				// The ambience follows the map's volumes; every voice follows the settings' volume of its kind.
+				const float Wanted = Voice.Volume * AudioSettingsGain(Voice.bMusic, Voice.AmbientId != 0);
+				if (!FMath::IsNearlyEqual(Voice.AppliedVolume, Wanted, 0.005f))
 				{
-					Voice.AppliedVolume = Voice.Volume;
-					Component->SetVolumeMultiplier(Voice.Volume);
+					Voice.AppliedVolume = Wanted;
+					Component->SetVolumeMultiplier(Wanted);
 				}
 			}
 			else if (Voice.bPositional)
@@ -707,7 +720,7 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 		Voice.LifeLeft = Pcm->Seconds() / Voice.Pitch + 0.1f;
 	}
 	Voice.State = EVoiceState::Playing;
-	Voice.AppliedVolume = Voice.Volume;
+	Voice.AppliedVolume = Voice.Volume * AudioSettingsGain(Voice.bMusic, Voice.AmbientId != 0);
 	++NumStarted;
 
 	if (bHasDevice)
@@ -724,7 +737,7 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 			Component->AttenuationSettings = Voice.bPositional ? FindOrCreateAttenuation(Voice.MinDistance, Voice.Radius)
 				: (Voice.bAtListener && !Voice.bMusic ? FindOrCreateOwnSoundSettings() : nullptr);
 			Component->bIsMusic = Voice.bMusic;
-			Component->SetVolumeMultiplier(Voice.Volume);
+			Component->SetVolumeMultiplier(Voice.AppliedVolume);
 			Component->SetPitchMultiplier(Voice.Pitch);
 			Component->SetWorldLocation(Voice.Location);
 			if (Voice.FadeIn > 0.0f)
