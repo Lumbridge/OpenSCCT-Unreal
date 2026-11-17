@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Hud/ScctVisionData.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctVisionSubsystem.generated.h"
 
@@ -48,6 +49,10 @@ public:
 	/** Night or thermal: the modes that show effects flagged bHideInNormalVision (the original's EffectViews rule). */
 	bool ShowsVisionOnlyEffects() const { return ShownMode == 34 || ShownMode == 36; }
 
+	/** The simulation's per-actor vision values of this frame (heat, EMF, motion, shock protection), refreshed by Present. */
+	const FScctVisionData& GetData() const { return Data; }
+	FScctVisionData& GetData() { return Data; }
+
 	/** The goggles of a world, or null. */
 	static const UScctVisionSubsystem* Find(const UWorld* World);
 
@@ -83,6 +88,8 @@ private:
 	bool bTriedMaterials = false;
 	bool bCharactersMarked = false;
 	int32 LastMode = 0;
+
+	FScctVisionData Data;
 
 	/** The mode shown, after the forced one is applied. */
 	int32 ShownMode = 0;

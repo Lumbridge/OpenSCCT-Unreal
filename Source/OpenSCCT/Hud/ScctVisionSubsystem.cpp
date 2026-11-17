@@ -109,6 +109,7 @@ bool UScctVisionSubsystem::EnsureVolume()
 
 void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 {
+	Data.Refresh(DeltaSeconds);
 	if (ForcedMode != INDEX_NONE)
 	{
 		VisionMode = ForcedMode;
@@ -166,6 +167,7 @@ void UScctVisionSubsystem::Clear()
 	}
 	LastMode = 0;
 	ShownMode = 0;
+	Data.Reset();
 	MarkCharacters(false);
 }
 
