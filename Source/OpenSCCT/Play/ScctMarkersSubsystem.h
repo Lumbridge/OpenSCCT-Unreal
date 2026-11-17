@@ -20,7 +20,8 @@ class UStaticMeshComponent;
  *     floating over them, turned to the camera: a ring, a glyph for the kind and an arc that fills while someone
  *     takes the objective. Its colour is the objective's state: cyan open, amber being taken (it throbs), red
  *     locked or armed, green taken, grey not in play yet;
- *   - security cameras and room sensors as a small status lamp: green watching, red alarmed, amber locked;
+ *   - security cameras and room sensors as a small status lamp on top of the device: green watching, red
+ *     alarmed, amber locked;
  *   - detector beams (tripwires, mine beams) as a hair-thin bright core inside a faint wide glow that shimmers
  *     like dust in the light, with a small bloom where the beam starts and where it lands.
  *
@@ -68,7 +69,7 @@ private:
 		float Size = 1.0f;    // of the usual sign
 		float Lift = 38.0f;   // cm above the marker's place, when the thing it marks is not drawn
 		bool bSign = false;   // a holographic sign
-		bool bLamp = false;   // a small status lamp at the marker's place
+		bool bLamp = false;   // a small status lamp on top of the device's body (at the marker's place when the device is not drawn)
 	};
 
 	struct FDrawn
@@ -119,6 +120,16 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInterface> BeamMaterial;
+
+	/** The engine shapes the pools draw with: kept here, since a pool that has made no component yet holds nothing alive. */
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> PlaneMesh;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> CylinderMesh;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> SphereMesh;
 
 	const FScctWorldApi* World = nullptr;
 

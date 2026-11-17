@@ -44,7 +44,7 @@ namespace
 	constexpr float BeamCoreWidth = 0.7f;
 	constexpr float BeamHaloWidth = 7.0f;
 	constexpr float BeamEndSize = 5.0f;
-	constexpr float LampSize = 9.0f;
+	constexpr float LampSize = 6.0f;
 
 	const FName MarkerColorParameter(TEXT("Color"));
 	const FName MarkerIntensityParameter(TEXT("Intensity"));
@@ -148,10 +148,10 @@ bool UScctMarkersSubsystem::EnsureScene()
 
 	MarkerMaterial = LoadObject<UMaterialInterface>(nullptr, MarkerMaterialPath);
 	BeamMaterial = LoadObject<UMaterialInterface>(nullptr, BeamMaterialPath);
-	UStaticMesh* Plane = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
-	UStaticMesh* Cylinder = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-	UStaticMesh* Sphere = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-	if (MarkerMaterial == nullptr || BeamMaterial == nullptr || Plane == nullptr || Cylinder == nullptr || Sphere == nullptr)
+	PlaneMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
+	CylinderMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	SphereMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	if (MarkerMaterial == nullptr || BeamMaterial == nullptr || PlaneMesh == nullptr || CylinderMesh == nullptr || SphereMesh == nullptr)
 	{
 		bSceneFailed = true;
 		UE_LOG(LogOpenSCCT, Error, TEXT("Markers: nothing is drawn, the marker materials are missing: run Tools/Level/build_level_assets.py"));
@@ -171,13 +171,13 @@ bool UScctMarkersSubsystem::EnsureScene()
 	Host->SetRootComponent(Root);
 	Root->RegisterComponent();
 
-	Signs.Mesh = Plane;
+	Signs.Mesh = PlaneMesh;
 	Signs.Material = MarkerMaterial;
-	Lamps.Mesh = Sphere;
+	Lamps.Mesh = SphereMesh;
 	Lamps.Material = BeamMaterial;
-	Cores.Mesh = Cylinder;
+	Cores.Mesh = CylinderMesh;
 	Cores.Material = BeamMaterial;
-	Halos.Mesh = Cylinder;
+	Halos.Mesh = CylinderMesh;
 	Halos.Material = BeamMaterial;
 	bSceneReady = true;
 	return true;
@@ -391,11 +391,32 @@ void UScctMarkersSubsystem::UpdateMarkers(const FVector& ViewLocation)
 		}
 
 		const FVector At(Marker.X, Marker.Y, Marker.Z);
+
+		// The actor drawn for the marked thing (a terminal, a case, a camera), looked for again now and then: it
+		// may be spawned only when the simulation first shows it.
+		if (Marker.OwnerPawnId == 0 && !Known->Object.IsValid() && (Frame - Known->LookedFrame > 90 || Known->LookedFrame == 0))
+		{
+			Known->LookedFrame = Frame;
+			Known->Object = LevelState != nullptr ? LevelState->FindLevelActor(LevelState->GetName(Marker.NameId)) : nullptr;
+		}
+		const AActor* Object = Marker.OwnerPawnId == 0 ? Known->Object.Get() : nullptr;
+
 		if (Look.bLamp)
 		{
 			++NumLamps;
 			const float Throb = 1.0f + Look.Pulse * 0.35f * FMath::Sin(MatchSeconds * 9.0f);
-			Component->SetWorldLocationAndRotation(At, FQuat::Identity);
+			// The marker's place is the device's origin, inside its body: the lamp sits on top of the body at its
+			// front (the original's devices face along their X axis), where it is seen from the room.
+			FVector LampAt = At;
+			const UStaticMeshComponent* Body = Object != nullptr ? Object->FindComponentByClass<UStaticMeshComponent>() : nullptr;
+			if (Body != nullptr && Body->GetStaticMesh() != nullptr)
+			{
+				const FBox Box = Body->GetStaticMesh()->GetBoundingBox();
+				const FTransform& BodyTransform = Body->GetComponentTransform();
+				LampAt = BodyTransform.TransformPosition(FVector(FMath::Lerp(Box.Min.X, Box.Max.X, 0.65), Box.GetCenter().Y, Box.Max.Z))
+					+ BodyTransform.GetUnitAxis(EAxis::Z) * (LampSize * 0.3);
+			}
+			Component->SetWorldLocationAndRotation(LampAt, FQuat::Identity);
 			Component->SetWorldScale3D(FVector(LampSize / 100.0f));
 			Material->SetVectorParameterValue(MarkerColorParameter, Look.Color);
 			Material->SetScalarParameterValue(MarkerIntensityParameter, Look.Intensity * Throb);
@@ -407,23 +428,12 @@ void UScctMarkersSubsystem::UpdateMarkers(const FVector& ViewLocation)
 		// Over the top of the thing it marks when that is drawn (a terminal, a case), so it never sits in it; a
 		// carried disk's sign rides over its carrier's head.
 		FVector Place = At + FVector(0.0, 0.0, Look.Lift);
-		if (Marker.OwnerPawnId == 0)
+		if (Object != nullptr && !Object->IsHidden())
 		{
-			if (!Known->Object.IsValid() && (Frame - Known->LookedFrame > 90 || Known->LookedFrame == 0))
+			const FBox Bounds = Object->GetComponentsBoundingBox();
+			if (Bounds.IsValid && Bounds.GetExtent().GetMax() < 200.0)
 			{
-				Known->LookedFrame = Frame;
-				Known->Object = LevelState != nullptr ? LevelState->FindLevelActor(LevelState->GetName(Marker.NameId)) : nullptr;
-			}
-			if (const AActor* Object = Known->Object.Get())
-			{
-				if (!Object->IsHidden())
-				{
-					const FBox Bounds = Object->GetComponentsBoundingBox();
-					if (Bounds.IsValid && Bounds.GetExtent().GetMax() < 200.0)
-					{
-						Place = FVector(Bounds.GetCenter().X, Bounds.GetCenter().Y, Bounds.Max.Z + SignClearance);
-					}
-				}
+				Place = FVector(Bounds.GetCenter().X, Bounds.GetCenter().Y, Bounds.Max.Z + SignClearance);
 			}
 		}
 		const float Distance = static_cast<float>(FVector::Dist(ViewLocation, Place));

@@ -29,6 +29,8 @@ struct FScctWorldDebugApi;
  *     the simulation says, throws sparks and is dark at once.
  *   - Destructibles swap to the mesh and the skins the simulation names; a mesh that was not imported is logged
  *     once and the old one stays.
+ *   - A level mesh that was imported as a Nanite mesh but wears glass or a glowing material (Nanite cannot draw
+ *     those and shows the engine's checkerboard instead) is switched to ordinary drawing when the match starts.
  *
  * Everything is restored when the match ends, so a second match in the same world starts from the level as it
  * was imported. Names the table sends that the level has nothing for, and movable level actors the table never
@@ -98,7 +100,8 @@ private:
 	struct FFixture
 	{
 		TWeakObjectPtr<UStaticMeshComponent> Mesh;
-		TWeakObjectPtr<UMaterialInterface> OriginalMaterial;
+		/** What the slot's override was before the lamp took it (none on a level actor as imported). */
+		TWeakObjectPtr<UMaterialInterface> OriginalOverride;
 		TWeakObjectPtr<UMaterialInstanceDynamic> Material;
 		int32 Slot = 0;
 		float Emissive = 0.0f;
@@ -159,12 +162,16 @@ private:
 	void RunDebugActions();
 
 	void FirstSight(FActorState& State, const FScctWorldActor& Record);
+	/** Takes a carried actor off its pawn's bone and back into the world. */
+	void Detach(FActorState& State);
 	/** Spawns an actor for a followed actor the level has none for; false when no imported mesh fits. */
 	bool SpawnStandIn(FActorState& State, const FScctWorldActor& Record);
 	void ApplyMesh(FActorState& State, int32 MeshId);
 	void ApplySkin(FActorState& State, int32 Slot, int32 SkinId);
 	void BindLight(FLightState& State, const FScctWorldLight& Record);
 	void BindFixtures(FLightState& State);
+	/** The glowing material a switched light put in this slot of a lamp mesh, or null. */
+	UMaterialInstanceDynamic* FindFixtureMaterial(const UStaticMeshComponent* Component, int32 Slot) const;
 
 	/** The imported mesh for a mesh as the simulation or the map's render file names it, or null. */
 	UStaticMesh* FindMesh(const FString& Name);
@@ -190,7 +197,8 @@ private:
 	const FScctWorldApi* World = nullptr;
 	const FScctWorldDebugApi* Debug = nullptr;
 
-	TArray<FString> Names;
+	/** By name id. The strings never move when the table grows, so a name handed out stays good all match. */
+	TIndirectArray<FString> Names;
 	/** The level's tagged mesh actors and, apart from them, its tagged lights, by tag. Actors spawned here are added to the first. */
 	TMap<FName, TWeakObjectPtr<AActor>> TaggedActors;
 	TMap<FName, TWeakObjectPtr<AActor>> TaggedLights;
@@ -228,5 +236,6 @@ private:
 	int32 NumMobilityChanged = 0;
 	int32 NumEvents[9] = {};
 	float PlacementError = 0.0f;
+	float PlacementTurnError = 0.0f;
 	int32 PlacementChecked = 0;
 };

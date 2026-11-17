@@ -10,6 +10,7 @@
 #include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "MaterialShared.h"
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
@@ -69,6 +70,29 @@ namespace
 	FLinearColor ToLightColor(const FLinearColor& Display)
 	{
 		return FLinearColor(FMath::Pow(FMath::Max(Display.R, 0.0f), 2.2f), FMath::Pow(FMath::Max(Display.G, 0.0f), 2.2f), FMath::Pow(FMath::Max(Display.B, 0.0f), 2.2f));
+	}
+
+	/**
+	 * Nanite draws only opaque and masked materials: a Nanite mesh that wears glass or a glow is drawn with the
+	 * engine's checkerboard instead. Such a component is drawn the ordinary way. Returns true when it was switched.
+	 */
+	bool LevelAvoidNanite(UStaticMeshComponent* Component)
+	{
+		const UStaticMesh* Mesh = Component != nullptr ? Component->GetStaticMesh() : nullptr;
+		if (Mesh == nullptr || Component->IsForceDisableNanite() || !Mesh->IsNaniteEnabled())
+		{
+			return false;
+		}
+		for (int32 Slot = 0; Slot < Component->GetNumMaterials(); ++Slot)
+		{
+			const UMaterialInterface* Material = Component->GetMaterial(Slot);
+			if (Material != nullptr && !IsOpaqueOrMaskedBlendMode(Material->GetBlendMode()))
+			{
+				Component->SetForceDisableNanite(true);
+				return true;
+			}
+		}
+		return false;
 	}
 
 	void ScanLevelFolder(const FString& Folder, const UClass* Class, TArray<FAssetData>& OutAssets)
@@ -156,7 +180,7 @@ void UScctLevelStateSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 
 	// Name ids, actor states and what was spawned belong to one match.
 	RestoreLevel();
-	Names.Reset();
+	Names.Empty();
 	ActorStates.Reset();
 	LightStates.Reset();
 	MentionedTags.Reset();
@@ -170,7 +194,7 @@ void UScctLevelStateSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	bBound = false;
 	NumLevelActors = NumStandIns = NumNothingToDraw = NumHiddenAtStart = 0;
 	NumLightsOffAtStart = NumLightsFound = NumMobilityChanged = 0;
-	PlacementError = 0.0f;
+	PlacementError = PlacementTurnError = 0.0f;
 	PlacementChecked = 0;
 	FMemory::Memzero(NumEvents);
 }
@@ -211,6 +235,7 @@ void UScctLevelStateSubsystem::IndexLevel()
 	bIndexed = true;
 
 	int32 NumLights = 0;
+	int32 NumNaniteAvoided = 0;
 	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
 	{
 		for (const FName& Tag : It->Tags)
@@ -228,6 +253,7 @@ void UScctLevelStateSubsystem::IndexLevel()
 			}
 			TaggedActors.Add(Tag, *It);
 			const AStaticMeshActor* MeshActor = Cast<AStaticMeshActor>(*It);
+			NumNaniteAvoided += MeshActor != nullptr && LevelAvoidNanite(MeshActor->GetStaticMeshComponent()) ? 1 : 0;
 			if (MeshActor != nullptr && MeshActor->GetStaticMeshComponent() != nullptr && MeshActor->GetStaticMeshComponent()->Mobility == EComponentMobility::Movable)
 			{
 				MovableTags.Add(Tag);
@@ -284,12 +310,42 @@ void UScctLevelStateSubsystem::IndexLevel()
 
 	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: the level has %d tagged actors (%d movable meshes, %d lights); %d imported meshes and %d materials can be swapped in (%s)"),
 		TaggedActors.Num() + TaggedLights.Num(), MovableTags.Num(), NumLights, MeshAssets.Num(), MaterialAssets.Num(), *MapFolder);
+	if (NumNaniteAvoided > 0)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: %d level meshes with glass or glowing materials were imported as Nanite meshes, which cannot draw those; they are drawn the ordinary way"), NumNaniteAvoided);
+	}
 }
 
 void UScctLevelStateSubsystem::RestoreLevel()
 {
 	const UWorld* ThisWorld = GetWorld();
 	const bool bTearingDown = ThisWorld == nullptr || ThisWorld->bIsTearingDown;
+
+	// The lamps before the actors: a lamp mesh that also wore a skin has all its slots cleared by its actor below.
+	for (FLightState& State : LightStates)
+	{
+		if (bTearingDown)
+		{
+			break;
+		}
+		if (ULightComponent* Light = State.Light.Get())
+		{
+			Light->SetIntensity(State.OriginalIntensity);
+			Light->SetLightColor(State.OriginalColor);
+			Light->SetVisibility(State.bOriginalVisible);
+			if (State.bMoved && State.Actor.IsValid())
+			{
+				State.Actor->SetActorTransform(State.OriginalTransform);
+			}
+		}
+		for (const FFixture& Fixture : State.Fixtures)
+		{
+			if (UStaticMeshComponent* Mesh = Fixture.Mesh.Get())
+			{
+				Mesh->SetMaterial(Fixture.Slot, Fixture.OriginalOverride.Get());
+			}
+		}
+	}
 
 	for (FActorState& State : ActorStates)
 	{
@@ -300,7 +356,7 @@ void UScctLevelStateSubsystem::RestoreLevel()
 		}
 		if (State.AttachedPawnId != 0)
 		{
-			Actor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+			Detach(State);
 		}
 		Actor->SetActorTransform(State.OriginalTransform);
 		Actor->SetActorHiddenInGame(State.bOriginalHidden);
@@ -329,31 +385,6 @@ void UScctLevelStateSubsystem::RestoreLevel()
 		}
 	}
 	Spawned.Reset();
-
-	for (FLightState& State : LightStates)
-	{
-		if (bTearingDown)
-		{
-			break;
-		}
-		if (ULightComponent* Light = State.Light.Get())
-		{
-			Light->SetIntensity(State.OriginalIntensity);
-			Light->SetLightColor(State.OriginalColor);
-			Light->SetVisibility(State.bOriginalVisible);
-			if (State.bMoved && State.Actor.IsValid())
-			{
-				State.Actor->SetActorTransform(State.OriginalTransform);
-			}
-		}
-		for (const FFixture& Fixture : State.Fixtures)
-		{
-			if (UStaticMeshComponent* Mesh = Fixture.Mesh.Get())
-			{
-				Mesh->SetMaterial(Fixture.Slot, Fixture.OriginalMaterial.Get());
-			}
-		}
-	}
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -368,7 +399,7 @@ void UScctLevelStateSubsystem::RefreshNames()
 	{
 		Buffer[0] = 0;
 		World->GetName(Names.Num(), Buffer, UE_ARRAY_COUNT(Buffer));
-		Names.Emplace(Buffer);
+		Names.Add(new FString(Buffer));
 	}
 }
 
@@ -564,8 +595,12 @@ void UScctLevelStateSubsystem::UpdateActors()
 			// Carried on a pawn's bone (the disk on a spy's thigh): the table gives the place from the bone.
 			if (State.AttachedPawnId != Record.AttachPawnId)
 			{
+				// The mesh keeps its scale and hangs by its pivot, as it stands in the world: the origin goes to the
+				// attachment's place less the turned pivot.
+				const FVector Scale = Actor->GetActorScale3D();
+				const FVector Pivot = FVector(State.Info.PrePivotX, State.Info.PrePivotY, State.Info.PrePivotZ) * Scale;
 				AScctPawnProxy* Proxy = Session->FindProxy(Record.AttachPawnId);
-				if (Proxy != nullptr && Proxy->AttachToBone(Actor->GetRootComponent(), GetName(Record.AttachBoneId), FTransform(Rotation, Location)))
+				if (Proxy != nullptr && Proxy->AttachToBone(Actor->GetRootComponent(), GetName(Record.AttachBoneId), FTransform(Rotation, Location - Rotation.RotateVector(Pivot), Scale)))
 				{
 					State.AttachedPawnId = Record.AttachPawnId;
 				}
@@ -574,8 +609,7 @@ void UScctLevelStateSubsystem::UpdateActors()
 		}
 		if (State.AttachedPawnId != 0)
 		{
-			State.AttachedPawnId = 0;
-			Actor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+			Detach(State);
 			State.Location = FVector(UE_BIG_NUMBER);
 		}
 
@@ -588,6 +622,25 @@ void UScctLevelStateSubsystem::UpdateActors()
 			State.Rotation = Rotation;
 			Actor->SetActorLocationAndRotation(Location, Rotation);
 		}
+	}
+}
+
+void UScctLevelStateSubsystem::Detach(FActorState& State)
+{
+	State.AttachedPawnId = 0;
+	AActor* Actor = State.Actor.Get();
+	if (Actor == nullptr)
+	{
+		return;
+	}
+	const FVector Scale = Actor->GetActorScale3D();
+	Actor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	Actor->SetActorScale3D(Scale);
+	// On the bone it was shown and hidden with the body; in the world again only the simulation hides it.
+	if (USceneComponent* Root = Actor->GetRootComponent())
+	{
+		Root->SetVisibility(true, true);
+		Root->SetHiddenInGame(false, true);
 	}
 }
 
@@ -641,6 +694,7 @@ void UScctLevelStateSubsystem::FirstSight(FActorState& State, const FScctWorldAc
 	{
 		++PlacementChecked;
 		PlacementError = FMath::Max(PlacementError, static_cast<float>(FVector::Dist(State.Location, State.FirstLocation)));
+		PlacementTurnError = FMath::Max(PlacementTurnError, static_cast<float>(FMath::RadiansToDegrees(Found->GetActorQuat().AngularDistance(State.FirstRotation))));
 	}
 
 	int32 Skins[ScctWorldSkinSlots] = {};
@@ -695,6 +749,7 @@ bool UScctLevelStateSubsystem::SpawnStandIn(FActorState& State, const FScctWorld
 	Component->SetMobility(EComponentMobility::Movable);
 	Component->SetCollisionEnabled(ECollisionEnabled::NoCollision); // the simulation owns collision
 	Component->SetStaticMesh(Mesh);
+	LevelAvoidNanite(Component);
 	FVector Scale(State.Info.ScaleX, State.Info.ScaleY, State.Info.ScaleZ);
 	Actor->SetActorScale3D(Scale.IsNearlyZero() ? FVector::OneVector : Scale);
 	Actor->Tags.Add(FScctWorld::LevelTag(*Name));
@@ -752,6 +807,7 @@ void UScctLevelStateSubsystem::ApplyMesh(FActorState& State, int32 MeshId)
 		return;
 	}
 	Component->SetStaticMesh(Mesh);
+	LevelAvoidNanite(Component);
 }
 
 void UScctLevelStateSubsystem::ApplySkin(FActorState& State, int32 Slot, int32 SkinId)
@@ -763,8 +819,8 @@ void UScctLevelStateSubsystem::ApplySkin(FActorState& State, int32 Slot, int32 S
 	}
 	if (SkinId == 0)
 	{
-		// Back to the mesh's own material.
-		Component->SetMaterial(Slot, nullptr);
+		// Back to the mesh's own material, or to the glowing copy of it a switched light keeps in this slot.
+		Component->SetMaterial(Slot, FindFixtureMaterial(Component, Slot));
 		return;
 	}
 
@@ -773,6 +829,7 @@ void UScctLevelStateSubsystem::ApplySkin(FActorState& State, int32 Slot, int32 S
 	{
 		Component->SetMaterial(Slot, Material);
 		State.bSkinned = true;
+		LevelAvoidNanite(Component);
 	}
 	else if (!ReportedMissing.Contains(Name))
 	{
@@ -929,6 +986,21 @@ void UScctLevelStateSubsystem::BindLight(FLightState& State, const FScctWorldLig
 	}
 }
 
+UMaterialInstanceDynamic* UScctLevelStateSubsystem::FindFixtureMaterial(const UStaticMeshComponent* Component, int32 Slot) const
+{
+	for (const FLightState& State : LightStates)
+	{
+		for (const FFixture& Fixture : State.Fixtures)
+		{
+			if (Fixture.Mesh.Get() == Component && Fixture.Slot == Slot)
+			{
+				return Fixture.Material.Get();
+			}
+		}
+	}
+	return nullptr;
+}
+
 void UScctLevelStateSubsystem::BindFixtures(FLightState& State)
 {
 	// The lamp of a switched light is the nearest small mesh beside it that glows by itself (the importer gives
@@ -986,7 +1058,7 @@ void UScctLevelStateSubsystem::BindFixtures(FLightState& State)
 		Fixture.Mesh = Best;
 		Fixture.Slot = Slot;
 		Fixture.Emissive = Emissive;
-		Fixture.OriginalMaterial = Material;
+		Fixture.OriginalOverride = Best->OverrideMaterials.IsValidIndex(Slot) ? Best->OverrideMaterials[Slot].Get() : nullptr;
 		UMaterialInstanceDynamic* Dynamic = UMaterialInstanceDynamic::Create(Material, Best);
 		Best->SetMaterial(Slot, Dynamic);
 		Fixture.Material = Dynamic;
@@ -1065,8 +1137,13 @@ void UScctLevelStateSubsystem::DrainEvents()
 				{
 					ActorStates[Event.NameId].Starts += Event.A != 0 ? 1 : 0;
 				}
-				UE_LOG(LogOpenSCCT, Log, TEXT("Level state: %.1f s mover '%s' %s at (%.0f, %.0f, %.0f), key %d"), MatchSeconds, *Name,
-					Event.A != 0 ? TEXT("starts moving") : TEXT("stops"), Event.X, Event.Y, Event.Z, Event.B);
+				// A searchlight or a fan starts and stops all match: each one is said only on request, the travel
+				// of every mover is in the summary.
+				if (bLog)
+				{
+					UE_LOG(LogOpenSCCT, Log, TEXT("Level state: %.1f s mover '%s' %s at (%.0f, %.0f, %.0f), key %d"), MatchSeconds, *Name,
+						Event.A != 0 ? TEXT("starts moving") : TEXT("stops"), Event.X, Event.Y, Event.Z, Event.B);
+				}
 				break;
 
 			case EScctWorldEventKind::ShownChanged:
@@ -1124,7 +1201,7 @@ void UScctLevelStateSubsystem::LogBound()
 	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: bound at the first frame: %d followed actors (%d are level actors, %d of them hidden by the simulation at the start, %d made movable here), %d movers; "
 		"%d lights (%d found in the level, %d off at the start, %d switched, %d of those with a lamp mesh that glows with them)"),
 		NumFollowed, NumLevelActors, NumHiddenAtStart, NumMobilityChanged, NumMovers, LightStates.Num(), NumLightsFound, NumLightsOffAtStart, NumSwitched, NumFixtures);
-	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: %d level actors that have not moved stand within %.3f cm of where the table puts them"), PlacementChecked, PlacementError);
+	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: %d level actors that have not moved stand within %.3f cm and %.3f degrees of where the table puts them"), PlacementChecked, PlacementError, PlacementTurnError);
 
 	if (bLog)
 	{
