@@ -1,5 +1,6 @@
 #include "Online/ScctOnlineSubsystem.h"
 
+#include "Demo/ScctDemoSubsystem.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -156,6 +157,8 @@ const FScctOnlineApi* UScctOnlineSubsystem::Connect()
 	}
 
 	LoadIdentity();
+	// Every visit is made with the demo-saving choice (Demo/ScctDemoSubsystem.h), so it is in the bridge before any join.
+	UScctDemoSubsystem::PushChoice();
 
 	FString MasterUrl, InviteKey;
 	ReadMasterSettings(MasterUrl, InviteKey);
