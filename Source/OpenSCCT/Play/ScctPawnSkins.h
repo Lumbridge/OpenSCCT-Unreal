@@ -10,6 +10,7 @@ class UMaterialInterface;
 class UPointLightComponent;
 class UPoseableMeshComponent;
 class UScctSessionSubsystem;
+class UTexture2D;
 
 /**
  * The state skins over a pawn's body, so everyone can see what is done to him:
@@ -112,6 +113,13 @@ private:
 	/** The wet skins: spy body, spy head, merc body. */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UMaterialInterface>> WetMaterials;
+
+	/**
+	 * The skins' textures, made at run time from the player's converted content (shared/chars/SPerso/textures under
+	 * the -ScctContent folder): the committed materials carry only neutral engine textures.
+	 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UTexture2D>> SkinTextures;
 
 	bool bTriedMaterials = false;
 
