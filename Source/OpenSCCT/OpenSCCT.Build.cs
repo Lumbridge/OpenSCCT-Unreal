@@ -6,6 +6,9 @@ public class OpenSCCT : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
+		// Headers are included by their path from the module folder ("Play/ScctGameMode.h").
+		PublicIncludePaths.Add(ModuleDirectory);
+
 		PublicDependencyModuleNames.AddRange(new[]
 		{
 			"Core",

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The bridge Unreal loads through the .NET host: it runs OpenSCCT's Godot-free play session (the same code the
+       Godot client and the dedicated server use) and hands its state to C++ through a flat C interface. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>OpenScct.UnrealBridge</RootNamespace>
+    <!-- Writes the runtimeconfig.json the native host starts the runtime from, and copies dependencies next to it. -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\Binaries\Bridge\</OutputPath>
+    <!-- The OpenSCCT checkout the bridge is built against (override with -p:OpenScctRoot=...). -->
+    <OpenScctRoot Condition="'$(OpenScctRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\OSC-unreal-bridge\</OpenScctRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(OpenScctRoot)src\OpenScct.Server\OpenScct.Server.csproj" />
+    <ProjectReference Include="$(OpenScctRoot)src\OpenScct.Bots\OpenScct.Bots.csproj" />
+  </ItemGroup>
+  <!-- The play session lives in the Godot project but has no Godot in it; it is linked, as OpenSCCT's map sweep does. -->
+  <ItemGroup>
+    <Compile Include="$(OpenScctRoot)game\Scripts\Play\Session\*.cs" Link="Linked\PlaySession\%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>
