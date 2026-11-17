@@ -46,7 +46,7 @@ namespace
 			const auto Entry = [this, &Entries](const FString& Caption, const FString& Sub, const FString& Description, TFunction<void()> OnPressed) -> TSharedRef<SScctButton>
 			{
 				TSharedPtr<SScctButton> Made;
-				Entries->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
+				Entries->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 0.0f)
 				[
 					SAssignNew(Made, SScctButton)
 					.Look(EScctButtonLook::Menu)
@@ -105,6 +105,9 @@ namespace
 			Entry(TEXT("Hub"), TEXT("Meet other players between matches"),
 				TEXT("The hubs the master lists, joining one by its address, or hosting a hub on this PC."),
 				[this] { Host.Open(TEXT("hub")); });
+			Entry(TEXT("Maps & Content"), TEXT("Download maps and shared content"),
+				TEXT("The maps of OpenSCCT-Content with what this PC has: download, update or remove a map, follow each download, and open the downloads folder."),
+				[this] { Host.Open(TEXT("content")); });
 			Entry(TEXT("Account"), TEXT("Your name, rank and career"),
 				TEXT("Sign in or out, claim or change the name the servers show, see your rank, experience and career, prestige, and choose an emblem and a title."),
 				[this] { Host.Open(TEXT("account")); });
@@ -126,7 +129,7 @@ namespace
 			[
 				SNew(SHorizontalBox)
 				// The wordmark and the menu.
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 30.0f, 0.0f, 0.0f)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 8.0f, 0.0f, 0.0f)
 				[
 					SNew(SBox).WidthOverride(600.0f)
 					[
@@ -155,7 +158,7 @@ namespace
 							.Font(ScctHudStyle::Font(ScctHudStyle::EWeight::Regular, 12.0f))
 							.ColorAndOpacity(ScctHudStyle::Fade(ScctHudStyle::TextDim(), 0.85f))
 						]
-						+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 22.0f, 0.0f, 34.0f)
+						+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 14.0f, 0.0f, 16.0f)
 						[
 							SNew(SBox).WidthOverride(64.0f).HAlign(HAlign_Left)[ SNew(SBox).WidthOverride(64.0f)[ ScctUi::Rule(0.5f) ] ]
 						]

@@ -25,8 +25,8 @@ internal static unsafe class DownloadProbe
 
         ContentApi api;
         int version = ((delegate* unmanaged<ContentApi*, int>)&ContentExports.GetApi)(&api);
-        Console.WriteLine($"ContentApi version {version}, {sizeof(ContentApi)} bytes (header: 8 + 11 pointers = {8 + 11 * sizeof(nint)}), info {sizeof(ContentDownloadInfo)} bytes");
-        bool ok = sizeof(ContentApi) == 8 + 11 * sizeof(nint) && sizeof(ContentDownloadInfo) == 32;
+        Console.WriteLine($"ContentApi version {version}, {sizeof(ContentApi)} bytes (header: 8 + 14 pointers = {8 + 14 * sizeof(nint)}), info {sizeof(ContentDownloadInfo)} bytes");
+        bool ok = sizeof(ContentApi) == 8 + 14 * sizeof(nint) && sizeof(ContentDownloadInfo) == 32;
 
         Console.WriteLine($"{map} before: {MapsExports.FolderOf(map) ?? "not installed"}");
         int index = 0;

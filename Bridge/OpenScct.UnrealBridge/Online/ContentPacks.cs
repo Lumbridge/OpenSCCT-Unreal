@@ -94,6 +94,65 @@ public static class ContentPacks
             Done ? $"{Title} downloaded" :
             Total > 0 ? string.Create(CultureInfo.InvariantCulture, $"{Step}: {Received / 1048576.0:0.0} / {Total / 1048576.0:0.0} MB") :
             Step;
+
+        /// <summary>
+        /// The Content page's short form under a row that already names the map: "Downloading 12.3 / 31.0 MB",
+        /// "Installing". A step that fetches a shared pack first keeps that pack's name.
+        /// </summary>
+        public string DescribeBrief()
+        {
+            string step = Step == $"Downloading {Title}" ? "Downloading" : Step == $"Installing {Title}" ? "Installing" : Step;
+            return Error is not null || Done ? Describe() :
+                Total > 0 ? string.Create(CultureInfo.InvariantCulture, $"{step} {Received / 1048576.0:0.0} / {Total / 1048576.0:0.0} MB") :
+                step;
+        }
+    }
+
+    /// <summary>The key a shared pack's own download is kept under.</summary>
+    public static string SharedKey(string id) => "shared:" + id;
+
+    /// <summary>The Content page's download of a shared pack, running or finished, else null.</summary>
+    public static DownloadJob? SharedJob(string id) => Job(SharedKey(id));
+
+    /// <summary>
+    /// Downloads a shared pack (core, chars, audio) on its own, as the Content page's Download does; a running one
+    /// is returned as it is.
+    /// </summary>
+    public static DownloadJob DownloadShared(ContentSharedPack pack)
+    {
+        ArgumentNullException.ThrowIfNull(pack);
+        DownloadJob job;
+        lock (Gate)
+        {
+            if (Jobs.TryGetValue(SharedKey(pack.Id), out DownloadJob? running) && running.Running)
+            {
+                return running;
+            }
+
+            job = new DownloadJob(pack);
+            Jobs[SharedKey(pack.Id)] = job;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                job.Step = $"Downloading {job.Title}";
+                await Store.InstallSharedAsync(pack, Progress(job), job.Stop.Token).ConfigureAwait(false);
+                job.Done = true;
+                Interlocked.Increment(ref s_generation);
+            }
+            catch (OperationCanceledException) when (job.Stop.IsCancellationRequested)
+            {
+                job.Error = "stopped";
+            }
+            catch (Exception e) when (e is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException or TaskCanceledException)
+            {
+                NetworkDiagnostics.Report("content download: " + job.Title, e);
+                job.Error = e is TaskCanceledException ? "the download timed out" : NetworkDiagnostics.Describe(e);
+            }
+        });
+        return job;
     }
 
     /// <summary>

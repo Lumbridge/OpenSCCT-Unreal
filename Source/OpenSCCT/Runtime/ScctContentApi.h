@@ -10,7 +10,7 @@
 // Text is UTF-16, zero terminated. A download is named by a key: a map code, or "nav:" and a map for its bot
 // navigation.
 
-constexpr int32 ScctContentApiVersion = 1;
+constexpr int32 ScctContentApiVersion = 2;
 
 /** FScctContentDownload::State. */
 enum class EScctContentDownloadState : int32
@@ -39,6 +39,9 @@ enum class EScctContentText : int32
 	LobbyLine = 2,       // the lobby's missing-map line
 	InstalledFolder = 3, // where the key's download was installed, once done
 	BotNavigation = 4,   // the key's (a map's) bot navigation question, or why none is offered
+	Library = 5,         // where the content comes from and where downloads go (two lines)
+	Summary = 6,         // the Content page's status line: loading, the index's failure, or the count of maps
+	PacksFolder = 7,     // the folder downloads go into
 };
 
 /** CheckBotNavigation. */
@@ -95,8 +98,24 @@ struct FScctContentApi
 
 	/** Moves on each time a map finished installing. */
 	int32 (__cdecl* GetGeneration)();
+
+	// Version 2: the Maps & Content page (Menu/SScctMenuContent.cpp, Online/ScctContentCatalogue.h).
+
+	/**
+	 * Copies the page's rows, one per line, fields separated by tabs: kind (map, shared), key, title, category, size
+	 * in bytes, state (available, downloaded, update, ingame, unlisted, notneeded), version, job (empty, running,
+	 * done, stopped, failed), the job's line, its fraction, picture (PNG path), modes (comma separated), detail ('|'
+	 * between lines). Returns the text's full length in characters.
+	 */
+	int32 (__cdecl* GetCatalogue)(TCHAR* Buffer, int32 Capacity);
+
+	/** Downloads a shared pack (key "shared:" and its id). Returns 1 started, 0 no such pack, -1 index not read yet, -2 failure. */
+	int32 (__cdecl* StartSharedDownload)(const TCHAR* Id);
+
+	/** Removes a downloaded map, with why not in Error. Returns 1 removed, 0 not downloaded, -1 its download is running, -2 failed. */
+	int32 (__cdecl* RemoveMap)(const TCHAR* Map, TCHAR* Error, int32 Capacity);
 };
 
 static_assert(sizeof(TCHAR) == 2, "The bridge's text is UTF-16");
 static_assert(sizeof(FScctContentDownload) == 32, "FScctContentDownload does not match ContentDownloadInfo");
-static_assert(sizeof(FScctContentApi) == 8 + 11 * sizeof(void*), "FScctContentApi does not match ContentApi");
+static_assert(sizeof(FScctContentApi) == 8 + 14 * sizeof(void*), "FScctContentApi does not match ContentApi");

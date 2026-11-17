@@ -1,4 +1,5 @@
 #include "Online/ScctContentDownloads.h"
+#include "Online/ScctContentCatalogue.h"
 
 #include "Containers/Ticker.h"
 #include "Misc/CommandLine.h"
@@ -53,7 +54,7 @@ namespace
 		{
 			const FString Map = Visit->GetSetupMap();
 			const FString Folder = Map.IsEmpty() ? FString() : ContentDownloadText(*Api, EScctContentText::InstalledFolder, Map);
-			UE_LOG(LogOpenSCCT, Log, TEXT("Content: a download finished installing (generation %d)%s"), Generation,
+			UE_LOG(LogOpenSCCT, Log, TEXT("Content: a map or pack was installed or removed (generation %d)%s"), Generation,
 				Folder.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(": %s in %s; it plays through %s"), *Map, *Folder, *UScctOnlineSubsystem::LevelOf(Map)));
 			if (!Folder.IsEmpty())
 			{
@@ -216,6 +217,8 @@ void ScctContentDownloads::Start(UScctOnlineSubsystem* Online)
 	if (!Watch.Ticker.IsValid())
 	{
 		Watch.Ticker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateStatic(&TickContentWatch), 0.25f);
+		// The Maps & Content page's unattended switches (-ScctContentDownload, -ScctContentRemove).
+		ScctContentCatalogue::StartUnattended(Online);
 	}
 }
 

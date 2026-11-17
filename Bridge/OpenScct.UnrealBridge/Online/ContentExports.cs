@@ -9,8 +9,9 @@ namespace OpenScct.UnrealBridge;
 /// <summary>
 /// Downloads from OpenSCCT-Content (Source/OpenSCCT/Runtime/ScctContentApi.h mirrors it field for field): the
 /// content index, a map's download with the host's content hash, the lobby's missing-map line with its Download
-/// button, and the prebuilt bot navigation offered before a start with bots (Online/ContentPacks.cs,
-/// OnlineBridge.MapFetch.cs, BotNavigationOffer.cs). A table of its own, so the online and lobby tables keep their
+/// button, the prebuilt bot navigation offered before a start with bots, and the Maps & Content page's catalogue,
+/// shared pack downloads and removals (Online/ContentPacks.cs, OnlineBridge.MapFetch.cs, BotNavigationOffer.cs,
+/// ContentCatalogue.cs). A table of its own, so the online and lobby tables keep their
 /// layout. Every entry catches its exceptions. Strings are UTF-16, zero terminated. New entries go at the end.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
@@ -28,6 +29,11 @@ public unsafe struct ContentApi
     public delegate* unmanaged[Cdecl]<char*, int> CheckBotNavigation;
     public delegate* unmanaged[Cdecl]<char*, int> StartBotNavigation;
     public delegate* unmanaged[Cdecl]<int> GetGeneration;
+
+    // Version 2: the Maps & Content page (Online/ContentCatalogue.cs).
+    public delegate* unmanaged[Cdecl]<char*, int, int> GetCatalogue;
+    public delegate* unmanaged[Cdecl]<char*, int> StartSharedDownload;
+    public delegate* unmanaged[Cdecl]<char*, char*, int, int> RemoveMap;
 }
 
 /// <summary>A download as GetDownload and GetLobbyFetch describe it (32 bytes).</summary>
@@ -94,11 +100,20 @@ public enum ContentText
 
     /// <summary>The key's (a map's) bot navigation question, or why none is offered.</summary>
     BotNavigation = 4,
+
+    /// <summary>Where the content comes from and where downloads go (two lines).</summary>
+    Library = 5,
+
+    /// <summary>The Content page's status line: loading, the index's failure, or the count of maps.</summary>
+    Summary = 6,
+
+    /// <summary>The folder downloads go into.</summary>
+    PacksFolder = 7,
 }
 
 public static unsafe class ContentExports
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     /// <summary>Fills <paramref name="api"/>. Returns the API version.</summary>
     [UnmanagedCallersOnly]
@@ -121,6 +136,9 @@ public static unsafe class ContentExports
         api->CheckBotNavigation = &CheckBotNavigation;
         api->StartBotNavigation = &StartBotNavigation;
         api->GetGeneration = &GetGeneration;
+        api->GetCatalogue = &GetCatalogue;
+        api->StartSharedDownload = &StartSharedDownload;
+        api->RemoveMap = &RemoveMap;
         return ApiVersion;
     }
 
@@ -168,6 +186,9 @@ public static unsafe class ContentExports
         ContentText.LobbyLine => OnlineBridge.Instance.MapFetch?.Line ?? string.Empty,
         ContentText.InstalledFolder => ContentPacks.Job(key)?.InstalledFolder ?? string.Empty,
         ContentText.BotNavigation => BotNavigationText(key),
+        ContentText.Library => ContentCatalogue.Library(),
+        ContentText.Summary => ContentCatalogue.Summary(),
+        ContentText.PacksFolder => OpenScct.Server.ContentPaths.PacksFolder,
         _ => string.Empty,
     };
 
@@ -364,4 +385,55 @@ public static unsafe class ContentExports
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int GetGeneration() => ContentPacks.Generation;
+
+    /// <summary>The Content page's rows (<see cref="ContentCatalogue.Lines"/>). Returns the text's full length.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetCatalogue(char* buffer, int capacity)
+    {
+        try
+        {
+            return OnlineTextCopy.Buffer(buffer, capacity, ContentCatalogue.Lines());
+        }
+        catch (Exception e)
+        {
+            Exports.ReportFailure(e.ToString());
+            return OnlineTextCopy.Buffer(buffer, capacity, string.Empty);
+        }
+    }
+
+    /// <summary>Downloads a shared pack (key "shared:" and its id). Returns 1 started, 0 no such pack, -1 index not read yet, -2 failure.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int StartSharedDownload(char* id)
+    {
+        try
+        {
+            return id == null ? 0 : ContentCatalogue.StartShared(new string(id));
+        }
+        catch (Exception e)
+        {
+            Exports.ReportFailure(e.ToString());
+            return -2;
+        }
+    }
+
+    /// <summary>
+    /// Removes a downloaded map, writing why it could not into <paramref name="error"/>. Returns 1 removed, 0 not
+    /// downloaded, -1 its download is running, -2 failed.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int RemoveMap(char* code, char* error, int capacity)
+    {
+        try
+        {
+            int result = ContentCatalogue.Remove(code == null ? string.Empty : new string(code), out string why);
+            OnlineTextCopy.Buffer(error, capacity, why);
+            return result;
+        }
+        catch (Exception e)
+        {
+            Exports.ReportFailure(e.ToString());
+            OnlineTextCopy.Buffer(error, capacity, e.Message);
+            return -2;
+        }
+    }
 }
