@@ -6,12 +6,14 @@ Runs inside the editor's Python (Tools/Materials/Build-VisionMaterials.ps1 does 
 
 Writes /Game/OpenSCCT/UI/Vision/M_ScctVision<Mode>. Each material is one Custom node over the finished picture
 (after tonemapping), blended in by its Amount parameter (0 plain sight .. 1 the mode), which
-Source/OpenSCCT/Hud/ScctVisionSubsystem drives. The shader text below is the whole look: edit it here and run the
-script again; the assets are rebuilt from nothing each time.
+Source/OpenSCCT/Hud/ScctVisionSubsystem drives (motion tracking also has the level's ramp and the tracker's clean
+rectangles, see MOTION). The shader text below is the whole look: edit it here and run the script again; the assets
+are rebuilt from nothing each time.
 
 Scene inputs the shaders read:
   14 the picture so far, 1 scene depth (cm), 13 custom depth (cm), 25 custom stencil.
-The game marks characters in the custom stencil while a mode is on: 1 a spy, 2 a merc. Detector beams are marked
+The game marks characters in the custom stencil while thermal or EMF is on: 64 to 127, the body's heat or EMF glow and
+its opacity in that mode (see PAWNS below). Detector beams are marked
 while thermal or EMF is on by a cylinder drawn only into the custom depth (Source/OpenSCCT/Play/ScctMarkersSubsystem):
 3 a beam EMF draws as a dark grey streak, 128 to 255 a beam thermal draws at the heat (stencil - 128) / 127.
 """
@@ -34,22 +36,38 @@ float2 Cell = floor(VUV * Res / 1.5);
 float Grain = frac(sin(dot(Cell + frac(T) * 37.0, float2(12.9898, 78.233))) * 43758.5453) - 0.5;
 """
 
-# Whether the pixel is a character that is really in view: marked in the stencil and not behind the scene.
-# Also the same test averaged over a ring, for edges and halos. Uses Radius (pixels) defined by the caller.
-BODY = """
+# The pawn bodies of thermal and EMF, marked 64 to 127 by the simulation's rule for the mode
+# (UScctVisionSubsystem::PawnStencil): code = stencil - 64, level (the mode's intensity) = floor(code / 4) / 15,
+# opacity = (code % 4 + 1) / 4 (1 opaque). A body the mode hides is not drawn at all, so it is simply not here. A
+# see-through body is drawn only into the custom depth, so the scene under it is what lies behind it and the body is
+# laid over that by its opacity. Body: how much of the pixel is a body (its opacity), BodyLevel its level; Ring the
+# bodies around the pixel (for the figure's shape), RingLevel the same weighted by their level and opacity (for halos).
+PAWNS = """
 float2 SUV = GetDefaultSceneTextureUV(Parameters, 25);
 float2 SPx = GetSceneTextureBufferSize(25).zw;
 float S0 = SceneTextureLookup(SUV, 25, false).r;
-float Body = (S0 > 0.5 && S0 < 2.5
-    && SceneTextureLookup(SUV, 13, false).r < SceneTextureLookup(SUV, 1, false).r + 30.0) ? 1.0 : 0.0;
+float Body = 0.0;
+float BodyLevel = 0.0;
+if (S0 > 63.5 && S0 < 127.5 && SceneTextureLookup(SUV, 13, false).r < SceneTextureLookup(SUV, 1, false).r + 30.0)
+{
+    float Code = round(S0) - 64.0;
+    BodyLevel = floor(Code / 4.0) / 15.0;
+    Body = (fmod(Code, 4.0) + 1.0) / 4.0;
+}
 float Ring = 0.0;
+float RingLevel = 0.0;
 for (int k = 0; k < 8; k++)
 {
     float Ak = k * 0.785398;
     float2 O = SUV + float2(cos(Ak), sin(Ak)) * SPx * Radius;
     float Sk = SceneTextureLookup(O, 25, false).r;
-    Ring += (Sk > 0.5 && Sk < 2.5
-        && SceneTextureLookup(O, 13, false).r < SceneTextureLookup(O, 1, false).r + 30.0) ? 0.125 : 0.0;
+    if (Sk > 63.5 && Sk < 127.5 && SceneTextureLookup(O, 13, false).r < SceneTextureLookup(O, 1, false).r + 30.0)
+    {
+        float Ck = round(Sk) - 64.0;
+        float Ok = (fmod(Ck, 4.0) + 1.0) / 4.0;
+        Ring += 0.125;
+        RingLevel += 0.125 * Ok * floor(Ck / 4.0) / 15.0;
+    }
 }
 """
 
@@ -113,8 +131,9 @@ return lerp(C, Out, Amount);
 
 THERMAL = PRELUDE + """
 float Radius = 10.0;
-""" + BODY + BEAMS + """
-// The room as temperature rather than detail: a softened brightness, kept cold. Lamps read warmer.
+""" + PAWNS + BEAMS + """
+// The room as temperature rather than detail: a softened brightness, kept cold. Lamps read warmer. (The original drew
+// each surface from its own heat texture; those were not imported, so the room's heat comes from its brightness.)
 float Lb = L;
 for (int i = 0; i < 4; i++)
 {
@@ -124,10 +143,11 @@ for (int i = 0; i < 4; i++)
 Lb *= 0.2;
 float Heat = 0.13 + pow(Lb, 0.7) * 0.50 + smoothstep(0.80, 1.0, Lb) * 0.20;
 
-// Characters are hot: hottest in the middle of the body and cooler towards its outline, so the figure keeps its
-// form, with warm air around it.
-float Core = 0.56 + 0.26 * Ring * Ring + 0.18 * saturate(L * 6.0);
-Heat = lerp(max(Heat, Ring * 0.50), Core, Body);
+// Characters are as hot as the simulation says (HeatIntensity, 1 for both sides): hottest in the middle of the body
+// and cooler towards its outline, so the figure keeps its form, with warm air around it. A body thinned by its
+// HeatOpacity (the camo suit) is laid over what is behind it by that opacity; at 0 it is not marked at all.
+float Core = (0.56 + 0.26 * Ring * Ring + 0.18 * saturate(L * 6.0)) * BodyLevel;
+Heat = lerp(max(Heat, RingLevel * 0.50), Core, Body);
 
 // A detector beam is drawn at its own heat (HeatIntensity: 1 a tripwire, 0.4 a mine's beam).
 Heat = lerp(Heat, max(Heat, BeamHeat), Beam);
@@ -144,38 +164,82 @@ Out *= lerp(0.35, 1.0, smoothstep(1.05, 0.45, length(Q)));
 return lerp(C, Out, Amount);
 """
 
+# Motion tracking, as the original's motion pass (ps_1_1 0x34e278) and its clean view rectangles (ps 0x10c4e328) draw
+# it; the Godot client's svm_display_post.glsl mode 37 is the same decode. Everything is the blurred scene as a false
+# colour ramp: lum = RampSlope x L(blurred scene x grain) + RampOffset, RampSlope = 2 (1 + 3 MTVSlope / 255) and RampOffset =
+# MTVOffset / 255 from the level (set by Source/OpenSCCT/Hud/ScctVisionSubsystem), navy (0, 20, 40) to red
+# (180, 10, 10) over lum x 1.7347, and above 0.5765 the fold (0.9, 0.05, 0.05) x (1 - lum); times the sonar backdrop.
+# Inside each of the motion tracker's clean view rectangles (Rect0..Rect7: left, top, right, bottom in viewport UV,
+# CleanCount of them in use) the sharp scene instead, in pale green monochrome: 2 x (2 x (L tint + bias)) x grain x
+# sonar, each stage saturated. Nothing marks the pawns: a moving one is seen because the tracker locks it and its
+# rectangle is drawn clean; one standing still is just part of the blurred ramp.
+#  - The blur stands for the original's 128 x 128 level of its blur pyramid: a 7 x 7 Gaussian of taps over about
+#    three of that level's texels each way.
+#  - The grain stands for Engine.Noise0_gauss (mean 0.5, spread 0.085): a hash per pixel scaled to that spread.
+#  - The sonar backdrop is Engine.sonar_background (8 x 16 texels, 0.8 or 1) tiled 80 x 60 over the picture, its
+#    texels written out below as a bit per 0.8 texel, row by row, and read with a bilinear filter.
 MOTION = PRELUDE + """
-float Radius = 2.5;
-""" + BODY + """
-// A cold steel picture with the geometry's edges picked out from depth, like a scanner's reconstruction.
-float2 DUV = GetDefaultSceneTextureUV(Parameters, 1);
-float2 DPx = GetSceneTextureBufferSize(1).zw;
-float Z = SceneTextureLookup(DUV, 1, false).r;
-float Zs = SceneTextureLookup(DUV + float2(DPx.x, 0.0) * 1.5, 1, false).r + SceneTextureLookup(DUV - float2(DPx.x, 0.0) * 1.5, 1, false).r
-    + SceneTextureLookup(DUV + float2(0.0, DPx.y) * 1.5, 1, false).r + SceneTextureLookup(DUV - float2(0.0, DPx.y) * 1.5, 1, false).r;
-float Edge = saturate(abs(Zs - 4.0 * Z) / (Z * 0.04 + 2.0) - 0.15) * saturate(1.0 - Z / 6000.0);
+float N = 0.5 + Grain * 0.294;
 
-float3 Out = lerp(float3(0.015, 0.022, 0.03), float3(0.52, 0.60, 0.66), saturate(pow(L, 0.85) * 1.15));
-Out += Edge * float3(0.20, 0.30, 0.36);
+// The blurred scene's luminance.
+float2 BlurStep = float2(1.0 / 128.0, 1.0 / 128.0) * 0.5;
+float Blurred = 0.0;
+float BlurWeight = 0.0;
+for (int by = -3; by <= 3; by++)
+{
+    for (int bx = -3; bx <= 3; bx++)
+    {
+        float W = exp(-0.5 * (bx * bx + by * by) / 4.0);
+        float2 At = saturate(VUV + float2(bx, by) * BlurStep);
+        Blurred += W * dot(SceneTextureLookup(ViewportUVToSceneTextureUV(At, 14), 14, true).rgb, Lw);
+        BlurWeight += W;
+    }
+}
+Blurred /= BlurWeight;
 
-// Characters in view: an amber outline that pulses, and a faint fill.
-float3 Amber = float3(1.0, 0.62, 0.18);
-float Outline = saturate(abs(Ring - Body) * 2.2);
-float Pulse = 0.75 + 0.25 * sin(T * 6.0);
-Out = lerp(Out, Amber * (0.25 + 0.5 * L), Body * 0.35);
-Out += Amber * Outline * Pulse;
+// The sonar backdrop.
+const uint SonarRows[16] = { 227u, 193u, 128u, 128u, 128u, 128u, 193u, 227u, 62u, 28u, 8u, 8u, 8u, 8u, 28u, 62u };
+float2 St = float2(frac(VUV.x * 80.0) * 8.0, frac(VUV.y * 60.0) * 16.0) - 0.5;
+float2 S0 = floor(St);
+float2 Sf = St - S0;
+float Sonar = 0.0;
+for (int c = 0; c < 4; c++)
+{
+    int Sx = ((int)S0.x + (c & 1) + 8) % 8;
+    int Sy = ((int)S0.y + (c >> 1) + 16) % 16;
+    float Texel = ((SonarRows[Sy] >> (uint)Sx) & 1u) != 0u ? 0.8 : 1.0;
+    Sonar += Texel * ((c & 1) != 0 ? Sf.x : 1.0 - Sf.x) * ((c >> 1) != 0 ? Sf.y : 1.0 - Sf.y);
+}
 
-// The sweep: a line that runs down the picture every two seconds.
-float Sweep = smoothstep(0.014, 0.0, abs(frac(T * 0.5) - VUV.y));
-Out += float3(0.30, 0.42, 0.50) * Sweep * 0.5;
-Out += Grain * 0.03;
-Out *= lerp(0.45, 1.0, smoothstep(1.05, 0.45, length(Q)));
+// The ramp and its fold.
+float Lum = clamp(RampSlope * Blurred * N + RampOffset, -1.0, 1.0);
+float3 Ramp = lerp(float3(0.0, 20.0, 40.0) / 255.0, float3(180.0, 10.0, 10.0) / 255.0, saturate(1.7347 * Lum));
+float3 Fold = float3(0.9, 0.05, 0.05) * (1.0 - Lum);
+float3 Out = saturate((Lum > 0.5765 ? Fold : Ramp) * Sonar);
+
+// The clean view rectangles of the tracker's held locks.
+float4 Rects[8] = { Rect0, Rect1, Rect2, Rect3, Rect4, Rect5, Rect6, Rect7 };
+int Count = (int)round(CleanCount);
+for (int r = 0; r < 8; r++)
+{
+    if (r < Count && VUV.x >= Rects[r].x && VUV.x < Rects[r].z && VUV.y >= Rects[r].y && VUV.y < Rects[r].w)
+    {
+        float3 M = saturate(2.0 * (L * float3(0.675, 0.75, 0.675) + float3(0.09, 0.1, 0.09)));
+        M = saturate(2.0 * M * N);
+        Out = saturate(M * Sonar);
+        break;
+    }
+}
 return lerp(C, Out, Amount);
 """
 
+# The parameters a mode's material has besides Amount: (name, default) scalars and vector names.
+MOTION_SCALARS = [("RampSlope", 2.0 * (1.0 + 3.0 * 85.0 / 255.0)), ("RampOffset", 52.0 / 255.0), ("CleanCount", 0.0)]
+MOTION_VECTORS = ["Rect%d" % index for index in range(8)]
+
 EMF = PRELUDE + """
-float Radius = 2.5;
-""" + BODY + BEAMS + """
+float Radius = 3.5;
+""" + PAWNS + BEAMS + """
 // Electrical things glow: what is bright in the picture (lamps, screens) blooms blue-white over a dark field.
 float Glow = 0.0;
 for (int i = 0; i < 8; i++)
@@ -191,8 +255,13 @@ float Hot = smoothstep(0.55, 0.95, L);
 float3 Out = lerp(float3(0.008, 0.012, 0.045), float3(0.09, 0.15, 0.40), saturate(L * 0.9));
 Out += float3(0.55, 0.78, 1.0) * (Hot * 0.9 + Glow * 0.9);
 
-// People carry little that shows: only a thin cold outline.
-Out += float3(0.25, 0.45, 0.9) * saturate(abs(Ring - Body) * 2.0) * 0.55;
+// A pawn is here only while the simulation says EMF shows him (a spy with his weapon away is not marked and not
+// drawn at all). He is a dim figure in the field, glowing by his EMF glow (EMFIntensity while bEMFIsOn) and, on what
+// he carries, by its glow (the drawn pistol), with a halo of it around him; laid over the scene by his EMFOpacity.
+float3 Figure = lerp(float3(0.03, 0.05, 0.14), float3(0.12, 0.20, 0.48), saturate(L * 0.9));
+Figure += float3(0.55, 0.78, 1.0) * BodyLevel * (1.2 + 0.25 * sin(T * 5.0));
+Out = lerp(Out, Figure, Body);
+Out += float3(0.45, 0.65, 1.0) * RingLevel * (1.0 - saturate(Body * 4.0)) * 0.8;
 
 // A detector beam is a dark grey streak: it gives off nothing, the field only shows it is there.
 Out = lerp(Out, float3(0.24, 0.24, 0.25), Streak);
@@ -204,7 +273,7 @@ Out *= lerp(0.35, 1.0, smoothstep(1.05, 0.45, length(Q)));
 return lerp(C, Out, Amount);
 """
 
-MODES = [("Night", NIGHT), ("Thermal", THERMAL), ("Motion", MOTION), ("Emf", EMF)]
+MODES = [("Night", NIGHT, [], []), ("Thermal", THERMAL, [], []), ("Motion", MOTION, MOTION_SCALARS, MOTION_VECTORS), ("Emf", EMF, [], [])]
 
 
 def log(text):
@@ -217,7 +286,7 @@ def scene_texture(material, texture_id, y):
     return node
 
 
-def build(name, code):
+def build(name, code, scalars, vectors):
     asset_name = "M_ScctVision" + name
     path = "%s/%s" % (PACKAGE, asset_name)
     if unreal.EditorAssetLibrary.does_asset_exist(path):
@@ -240,8 +309,24 @@ def build(name, code):
     amount.set_editor_property("parameter_name", "Amount")
     amount.set_editor_property("default_value", 1.0)
     inputs.append(("Amount", amount, ""))
+    for index, (parameter, default) in enumerate(scalars):
+        node = library.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -700, 950 + index * 150)
+        node.set_editor_property("parameter_name", parameter)
+        node.set_editor_property("default_value", default)
+        inputs.append((parameter, node, ""))
+    # A vector parameter's first output is its RGB only, so each is joined with its A into a float4 for the shader.
+    for index, parameter in enumerate(vectors):
+        y = 950 + (len(scalars) + index) * 150
+        node = library.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -1000, y)
+        node.set_editor_property("parameter_name", parameter)
+        node.set_editor_property("default_value", unreal.LinearColor(0.0, 0.0, 0.0, 0.0))
+        append = library.create_material_expression(material, unreal.MaterialExpressionAppendVector, -700, y)
+        if not library.connect_material_expressions(node, "", append, "A") or not library.connect_material_expressions(node, "A", append, "B"):
+            log("could not join %s of %s" % (parameter, asset_name))
+        inputs.append((parameter, append, ""))
     if "GainIn" in code:
-        gain = library.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -700, 950)
+        y = 950 + (len(scalars) + len(vectors)) * 150
+        gain = library.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -700, y)
         gain.set_editor_property("parameter_name", "Gain")
         gain.set_editor_property("default_value", 1.25)
         inputs.append(("GainIn", gain, ""))
@@ -322,7 +407,7 @@ def build_double_vision():
     log("built %s" % path)
 
 
-for mode_name, mode_code in MODES:
-    build(mode_name, mode_code)
+for mode_name, mode_code, mode_scalars, mode_vectors in MODES:
+    build(mode_name, mode_code, mode_scalars, mode_vectors)
 build_double_vision()
 log("done: %d materials" % (len(MODES) + 1))

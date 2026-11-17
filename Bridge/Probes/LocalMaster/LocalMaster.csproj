@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- OpenSCCT's master server (src/OpenScct.Master, compiled from its sources here, without its Main) run on this PC
+       with a test account and session made directly in its account database, so the account page, the name claim,
+       prestige and the settings sync can be checked signed in without a Discord sign-in. Never for players. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>OpenScct.Master</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <OpenScctRoot Condition="'$(OpenScctRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\OSC-unreal-bridge\</OpenScctRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(OpenScctRoot)src\OpenScct.Net\OpenScct.Net.csproj" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
+    <PackageReference Include="AWSSDK.S3" Version="4.0.23.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="$(OpenScctRoot)src\OpenScct.Master\**\*.cs" Exclude="$(OpenScctRoot)src\OpenScct.Master\Program.cs;$(OpenScctRoot)src\OpenScct.Master\obj\**;$(OpenScctRoot)src\OpenScct.Master\bin\**" Link="Master\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(OpenScctRoot)shared\ProjectLinks.cs" Link="Project\ProjectLinks.cs" />
+    <EmbeddedResource Include="$(OpenScctRoot)src\OpenScct.Master\Admin\assets\*" LogicalName="admin/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="$(OpenScctRoot)src\OpenScct.Master\Web\assets\*" LogicalName="web/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>
