@@ -47,6 +47,10 @@ AScctPawnProxy::AScctPawnProxy()
 	// The simulation does all collision; Unreal's physics must not see these.
 	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Body->SetCastShadow(true);
+	// A player looking through their own eyes still sees their shadow on the floor and walls: the body is hidden
+	// in game for that view and keeps its shadow through bCastHiddenShadow. Present switches that on only while
+	// the simulation shows the pawn, because the engine draws a hidden shadow for invisible components too.
+	Body->bCastHiddenShadow = false;
 
 	StandIn = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StandIn"));
 	StandIn->SetupAttachment(Root);
@@ -63,6 +67,8 @@ void AScctPawnProxy::SetKind(int32 NewKind, TConstArrayView<FScctBridgeBoneInfo>
 	Kind = NewKind;
 	bHasModel = false;
 	BoneMap.Reset();
+	BonesByBridgeName.Reset();
+	MeshBonesByKey.Reset();
 
 	USkeletalMesh* Model = Kind >= 0 && Kind < UE_ARRAY_COUNT(ModelPaths) ? LoadObject<USkeletalMesh>(nullptr, ModelPaths[Kind]) : nullptr;
 	if (Model == nullptr)
@@ -73,27 +79,32 @@ void AScctPawnProxy::SetKind(int32 NewKind, TConstArrayView<FScctBridgeBoneInfo>
 
 	Body->SetSkinnedAssetAndUpdate(Model);
 
-	TMap<FString, int32> MeshBones;
 	const FReferenceSkeleton& Reference = Model->GetRefSkeleton();
 	for (int32 Index = 0; Index < Reference.GetNum(); ++Index)
 	{
-		MeshBones.Add(BoneKey(Reference.GetBoneName(Index).ToString()), Index);
+		MeshBonesByKey.Add(BoneKey(Reference.GetBoneName(Index).ToString()), Index);
 	}
 
 	int32 Missing = 0;
 	BoneMap.Reserve(Skeleton.Num());
 	for (const FScctBridgeBoneInfo& Bone : Skeleton)
 	{
-		const int32* Found = MeshBones.Find(BoneKey(FString(Bone.Name)));
+		const FString Name(Bone.Name);
+		const int32* Found = MeshBonesByKey.Find(BoneKey(Name));
 		BoneMap.Add(Found != nullptr ? *Found : INDEX_NONE);
+		if (Found != nullptr)
+		{
+			BonesByBridgeName.Add(FName(*Name), *Found);
+		}
 		Missing += Found == nullptr ? 1 : 0;
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Pawn kind %d: model has %d bones, the simulation %d, %d unmatched"), Kind, Reference.GetNum(), Skeleton.Num(), Missing);
 	bHasModel = true;
 }
 
-void AScctPawnProxy::Present(const FScctBridgePawn& Pawn, TConstArrayView<FScctBridgeBoneInfo> Skeleton, TConstArrayView<FScctBridgeBone> Pose, bool bHideBody)
+void AScctPawnProxy::Present(const FScctBridgePawn& NewPawn, TConstArrayView<FScctBridgeBoneInfo> Skeleton, TConstArrayView<FScctBridgeBone> Pose)
 {
+	Pawn = NewPawn;
 	if (Pawn.Kind != Kind)
 	{
 		SetKind(Pawn.Kind, Skeleton);
@@ -103,10 +114,35 @@ void AScctPawnProxy::Present(const FScctBridgePawn& Pawn, TConstArrayView<FScctB
 	const FVector Location(Pawn.X + Pawn.PrePivotX, Pawn.Y + Pawn.PrePivotY, Pawn.Z + Pawn.PrePivotZ);
 	SetActorLocationAndRotation(Location, FRotator(0.0, Pawn.Yaw, 0.0));
 
-	const bool bVisible = (Pawn.Flags & EScctPawnFlags::Visible) != 0 && !bHideBody;
+	// Two different kinds of "not drawn". A pawn the simulation does not show is gone, shadow and all
+	// (visibility, and no hidden shadow: the engine would otherwise still draw the shadow of an invisible
+	// component that has bCastHiddenShadow). The local player seen from their own eyes is only out of the main
+	// view: hidden in game, which with bCastHiddenShadow leaves the shadow. Both reach what features attached
+	// to the body.
 	const bool bPosed = bHasModel && Pose.Num() > 0;
-	Body->SetVisibility(bVisible && bPosed);
-	StandIn->SetVisibility(bVisible && !bHasModel);
+	const bool bBodyVisible = IsShown() && bPosed;
+	if (Body->IsVisible() != bBodyVisible)
+	{
+		Body->SetVisibility(bBodyVisible, true);
+	}
+	if (static_cast<bool>(Body->bCastHiddenShadow) != bBodyVisible)
+	{
+		Body->SetCastHiddenShadow(bBodyVisible);
+		TArray<USceneComponent*> Attached;
+		Body->GetChildrenComponents(true, Attached);
+		for (USceneComponent* Child : Attached)
+		{
+			if (UPrimitiveComponent* Primitive = Cast<UPrimitiveComponent>(Child))
+			{
+				Primitive->SetCastHiddenShadow(bBodyVisible);
+			}
+		}
+	}
+	if (Body->bHiddenInGame != IsFirstPerson())
+	{
+		Body->SetHiddenInGame(IsFirstPerson(), true);
+	}
+	StandIn->SetVisibility(IsShown() && !bHasModel && !IsFirstPerson());
 
 	if (bPosed)
 	{
@@ -128,4 +164,37 @@ void AScctPawnProxy::Present(const FScctBridgePawn& Pawn, TConstArrayView<FScctB
 		StandIn->SetWorldLocation(FVector(Pawn.X, Pawn.Y, Pawn.Z));
 		StandIn->SetWorldScale3D(FVector(Pawn.CollisionRadius / 50.0, Pawn.CollisionRadius / 50.0, Pawn.CollisionHeight / 50.0));
 	}
+}
+
+int32 AScctPawnProxy::FindMeshBone(const FString& BridgeBoneName) const
+{
+	const int32* Found = MeshBonesByKey.Find(BoneKey(BridgeBoneName));
+	return Found != nullptr ? *Found : INDEX_NONE;
+}
+
+FName AScctPawnProxy::FindMeshBoneName(const FString& BridgeBoneName) const
+{
+	const int32 Bone = FindMeshBone(BridgeBoneName);
+	return Bone != INDEX_NONE ? Body->GetBoneName(Bone) : NAME_None;
+}
+
+bool AScctPawnProxy::AttachToBone(USceneComponent* Component, const FString& BridgeBoneName, const FTransform& RelativeTransform)
+{
+	const FName Bone = FindMeshBoneName(BridgeBoneName);
+	if (Component == nullptr || Bone.IsNone())
+	{
+		return false;
+	}
+
+	Component->AttachToComponent(Body, FAttachmentTransformRules::KeepRelativeTransform, Bone);
+	Component->SetRelativeTransform(RelativeTransform);
+
+	// From here on it is part of the body: drawn, hidden and shadowed as the body is.
+	if (UPrimitiveComponent* Primitive = Cast<UPrimitiveComponent>(Component))
+	{
+		Primitive->SetCastHiddenShadow(Body->bCastHiddenShadow);
+	}
+	Component->SetVisibility(Body->IsVisible(), true);
+	Component->SetHiddenInGame(Body->bHiddenInGame, true);
+	return true;
 }

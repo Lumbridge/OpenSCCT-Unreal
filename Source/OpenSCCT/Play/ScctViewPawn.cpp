@@ -11,9 +11,12 @@ AScctViewPawn::AScctViewPawn()
 	Camera->bUsePawnControlRotation = false;
 
 	// The simulation's field of view is the horizontal angle of a 4:3 picture, and wider screens keep its
-	// vertical angle (they see more at the sides). Unreal keeps the vertical angle it derives from this ratio.
+	// vertical angle (they see more at the sides). Unreal keeps the vertical angle it derives from this ratio,
+	// as long as the vertical axis is the one it maintains: said here, so a project setting cannot change it.
 	Camera->SetAspectRatio(4.0f / 3.0f);
 	Camera->SetConstraintAspectRatio(false);
+	Camera->bOverrideAspectRatioAxisConstraint = true;
+	Camera->SetAspectRatioAxisConstraint(AspectRatio_MaintainYFOV);
 
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;

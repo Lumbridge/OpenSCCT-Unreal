@@ -31,6 +31,64 @@ Needs Unreal Engine 5.8.4, Visual Studio with the C++ game workload and the .NET
 & "F:\UE_5.8\Engine\Build\BatchFiles\Build.bat" OpenSCCTEditor Win64 Development -project="$PWD\OpenSCCTUnreal.uproject" -waitmutex
 ```
 
+Build the bridge too, before the first run and after any C# change (output lands in `Binaries/Bridge`):
+
+```powershell
+dotnet build -c Release Bridge\OpenScct.UnrealBridge -p:OpenScctRoot=<OpenSCCT checkout>\
+```
+
+## Assets after a fresh checkout
+
+Build the C++ first (the weapon table and the front end level name classes of the game module). Then, in this
+order, with `$c` the converted content folder. Every script runs headless (no window), prints its own log lines
+and ends with exit code 0 only when its editor script really finished:
+
+```powershell
+Tools\Import\Import-Characters.ps1 -Content $c     # bodies, weapons, view models, goggle lenses -> Content\Imported\Chars
+Tools\Effects\Build-EffectAssets.ps1 -Content $c   # the game's effect meshes -> Content\Imported\Fx
+Tools\Import\Import-Map.ps1 -Map AquaE -Content $c # once per map -> Content\Imported\Maps\<Map>
+```
+
+Everything else is committed and only needs its script after a change to that script: the surface, glass, water
+and sky materials (`Tools\Import\Import-Assets.ps1 -MaterialsOnly`; without the switch it also downloads the CC0
+sets again), the map effect materials (`Tools\Import\Import-Effects.ps1`), the merc rifle
+(`Tools\Import\Import-MercRifle.ps1`), the marker materials (`Tools\Level\Build-LevelAssets.ps1`), the goggles
+(`Tools\Materials\Build-VisionMaterials.ps1`) and the front end level (`Tools\Menu\Build-FrontEnd.ps1`). They
+come before the map imports when they are run. A rebuilt asset is a new binary file even when nothing changed.
+The weapon table `DA_ScctWeapons` is made once: delete it and run `Import-Characters.ps1` to get the script's
+values back.
+
+## Playing a level
+
+An imported level starts a local match with bots when it opens. Game URL options (all optional, see
+`Source/OpenSCCT/Play/ScctGameMode.h`): `?Side=spy|merc`, `?Bots=3`, `?Mode=Story`,
+`?Difficulty=easy|normal|hard|expert`, `?Sidearms=1`, `?Rifles=1`, `?Practice=1` (no time limit, unlimited
+lives), `?Name=Sam`, `?ScctMap=AquaE`. The converted content folder comes from `-ScctContent=<folder>`, else
+the `SVM_CONTENT` variable, else `ContentRoot` under `[OpenSCCT]` in the game ini.
+
+`Tools\Run-Offscreen.ps1 -Map AquaE -Content <folder> -Shots 3` plays a level with no window, saves
+screenshots to `Saved\ScctShots` and quits.
+
+## Front end and online play
+
+The game starts in the front end (`/Game/OpenSCCT/Maps/L_FrontEnd`, built by `Tools\Menu\Build-FrontEnd.ps1`;
+the menu is C++ in `Source/OpenSCCT/Menu`): play offline, join a server by address, or pick one from the master
+server's list. The servers are OpenSCCT's own: the bridge speaks their protocol, so the Unreal game joins the
+same dedicated and listen servers as the Godot client (`Source/OpenSCCT/Online/ScctOnlineSubsystem.h` describes
+the flow: lobby in the front end, each round in the imported level of its map). The master server and invite
+key are under `[OpenSCCT.Online]` in `Config/DefaultGame.ini`.
+
+`Tools\Run-OnlineCheck.ps1 -Content <folder> -OpenScct <OpenSCCT checkout>` starts a real dedicated server on
+localhost with bots, joins it with the game off-screen, plays a round and saves screenshots and logs.
+
+## Packaging
+
+The bridge is staged with the game as loose files (`RuntimeDependencies` in `OpenSCCT.Build.cs`), so build
+it before packaging. The .NET runtime is looked for in this order: `Binaries/DotNet` (a private runtime laid
+out as a .NET install root: copy the contents of a .NET 10 runtime zip there and players need nothing
+installed), the `DOTNET_ROOT` variable, `Program Files\dotnet`. The converted content folder is not staged:
+it is the player's own.
+
 ## Content rule
 
 Original game content (maps, textures, meshes, sounds, animations, text) is never committed here, as in
