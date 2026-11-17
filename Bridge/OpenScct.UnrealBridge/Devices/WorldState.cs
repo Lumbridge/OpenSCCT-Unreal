@@ -8,7 +8,7 @@ using OpenScct.Game.Lighting;
 using OpenScct.Game.Objectives;
 using OpenScct.Game.SBase;
 
-namespace OpenScct.UnrealBridge.World;
+namespace OpenScct.UnrealBridge.Devices;
 
 /// <summary>
 /// The dynamic state of the level for Unreal: every map actor that moves, hides or changes what it shows, the map's

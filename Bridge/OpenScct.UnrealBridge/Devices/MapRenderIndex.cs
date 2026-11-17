@@ -5,7 +5,7 @@ using System.IO;
 using System.Text.Json;
 using OpenScct.Core;
 
-namespace OpenScct.UnrealBridge.World;
+namespace OpenScct.UnrealBridge.Devices;
 
 /// <summary>One placed mesh of render/world.glb (an entry of its <c>extras.svmap.instances</c>).</summary>
 public sealed class RenderInstance

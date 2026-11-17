@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using OpenScct.UnrealBridge.World;
+using OpenScct.UnrealBridge.Devices;
 
 namespace OpenScct.UnrealBridge;
 

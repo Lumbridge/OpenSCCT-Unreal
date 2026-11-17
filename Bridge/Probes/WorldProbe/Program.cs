@@ -11,7 +11,7 @@ using OpenScct.Core.Engine;
 using OpenScct.Game.SBase;
 using OpenScct.Server;
 using OpenScct.UnrealBridge;
-using OpenScct.UnrealBridge.World;
+using OpenScct.UnrealBridge.Devices;
 
 // Hosts a map with bots and reads the world state every frame as Unreal would. Part of the way in it breaks three
 // trigger lights, then fires the movers' and trigger lights' events and damages the breakable props, all on the
