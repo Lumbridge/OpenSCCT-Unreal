@@ -148,6 +148,9 @@ bool UScctControlSettings::Load()
 
 bool UScctControlSettings::Apply()
 {
+	// The files first: otherwise this would act on the defaults and a save after it would write them over the
+	// player's own.
+	EnsureLoaded();
 	const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>(&LastError);
 	if (Controls == nullptr)
 	{
@@ -181,6 +184,7 @@ bool UScctControlSettings::Save()
 
 bool UScctControlSettings::Refresh()
 {
+	EnsureLoaded();
 	const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>(&LastError);
 	if (Controls == nullptr)
 	{
@@ -205,6 +209,7 @@ bool UScctControlSettings::LoadBindings()
 
 bool UScctControlSettings::SaveBindings()
 {
+	EnsureLoaded();
 	const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>(&LastError);
 	if (Controls == nullptr)
 	{
@@ -223,6 +228,7 @@ bool UScctControlSettings::SaveBindings()
 
 FString UScctControlSettings::GetBinding(bool bMerc, bool bPad, const FString& Key) const
 {
+	Get()->EnsureLoaded();
 	const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>();
 	if (Controls == nullptr)
 	{
@@ -233,6 +239,7 @@ FString UScctControlSettings::GetBinding(bool bMerc, bool bPad, const FString& K
 
 bool UScctControlSettings::SetBinding(bool bMerc, bool bPad, const FString& Key, const FString& Command)
 {
+	EnsureLoaded();
 	const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>(&LastError);
 	if (Controls == nullptr)
 	{
@@ -248,6 +255,7 @@ bool UScctControlSettings::SetBinding(bool bMerc, bool bPad, const FString& Key,
 
 void UScctControlSettings::ResetBindings(bool bMerc)
 {
+	EnsureLoaded();
 	if (const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>())
 	{
 		Controls->ResetBindings(bMerc ? 1 : 0);
@@ -256,6 +264,7 @@ void UScctControlSettings::ResetBindings(bool bMerc)
 
 FString UScctControlSettings::GetBindingsJson() const
 {
+	Get()->EnsureLoaded();
 	const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>();
 	if (Controls == nullptr)
 	{

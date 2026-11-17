@@ -121,7 +121,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "OpenSCCT|Controls", meta = (DisplayName = "Get OpenSCCT Control Settings"))
 	static UScctControlSettings* Get();
 
-	/** Loads the settings and the bindings once per run; later calls do nothing. False when a file was refused. */
+	/**
+	 * Loads the settings and the bindings once per run; later calls do nothing. False when a file was refused.
+	 * Every call below that hands something to the bridge or writes a file does this first, so nothing can act on
+	 * (or save) the defaults in place of the player's files.
+	 */
 	bool EnsureLoaded();
 
 	/** Reads controls.json (the defaults when there is none) and fills the properties from it. */

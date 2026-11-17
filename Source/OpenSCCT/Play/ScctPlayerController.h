@@ -34,7 +34,9 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(FScctLocalCommandEvent, FName /*Name*/, i
  * CAMERA. The session asks this controller for the frame's camera (its ViewOverride): the controls' view, which
  * is the simulation's view turned by the mouse counts the simulation has not taken yet, so the picture follows
  * the mouse with no tick of delay. The field of view comes with the simulation's zoom, scope and rifle aim
- * blends and the widescreen setting already applied. GetLookView has the rest of it for other features (where
+ * blends and the widescreen setting already applied. A view that does not continue the last one (the bridge's
+ * Cut, or a jump the bridge did not flag because several ticks ran in the frame) is told to Unreal as a camera
+ * cut, so motion blur and temporal anti-aliasing do not smear across it. GetLookView has the rest of it for other features (where
  * the local player aims, the rifle aim blend).
  *
  * INTERFACE COMMANDS. Bindings that are not for the pawn (ShowMenu, Talk, HoldScoreboard, DisplayStrategicMap,
@@ -43,6 +45,10 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(FScctLocalCommandEvent, FName /*Name*/, i
  * CONSOLE (until there is a settings menu):
  *   ScctInvertY 0|1        look up and down the other way round
  *   ScctMouseScale <x>     a multiplier over every mouse count
+ *   ScctBind spy|merc <key> "<command>"   bind a key for one side: the key by its binding name (W, Shift,
+ *                          LeftMouse, Ctrl+F, Double+H), the command in the original's grammar ("Button bCrouch");
+ *                          "" unbinds
+ *   ScctBindReset spy|merc put that side's keys and controller back to the defaults
  *   ScctControlsSave       write the settings and the bindings to Saved/Controls
  *   ScctControlsLoad       read them again
  *
@@ -56,13 +62,17 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(FScctLocalCommandEvent, FName /*Name*/, i
  *                            mouse button, Space, C, Shift, Q, R, E, middle mouse button, X); 0.1 s when no
  *                            time is given; several joined with + are held together ("forward+left 2")
  *   key <UnrealKeyName> [seconds]   hold any key by its Unreal name ("key Tab", "key F 0.5")
- *   turn <degrees> [seconds]        move the mouse sideways, right positive, over the time (0.5 s); the degrees
- *                                   are those of the side's plain look (spy with the gun holstered, merc unscoped)
- *   look <degrees> [seconds]        move the mouse away (up positive)
+ *   turn <degrees> [seconds] [actions]   move the mouse sideways, right positive, over the time (0.5 s); the
+ *                                   degrees are those of the side's plain look (spy with the gun holstered, merc
+ *                                   unscoped); actions named after the seconds are held meanwhile
+ *                                   ("turn 90 1 forward" runs round a corner)
+ *   look <degrees> [seconds] [actions]   move the mouse away (up positive)
  *   wheel <notches>                 turn the wheel, up positive
  *   wait [seconds]                  nothing (1 s)
  * Each step's start, and the end of the script, writes a LogOpenSCCT line "Autoplay: ..." with the local pawn's
- * place, yaw, height and health, the view, the simulation's state name and the merc's ammunition.
+ * place, yaw, height and health, the view (with the field of view Unreal really draws), the simulation's state
+ * name, the merc's ammunition and fire mode, the selected gadget and the vision mode, and since the line before: the largest frame-to-frame change of the view, how far
+ * the view's turn was from the mouse counts of its own frame (the look-ahead check) and the camera cuts raised.
  * Example: -ScctAutoplay="wait 2;forward 2;turn 90;crouch 1;jump;wait 1;fire 0.5"
  */
 UCLASS()
@@ -99,6 +109,12 @@ public:
 	void ScctMouseScale(float Scale);
 
 	UFUNCTION(Exec)
+	void ScctBind(const FString& Side, const FString& Key, const FString& Command);
+
+	UFUNCTION(Exec)
+	void ScctBindReset(const FString& Side);
+
+	UFUNCTION(Exec)
 	void ScctControlsSave();
 
 	UFUNCTION(Exec)
@@ -117,6 +133,9 @@ private:
 	/** Passes on the interface commands the bindings raised this frame. */
 	void TakeLocalCommands(const FScctControlsApi& Controls);
 
+	/** The session's OnSessionChanged: drops what belonged to the match before. */
+	void ForgetView(int32 OldSessionId, int32 NewSessionId);
+
 	/** Mouse counts that turn the current side's plain look by one degree (for the autoplay's "turn"). */
 	float GetMouseCountsPerDegree() const;
 
@@ -125,6 +144,10 @@ private:
 
 	TWeakObjectPtr<UScctSessionSubsystem> Session;
 	FDelegateHandle BeforeTicksHandle;
+	FDelegateHandle SessionChangedHandle;
+
+	/** The missing controls table has been reported (once, not every frame). */
+	bool bReportedNoControls = false;
 
 	FScctLookView LookView = {};
 
@@ -143,5 +166,14 @@ private:
 	/** The largest turn and move of the camera from one frame to the next since the last autoplay line. */
 	float LargestViewTurn = 0.0f;
 	float LargestViewMove = 0.0f;
+
+	/** There was a view last frame, so this frame's can be compared with it. */
 	bool bHadLookView = false;
+
+	/** The mouse counts handed to the bridge this frame, and how far the view's turn has been from them. */
+	float FrameMouseX = 0.0f;
+	float LargestTurnError = 0.0f;
+
+	/** Camera cuts told to Unreal since the last autoplay line. */
+	int32 CutsRaised = 0;
 };

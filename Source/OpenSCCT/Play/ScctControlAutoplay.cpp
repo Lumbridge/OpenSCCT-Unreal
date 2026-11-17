@@ -66,6 +66,24 @@ bool FScctControlAutoplay::Parse(const FString& Script, FString& OutError)
 		const FString Action = Words[0].ToLower();
 		const auto Number = [&Words](int32 At, float Default) { return Words.IsValidIndex(At) ? FCString::Atof(*Words[At]) : Default; };
 
+		// One or more named actions held together: "forward+left".
+		const auto AddNamedKeys = [&Step, &OutError](const FString& Joined)
+		{
+			TArray<FString> Names;
+			Joined.ParseIntoArray(Names, TEXT("+"));
+			for (const FString& Name : Names)
+			{
+				const FNamedKey* Found = Algo::FindByPredicate(NamedKeys, [&Name](const FNamedKey& Named) { return Name == Named.Name; });
+				if (Found == nullptr)
+				{
+					OutError = FString::Printf(TEXT("'%s' is not an autoplay action (in '%s')"), *Name, *Step.Text);
+					return false;
+				}
+				Step.Keys.Add(FKey(FName(Found->Key)));
+			}
+			return true;
+		};
+
 		if (Action == TEXT("wait"))
 		{
 			Step.Seconds = Number(1, WaitSeconds);
@@ -79,6 +97,12 @@ bool FScctControlAutoplay::Parse(const FString& Script, FString& OutError)
 			}
 			(Action == TEXT("turn") ? Step.TurnDegrees : Step.LookDegrees) = Number(1, 0.0f);
 			Step.Seconds = Number(2, MouseSeconds);
+
+			// "turn 90 1 forward": the mouse moves while keys are held, as a player turns a corner.
+			if (Words.IsValidIndex(3) && !AddNamedKeys(Words[3].ToLower()))
+			{
+				return false;
+			}
 		}
 		else if (Action == TEXT("wheel"))
 		{
@@ -98,18 +122,9 @@ bool FScctControlAutoplay::Parse(const FString& Script, FString& OutError)
 		}
 		else
 		{
-			// One or more named actions held together: "forward+left 2".
-			TArray<FString> Names;
-			Action.ParseIntoArray(Names, TEXT("+"));
-			for (const FString& Name : Names)
+			if (!AddNamedKeys(Action))
 			{
-				const FNamedKey* Found = Algo::FindByPredicate(NamedKeys, [&Name](const FNamedKey& Named) { return Name == Named.Name; });
-				if (Found == nullptr)
-				{
-					OutError = FString::Printf(TEXT("'%s' is not an autoplay action (in '%s')"), *Name, *Step.Text);
-					return false;
-				}
-				Step.Keys.Add(FKey(FName(Found->Key)));
+				return false;
 			}
 			Step.Seconds = Number(1, TapSeconds);
 		}
