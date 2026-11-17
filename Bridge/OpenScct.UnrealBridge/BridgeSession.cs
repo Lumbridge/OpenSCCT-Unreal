@@ -66,6 +66,9 @@ public sealed record LocalMatch
 
     /// <summary>The server ticks on the caller's thread just before the client (the drills read it between ticks).</summary>
     public bool InlineHost { get; init; }
+
+    /// <summary>The folder the match is recorded into as a demo (PlaySettings.DemoFolder, Demo/DemoSaving.cs), or null.</summary>
+    public string? DemoFolder { get; init; }
 }
 
 /// <summary>
@@ -154,6 +157,7 @@ public sealed class BridgeSession : IDisposable
             StartAt = match.StartAt,
             Rules = match.PlayLevel ? PlayRules.PlayLevel : PlayRules.MapSettings,
             HostMode = match.InlineHost ? PlayHostMode.Inline : PlayHostMode.Thread,
+            DemoFolder = match.DemoFolder,
         }.ForLocalLaunch();
         var session = new PlaySession(settings, new StopwatchClock());
         OverrideRules(session, match);

@@ -1,5 +1,6 @@
 #include "Play/ScctSessionSubsystem.h"
 
+#include "Demo/ScctDemoSubsystem.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -131,6 +132,9 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 		*Options.Map, *Options.Mode, Options.bMerc ? TEXT("merc") : TEXT("spy"), Start.Bots, Start.Difficulty,
 		Options.bSidearms ? 1 : 0, Options.Sidearm, Options.bRifles ? 1 : 0, Options.bOfflineRules ? 1 : 0, *Options.PlayerName,
 		Options.TimeLimit, Options.SpyLives, Options.MercLives, Options.RespawnSeconds);
+
+	// The player's demo-saving choice as it is now, so the match records (or not) on it (Demo/ScctDemoSubsystem.h).
+	UScctDemoSubsystem::PushChoice();
 
 	const int32 NewId = Api->StartLocalEx(&Start);
 	if (NewId == 0)
