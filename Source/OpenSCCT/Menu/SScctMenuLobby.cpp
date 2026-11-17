@@ -44,6 +44,33 @@ namespace
 		return Prestige > 0 ? FString::Printf(TEXT("P%d · %d"), Prestige, Level) : FString::Printf(TEXT("%d"), Level);
 	}
 
+	const FScctOnlinePlayer* LobbyLocalPlayer(const UScctOnlineSubsystem& Visit)
+	{
+		const int32 LocalId = Visit.GetStatus().LocalId;
+		return LocalId < 0 ? nullptr : Visit.GetPlayers().FindByPredicate([LocalId](const FScctOnlinePlayer& P) { return P.Id == LocalId; });
+	}
+
+	/** The local player hosts the server (a listen server: a dedicated one has no host). */
+	bool LobbyLocalIsHost(const UScctOnlineSubsystem& Visit)
+	{
+		const FScctOnlinePlayer* Local = LobbyLocalPlayer(Visit);
+		return Local != nullptr && (Local->Flags & EScctOnlinePlayerFlags::Host) != 0;
+	}
+
+	bool LobbyLocalOnSide(const UScctOnlineSubsystem& Visit)
+	{
+		const int32 Team = Visit.GetStatus().LocalTeam;
+		return Team == 0 || Team == 1;
+	}
+
+	/** LAUNCH, or CANCEL while the launch counts down. */
+	FString LobbyLaunchCaption(const UScctOnlineSubsystem& Visit)
+	{
+		return (Visit.GetStatus().Countdown > 0.0f
+			? ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Control2ServerCancel"), TEXT("Cancel"))
+			: ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Control2Server"), TEXT("Launch"))).ToUpper();
+	}
+
 	FLinearColor LobbyPingColour(int32 PingMs)
 	{
 		return PingMs < 80 ? FLinearColor(0.35f, 0.9f, 0.55f) : PingMs < 160 ? FLinearColor(0.95f, 0.8f, 0.3f) : ScctHudStyle::Danger();
@@ -133,6 +160,36 @@ namespace
 							.Visibility_Lambda([Weak] { return Weak.IsValid() && Weak->GetStatus().Countdown > 0.0f ? EVisibility::Visible : EVisibility::Collapsed; })
 							.Text_Lambda([Weak] { return FText::FromString(Weak.IsValid() ? FString::Printf(TEXT("Starting in %d"), FMath::CeilToInt32(Weak->GetStatus().Countdown)) : FString()); })
 						]
+						// What the match waits for (who is not ready yet), as Godot's lobby status line says it.
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
+						[
+							SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true).Justification(ETextJustify::Center)
+							.Visibility_Lambda([this, Weak] { return WaitingFor.IsEmpty() || (Weak.IsValid() && Weak->GetStatus().Countdown > 0.0f) ? EVisibility::Collapsed : EVisibility::Visible; })
+							.Text_Lambda([this] { return FText::FromString(WaitingFor); })
+						]
+						// A player of a dedicated server may ask it to start (or stop its countdown) without waiting for
+						// the start it makes on its own. The host of a listen server launches from the main button.
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
+						[
+							SNew(SScctButton)
+							.FillWidth(true)
+							.Visibility_Lambda([Weak]
+							{
+								const UScctOnlineSubsystem* V = Weak.Get();
+								return V != nullptr && V->HasFlag(EScctOnlineStatusFlags::CanLaunch) && !LobbyLocalIsHost(*V) && LobbyLocalOnSide(*V)
+									? EVisibility::Visible : EVisibility::Collapsed;
+							})
+							.Text_Lambda([Weak] { return FText::FromString(Weak.IsValid() ? LobbyLaunchCaption(*Weak.Get()) : FString()); })
+							.Description(FText::FromString(TEXT("Start the match now (or stop its countdown). The server starts it only when everyone on a side is ready, you too.")))
+							.OnPressed(FSimpleDelegate::CreateLambda([Weak]
+							{
+								UScctOnlineSubsystem* V = Weak.Get();
+								if (V == nullptr) { return; }
+								// The server wants the one launching ready as well; a press during the countdown cancels it.
+								if (V->GetStatus().Countdown <= 0.0f && !V->HasFlag(EScctOnlineStatusFlags::LocalReady)) { V->SetReady(true); }
+								V->Launch();
+							}))
+						]
 						// The kit the player takes into the round for the player's side (the spy's while spectating), the
 						// Equipment page under the lobby's rules and the lobby map's strategic map (Menu/ScctOverlayPages.cpp).
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
@@ -167,26 +224,23 @@ namespace
 								.Text_Lambda([Weak, Ready, NotReady]
 								{
 									const UScctOnlineSubsystem* V = Weak.Get();
-									if (V != nullptr && V->HasFlag(EScctOnlineStatusFlags::CanLaunch))
+									if (V != nullptr && LobbyLocalIsHost(*V))
 									{
-										return FText::FromString(V->GetStatus().Countdown > 0.0f
-											? ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Control2ServerCancel"), TEXT("Cancel")).ToUpper()
-											: ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Control2Server"), TEXT("Launch")).ToUpper());
+										return FText::FromString(LobbyLaunchCaption(*V));
 									}
 									// The button says what pressing it does.
 									return FText::FromString((V != nullptr && V->HasFlag(EScctOnlineStatusFlags::LocalReady) ? NotReady : Ready).ToUpper());
 								})
-								.Description(FText::FromString(TEXT("Say you are ready, or (when you run the server) start the match. A match starts when everyone on a side is ready.")))
+								.Description(FText::FromString(TEXT("Say you are ready, or not ready any more (the host of a player-run server starts the match here instead). A match starts when everyone on a side is ready.")))
 								.OnPressed(FSimpleDelegate::CreateLambda([Weak]
 								{
 									UScctOnlineSubsystem* V = Weak.Get();
 									if (V == nullptr) { return; }
-									if (V->HasFlag(EScctOnlineStatusFlags::CanLaunch))
-									{
-										// The server starts a match only when everyone is ready, the one launching it too.
-										if (!V->HasFlag(EScctOnlineStatusFlags::LocalReady)) { V->SetReady(true); }
-										V->Launch();
-									}
+									// The host launches (the server does not wait for the host's ready). Everyone else,
+									// on a dedicated server too, says ready or not ready, as Godot's lobby page does: a
+									// dedicated server starts on its own once everyone on a side is ready, and the
+									// LAUNCH button over this row asks it to start sooner.
+									if (LobbyLocalIsHost(*V)) { V->Launch(); }
 									else { V->SetReady(!V->HasFlag(EScctOnlineStatusFlags::LocalReady)); }
 								}))
 							]
@@ -324,6 +378,20 @@ namespace
 				}
 			}
 			Spectators = Watching.IsEmpty() ? FString() : TEXT("Watching: ") + FString::Join(Watching, TEXT(", "));
+
+			// Who the match waits for: the players on a side who are not ready (bots always are, and the host of a
+			// listen server launches instead).
+			TArray<FString> NotReady;
+			for (const FScctOnlinePlayer& Player : Visit->GetPlayers())
+			{
+				if ((Player.Team == 0 || Player.Team == 1) && (Player.Flags & (EScctOnlinePlayerFlags::Ready | EScctOnlinePlayerFlags::Bot | EScctOnlinePlayerFlags::Host)) == 0)
+				{
+					NotReady.Add(Player.Id == Status.LocalId ? FString(TEXT("you")) : Player.Name);
+				}
+			}
+			WaitingFor = !LobbyLocalOnSide(*Visit) ? FString(TEXT("Pick a side to play (Switch Team)."))
+				: NotReady.IsEmpty() ? FString(TEXT("Everyone is ready."))
+				: TEXT("Not ready yet: ") + FString::Join(NotReady, TEXT(", "));
 
 			// The chat.
 			ChatLines->ClearChildren();
@@ -520,6 +588,7 @@ namespace
 		TSharedPtr<SBox> MapCard;
 		TSharedPtr<SBox> SetupCard;
 		FString Spectators;
+		FString WaitingFor;
 		int32 SeenRevision = -1;
 		int32 SeenChat = -1;
 		bool bTeamChat = false;
