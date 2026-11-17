@@ -1,0 +1,40 @@
+{
+  "format": "svm.animation/1",
+  "requiresRuntime": 1,
+  "assets": {},
+  "project": {
+    "format": "osanim/1",
+    "id": "scct-sequence-audio-check",
+    "name": "Sequence audio check",
+    "framesPerSecond": 30,
+    "sequences": [
+      {
+        "id": "scct-sequence-audio-check",
+        "name": "Sequence audio check",
+        "duration": 40,
+        "loop": false,
+        "tracks": [
+          {
+            "name": "Window",
+            "kind": "Audio",
+            "target": "actor:PlayerStart541",
+            "segments": [
+              { "id": "seg-window", "start": 2, "duration": 14, "offset": 0.5, "rate": 1, "asset": "Amb_Squat.Ambiances.Squ_Fenetre_ouverte2" }
+            ]
+          },
+          {
+            "name": "Rise",
+            "kind": "Audio",
+            "target": "actor:ZoneInfo9865",
+            "segments": [
+              { "id": "seg-rise", "start": 18, "duration": 9, "offset": 0, "rate": 0.9, "asset": "Amb_Penitentiary.Ambiances.TONAL_RISE_B" }
+            ]
+          }
+        ]
+      }
+    ],
+    "bindings": [
+      { "target": "level:sequence-audio-check", "slot": "ScctSequenceAudioCheck", "sequence": "scct-sequence-audio-check", "mode": "Visual" }
+    ]
+  }
+}
