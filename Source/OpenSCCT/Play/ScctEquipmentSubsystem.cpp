@@ -53,6 +53,14 @@ namespace
 	const TCHAR* const CylinderPath = TEXT("/Engine/BasicShapes/Cylinder.Cylinder");
 	const TCHAR* const SpherePath = TEXT("/Engine/BasicShapes/Sphere.Sphere");
 
+	// For tuning with the game running; the defaults are the values above.
+	TAutoConsoleVariable<float> CVarTorchCandelas(TEXT("scct.Torch.CandelasPerBrightness"), TorchCandelasPerBrightness,
+		TEXT("Candelas of a merc's torch per unit of the original's light brightness (304 for the torch)."));
+	TAutoConsoleVariable<float> CVarTorchFog(TEXT("scct.Torch.FogScattering"), TorchFogScattering,
+		TEXT("How strongly a merc's torch beam shows in the level's volumetric fog."));
+	TAutoConsoleVariable<float> CVarFirstPersonScale(TEXT("scct.FirstPerson.Scale"), FirstPersonScale,
+		TEXT("How far the first-person view model is pulled towards the camera (0.05 to 1). Lower keeps it out of walls; too low and the near plane cuts the hands."));
+
 	struct FFlagName
 	{
 		int32 Flag;
@@ -127,6 +135,13 @@ void UScctEquipmentSubsystem::Deinitialize()
 	}
 	DropEverything();
 	Super::Deinitialize();
+}
+
+void UScctEquipmentSubsystem::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector)
+{
+	// The camo suit keeps the materials it took off the meshes; nothing else holds them while it is on.
+	CastChecked<UScctEquipmentSubsystem>(InThis)->CloakLook.AddReferencedObjects(Collector);
+	Super::AddReferencedObjects(InThis, Collector);
 }
 
 void UScctEquipmentSubsystem::OnMatchStarted()
@@ -484,7 +499,6 @@ void UScctEquipmentSubsystem::UpdateTorch(FPawnGear& Found, AScctPawnProxy& Prox
 		Torch->SetUsingAbsoluteRotation(true);
 		Torch->SetIntensityUnits(ELightUnits::Candelas);
 		Torch->SetCastShadows(true);
-		Torch->SetVolumetricScatteringIntensity(TorchFogScattering);
 		Torch->SetSourceRadius(1.5f);
 		Torch->RegisterComponent();
 		Proxy.AddInstanceComponent(Torch);
@@ -524,7 +538,8 @@ void UScctEquipmentSubsystem::UpdateTorch(FPawnGear& Found, AScctPawnProxy& Prox
 	Torch->SetInnerConeAngle(Pawn.TorchHalfAngle * TorchInnerCone);
 	Torch->SetAttenuationRadius(Pawn.TorchRange);
 	Torch->SetLightColor(FLinearColor(Pawn.TorchR, Pawn.TorchG, Pawn.TorchB));
-	Torch->SetIntensity(Pawn.TorchBrightness * TorchCandelasPerBrightness);
+	Torch->SetIntensity(Pawn.TorchBrightness * CVarTorchCandelas.GetValueOnGameThread());
+	Torch->SetVolumetricScatteringIntensity(CVarTorchFog.GetValueOnGameThread());
 	if (!Torch->IsVisible())
 	{
 		Torch->SetVisibility(true);
@@ -600,8 +615,10 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		Light->SetupAttachment(Proxy.GetRootComponent());
 		Light->SetUsingAbsoluteLocation(true);
 		Light->SetIntensityUnits(ELightUnits::Candelas);
-		Light->SetIntensity(0.6f);
-		Light->SetAttenuationRadius(70.0f);
+		// A faint spill on the surface around the dot and no more: at 0.6 cd a merc with a dot on his chest was
+		// red from head to foot, and so was the door frame beside him.
+		Light->SetIntensity(0.04f);
+		Light->SetAttenuationRadius(30.0f);
 		Light->SetLightColor(LaserColor);
 		Light->SetCastShadows(false);
 		Light->RegisterComponent();
@@ -654,6 +671,9 @@ void UScctEquipmentSubsystem::UpdateFirstPerson(const FScctEquipmentApi& Api, fl
 	if (!bDraw)
 	{
 		FirstPersonView->Hide(DeltaSeconds);
+		// Shots fired while no view model is drawn (through the scope) are not owed a flash when it comes back:
+		// the count is taken up afresh then.
+		FirstPersonActor = 0;
 		return;
 	}
 
@@ -663,7 +683,7 @@ void UScctEquipmentSubsystem::UpdateFirstPerson(const FScctEquipmentApi& Api, fl
 	if (UCameraComponent* Camera = ViewPawn != nullptr ? ViewPawn->FindComponentByClass<UCameraComponent>() : nullptr)
 	{
 		Camera->SetEnableFirstPersonScale(true);
-		Camera->SetFirstPersonScale(FirstPersonScale);
+		Camera->SetFirstPersonScale(FMath::Clamp(CVarFirstPersonScale.GetValueOnGameThread(), 0.05f, 1.0f));
 	}
 
 	const float Cloak = ForcedCloak >= 0.0f ? ForcedCloak : FirstPerson.Cloak;
@@ -689,7 +709,7 @@ void UScctEquipmentSubsystem::LogChanges(const FScctEquipmentApi& Api, FPawnGear
 	{
 		Mask |= Flag.Flag;
 	}
-	if (((Found.Flags ^ Pawn.Flags) & Mask) == 0 && Found.ShotCount >= 0)
+	if (((Found.Flags ^ Pawn.Flags) & Mask) == 0 && Found.ShotCount >= 0 && Found.WeaponClass == Pawn.WeaponClass && Found.WeaponSlot == Pawn.ActiveWeaponSlot)
 	{
 		Found.ShotCount = Pawn.ShotCount;
 		return;
@@ -704,10 +724,12 @@ void UScctEquipmentSubsystem::LogChanges(const FScctEquipmentApi& Api, FPawnGear
 			Names += Flag.Name;
 		}
 	}
-	UE_LOG(LogOpenSCCT, Log, TEXT("Equipment: pawn %d weapon %s loaded %d [%s] shots %d cloak %.2f goggles %d; torch at (%.0f %.0f %.0f) half angle %.1f range %.0f; laser (%.0f %.0f %.0f) to (%.0f %.0f %.0f)"),
-		Pawn.ActorId, *Models.Name(Api, Pawn.WeaponClass), Pawn.WeaponLoaded, *Names, Pawn.ShotCount, Pawn.Cloak, Pawn.GoggleMode,
+	UE_LOG(LogOpenSCCT, Log, TEXT("Equipment: pawn %d weapon %s slot %d loaded %d [%s] shots %d cloak %.2f goggles %d; torch at (%.0f %.0f %.0f) half angle %.1f range %.0f; laser (%.0f %.0f %.0f) to (%.0f %.0f %.0f)"),
+		Pawn.ActorId, *Models.Name(Api, Pawn.WeaponClass), Pawn.ActiveWeaponSlot, Pawn.WeaponLoaded, *Names, Pawn.ShotCount, Pawn.Cloak, Pawn.GoggleMode,
 		Pawn.TorchX, Pawn.TorchY, Pawn.TorchZ, Pawn.TorchHalfAngle, Pawn.TorchRange,
 		Pawn.LaserStartX, Pawn.LaserStartY, Pawn.LaserStartZ, Pawn.LaserEndX, Pawn.LaserEndY, Pawn.LaserEndZ);
 	Found.Flags = Pawn.Flags;
 	Found.ShotCount = Pawn.ShotCount;
+	Found.WeaponClass = Pawn.WeaponClass;
+	Found.WeaponSlot = Pawn.ActiveWeaponSlot;
 }

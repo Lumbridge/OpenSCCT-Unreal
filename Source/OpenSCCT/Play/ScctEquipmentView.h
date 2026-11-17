@@ -79,10 +79,13 @@ public:
 	/** Forgets components that are gone. */
 	void Trim();
 
+	/** Keeps the materials taken off the cloaked meshes alive; call from the owner's AddReferencedObjects. */
+	void AddReferencedObjects(FReferenceCollector& Collector);
+
 private:
 	struct FState
 	{
-		TArray<TWeakObjectPtr<UMaterialInterface>> Originals;
+		TArray<TObjectPtr<UMaterialInterface>> Originals;
 		bool bCastShadow = true;
 	};
 

@@ -37,6 +37,7 @@ class OPENSCCT_API AScctFirstPersonView : public AActor
 
 public:
 	AScctFirstPersonView();
+	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
 
 	/**
 	 * Draws the frame's view model as the bridge describes it, in front of Camera (the frame's final camera in

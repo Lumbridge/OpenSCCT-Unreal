@@ -40,6 +40,10 @@ class UStaticMeshComponent;
  *   -ScctForceCloak=<0..1>   draw every pawn and the view model with that much of the camo suit on (the suit is
  *                            not in the default kit, so a local match never switches it on by itself)
  *   -ScctNoViewModel         do not draw the first-person view model (to compare a view with and without it)
+ *
+ * Console variables for tuning with the game running: scct.Torch.CandelasPerBrightness, scct.Torch.FogScattering,
+ * scct.FirstPerson.Scale, and scct.Weapons.Replacements (0: the original models even where the weapon table
+ * names a replacement that exists; read when a weapon is next shown).
  */
 UCLASS()
 class OPENSCCT_API UScctEquipmentSubsystem : public UWorldSubsystem
@@ -49,6 +53,7 @@ class OPENSCCT_API UScctEquipmentSubsystem : public UWorldSubsystem
 public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
+	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
 
 	/** What a pawn holds and wears this frame as the bridge described it, or null. */
 	const FScctEquipment* FindEquipment(int32 ActorId) const;
@@ -91,6 +96,8 @@ private:
 		TWeakObjectPtr<UPointLightComponent> DotLight;
 		int32 Flags = 0;
 		int32 ShotCount = -1;
+		int32 WeaponClass = 0;
+		int32 WeaponSlot = 0;
 		bool bSeen = false;
 	};
 

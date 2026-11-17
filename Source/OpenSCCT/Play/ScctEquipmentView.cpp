@@ -5,6 +5,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/Texture.h"
 #include "GameFramework/Actor.h"
+#include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "OpenSCCT.h"
 #include "Play/ScctEquipmentData.h"
@@ -12,6 +13,11 @@
 
 namespace
 {
+	// Read when a weapon's components are made (a new match, a weapon drawn for the first time), to compare a
+	// replacement model with the original it stands in for.
+	TAutoConsoleVariable<int32> CVarReplacements(TEXT("scct.Weapons.Replacements"), 1,
+		TEXT("1: draw the weapon table's replacement models where their assets exist. 0: always the original models."));
+
 	void Prepare(UPrimitiveComponent& Primitive, bool bFirstPerson)
 	{
 		// The simulation does all collision; Unreal's physics must not see these.
@@ -57,7 +63,7 @@ void FScctEquipmentView::Show(AActor& Owner, const FScctEquipmentModel* NewModel
 		Followers.Add(Follower);
 	}
 
-	USkeletalMesh* Other = Row != nullptr && Row->ReplacementMesh.IsValid()
+	USkeletalMesh* Other = Row != nullptr && Row->ReplacementMesh.IsValid() && CVarReplacements.GetValueOnGameThread() != 0
 		? LoadObject<USkeletalMesh>(nullptr, *Row->ReplacementMesh.ToString(), nullptr, LOAD_NoWarn) : nullptr;
 	if (Other == nullptr)
 	{
@@ -211,7 +217,7 @@ void FScctCloakLook::Apply(UMeshComponent& Component, float Amount)
 		{
 			for (int32 Slot = 0; Slot < State->Originals.Num(); ++Slot)
 			{
-				Component.SetMaterial(Slot, State->Originals[Slot].Get());
+				Component.SetMaterial(Slot, State->Originals[Slot]);
 			}
 			Component.SetCastShadow(State->bCastShadow);
 			Cloaked.Remove(&Component);
@@ -257,6 +263,14 @@ void FScctCloakLook::Apply(UMeshComponent& Component, float Amount)
 	}
 	// Bent light throws no shadow: it thins out with the suit and is gone once the suit is mostly on.
 	Component.SetCastShadow(State->bCastShadow && Amount < 0.5f);
+}
+
+void FScctCloakLook::AddReferencedObjects(FReferenceCollector& Collector)
+{
+	for (TPair<TWeakObjectPtr<UMeshComponent>, FState>& Pair : Cloaked)
+	{
+		Collector.AddReferencedObjects(Pair.Value.Originals);
+	}
 }
 
 void FScctCloakLook::Trim()

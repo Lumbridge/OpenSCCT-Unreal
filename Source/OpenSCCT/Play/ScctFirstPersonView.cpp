@@ -83,6 +83,13 @@ AScctFirstPersonView::AScctFirstPersonView()
 	FlashLight->SetVisibility(false);
 }
 
+void AScctFirstPersonView::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector)
+{
+	// The camo suit keeps the materials it took off the view model.
+	CastChecked<AScctFirstPersonView>(InThis)->CloakLook.AddReferencedObjects(Collector);
+	Super::AddReferencedObjects(InThis, Collector);
+}
+
 void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentModels& Models, const UScctWeaponSet* Weapons,
 	const FScctFirstPerson& View, const FTransform& Camera, float Cloak, float DeltaSeconds)
 {
