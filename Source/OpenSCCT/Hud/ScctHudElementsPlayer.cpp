@@ -59,7 +59,9 @@ bool ScctHudElements::ShowsPlayerHud(const FScctHudModel& Model)
 	return Model.bHasState
 		&& (Model.State.Flags & EScctHudFlags::HasPawn) != 0
 		&& (Model.State.Flags & (EScctHudFlags::HideHud | EScctHudFlags::Spectating | EScctHudFlags::GameEnded)) == 0
-		&& Model.State.GadgetView == 0;
+		&& Model.State.GadgetView == 0
+		// The spy's binocular page replaces his HUD, as P_BinocularsATT replaces P_HudATT in the original.
+		&& Model.State.BinocularMode != 1;
 }
 
 FString ScctHudElements::LivesText(const FScctHudModel& Model, int32 Lives, int32 InfiniteFrom)
@@ -249,7 +251,8 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 
 void ScctHudElements::PaintScope(FScctHudPainter& Painter, const FScctHudModel& Model)
 {
-	if (!ShowsPlayerHud(Model) || Model.State.BinocularMode == 0)
+	// The merc's scope only: the spy's binoculars are their own page (PaintSpyBinoculars).
+	if (!ShowsPlayerHud(Model) || Model.State.BinocularMode != 2)
 	{
 		return;
 	}

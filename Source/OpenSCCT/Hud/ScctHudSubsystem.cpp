@@ -55,6 +55,7 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	InitIcons();
 	InitRadar();
 	InitBackpack();
+	InitBinoculars();
 
 	// -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1"
 	FString Commands;
@@ -122,6 +123,19 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	LastHeartCone = 0;
 	LastBackpackSignature = 0;
 	bRadarTextureMissingLogged = false;
+	BinocularCheck.Stage = 0;
+	BinocularCheck.NextZoom = 0;
+	BinocularCheck.NextUse = 0;
+	BinocularCheck.bUseHeld = false;
+	BinocularAge = 0.0f;
+	SpeakAge = -1.0f;
+	BinocularKeysAge = -100.0f;
+	LastBinocularMode = 0;
+	LastZoomStep = 0;
+	LastBinocularTargetCount = -1;
+	LastLockCandidate.Reset();
+	bLastLockMarked = false;
+	bBinocularPageMissingLogged = false;
 	if (NewSessionId != 0 && Api == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Error, TEXT("HUD: the bridge has no HUD table (its reason is in the log above); the match plays without a HUD and without goggles"));
@@ -218,6 +232,7 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 	ProjectMarkers();
 	RunTimedCommands();
 	RunGadgetChecks(DeltaSeconds);
+	RunBinocularCheck();
 
 	// The scoreboard follows the player's bindings, which arrive as interface commands.
 	AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController());
@@ -229,6 +244,7 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 	Model->bScoreboardHeld = bScoreboardForced || bScoreboardKeyHeld || bScoreboardToggled;
 	Model->Advance(DeltaSeconds);
 	ReadIcons(DeltaSeconds);
+	ReadBinoculars(DeltaSeconds);
 
 	if (UScctVisionSubsystem* Vision = GetWorld()->GetSubsystem<UScctVisionSubsystem>())
 	{
@@ -250,6 +266,7 @@ void UScctHudSubsystem::ReadSnapshot()
 	ReadRows(M.ObjectiveLines, 16, Api->GetObjectiveLines);
 	ReadRows(M.Scores, 32, Api->GetScoreboard);
 	ReadRows(M.Radar, 64, Api->GetRadar);
+	ReadRows(M.BinocularTargets, 16, Api->GetBinocularTargets);
 	ReadGadgetViews();
 	ReadRadar();
 	ReadBackpack();
@@ -284,6 +301,7 @@ void UScctHudSubsystem::ProjectMarkers()
 {
 	FScctHudModel& M = *Model;
 	M.Markers.Reset();
+	M.BinocularMarkers.Reset();
 	const APlayerController* Player = GetWorld()->GetFirstPlayerController();
 	if (Player == nullptr || !M.bHasState)
 	{
@@ -303,6 +321,7 @@ void UScctHudSubsystem::ProjectMarkers()
 		Marker.bInFront = Player->ProjectWorldLocationToScreen(Location, Screen, false);
 		Marker.Screen = FVector2f(Screen) / Scale;
 	}
+	ProjectBinocularTargets();
 }
 
 void UScctHudSubsystem::RunTimedCommands()
@@ -392,6 +411,7 @@ void UScctHudSubsystem::LogSnapshot(float DeltaSeconds)
 		S.DamageCount, *M.Text(R.WatchedNameId), R.RespawnIn, R.NoRespawn);
 	LogRadar();
 	LogBackpack();
+	LogBinoculars(false);
 
 	// The scoreboard's rows while it is up (and once near the start), for the same check.
 	constexpr float FirstRows = 2.0f;

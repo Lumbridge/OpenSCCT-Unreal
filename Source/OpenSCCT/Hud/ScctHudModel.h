@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Runtime/ScctHudApi.h"
 #include "Runtime/ScctHudBackpackApi.h"
+#include "Runtime/ScctHudBinocularApi.h"
 #include "Runtime/ScctHudGadgetApi.h"
 #include "Runtime/ScctHudRadarApi.h"
 #include "Runtime/ScctHudTextureApi.h"
@@ -131,6 +132,17 @@ public:
 
 	/** The name of the Use key, which cycles the Merc Deathmatch respawn weapon (empty when unbound). */
 	FString RespawnUseKey;
+
+	/**
+	 * The spy binoculars (State.BinocularMode 1): the objective triggers they show (GetBinocularTargets) and the same
+	 * placed on the screen for this frame (a target behind the camera is pushed far out on its side, so its edge arrow
+	 * points the right way); the content's P_BinocularsATT page evaluated for this moment (ScctHudBinoculars.cpp); and
+	 * the Use key's name for the lock hint's \USE.
+	 */
+	TArray<FScctHudObjective> BinocularTargets;
+	TArray<FScctHudMarker> BinocularMarkers;
+	TArray<FScctHudPageLayer> BinocularLayers;
+	FString BinocularUseKey;
 
 	/** The team of the player at this machine (0 spies, 1 mercs), from the scoreboard, else the side played. */
 	int32 LocalTeam = 0;

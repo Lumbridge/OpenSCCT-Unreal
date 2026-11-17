@@ -159,7 +159,9 @@ void ScctHudElements::PaintRound(FScctHudPainter& Painter, const FScctHudModel& 
 
 void ScctHudElements::PaintObjectives(FScctHudPainter& Painter, const FScctHudModel& Model)
 {
-	if (!Model.bHasRound || !Model.bHasState || (Model.State.Flags & EScctHudFlags::HideHud) != 0 || Model.ObjectiveLines.Num() == 0)
+	// Not over the spy binocular page, which replaces the player page this panel belongs to.
+	if (!Model.bHasRound || !Model.bHasState || (Model.State.Flags & EScctHudFlags::HideHud) != 0 || Model.ObjectiveLines.Num() == 0
+		|| Model.State.BinocularMode == 1)
 	{
 		return;
 	}

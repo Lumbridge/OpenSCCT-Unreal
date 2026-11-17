@@ -21,8 +21,24 @@ namespace ScctHudElements
 	/** The crosshair with its spread and hit confirmation, what the laser holds, noise and hit arcs around it. */
 	void PaintCrosshair(FScctHudPainter& Painter, const FScctHudModel& Model);
 
-	/** Binoculars and the rifle scope. */
+	/** The merc's rifle scope (BinocularMode 2); the spy's binoculars have their own page below. */
 	void PaintScope(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/**
+	 * The spy's binocular page (BinocularMode 1), which replaces his HUD: the content's P_BinocularsATT (goggle frame,
+	 * sound meter, zoom scale with its x2 / x4 / x6 label and marker, key help, the Hack box) stretched over the screen,
+	 * and over it the objective targets: the one under the reticle in the lock panel with its name, distance and the
+	 * Lock or Locked hint, the others as their icon with pulsing brackets, those off the screen as an arrow at its edge.
+	 * ScctHudElementsBinoculars.cpp.
+	 */
+	void PaintSpyBinoculars(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/**
+	 * The binocular target the lock panel is for on a screen of this size (the first on-screen target whose point is just
+	 * right of and below the original's target point, 0.46 / 0.45 of the screen), as an index of Model.BinocularMarkers,
+	 * or -1 when there is none.
+	 */
+	int32 BinocularLockCandidate(const FScctHudModel& Model, const FVector2f& Size);
 
 	/**
 	 * The page that replaces the player's view while looking through a gadget's camera: the spy's sticky cam (sweep,
@@ -115,7 +131,7 @@ namespace ScctHudElements
 
 	/**
 	 * True when the player's own HUD blocks are to be drawn (a live pawn, not hidden by the game, not looking through
-	 * a gadget's camera: that page replaces them, as in the original).
+	 * a gadget's camera or the spy's binoculars: those pages replace them, as in the original).
 	 */
 	bool ShowsPlayerHud(const FScctHudModel& Model);
 }

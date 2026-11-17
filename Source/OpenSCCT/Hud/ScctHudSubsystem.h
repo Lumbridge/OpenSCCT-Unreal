@@ -52,6 +52,13 @@ class UScctHudWidget;
  *        camera network gadget is selected; a spy then draws the Shocker (the weapon key held) and fires the cam with
  *        Alt-fire, a merc uses the network with Alt-fire; Stay seconds later (default 10) Alt-fire leaves the view.
  *        The view's changes go to the log ("ScctHud: gadget view ...", "ScctHud: CamNetworkAlert ...").
+ *   -ScctBinoculars=At[,Zoom+Zoom...[,Lower[,Use+Use...]]]   and   -ScctBinocularsAim
+ *        raises the spy's binoculars by the player's own keys: at At seconds (default 4) the key bound to
+ *        SwitchBinocularVision is pressed, at each Zoom time one notch of the mouse wheel up (one zoom step in), at
+ *        each Use time the Use key (locks the target in the lock panel, or unlocks it), and at Lower the binocular key
+ *        again (an empty field skips it). With -ScctBinocularsAim the view is turned onto the nearest objective target every half
+ *        second while the binoculars are up, so the lock panel shows. The page's changes go to the log
+ *        ("ScctHud: binoculars ...": mode, zoom step, the target count and the lock candidate).
  */
 UCLASS()
 class OPENSCCT_API UScctHudSubsystem : public UWorldSubsystem
@@ -148,6 +155,42 @@ private:
 	void LogBackpack();
 	uint32 LastBackpackSignature = 0;
 	bool bBackpackTableMissingLogged = false;
+
+	// The spy binoculars (ScctHudBinoculars.cpp): the page's clocks, key names and layers into the model, the targets
+	// placed on the screen, a log line when the page opens, closes or its zoom step or targets change, and the
+	// unattended -ScctBinoculars check.
+	void InitBinoculars();
+	void ReadBinoculars(float DeltaSeconds);
+	void ProjectBinocularTargets();
+	void RunBinocularCheck();
+	void LogBinoculars(bool bChange);
+
+	struct FBinocularCheck
+	{
+		bool bOn = false;
+		float At = 4.0f;         // seconds into the match when the binocular key is pressed
+		TArray<float> ZoomAt;    // seconds into the match when the zoom-in key (the wheel's up notch) is pressed
+		bool bAim = false;       // keep the view on the nearest target while the binoculars are up
+		float Lower = -1.0f;     // seconds into the match when the binocular key is pressed again, below 0 never
+		TArray<float> UseAt;     // seconds into the match when the Use key (lock, unlock) is pressed
+		int32 Stage = 0;         // 0 waiting, 1 raised, 2 lowered
+		int32 NextZoom = 0;
+		int32 NextUse = 0;
+		bool bUseHeld = false;
+		float UseReleaseAt = 0.0f;
+		float AimClock = 0.0f;
+	} BinocularCheck;
+
+	float BinocularAge = 0.0f;   // seconds since the binoculars came up
+	float SpeakAge = -1.0f;      // seconds since the speak box appeared, below 0 while it is not shown
+	float BinocularKeysAge = -100.0f;
+	FString BinocularZoomKeys, BinocularExitKey;
+	int32 LastBinocularMode = 0;
+	int32 LastZoomStep = 0;
+	int32 LastBinocularTargetCount = -1;
+	FString LastLockCandidate;
+	bool bLastLockMarked = false;
+	bool bBinocularPageMissingLogged = false;
 
 	float GadgetKeysAge = 0.0f;
 	int32 LastGadgetView = 0;

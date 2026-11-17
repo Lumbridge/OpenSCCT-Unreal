@@ -56,6 +56,13 @@ if (args.Length > 5 && args[5].Equals("backpack", StringComparison.OrdinalIgnore
     return BackpackRun(content, map, mode, merc, seconds);
 }
 
+Console.WriteLine($"sizes: HudPageLayer {Unsafe.SizeOf<HudPageLayer>()}, HudBinocularPageInput {Unsafe.SizeOf<HudBinocularPageInput>()}, HudBinocularApi {Unsafe.SizeOf<HudBinocularApi>()}");
+
+if (args.Length > 5 && args[5].Equals("binoculars", StringComparison.OrdinalIgnoreCase))
+{
+    return BinocularsRun(content, map, mode, merc, seconds);
+}
+
 BridgeSession.Configure(content);
 var load = Stopwatch.StartNew();
 using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
@@ -833,6 +840,99 @@ static unsafe int BackpackRun(string content, string map, string mode, bool merc
     }
 
     Console.WriteLine($"backpack summary: highest mode {maxMode}, frames with the refill share {sharePanels}");
+    return 0;
+}
+
+// The spy binoculars: raised at 2 s (the controller's SwitchBinocularVision, as the B key's binding calls it), the
+// mode, zoom, lock texts and objective targets each second, the view turned onto the first target at 3 s, and the
+// page's layers (goggle frame, sound meter, zoom scale, key help) for each zoom step and at three moments of the meter.
+static unsafe int BinocularsRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    HudMagmaPage? page = HudBinocularExports.SpyPage(out string? pageError);
+    Console.WriteLine(page is null ? $"spy page: missing ({pageError})" : $"spy page {page.Name}: instances {string.Join(", ", page.Instances)}");
+    foreach (int step in new[] { 3, 2, 1 })
+    {
+        var layers = HudBinocularExports.ReadSpyPage(0.5f, -1f, step, "Mouse Wheel Up / Mouse Wheel Down", "B", "");
+        int images = layers.Count(l => !l.IsText);
+        string texts = string.Join(" | ", layers.Where(l => l.IsText).Select(l => $"{l.Widget}='{l.Text}' at ({l.L:F0},{l.T:F0}) h {l.Height:F0}"));
+        HudMagmaPage.Layer marker = layers.FirstOrDefault(l => l.Widget == "zoomInside");
+        Console.WriteLine($"   step {step} ({HudBinocularExports.ZoomLabel(step)}): {layers.Count} layers, {images} images; zoomInside at ({marker.L:F0},{marker.T:F0}); texts {texts}");
+    }
+
+    foreach (float at in new[] { 0f, 1.0f, 1.6f, 2.9f })
+    {
+        var layers = HudBinocularExports.ReadSpyPage(at, -1f, 3, "", "", "");
+        string meter = string.Join(" ", layers.Where(l => l.Widget.StartsWith("curseur", StringComparison.Ordinal) || l.Widget.StartsWith("soundAnimation", StringComparison.Ordinal))
+            .Select(l => $"{l.Widget}:{l.T:F0}-{l.B:F0}/a{l.Alpha:F2}"));
+        Console.WriteLine($"   meter at {at:F1} s: {meter}");
+    }
+
+    var speak = HudBinocularExports.ReadSpyPage(1f, 0.3f, 3, "", "", "Hack");
+    Console.WriteLine("   speak box: " + string.Join(" | ", speak.Where(l => l.Widget is "_TextSpeakATT" or "Element4").Select(l => $"{l.Widget}='{l.Text}' at ({l.L:F0},{l.T:F0})")));
+
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+    HudFeature hud = HudFeature.Of(session);
+    hud.SetViewport(1920, 1080);
+    var input = default(BridgeInput);
+    var targets = new HudObjective[16];
+    var run = Stopwatch.StartNew();
+    bool raised = false, aimed = false;
+    double nextReport = 1;
+    int maxTargets = 0;
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        // The Use button from 5 to 5.3 s marks the target under the reticle (and again from 8 s, which unmarks it).
+        const int Use = 10;
+        input.Buttons[Use] = (byte)(t is > 5 and < 5.3 or > 8 and < 8.3 ? 1 : 0);
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        if (!raised && t > 2 && session.Session.LocalController is { } pc)
+        {
+            raised = true;
+            pc.eventSwitchBinocularVision();
+            Console.WriteLine($"t={t:F1} SwitchBinocularVision -> state {pc.GetStateName()}");
+        }
+
+        hud.GetState(out HudState s);
+        int count = hud.Frame.BinocularTargets.CopyTo(targets);
+        maxTargets = Math.Max(maxTargets, count);
+        if (!aimed && t > 3 && count > 0)
+        {
+            aimed = true;
+            HudObjective first = targets.Take(Math.Min(count, targets.Length))
+                .MinBy(o => (o.X - s.X) * (o.X - s.X) + (o.Y - s.Y) * (o.Y - s.Y) + (o.Z - s.Z) * (o.Z - s.Z));
+            Console.WriteLine($"t={t:F1} AimAt nearest '{hud.Texts.Text(first.NameId)}' -> {HudBinocularExports.Aim(session.Session.LocalController, new OpenScct.Core.FVector(first.X, first.Y, first.Z))}" +
+                $", under the reticle now: '{OpenScct.Game.Equipment.SpyBinoculars.ObjectiveUnderReticle(session.Session.LocalController!)?.TriggerName}'");
+        }
+
+        if (t >= nextReport)
+        {
+            nextReport += 1;
+            string rows = string.Join(" | ", targets.Take(Math.Min(count, targets.Length)).Select(o =>
+                $"'{hud.Texts.Text(o.NameId)}' kind {o.Kind} flags {o.Flags} {o.Percent}% at {MathF.Sqrt((o.X - s.X) * (o.X - s.X) + (o.Y - s.Y) * (o.Y - s.Y) + (o.Z - s.Z) * (o.Z - s.Z)):F0} uu"));
+            string marked = string.Join(", ", targets.Take(Math.Min(count, targets.Length)).Where(o => (o.Flags & HudObjectiveFlags.Marked) != 0)
+                .Select(o => hud.Texts.Text(o.NameId)));
+            Console.WriteLine($"t={t:F1} marked '{marked}' (SHud.LockedObjective '{(session.Session.LocalController?.myHUD as OpenScct.Game.SBase.SHud)?.LockedObjective?.TriggerName}')");
+            Console.WriteLine($"t={t:F1} mode {s.BinocularMode} fov {s.BinocularFov:F0} yaw {s.Yaw:F0} ER {((s.Flags & HudFlags.EnhancedReality) != 0 ? 1 : 0)} | lock '{hud.Texts.Text(s.LockTextId)}' locked '{hud.Texts.Text(s.LockedTextId)}' " +
+                $"drop zone '{hud.Texts.Text(s.DropZoneTextId)}' | {count} targets: {rows}");
+        }
+
+        Thread.Sleep(4);
+    }
+
+    Console.WriteLine($"binocular summary: most targets {maxTargets}");
     return 0;
 }
 
