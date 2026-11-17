@@ -35,7 +35,8 @@ void ScctHudElements::PaintFeed(FScctHudPainter& Painter, const FScctHudModel& M
 	const float Right = Size.X - Margin;
 	const FSlateFontInfo NameFont = Font(EWeight::Regular, 10.5f);
 	const FSlateFontInfo TextFont = Font(EWeight::Regular, 10.0f);
-	constexpr float RowHeight = 26.0f, RowGap = 4.0f, Pad = 12.0f, Mark = 40.0f;
+	const FSlateFontInfo CauseFont = Font(EWeight::Regular, 8.5f, 20);
+	constexpr float NameRowHeight = 26.0f, CauseRowHeight = 13.0f, RowGap = 4.0f, Pad = 12.0f, Mark = 40.0f, IconSize = 15.0f, IconGap = 9.0f;
 
 	float Y = Margin;
 	for (const FScctHudLine& Line : Model.Feed)
@@ -45,23 +46,41 @@ void ScctHudElements::PaintFeed(FScctHudPainter& Painter, const FScctHudModel& M
 		const bool bLocal = (Line.Flags & EScctHudMessageFlags::InvolvesLocal) != 0;
 		const bool bKill = IsKill(Line);
 
-		// A kill is drawn from its parts (who, to whom) in the teams' colours; anything else is the game's line.
+		// How it happened, on a second line under the names (Godot's cause subtitle and trigger line).
+		const FString Cause = ActivityCauseText(Line);
+		const float CauseWidth = Cause.IsEmpty() ? 0.0f : Painter.Measure(Cause, CauseFont).X;
+		const float RowHeight = NameRowHeight + (Cause.IsEmpty() ? 0.0f : CauseRowHeight);
+
+		// A kill is drawn from its parts (who, to whom) in the teams' colours; anything else is the game's line. Each row
+		// starts with the icon of its cause, or of what happened.
 		const float ActorWidth = bKill ? Painter.Measure(Line.Actor, NameFont).X : 0.0f;
 		const float VictimWidth = bKill ? Painter.Measure(Line.Victim, NameFont).X : 0.0f;
-		const float Width = Pad * 2.0f + (bKill ? ActorWidth + Mark + VictimWidth : Painter.Measure(Line.Text, TextFont).X);
+		const float MainWidth = bKill ? ActorWidth + Mark + VictimWidth : Painter.Measure(Line.Text, TextFont).X;
+		const float Width = Pad * 2.0f + IconSize + IconGap + FMath::Max(MainWidth, CauseWidth);
 		const float X = Right - Width + Slide;
+		const float TextX = X + Pad + IconSize + IconGap;
 
 		Painter.SetOpacity(Alpha);
 		Painter.Blur(HudBox(X, Y, Width, RowHeight), 10.0f, 4.0f);
 		Painter.Fill(HudBox(X, Y, Width, RowHeight), FLinearColor(0.004f, 0.007f, 0.011f, bLocal ? 0.52f : 0.36f), 4.0f,
 			bLocal ? Fade(Accent(Model.LocalTeam), 0.55f) : FLinearColor(1.0f, 1.0f, 1.0f, 0.07f), 1.0f);
 
+		const bool bLethalLine = static_cast<EScctHudActivity>(Line.Kind) == EScctHudActivity::Kill
+			|| static_cast<EScctHudActivity>(Line.Kind) == EScctHudActivity::Death || static_cast<EScctHudActivity>(Line.Kind) == EScctHudActivity::Suicide;
+		const FLinearColor IconColour = bLocal ? Accent(Model.LocalTeam) : (bLethalLine ? Fade(Text(), 0.85f) : TextDim());
+		PaintActivityIcon(Painter, FVector2f(X + Pad + IconSize * 0.5f, Y + RowHeight * 0.5f), IconSize, Line, IconColour);
+
+		if (!Cause.IsEmpty())
+		{
+			Painter.Text(FVector2f(TextX, Y + NameRowHeight - 4.0f), Cause, CauseFont, TextDim());
+		}
+
 		if (bKill)
 		{
-			Painter.Text(FVector2f(X + Pad, Y + 5.0f), Line.Actor, NameFont, Accent(Line.ActorTeam));
+			Painter.Text(FVector2f(TextX, Y + 5.0f), Line.Actor, NameFont, Accent(Line.ActorTeam));
 
 			// Between the names: an arrow for a kill, with a ring on it for a headshot; a softer mark for a knock-out.
-			const FVector2f MarkCentre(X + Pad + ActorWidth + Mark * 0.5f, Y + RowHeight * 0.5f);
+			const FVector2f MarkCentre(TextX + ActorWidth + Mark * 0.5f, Y + NameRowHeight * 0.5f);
 			const bool bLethal = static_cast<EScctHudActivity>(Line.Kind) == EScctHudActivity::Kill;
 			const FLinearColor MarkColour = bLethal ? Fade(Text(), 0.85f) : TextDim();
 			const bool bHeadshot = (Line.Flags & EScctHudMessageFlags::Headshot) != 0;
@@ -76,11 +95,11 @@ void ScctHudElements::PaintFeed(FScctHudPainter& Painter, const FScctHudModel& M
 				Painter.Fill(FBox2f(Ring - FVector2f(1.0f), Ring + FVector2f(1.0f)), Danger(), 1.0f);
 			}
 
-			Painter.Text(FVector2f(X + Pad + ActorWidth + Mark, Y + 5.0f), Line.Victim, NameFont, Accent(Line.VictimTeam));
+			Painter.Text(FVector2f(TextX + ActorWidth + Mark, Y + 5.0f), Line.Victim, NameFont, Accent(Line.VictimTeam));
 		}
 		else
 		{
-			Painter.Text(FVector2f(X + Pad, Y + 6.0f), Line.Text, TextFont, bLocal ? Text() : TextDim());
+			Painter.Text(FVector2f(TextX, Y + 6.0f), Line.Text, TextFont, bLocal ? Text() : TextDim());
 		}
 		Painter.SetOpacity(1.0f);
 		Y += (RowHeight + RowGap) * FMath::Clamp((Line.Life - Line.Age) / 0.3f, 0.0f, 1.0f);
@@ -103,8 +122,13 @@ void ScctHudElements::PaintHeadlines(FScctHudPainter& Painter, const FScctHudMod
 	float Y = Margin + 112.0f;
 	for (const FScctHudLine& Line : Model.Headlines)
 	{
-		// A briefing is a paragraph; an objective line is short and carries the side's colour.
+		// A briefing is a paragraph; an objective line is short and carries the side's colour. Briefings wait unseen while
+		// a tutorial message is up (the game message queue's wait).
 		const bool bBriefing = Line.Category == EScctHudMessageCategory::Game;
+		if (bBriefing && Model.IsTutorialUp())
+		{
+			continue;
+		}
 		const FSlateFontInfo LineFont = bBriefing ? Font(EWeight::Light, 13.0f, 20) : Font(EWeight::Regular, 12.0f, 60);
 		TArray<FString> Lines;
 		Painter.Wrap(Line.Text, LineFont, MaxWidth, 4, Lines);

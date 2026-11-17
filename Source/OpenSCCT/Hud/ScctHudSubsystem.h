@@ -57,6 +57,12 @@ class UScctHudWidget;
  *        PingKey 1/0 holds or lets go of the key bound to TeamPing (UScctTeamPingSubsystem: a tap marks the aimed spot,
  *        a hold opens the wheel); PingWheel D points the wheel's choice as the mouse would (1 up, 2 right, 3 down,
  *        4 left, 0 the middle).
+ *        Tutorial 1/0 raises the -ScctHudTutorial text as the tutorial message again, or clears it, through the
+ *        game's own SHud.AddTutoMapMessage (offline only, as the zone tips).
+ *   -ScctHudTutorial=<text>[|At]
+ *        at At seconds into the match (default 4) raises that text as the tutorial message, through the game's own
+ *        SHud.AddTutoMapMessage (the zone tips' path), so the tutorial box and the briefing queue's wait can be checked
+ *        on any map ("ScctHud: tutorial ..." lines in the log).
  *   -ScctHudTexture=Package.Name[,Package.Name...]
  *        loads those textures of the content as the session starts and logs their size ("ScctHudTextures: ...").
  *   -ScctHudLog=S
@@ -183,6 +189,20 @@ private:
 	void LogRadar();
 	int32 LastHeartCone = 0;
 	bool bRadarTextureMissingLogged = false;
+
+	// The marker and message details (ScctHudDetails.cpp): the Hud.MarkerFadeWhileMoving option, the tutorial message's
+	// table (a tutorial map; the -ScctHudTutorial message raised through the game's own SHud.AddTutoMapMessage), a log
+	// line when the tutorial message or the markers' fade changes, and the timed command Tutorial 1/0.
+	void InitDetails();
+	void ReadDetails();
+	bool RunDetailsCommand(const FString& Name, int32 Argument);
+	void LogDetails();
+	FString TutorialSwitchText;      // -ScctHudTutorial=<text>
+	float TutorialSwitchAt = 4.0f;   // -ScctHudTutorial's seconds into the match (4 by default)
+	bool bTutorialSwitchDone = false;
+	int32 LastLoggedTutorialId = 0;
+	int32 LastLoggedFadeStep = -1;
+	bool bLastLoggedHeldBriefings = false;
 
 	// The merc backpack panels (ScctHudBackpack.cpp): the bridge's backpack table into the model, a log line when the
 	// panels change and with each snapshot line, and the timed commands GiveBackpack, Backpack and Refill.

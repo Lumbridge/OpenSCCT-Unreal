@@ -55,10 +55,15 @@ namespace
 		}
 	}
 
-	void AgeLines(TArray<FScctHudLine>& Lines, float DeltaSeconds)
+	/** Ages the lines and drops those past their life; lines of HeldCategory (when not -1) keep their age. */
+	void AgeLines(TArray<FScctHudLine>& Lines, float DeltaSeconds, int32 HeldCategory = -1)
 	{
 		for (int32 Index = Lines.Num() - 1; Index >= 0; --Index)
 		{
+			if (Lines[Index].Category == HeldCategory)
+			{
+				continue;
+			}
 			Lines[Index].Age += DeltaSeconds;
 			if (Lines[Index].Age >= Lines[Index].Life)
 			{
@@ -140,6 +145,7 @@ void FScctHudModel::AddMessage(const FScctHudMessage& Message)
 	Line.Kind = Message.Kind;
 	Line.Cause = Message.Cause;
 	Line.Flags = Message.Flags;
+	Line.Trigger = Message.Trigger;
 
 	if (Message.Category == EScctHudMessageCategory::Activity)
 	{
@@ -149,6 +155,7 @@ void FScctHudModel::AddMessage(const FScctHudMessage& Message)
 		}
 		Line.Actor = Text(Message.ActorNameId);
 		Line.Victim = Text(Message.VictimNameId);
+		Line.TriggeredBy = Text(Message.TriggeredByNameId);
 		Line.ActorTeam = Message.ActorTeam;
 		Line.VictimTeam = Message.VictimTeam;
 		Line.Life = FMath::Clamp(Message.Duration, 6.0f, 9.0f);
@@ -205,7 +212,24 @@ void FScctHudModel::Advance(float DeltaSeconds)
 
 	Clock += DeltaSeconds;
 	AgeLines(Feed, DeltaSeconds);
-	AgeLines(Headlines, DeltaSeconds);
+	// The game message queue waits while a tutorial message is up (SHud's message driver): its briefings stay where
+	// they are, unseen, and run their time once the message is gone.
+	AgeLines(Headlines, DeltaSeconds, IsTutorialUp() ? EScctHudMessageCategory::Game : -1);
+
+	// The tutorial box eases in and out and keeps its text while it fades.
+	if (IsTutorialUp())
+	{
+		TutorialText = Text(State.TutorialId);
+	}
+	TutorialShown = Ease(TutorialShown, IsTutorialUp() && !TutorialText.IsEmpty() ? 1.0f : 0.0f, DeltaSeconds, 10.0f);
+
+	// The spy's Enhanced Reality fade (Godot's HudMarkers.Update): 0.99 standing, 0 moving, 2 a second either way.
+	{
+		constexpr float FadeStill = 0.99f, FadeRate = 2.0f;
+		const float Target = bMarkerFadeWhileMoving && bHasState && State.Speed > 0.0f ? 0.0f : FadeStill;
+		const float Step = FadeRate * DeltaSeconds;
+		MarkerFade = FMath::Abs(Target - MarkerFade) <= Step ? Target : MarkerFade + FMath::Sign(Target - MarkerFade) * Step;
+	}
 	AgeLines(Log, DeltaSeconds);
 
 	// Health: the bar eases, and a drop leaves a short red trace.
