@@ -260,8 +260,11 @@ def build_surface():
     lightmap = g.texture("Lightmap", "/Engine/EngineResources/Black", uvs=lightmap_uv)
     baked_vertex = g.node(unreal.MaterialExpressionScalarParameter, parameter_name="BakedVertexLight", default_value=0.0,
                           use_custom_primitive_data=True, primitive_data_index=BAKED_VERTEX_SLOT)
+    # The baked light keeps only part of its colour: it is a fill under lamps that carry the same tint, and with
+    # their bounces on top a tinted room turned into one flat hue.
     baked = g.custom("float3 vertex = pow(saturate(VC.rgb) * 2.0, 2.2) * saturate(UseVC);"
-                     " return (min(LM * 4.6, 4.6) + vertex) * Fill;", FLOAT3,
+                     " float3 light = min(LM * 4.6, 4.6) + vertex;"
+                     " return lerp(dot(light, float3(0.2126, 0.7152, 0.0722)), light, 0.6) * Fill;", FLOAT3,
                      LM=(lightmap, "RGB"), VC=g.node(unreal.MaterialExpressionVertexColor), UseVC=baked_vertex,
                      Fill=g.scalar("BakedFill", 0.0))
     # The glow of a screen, a lamp glass or an additive flare is a brightness in the finished picture (see
@@ -270,8 +273,18 @@ def build_surface():
     glow = g.custom("return Base * Tint * Whole + Lit * Mask * Strength;", FLOAT3,
                     Base=(base, "RGB"), Tint=tint, Whole=g.scalar("Emissive", 0.0),
                     Lit=(self_lit, "RGB"), Mask=(self_mask, "A"), Strength=g.scalar("SelfIllum", 0.0))
-    emissive = g.custom("return Glow + Base * Tint * Baked;", FLOAT3, Glow=g.in_the_picture(glow, g.scalar("GlowInPicture", 1.0)),
-                        Base=(base, "RGB"), Tint=tint, Baked=baked)
+    # ---- the least light. The original never drew a lit surface black: every zone had an ambient light, and its
+    # darkest rooms were dim shapes, not a black screen. Real lights and real shadows have no such floor, and a room
+    # whose lamps did not survive in the map file is pitch dark however far the eye opens. So every lit surface
+    # gives off a trace of its own colour, a little stronger on what faces up and weaker in the detail layer's
+    # pores, so a dark room keeps its forms and not only its outlines. It is light in the scene, far below any
+    # lamp's: lost in a lit room, and what the eye finds once it has opened for a dark one. (Not a brightness in
+    # the picture like the glows: Lumen gathers every surface's glow without the eye's exposure, and a whole
+    # level glowing "the same at any exposure" lit itself up like a lamp.)
+    least = g.custom("return Base * Tint * Floor * (0.55 + 0.45 * saturate(N.z * 0.5 + 0.5)) * AO;", FLOAT3,
+                     Base=(base, "RGB"), Tint=tint, Floor=g.scalar("AmbientFloor", 0.0), N=normal, AO=occlusion)
+    emissive = g.custom("return Glow + Least + Base * Tint * Baked;", FLOAT3, Glow=g.in_the_picture(glow, g.scalar("GlowInPicture", 1.0)),
+                        Least=least, Base=(base, "RGB"), Tint=tint, Baked=baked)
     g.output(emissive, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
     alpha = g.custom("return A * O;", FLOAT1, A=(base, "A"), O=g.scalar("Opacity", 1.0))
@@ -305,29 +318,79 @@ def build_glass():
     # Glass is clearest seen straight on and turns to a mirror at a glancing angle. What the original painted
     # on the pane (dirt, frames, tint) stays as opaque as it painted it.
     fresnel = g.node(unreal.MaterialExpressionFresnel, exponent=4.0, base_reflect_fraction=0.04)
-    opacity = g.custom("return saturate(max(A * Scale, Floor) + F * Glance);", FLOAT1,
+    # SoftDepth (world units, 0 = off) is for the original's haze sheets (the layers of blue it hung in a fish tank
+    # to fake deep water): such a sheet thins out where it meets a wall and where the eye comes up to it, so it
+    # reads as depth in the water and never as a pane.
+    opacity = g.custom("float soft = Soft > 0.0 ? saturate((Scene - Pixel) / Soft) * saturate((Pixel - 12.0) / Soft) : 1.0;"
+                       " return saturate(max(A * Scale, Floor) + F * Glance) * soft;", FLOAT1,
                        A=(base, "A"), Scale=g.scalar("Opacity", 1.0), Floor=g.scalar("OpacityFloor", 0.12),
-                       F=fresnel, Glance=g.scalar("GlanceOpacity", 0.5))
+                       F=fresnel, Glance=g.scalar("GlanceOpacity", 0.5), Soft=g.scalar("SoftDepth", 0.0),
+                       Scene=g.node(unreal.MaterialExpressionSceneDepth), Pixel=g.node(unreal.MaterialExpressionPixelDepth))
     g.output(opacity, unreal.MaterialProperty.MP_OPACITY)
     emissive = g.custom("return Base * Tint * E;", FLOAT3, Base=(base, "RGB"), Tint=tint, E=g.scalar("Emissive", 0.0))
     g.output(g.in_the_picture(emissive), unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     return g.finish()
 
 
+# Water. What is under the surface is seen through it, less and less the more water lies in front of it: the
+# thickness is the distance from the surface to the scene behind it along the view. Shallow water over a pool
+# floor is clear, deep water is its own colour, and where the surface meets a wall or a bank it thins to nothing
+# instead of ending in a ruled line. x: opacity, y: how much water the eye looks through (0..1).
+WATER_DEPTH_CODE = """
+float thickness = max(Scene - Pixel, 0.0);
+float deep = 1.0 - exp(-thickness / max(Clear, 1.0));
+float edge = saturate(thickness / 6.0);
+float body = lerp(Shallow, Deep, deep);
+// A fall or a spray sheet is water in the air: as see-through as the original painted it.
+body = lerp(saturate(Alpha * 1.6 + 0.1), body, Flat);
+return float2(saturate(body + F * 0.5) * edge, deep);"""
+
+# The ripples are strong near the eye and calm far away: a small wave seen from across a canal is smaller than
+# a pixel, and what is left of it is glitter that crawls. The surface gets a little rougher there instead, which
+# is what many small waves add up to. x, y: the tilt, z: the roughness.
+WATER_RIPPLE_CODE = """
+float calm = saturate((Depth - 300.0) / 2500.0);
+float2 tilt = (A.xy + B.xy) * S * lerp(1.0, 0.25, calm) * Flat;
+return float3(tilt, lerp(R, max(R, 0.22), calm));"""
+
+
 def build_water():
     g = Graph(WATER)
     forward_lit_translucent(g.material)
     g.material.set_editor_property("tangent_space_normal", False)
-    base = g.texture("BaseColor", "/Engine/EngineMaterials/DefaultDiffuse")
-    tint = g.colour("Tint", (0.55, 0.75, 0.8, 1))
-    colour = g.custom("return Base * Tint;", FLOAT3, Base=(base, "RGB"), Tint=tint)
+    # What lies under the surface is bent by the ripples.
+    for name, value in (("refraction_method", "RM_PIXEL_NORMAL_OFFSET"), ("refraction_mode", "RM_PIXEL_NORMAL_OFFSET")):
+        try:
+            g.material.set_editor_property(name, getattr(unreal.RefractionMode, value))
+            break
+        except Exception:  # pylint: disable=broad-except
+            continue
+
+    # The original's water texture is a painted picture of ripples and highlights. Drawn as it is on a real
+    # reflecting surface it reads as a cartoon; its average (the texture's smallest copy) is the colour of the
+    # water body, and only a little of the picture itself is laid over that, scrolling as the original scrolled
+    # it, as foam and movement. A surface that is not level (a waterfall, a spray sheet) shows the picture.
+    uv = g.custom("return UV + T * float2(U, V);", FLOAT2, UV=g.node(unreal.MaterialExpressionTextureCoordinate),
+                  T=g.node(unreal.MaterialExpressionTime), U=g.scalar("PanU", 0.0), V=g.scalar("PanV", 0.0))
+    base = g.texture("BaseColor", "/Engine/EngineMaterials/DefaultDiffuse", uvs=uv)
+    average = g.node(unreal.MaterialExpressionTextureSample, mip_value_mode=unreal.TextureMipValueMode.TMVM_MIP_LEVEL, const_mip_value=12)
+    texture_object = g.node(unreal.MaterialExpressionTextureObjectParameter, parameter_name="BaseColor",
+                            texture=unreal.load_asset("/Engine/EngineMaterials/DefaultDiffuse"))
+    g.link(texture_object, average, "Tex")
+    tint = g.colour("Tint", (0.75, 0.9, 0.95, 1))
+    surface_normal = g.node(unreal.MaterialExpressionVertexNormalWS)
+    level = g.custom("return saturate(abs(normalize(N).z) * 3.0 - 1.5);", FLOAT1, N=surface_normal)
+    body_colour = g.colour("BodyColour", (0.02, 0.07, 0.08, 0.35))
+    colour = g.custom("float3 body = lerp(Mean, Deep, DeepShare); return lerp(body, Base, lerp(0.85, Picture, Flat)) * Tint;", FLOAT3,
+                      Base=(base, "RGB"), Mean=(average, "RGB"), Tint=tint, Picture=g.scalar("TextureAmount", 0.18), Flat=level,
+                      Deep=body_colour, DeepShare=(body_colour, "A"))
     g.output(colour, unreal.MaterialProperty.MP_BASE_COLOR)
 
     # Two copies of one ripple map slide across each other at different sizes and speeds, in world space so
     # neighbouring water polygons join up whatever their texture mapping.
     time = g.node(unreal.MaterialExpressionTime)
     position = g.node(unreal.MaterialExpressionWorldPosition)
-    scale, speed = g.scalar("RippleScale", 0.0025), g.scalar("RippleSpeed", 0.03)
+    scale, speed = g.scalar("RippleScale", 0.0016), g.scalar("RippleSpeed", 0.02)
     ripples = unreal.load_asset(WATER_NORMAL)
     samples = []
     for index, code in enumerate(("return P.xy * S + T * V * float2(1.0, 0.35);",
@@ -336,17 +399,30 @@ def build_water():
         sample = g.node(unreal.MaterialExpressionTextureSample, texture=ripples, sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL)
         g.link(plane, sample, "UVs")
         samples.append(sample)
-    # The ripples tilt whatever way the surface faces; on the usual level water that is straight up.
-    normal = g.custom("float2 r = (A.xy + B.xy) * S; return normalize(N + float3(r, 0.0) * (1.0 - 0.7 * abs(N.x + N.y)));", FLOAT3,
-                      A=(samples[0], "RGB"), B=(samples[1], "RGB"), S=g.scalar("RippleStrength", 0.25),
-                      N=g.node(unreal.MaterialExpressionVertexNormalWS))
+    depth = g.node(unreal.MaterialExpressionPixelDepth)
+    rippled = g.custom(WATER_RIPPLE_CODE, FLOAT3, A=(samples[0], "RGB"), B=(samples[1], "RGB"), S=g.scalar("RippleStrength", 0.14),
+                       Depth=depth, Flat=level, R=g.scalar("Roughness", 0.05))
+    normal = g.custom("return normalize(N + float3(R.xy, 0.0));", FLOAT3, R=rippled, N=surface_normal)
     g.output(normal, unreal.MaterialProperty.MP_NORMAL)
-    g.output(g.scalar("Roughness", 0.07), unreal.MaterialProperty.MP_ROUGHNESS)
+    g.output(g.custom("return R.z;", FLOAT1, R=rippled), unreal.MaterialProperty.MP_ROUGHNESS)
     g.output(g.scalar("Specular", 1.0), unreal.MaterialProperty.MP_SPECULAR)
+
     fresnel = g.node(unreal.MaterialExpressionFresnel, exponent=5.0, base_reflect_fraction=0.02)
     g.link(normal, fresnel, "Normal")
-    opacity = g.custom("return saturate(O + F * 0.6);", FLOAT1, O=g.scalar("Opacity", 0.55), F=fresnel)
-    g.output(opacity, unreal.MaterialProperty.MP_OPACITY)
+    through = g.custom(WATER_DEPTH_CODE, FLOAT2, Scene=g.node(unreal.MaterialExpressionSceneDepth), Pixel=depth,
+                       Clear=g.scalar("ClearDepth", 160.0), Shallow=g.scalar("ShallowOpacity", 0.12), Deep=g.scalar("Opacity", 0.8),
+                       Alpha=(base, "A"), Flat=level, F=fresnel)
+    g.output(g.custom("return W.x;", FLOAT1, W=through), unreal.MaterialProperty.MP_OPACITY)
+    # Water the original drew at full brightness keeps a little light of its own, so a pool in a dark club is
+    # not a black hole: a brightness in the picture, like every glow.
+    glow = g.custom("return C * G * (0.4 + 0.6 * W.y);", FLOAT3, C=colour, G=g.scalar("Glow", 0.0), W=through)
+    g.output(g.in_the_picture(glow), unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    # Air to water; nothing is bent where the water is too thin to bend it.
+    refraction = g.custom("return lerp(1.0, 1.33, saturate(W.y * 3.0) * Flat);", FLOAT1, W=through, Flat=level)
+    try:
+        g.output(refraction, unreal.MaterialProperty.MP_REFRACTION)
+    except RuntimeError:
+        unreal.log_warning("SCCT-IMPORT water: this engine has no refraction input by that name; the water does not bend what is under it")
     return g.finish()
 
 

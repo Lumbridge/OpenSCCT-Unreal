@@ -38,7 +38,7 @@ namespace
 	// is sampled in the mesh's own space, so the grain travels with a thing that moves.
 	constexpr int32 LevelLocalDetailSlot = 0;
 	// The importer gives up part of a map light's colour toward white (LIGHT_SATURATION in Tools/Import/import_map.py).
-	constexpr float LevelLightSaturation = 0.7f;
+	constexpr float LevelLightSaturation = 0.55f;
 	const TCHAR* const LevelLightTypeTagPrefix = TEXT("ScctLightType:");
 	const FName LevelLightTypeParameter(TEXT("LightType"));
 	const FName LevelCardBrightnessParameter(TEXT("Brightness"));

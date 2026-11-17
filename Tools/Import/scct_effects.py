@@ -26,6 +26,7 @@ PROJECTOR = EFFECTS + "/M_ScctProjector"
 GLOW_CARD = EFFECTS + "/M_ScctGlowCard"
 WET = EFFECTS + "/M_ScctWet"
 RAIN_STREAK = EFFECTS + "/T_RainStreak"
+RAIN_COVER_NONE = EFFECTS + "/T_RainCoverNone"
 
 # Custom primitive data slots of a corona card (set per placed card by scct_fx.py).
 CORONA_COLOUR_SLOT = 0     # 0..2: colour
@@ -55,6 +56,33 @@ return uv;"""
 def primitive_data(g, name, slot, default=0.0):
     return g.node(unreal.MaterialExpressionScalarParameter, parameter_name=name, default_value=default,
                   use_custom_primitive_data=True, primitive_data_index=slot)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Rain cover
+# ---------------------------------------------------------------------------------------------------------------
+
+# What stands in the rain's way inside a rain volume, as a picture of heights seen from straight above
+# (prepare_rain_cover.py): a drop below the roof it would have met is not drawn, and the floor under that roof is
+# not wet. Box is the picture's place in the world (x, y of its low corner, then its width and depth), Low and
+# Height turn its values into world heights. 1 where the rain reaches `Position`, 0 under cover, with a short
+# fade between (Margin: how far under the cover's height still counts as on top of it).
+COVER_CODE = """
+if (On < 0.5) return 1.0;
+float2 uv = (Position.xy - Box.xy) / max(float2(Box.z, Depth), 1.0);
+float top = Low + Texture2DSampleLevel(Tex, TexSampler, saturate(uv), 0).r * Height;
+return saturate((Position.z - (top - Margin)) / max(Margin * 0.5, 1.0));"""
+
+
+def rain_cover(g, margin):
+    """The cover test for the pixel's world position. A material that is given no cover picture passes everything."""
+    picture = g.node(unreal.MaterialExpressionTextureObjectParameter, parameter_name="Cover",
+                     texture=unreal.load_asset(RAIN_COVER_NONE),
+                     sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
+    box = g.colour("CoverBox", (0, 0, 1, 1))
+    return g.custom(COVER_CODE, FLOAT1, Tex=picture, Position=g.node(unreal.MaterialExpressionWorldPosition),
+                    Box=box, Depth=(box, "A"), Low=g.scalar("CoverLow", 0.0), Height=g.scalar("CoverHeight", 0.0),
+                    On=g.scalar("CoverOn", 0.0), Margin=g.node(unreal.MaterialExpressionConstant, r=margin))
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -90,7 +118,9 @@ def build_particle_lit():
     g.output(base, unreal.MaterialProperty.MP_BASE_COLOR)
     # A little light of its own keeps a puff readable in a black room (the original drew it at full brightness).
     g.output(g.custom("return B * E;", FLOAT3, B=base, E=g.scalar("Emissive", 0.04)), unreal.MaterialProperty.MP_EMISSIVE_COLOR)
-    g.output(g.custom("return saturate(T * C * O) * S * N;", FLOAT1, T=(texture, "A"), C=(colour, "A"), O=g.scalar("Opacity", 1.0), S=soft, N=near),
+    # Rain is this material too: its drops end where the rain volume's cover picture says a roof is (rain_cover).
+    g.output(g.custom("return saturate(T * C * O) * S * N * R;", FLOAT1, T=(texture, "A"), C=(colour, "A"), O=g.scalar("Opacity", 1.0), S=soft, N=near,
+                      R=rain_cover(g, 24.0)),
              unreal.MaterialProperty.MP_OPACITY)
     return g.finish()
 
@@ -352,7 +382,8 @@ def build_wet():
                    Damp=g.scalar("DampRoughness", 0.3), Puddle=g.scalar("PuddleRoughness", 0.04),
                    DampAmount=g.scalar("DampAmount", 0.6))
     g.output(g.custom("return W.x;", FLOAT1, W=wet), unreal.MaterialProperty.MP_ROUGHNESS)
-    g.output(g.custom("return W.y;", FLOAT1, W=wet), unreal.MaterialProperty.MP_OPACITY)
+    # Only what the rain reaches is wet: the top of whatever stands highest (rain_cover), not the floor under a roof.
+    g.output(g.custom("return W.y * R;", FLOAT1, W=wet, R=rain_cover(g, 40.0)), unreal.MaterialProperty.MP_OPACITY)
     return g.finish()
 
 

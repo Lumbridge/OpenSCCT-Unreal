@@ -31,6 +31,12 @@ for file in sorted(os.listdir(TEXTURES)):
         tasks.append(task)
 unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
 
+# The cover picture holds heights, not colours.
+cover = unreal.load_asset(scct_effects.RAIN_COVER_NONE)
+cover.set_editor_property("srgb", False)
+cover.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_GRAYSCALE)
+unreal.EditorAssetLibrary.save_loaded_asset(cover, only_if_is_dirty=False)
+
 scct_effects.build_all()
 scct_niagara.build_all()
 unreal.log_warning("SCCT-IMPORT effects ready")
