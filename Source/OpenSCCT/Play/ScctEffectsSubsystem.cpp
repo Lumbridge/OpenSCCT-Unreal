@@ -164,8 +164,8 @@ void UScctEffectsSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 {
 	if (OldId != 0)
 	{
-		UE_LOG(LogOpenSCCT, Log, TEXT("Effects summary: %d muzzle flashes, %d tracers, %d impacts, %d effect actors (%d drawn as stand-in shapes), at most %d sprites at once"),
-			NumFlashes, NumTracers, NumImpacts, NumActors, NumStandIns, PeakSprites);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Effects summary: %d muzzle flashes, %d tracers, %d impacts, %d effect actors (%d drawn as stand-in shapes), at most %d sprites at once; rain on bodies: %d splashes, %d drips, %d puffs"),
+			NumFlashes, NumTracers, NumImpacts, NumActors, NumStandIns, PeakSprites, NumFlicSplashes, NumFlicDrips, NumFlicPuffs);
 	}
 	// Actor ids are reused by the next match: nothing drawn may carry over.
 	ResetMatch();
@@ -209,6 +209,7 @@ void UScctEffectsSubsystem::ResetMatch()
 	MatchSeconds = 0.0f;
 	bFireHeld = bAltFireHeld = false;
 	NumFlashes = NumFlashesLeftToViewModel = NumTracers = NumImpacts = NumActors = NumStandIns = PeakSprites = 0;
+	NumFlicSplashes = NumFlicDrips = NumFlicPuffs = 0;
 }
 
 void UScctEffectsSubsystem::HandleMatchStarted()
@@ -780,7 +781,9 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 		// A smoke grenade's cloud is the responsive smoke volume when the match runs it, not sprites.
 		const bool bVolumeSmoke = (Fx->Style == EStyle::Smoke || Fx->Style == EStyle::Gas)
 			&& SmokeVolumes.CoversEmitter(Record.ActorId, GetName(Fx->ClassId).Contains(TEXT("SmokeEmitter")), Fx->Age);
-		if (!bHidden && !bVolumeSmoke && Fx->Style != EStyle::None && Record.Kind == EScctEffectKind::Emitter)
+		// Rain on a pawn spreads over the drawn body (Play/ScctEffectsFlicFloc.cpp); without its table, a plain splash.
+		const bool bFlicDrawn = Fx->bFlicFloc && UpdateFlicFloc(*Fx, Record, Fx->Location, bHidden, DeltaSeconds);
+		if (!bHidden && !bVolumeSmoke && !bFlicDrawn && Fx->Style != EStyle::None && Record.Kind == EScctEffectKind::Emitter)
 		{
 			Emit(Fx->Style, Fx->Location, FVector(Record.VelX, Record.VelY, Record.VelZ), DeltaSeconds, Fx->EmitDebt);
 		}
@@ -835,6 +838,7 @@ void UScctEffectsSubsystem::StartActor(FActorFx& Fx, const FScctEffectActor& Rec
 	Fx.Location = FVector(Record.X, Record.Y, Record.Z);
 	Fx.Style = Record.Kind == EScctEffectKind::Emitter ? FindStyle(Record.ClassId) : EStyle::None;
 	Fx.TrailStyle = Record.TrailClassId != 0 ? FindStyle(Record.TrailClassId) : EStyle::None;
+	Fx.bFlicFloc = Record.Kind == EScctEffectKind::Emitter && GetName(Record.ClassId).Contains(TEXT("FlicFloc"));
 
 	const bool bDrawsMesh = Record.Kind == EScctEffectKind::Projectile || Record.Kind == EScctEffectKind::Mine || Record.Kind == EScctEffectKind::Gadget
 		|| Record.Kind == EScctEffectKind::Beam || Record.Kind == EScctEffectKind::Decal;

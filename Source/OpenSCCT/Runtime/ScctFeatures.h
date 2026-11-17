@@ -7,6 +7,7 @@
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctEquipmentApi.h"
 #include "Runtime/ScctEventsApi.h"
+#include "Runtime/ScctFlicFlocApi.h"
 #include "Runtime/ScctFxTraceApi.h"
 #include "Runtime/ScctGlassApi.h"
 #include "Runtime/ScctHubActivityApi.h"
@@ -27,6 +28,7 @@
 #include "Runtime/ScctVisionApi.h"
 #include "Runtime/ScctVoiceApi.h"
 #include "Runtime/ScctWorldApi.h"
+#include "Runtime/ScctWorldEmitterApi.h"
 #include "Test/ScctGrabAreaApi.h"
 #include "Test/ScctLessonApi.h"
 
@@ -54,6 +56,7 @@ SCCT_FEATURE_TABLE(FScctAudioCheckApi, "AudioCheckExports", ScctAudioCheckApiVer
 SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
 SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
+SCCT_FEATURE_TABLE(FScctFlicFlocApi, "FlicFlocExports", ScctFlicFlocApiVersion);
 SCCT_FEATURE_TABLE(FScctFxTraceApi, "FxTraceExports", ScctFxTraceApiVersion);
 SCCT_FEATURE_TABLE(FScctGlassApi, "GlassExports", ScctGlassApiVersion);
 SCCT_FEATURE_TABLE(FScctHostApi, "HostExports", ScctHostApiVersion);
@@ -74,6 +77,7 @@ SCCT_FEATURE_TABLE(FScctSoftBodyApi, "SoftBodyExports", ScctSoftBodyApiVersion);
 SCCT_FEATURE_TABLE(FScctVisionApi, "VisionExports", ScctVisionApiVersion);
 SCCT_FEATURE_TABLE(FScctVoiceApi, "VoiceExports", ScctVoiceApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);
+SCCT_FEATURE_TABLE(FScctWorldEmitterApi, "WorldEmitterExports", ScctWorldEmitterApiVersion);
 SCCT_FEATURE_TABLE(FScctGrabAreaApi, "GrabAreaExports", ScctGrabAreaApiVersion);
 SCCT_FEATURE_TABLE(FScctLessonApi, "LessonExports", ScctLessonApiVersion);
 

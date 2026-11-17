@@ -118,6 +118,18 @@ private:
 		int32 Light = INDEX_NONE; // index into Lights
 		uint32 SeenFrame = 0;
 		bool bStandIn = false;
+
+		// Rain on a pawn (SFlicFlocEmitter, Play/ScctEffectsFlicFloc.cpp): the script's restarts and puff triggers
+		// already applied, each sub-emitter's spawns owed and the spawn budget left since its restart.
+		bool bFlicFloc = false;
+		int32 FlicSplashStarts = 0;
+		int32 FlicDripStarts = 0;
+		int32 FlicPuffTriggers = 0;
+		int32 FlicSplashBudget = 0;
+		int32 FlicDripBudget = 0;
+		float FlicSplashDebt = 0.0f;
+		float FlicDripDebt = 0.0f;
+		bool bFlicSeen = false;
 	};
 
 	struct FLight
@@ -226,6 +238,13 @@ private:
 	bool EnsureCasingMesh();
 
 	void UpdateEffectActors(float DeltaSeconds);
+	/**
+	 * Rain splashing on a pawn, as the Godot client's EffectViews.FlicFloc draws it: splashes spread over the drawn
+	 * body along the original's 11 bone segments while in the rain, drips from the head carrying the pawn's speed
+	 * after it, the puff on each trigger, following the script's rates, restarts and triggers. Play/ScctEffectsFlicFloc.cpp.
+	 * Returns false when the bridge has no table for it (the plain Water style is drawn then).
+	 */
+	bool UpdateFlicFloc(FActorFx& Fx, const FScctEffectActor& Record, const FVector& Head, bool bHidden, float DeltaSeconds);
 	void UpdateLights(float DeltaSeconds);
 
 	/**
@@ -397,6 +416,12 @@ private:
 	TArray<FCasing> Casings;
 	/** The client world's collision, which the casings bounce off (the level has no Unreal collision). */
 	const FScctFxTraceApi* FxTrace = nullptr;
+	/** The rain-on-pawn table (Runtime/ScctFlicFlocApi.h), looked for once. */
+	const struct FScctFlicFlocApi* FlicFlocApi = nullptr;
+	bool bFlicFlocApiTried = false;
+	int32 NumFlicSplashes = 0;
+	int32 NumFlicDrips = 0;
+	int32 NumFlicPuffs = 0;
 	/** The casing mesh's scale, its long axis (0 X, 1 Y, 2 Z) and half its thickness once scaled, in cm. */
 	FVector CasingScale = FVector::OneVector;
 	int32 CasingLongAxis = 0;
