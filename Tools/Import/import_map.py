@@ -41,11 +41,6 @@ LIGHT_PER_BRIGHTNESS = 5.0 / 255.0
 # which carries the same tint. At 0.7 SancE's break room was one green and CineE's backstage one blue. The game's
 # copy of this number is LevelLightSaturation in Play/ScctLevelStateSubsystem.cpp.)
 LIGHT_SATURATION = 0.55
-# A light the original kept off the level's surfaces (apply_static false) was a tint for the characters walking
-# past it, and it hangs right where they walk: at the map's saturation a spy who stepped behind StatE's car was
-# red from head to foot. Those that never change give up more of their colour (switched ones keep the map's
-# number, which the game uses again when it recolours them).
-CHARACTER_LIGHT_SATURATION = 0.3
 # A "special lit" light lit only the surfaces marked special lit (a car's own tail-light glow, a sign's housing),
 # none of the room and none of the characters. Nothing of ours carries that mark, so such a light is kept on a
 # lighting channel nothing receives: placed (the level state can still switch it) but lighting no one.
@@ -644,20 +639,19 @@ def main():
         # The map's colours come from hue and saturation, in display (gamma) space.
         colour = [channel ** 2.2 for channel in light["color"]]
         grey = 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2]
-        character_only = not light.get("apply_static", True) and not light.get("triggered")
-        saturation = CHARACTER_LIGHT_SATURATION if character_only else LIGHT_SATURATION
-        colour = [grey + (channel - grey) * saturation for channel in colour]
+        colour = [grey + (channel - grey) * LIGHT_SATURATION for channel in colour]
         component.set_light_color(unreal.LinearColor(colour[0], colour[1], colour[2], 1.0))
         component.set_attenuation_radius(radius)
         component.set_source_radius(6.0)
         component.set_soft_source_radius(12.0)
-        component.set_cast_shadows(True)
+        component.set_cast_shadows(not light.get("special_lit"))
         if light.get("special_lit"):
+            # Nothing receives it, so it has no shadow to cast either (a shadowed light costs its shadow maps
+            # whether or not anything it lights is drawn).
             channels = unreal.LightingChannels()
             channels.set_editor_property("channel0", False)
             channels.set_editor_property("channel%d" % SPECIAL_LIT_CHANNEL, True)
             component.set_editor_property("lighting_channels", channels)
-            component.set_editor_property("affects_world", True)
             try_set(component, "volumetric_scattering_intensity", 0.0)
             try_set(component, "affect_global_illumination", False)
         else:
