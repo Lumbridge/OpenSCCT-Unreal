@@ -36,7 +36,7 @@ internal static unsafe class HostProbe
         int lanPort = args.Length > 3 ? int.Parse(args[3], CultureInfo.InvariantCulture) : 28942;
         bool upnp = args.Contains("upnp");
 
-        int expected = 8 + 7 * sizeof(void*);
+        int expected = 8 + 8 * sizeof(void*);
         Console.WriteLine($"layout: HostApi {sizeof(HostApi)} bytes{(sizeof(HostApi) == expected ? string.Empty : $" BUT THE HEADER ASSERTS {expected}")}");
         if (sizeof(HostApi) != expected)
         {

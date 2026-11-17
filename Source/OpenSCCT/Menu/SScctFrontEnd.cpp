@@ -5,6 +5,7 @@
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformMisc.h"
+#include "Menu/SScctHostPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -183,6 +184,10 @@ void SScctFrontEnd::ShowPageNamed(const FString& Name)
 	{
 		ShowPage(EPage::Servers);
 	}
+	else if (Name.Equals(TEXT("host"), ESearchCase::IgnoreCase))
+	{
+		ShowPage(EPage::Host);
+	}
 	else if (Name.Equals(TEXT("start"), ESearchCase::IgnoreCase))
 	{
 		// Unattended: the offline page with its choices as they stand, and its START pressed.
@@ -218,6 +223,10 @@ void SScctFrontEnd::Rebuild()
 	case EPage::Join: Content = BuildJoin(); break;
 	case EPage::Servers: Content = BuildServers(); break;
 	case EPage::Visit: Content = BuildVisit(); break;
+	case EPage::Host:
+		// Create Session (Menu/SScctHostPage.h); a hosted game's lobby then takes the screen over as any visit does.
+		Content = SNew(SScctHostPage).Online(Online).OnBack(FSimpleDelegate::CreateLambda([this] { ShowPage(EPage::Home); }));
+		break;
 	}
 	PageBox->SetContent(Content);
 	SeenRevision = -1;
@@ -254,6 +263,7 @@ TSharedRef<SWidget> SScctFrontEnd::BuildHome()
 		Ui::Glass(
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("PLAY OFFLINE"), EPage::Offline) ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("HOST GAME"), EPage::Host) ]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("JOIN BY ADDRESS"), EPage::Join) ]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 20.0f)[ Entry(TEXT("SERVER LIST"), EPage::Servers) ]
 			+ SVerticalBox::Slot().AutoHeight()

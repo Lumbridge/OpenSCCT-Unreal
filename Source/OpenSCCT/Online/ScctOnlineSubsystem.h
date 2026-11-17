@@ -33,6 +33,9 @@ struct FScctHostRequest
 
 	/** A request with the Online settings page's hosting values (port, players, listing, UPnP, accounts, demos, LAN port). */
 	static FScctHostRequest Default();
+
+	/** Keeps this request's hosting choices on the Online settings page for the next time (Create Session does it on CREATE). */
+	void Remember() const;
 };
 
 /** One chat or system line as the menus and the match overlay list it. */
@@ -130,9 +133,10 @@ public:
 
 	/**
 	 * Hosts a game and joins it as the lobby's host; the visit then goes on as any other. False when the server
-	 * could not start (GetNotice says why: the port is in use, the map is not installed).
+	 * could not start: GetNotice says why (the port is in use, the map is not installed), or, with OutError, the
+	 * reason goes there instead and the failed visit is dismissed, so the page that asked can show it itself.
 	 */
-	bool Host(const FScctHostRequest& Request);
+	bool Host(const FScctHostRequest& Request, FString* OutError = nullptr);
 
 	/** Closes the player's server; the visit to it ends. */
 	void StopHosting();
@@ -341,6 +345,8 @@ private:
 	bool bAutoHostPublic = false;
 	bool bAutoHosted = false;
 	int32 LaunchWhen = 2;
+	/** -ScctLaunchWhen was given: a game hosted from Create Session launches unattended too. */
+	bool bLaunchWhenGiven = false;
 	bool bAutoLaunched = false;
 	int32 AutoSideRevision = -1;
 };

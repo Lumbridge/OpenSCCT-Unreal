@@ -168,6 +168,21 @@ FScctHostRequest FScctHostRequest::Default()
 	return Request;
 }
 
+void FScctHostRequest::Remember() const
+{
+	UScctOnlineSubsystem::RegisterOnlineSettings();
+	if (Port > 0)
+	{
+		FScctSettings::SetInt(KeyHostPort, Port);
+	}
+	FScctSettings::SetInt(KeyHostMaxPlayers, MaxPlayers);
+	FScctSettings::SetBool(KeyHostListed, bListed);
+	FScctSettings::SetBool(KeyHostUpnp, bUpnp);
+	FScctSettings::SetBool(KeyHostRequireAccounts, bRequireAccounts);
+	FScctSettings::SetBool(KeyHostRecordDemos, bRecordDemos);
+	FScctSettings::Save();
+}
+
 void UScctOnlineSubsystem::HandleSettingChanged(FName Key)
 {
 	if (Key == FName(KeyMasterUrl) || Key == FName(KeyInviteKey))
@@ -226,7 +241,7 @@ const FScctHostApi* UScctOnlineSubsystem::ConnectHost()
 	return HostApi;
 }
 
-bool UScctOnlineSubsystem::Host(const FScctHostRequest& Request)
+bool UScctOnlineSubsystem::Host(const FScctHostRequest& Request, FString* OutError)
 {
 	if (Connect() == nullptr || ConnectHost() == nullptr)
 	{
@@ -263,6 +278,13 @@ bool UScctOnlineSubsystem::Host(const FScctHostRequest& Request)
 		}
 		UE_LOG(LogOpenSCCT, Warning, TEXT("Online: %s"), *Notice);
 		TickHost();
+		if (OutError != nullptr)
+		{
+			// The page that asked shows the reason; the bridge's failed visit would otherwise take the screen over.
+			*OutError = Notice;
+			Api->Leave();
+			Notice.Reset();
+		}
 		Touch();
 		return false;
 	}
@@ -361,7 +383,7 @@ void UScctOnlineSubsystem::ReadHostSwitches()
 	FParse::Value(CommandLine, TEXT("ScctHostName="), AutoHostName, false);
 	FParse::Value(CommandLine, TEXT("ScctHostPassword="), AutoHostPassword);
 	bAutoHostPublic = FParse::Param(CommandLine, TEXT("ScctHostPublic"));
-	FParse::Value(CommandLine, TEXT("ScctLaunchWhen="), LaunchWhen);
+	bLaunchWhenGiven = FParse::Value(CommandLine, TEXT("ScctLaunchWhen="), LaunchWhen);
 	LaunchWhen = FMath::Max(1, LaunchWhen);
 }
 
@@ -396,7 +418,8 @@ void UScctOnlineSubsystem::RunUnattendedHost()
 		Host(Request);
 	}
 
-	if (!IsHosting() || Api == nullptr || GetState() != EScctOnlineState::Lobby || Status.LocalId < 0)
+	// The side and the launch below are for unattended runs only: a game hosted from Create Session waits for its host.
+	if (!(bAutoHosted || bLaunchWhenGiven) || !IsHosting() || Api == nullptr || GetState() != EScctOnlineState::Lobby || Status.LocalId < 0)
 	{
 		return;
 	}

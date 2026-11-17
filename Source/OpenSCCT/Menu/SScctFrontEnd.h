@@ -20,6 +20,7 @@ class UScctOnlineSubsystem;
  *   Offline   map, mode, side, bots and their skill, start
  *   Join      name, address, password, side
  *   Servers   the master's list, refresh, sign in
+ *   Host      Create Session: map, rules and hosting choices, create (Menu/SScctHostPage.h)
  *   Visit     shown instead of the above while UScctOnlineSubsystem::IsVisiting
  */
 class SScctFrontEnd : public SCompoundWidget
@@ -44,6 +45,7 @@ private:
 		Join,
 		Servers,
 		Visit,
+		Host,
 	};
 
 	/** What the visit page is showing; a change rebuilds it. */

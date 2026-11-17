@@ -590,6 +590,11 @@ void UScctOnlineSubsystem::HandleStateChange(EScctOnlineState Old, EScctOnlineSt
 	{
 		MatchSeconds = 0.0f;
 	}
+	else if (New == EScctOnlineState::Lobby && IsHosting())
+	{
+		// The match the player's own server is set up for, as the session holds it (the line Create Session sent).
+		UE_LOG(LogOpenSCCT, Log, TEXT("Online: the hosted lobby's setup is %s"), *ReadText(EScctOnlineText::SetupOptions));
+	}
 	Touch();
 }
 

@@ -24,6 +24,9 @@ public unsafe struct HostApi
     public delegate* unmanaged[Cdecl]<int, char*, int, int> GetHostText;
     public delegate* unmanaged[Cdecl]<char*, int, int> TakeHostLine;
     public delegate* unmanaged[Cdecl]<int, void> SetConnectPath;
+
+    // Version 2.
+    public delegate* unmanaged[Cdecl]<int, char*, char*, int, char*, int, int> SetupText;
 }
 
 /// <summary>HostApi.Host's flags.</summary>
@@ -69,7 +72,7 @@ public enum HostText
 
 public static unsafe class HostExports
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     private static OnlineBridge Online => OnlineBridge.Instance;
 
@@ -90,6 +93,7 @@ public static unsafe class HostExports
         api->GetHostText = &GetHostText;
         api->TakeHostLine = &TakeHostLine;
         api->SetConnectPath = &SetConnectPath;
+        api->SetupText = &SetupText;
         return ApiVersion;
     }
 
@@ -237,6 +241,26 @@ public static unsafe class HostExports
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void SetConnectPath(int path) =>
         Guard(() => Online.Master.Path = path is >= 0 and <= 3 ? (ConnectPath)path : ConnectPath.Auto);
+
+    /// <summary>
+    /// The Create Session page's rules (<see cref="OpenScct.UnrealBridge.Online.SetupText"/>, <see cref="HostSetupModel"/>): the hostable
+    /// maps, a map's modes and defaults, the page's rows, the change of a row. Copies the text into
+    /// <paramref name="buffer"/> and returns its full length in characters. Leaves the visit alone on an error.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int SetupText(int kind, char* options, char* argument, int maxPlayers, char* buffer, int capacity)
+    {
+        string? line = Text(options), arg = Text(argument);
+        try
+        {
+            return OnlineTextCopy.Buffer(buffer, capacity, HostSetupModel.Text(Online, (OpenScct.UnrealBridge.Online.SetupText)kind, line, arg, maxPlayers));
+        }
+        catch (Exception e)
+        {
+            Exports.ReportFailure(e.ToString());
+            return OnlineTextCopy.Buffer(buffer, capacity, string.Empty);
+        }
+    }
 
     private static string? Text(char* text) => text == null ? null : new string(text);
 

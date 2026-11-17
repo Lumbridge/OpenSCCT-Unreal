@@ -11,7 +11,7 @@
 // the server. The session runs on its own thread; nothing here blocks a frame except Host itself (it opens the port).
 // Text is UTF-16, zero terminated.
 
-constexpr int32 ScctHostApiVersion = 1;
+constexpr int32 ScctHostApiVersion = 2;
 
 /** FScctHostApi::Host's flags. */
 namespace EScctHostFlags
@@ -32,6 +32,20 @@ enum class EScctHostText : int32
 	Master = 2,  // the master listing (registered id, reachability, public address, or why not) and the LAN beacon
 	Upnp = 3,    // the UPnP mapping's result; empty while the router is being asked
 	Error = 4,   // why the last Host failed (the online visit's error)
+};
+
+/** FScctHostApi::SetupText's kinds: what the Create Session page asks (Bridge/Online/HostSetupModel.cs). */
+enum class EScctSetupText : int32
+{
+	Maps = 0,          // the hostable maps, one per line: "Id TAB name TAB picture path TAB mode keys (comma separated)"
+	Modes = 1,         // the modes of the map named by Argument, as mode keys separated by commas, in the page's order
+	Defaults = 2,      // a fresh setup for Argument's ?MapName=..?Mode=.. on top of Options (session-wide values kept); returns the setup line
+	Normalize = 3,     // Options as the setup line the session reads, every value in the page's ranges
+	Describe = 4,      // the setup in one line as the lobby describes it
+	Rows = 5,          // the page's rows: "Row TAB number|check|choice TAB caption TAB shown text TAB value TAB min TAB max TAB visible TAB choices (|)", then "hint TAB Voice|Bots TAB text"
+	Edit = 6,          // Argument "Row value" ("TimeLimit 12", "Mode DiskHunt", "Map AquaE") applied with the page's rules; returns the setup line
+	Alternate = 7,     // the Alternate rules: "ability TAB bit TAB side TAB caption TAB on", "gadget TAB side TAB option TAB name TAB allowed", "slots TAB side TAB count TAB most"
+	EditAlternate = 8, // Argument "ability BIT 0|1", "gadget SIDE OPTION 0|1", "slots SIDE COUNT" or "reset"; returns the setup line
 };
 
 struct FScctHostApi
@@ -63,7 +77,16 @@ struct FScctHostApi
 
 	/** How listed servers are joined: 0 as the master suggests, 1 direct only, 2 NAT punch only, 3 relay only. */
 	void (__cdecl* SetConnectPath)(int32 Path);
+
+	// Version 2.
+
+	/**
+	 * Create Session's rules (EScctSetupText): OpenSCCT's CreateSessionModel over the bridge's map catalog. Options is the
+	 * page's setup line (may be null: the first map's defaults); MaxPlayers the slots the host picked, 0 while they follow
+	 * the map. Copies the text into Buffer and returns its full length in characters.
+	 */
+	int32 (__cdecl* SetupText)(int32 Kind, const TCHAR* Options, const TCHAR* Argument, int32 MaxPlayers, TCHAR* Buffer, int32 Capacity);
 };
 
 static_assert(sizeof(TCHAR) == 2, "The bridge's text is UTF-16");
-static_assert(sizeof(FScctHostApi) == 8 + 7 * sizeof(void*), "FScctHostApi does not match HostApi");
+static_assert(sizeof(FScctHostApi) == 8 + 8 * sizeof(void*), "FScctHostApi does not match HostApi");
