@@ -146,9 +146,10 @@ FString UScctTutorialSubsystem::GetProgressLine() const
 
 bool UScctTutorialSubsystem::CanPlay(const FString& Map)
 {
-	// The tutorial maps are not in the host list the menus' catalog holds; a level is only imported from a converted
-	// map, so its package is the test (the bridge reports a map whose content is gone when the match starts).
-	return !Map.IsEmpty() && FPackageName::DoesPackageExist(UScctOnlineSubsystem::LevelOf(Map));
+	// The tutorial maps are not in the host list the menus' catalog holds; the test is whether the map can be drawn
+	// (an imported level, or render files the runtime level is built from: LevelOf can be that level's URL with
+	// ?ScctMap=, which DoesPackageExist refuses). The bridge reports a map whose content is gone when the match starts.
+	return UScctOnlineSubsystem::IsPlayable(Map);
 }
 
 bool UScctTutorialSubsystem::PlayTutorial(const FString& Map, int32 Team)
@@ -171,7 +172,7 @@ bool UScctTutorialSubsystem::Start(const FString& Map, bool bMerc, bool bVisit)
 	}
 	if (!CanPlay(Map))
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("ScctTutorial: %s cannot be played here (its level is not imported, or the content lacks the map)"), *Map);
+		UE_LOG(LogOpenSCCT, Warning, TEXT("ScctTutorial: %s cannot be played here (its level is not imported and its render files cannot build it)"), *Map);
 		return false;
 	}
 

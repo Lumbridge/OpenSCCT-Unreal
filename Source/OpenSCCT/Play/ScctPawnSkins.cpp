@@ -8,7 +8,10 @@
 #include "Engine/World.h"
 #include "Hud/ScctHudSubsystem.h"
 #include "Hud/ScctVisionSubsystem.h"
+#include "Engine/Texture2D.h"
+#include "ImageUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Misc/Paths.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -74,6 +77,86 @@ namespace
 	const FName FillName(TEXT("Fill"));
 	const FName RimName(TEXT("Rim"));
 	const FName StrengthName(TEXT("Strength"));
+
+	/** The skins' textures in the converted content, under shared/chars/SPerso/textures (SPersoTextures.*). */
+	const TCHAR* const TextureFolder = TEXT("shared/chars/SPerso/textures");
+	const TCHAR* const StickyFile = TEXT("SPersoTextures_shadwagent_sticky_1.png");
+	const TCHAR* const WetEnvFile = TEXT("SPersoTextures_envmap_wet.png");
+	const TCHAR* const WetMaskFiles[] = { // as WetPaths
+		TEXT("SPersoTextures_ATT_spec_mask.png"),
+		TEXT("SPersoTextures_ATT_2_wet.png"),
+		TEXT("SPersoTextures_DEF_01_A_Body_envmap.png"),
+	};
+	const FName StickyTextureName(TEXT("Sticky"));
+	const FName EnvMapName(TEXT("EnvMap"));
+	const FName SpecMaskName(TEXT("SpecMask"));
+
+	/**
+	 * A converted PNG as a transient texture with its box-filtered mip chain (as the pawn looks make theirs), or null
+	 * with a warning. The masks are read from their alpha, which no colour space changes, so all are sRGB.
+	 */
+	UTexture2D* MakeSkinTexture(const FString& Path)
+	{
+		FImage Image;
+		if (!FImageUtils::LoadImage(*Path, Image) || Image.SizeX <= 0 || Image.SizeY <= 0)
+		{
+			UE_LOG(LogOpenSCCT, Warning, TEXT("PawnSkins: could not read %s"), *Path);
+			return nullptr;
+		}
+		Image.ChangeFormat(ERawImageFormat::BGRA8, EGammaSpace::sRGB);
+		UTexture2D* Texture = UTexture2D::CreateTransient(Image.SizeX, Image.SizeY, PF_B8G8R8A8, *FString::Printf(TEXT("PawnSkin_%s"), *FPaths::GetBaseFilename(Path)));
+		if (Texture == nullptr)
+		{
+			return nullptr;
+		}
+		Texture->SRGB = true;
+		Texture->NeverStream = true;
+		Texture->Filter = TF_Trilinear;
+		FTexturePlatformData* Data = Texture->GetPlatformData();
+		TArray64<uint8> Level(Image.RawData);
+		int32 Width = Image.SizeX;
+		int32 Height = Image.SizeY;
+		for (int32 MipIndex = 0;; ++MipIndex)
+		{
+			FTexture2DMipMap* Mip = MipIndex < Data->Mips.Num() ? &Data->Mips[MipIndex] : new FTexture2DMipMap(Width, Height, 1);
+			if (MipIndex >= Data->Mips.Num())
+			{
+				Data->Mips.Add(Mip);
+			}
+			Mip->SizeX = Width;
+			Mip->SizeY = Height;
+			Mip->BulkData.Lock(LOCK_READ_WRITE);
+			FMemory::Memcpy(Mip->BulkData.Realloc(Level.Num()), Level.GetData(), Level.Num());
+			Mip->BulkData.Unlock();
+			if (Width == 1 && Height == 1)
+			{
+				break;
+			}
+			const int32 NextWidth = FMath::Max(1, Width / 2);
+			const int32 NextHeight = FMath::Max(1, Height / 2);
+			TArray64<uint8> Next;
+			Next.SetNumUninitialized(static_cast<int64>(NextWidth) * NextHeight * 4);
+			for (int32 Y = 0; Y < NextHeight; ++Y)
+			{
+				for (int32 X = 0; X < NextWidth; ++X)
+				{
+					const int32 X0 = FMath::Min(X * 2, Width - 1), X1 = FMath::Min(X * 2 + 1, Width - 1);
+					const int32 Y0 = FMath::Min(Y * 2, Height - 1), Y1 = FMath::Min(Y * 2 + 1, Height - 1);
+					for (int32 Channel = 0; Channel < 4; ++Channel)
+					{
+						const int32 Sum = Level[(static_cast<int64>(Y0) * Width + X0) * 4 + Channel] + Level[(static_cast<int64>(Y0) * Width + X1) * 4 + Channel] +
+							Level[(static_cast<int64>(Y1) * Width + X0) * 4 + Channel] + Level[(static_cast<int64>(Y1) * Width + X1) * 4 + Channel];
+						Next[(static_cast<int64>(Y) * NextWidth + X) * 4 + Channel] = static_cast<uint8>((Sum + 2) / 4);
+					}
+				}
+			}
+			Level = MoveTemp(Next);
+			Width = NextWidth;
+			Height = NextHeight;
+		}
+		Texture->UpdateResource();
+		return Texture;
+	}
 
 	FLinearColor ShockLightColor()
 	{
@@ -163,24 +246,50 @@ bool UScctPawnSkinsSubsystem::EnsureMaterials()
 	}
 	bTriedMaterials = true;
 
-	StickyMaterial = LoadObject<UMaterialInterface>(nullptr, StickyPath, nullptr, LOAD_NoWarn);
+	// The textures are the original game's: made from the player's converted content, never shipped in the materials.
+	const FString Folder = FPaths::Combine(FOpenSCCTModule::FindContentRoot(), TextureFolder);
+	SkinTextures.Reset();
+	const auto Make = [this, &Folder](const TCHAR* File)
+	{
+		UTexture2D* Texture = MakeSkinTexture(FPaths::Combine(Folder, File));
+		SkinTextures.Add(Texture);
+		return Texture;
+	};
+	UTexture2D* StickyTexture = Make(StickyFile);
+	UTexture2D* EnvTexture = Make(WetEnvFile);
+	bool bAll = StickyTexture != nullptr && EnvTexture != nullptr;
+
+	UMaterialInterface* Sticky = LoadObject<UMaterialInterface>(nullptr, StickyPath, nullptr, LOAD_NoWarn);
 	EdgeMaterial = LoadObject<UMaterialInterface>(nullptr, EdgePath, nullptr, LOAD_NoWarn);
+	bAll &= Sticky != nullptr && EdgeMaterial != nullptr;
+	if (bAll)
+	{
+		UMaterialInstanceDynamic* Instance = UMaterialInstanceDynamic::Create(Sticky, this);
+		Instance->SetTextureParameterValue(StickyTextureName, StickyTexture);
+		StickyMaterial = Instance;
+	}
 	WetMaterials.Reset();
-	bool bAll = StickyMaterial != nullptr && EdgeMaterial != nullptr;
-	for (const TCHAR* Path : WetPaths)
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(WetPaths); ++Index)
 	{
 		// One dynamic instance per wet skin, shared by every pawn: the picture scale is the same for all of them.
-		UMaterialInterface* Wet = LoadObject<UMaterialInterface>(nullptr, Path, nullptr, LOAD_NoWarn);
-		WetMaterials.Add(Wet != nullptr ? UMaterialInstanceDynamic::Create(Wet, this) : nullptr);
-		bAll &= Wet != nullptr;
+		UMaterialInterface* Wet = LoadObject<UMaterialInterface>(nullptr, WetPaths[Index], nullptr, LOAD_NoWarn);
+		UTexture2D* Mask = Make(WetMaskFiles[Index]);
+		UMaterialInstanceDynamic* Instance = Wet != nullptr && Mask != nullptr && EnvTexture != nullptr ? UMaterialInstanceDynamic::Create(Wet, this) : nullptr;
+		if (Instance != nullptr)
+		{
+			Instance->SetTextureParameterValue(EnvMapName, EnvTexture);
+			Instance->SetTextureParameterValue(SpecMaskName, Mask);
+		}
+		WetMaterials.Add(Instance);
+		bAll &= Instance != nullptr;
 	}
 	if (!bAll)
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("PawnSkins: the skin materials are missing; run Tools/Materials/Build-PawnSkinMaterials.ps1. No pawn shows a state skin."));
+		UE_LOG(LogOpenSCCT, Warning, TEXT("PawnSkins: the skin materials or their textures (%s) are missing; the materials come from Tools/Materials/Build-PawnSkinMaterials.ps1. No pawn shows a state skin."), *Folder);
 		StickyMaterial = nullptr;
 		return false;
 	}
-	UE_LOG(LogOpenSCCT, Log, TEXT("PawnSkins: sticky, protection edge and %d wet skins ready"), WetMaterials.Num());
+	UE_LOG(LogOpenSCCT, Log, TEXT("PawnSkins: sticky, protection edge and %d wet skins ready, textures from %s"), WetMaterials.Num(), *Folder);
 	return true;
 }
 

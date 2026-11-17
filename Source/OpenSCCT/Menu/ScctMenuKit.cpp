@@ -541,7 +541,7 @@ void SScctButton::Construct(const FArguments& InArgs)
 	{
 		Lines->AddSlot().AutoHeight().Padding(1.0f, 3.0f, 0.0f, 0.0f)
 		[
-			SNew(STextBlock).Text(InArgs._SubText).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim())
+			SNew(STextBlock).Text(InArgs._SubText).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).Visibility(InArgs._SubTextVisibility)
 		];
 	}
 
