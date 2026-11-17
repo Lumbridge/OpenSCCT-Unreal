@@ -306,6 +306,12 @@ public:
 	/** Chat and system lines received since the start of the run (GetChat keeps the last ones only). */
 	int32 GetChatReceived() const { return ChatReceived; }
 
+	/** One value of the setup's options line (GetSetupOptions), or Fallback (the menus' lobby steppers). */
+	int32 GetSetupOption(const TCHAR* Name, int32 Fallback) const;
+
+	/** The master's message of the day, empty when it has none. */
+	const FString& GetMotd() const { return Motd; }
+
 	// ---- identity, master, account ---------------------------------------------------------------------------
 
 	const FString& GetPlayerName() const { return PlayerName; }
@@ -370,6 +376,9 @@ public:
 	const TArray<FScctOnlineServerEntry>& GetServers() const { return Servers; }
 	const FString& GetMasterError() const { return MasterError; }
 	bool HasMaster() const { return bMasterSet; }
+
+	/** Starts the bridge's online half now (it starts on first use otherwise), so HasMaster and the name are known. */
+	void EnsureConnected() { Connect(); }
 
 	/** Starts a sign-in in the player's browser (the official servers take signed-in players only). */
 	void BeginSignIn();
@@ -460,7 +469,7 @@ private:
 	TArray<FScctOnlinePlayer> Players;
 	TArray<FScctOnlineServerEntry> Servers;
 	TArray<FScctOnlineChatEntry> Chat;
-	FString ServerName, SetupMap, ModeName, SetupDescription, ConnectLog, MapToLoad, SetupOptions;
+	FString ServerName, SetupMap, ModeName, SetupDescription, ConnectLog, MapToLoad, SetupOptions, Motd;
 	/** The lobby's players as last logged (name, side, ready, map state), so a change is logged once. */
 	FString LoggedRoster;
 	FString MasterError, AccountName, AccountError, SignInCode;

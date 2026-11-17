@@ -10,7 +10,8 @@ namespace OpenScct.UnrealBridge.Controls;
 
 /// <summary>
 /// A named action a controller button (or a bindings menu) can pick, and the command in the original's binding
-/// grammar it stands for. The ids and commands are OpenSCCT's (game/Scripts/UI/ControlActions.cs), without the hub's.
+/// grammar it stands for. The ids and commands are OpenSCCT's (game/Scripts/UI/ControlActions.cs); the hub's own
+/// (category "Hub") come from Hub/HubBindings.cs.
 /// </summary>
 public sealed record ControlAction(string Id, string Category, string Label, string Command, bool Spy = true, bool Merc = true);
 
@@ -115,6 +116,8 @@ public static class ControlActions
         new("hidehud", "Interface", "Toggle HUD visibility", "HideHud"),
         new("freecam", "Interface", "Toggle cinematic free camera", "FreeCam"),
         new("menu", "Interface", "Open game menu", "ShowMenu"),
+        new("grabarea", "Interface", "Practice: show grab areas", "GrabArea"),
+        .. OpenScct.UnrealBridge.Hub.HubBindings.Actions,
     ];
 
     private static readonly Dictionary<string, List<KeyAction>> s_resolved = Build();
@@ -326,6 +329,7 @@ public sealed class ControlBindings
         }
 
         layout.UpgradeWheelBindings(wheelMode);
+        OpenScct.UnrealBridge.Hub.HubBindings.Upgrade(layout);
         return layout;
     }
 
@@ -387,9 +391,14 @@ public sealed class ControlBindings
 
         [JsonPropertyName("merc")]
         public SideFile? Merc { get; set; }
+
+        /// <summary>The hub keys' version the layouts have (HubBindings.Version); 0 in a file from before them.</summary>
+        [JsonPropertyName("hub")]
+        public int Hub { get; set; }
     }
 
-    public string ToJson() => JsonSerializer.Serialize(new BindingsFile { Spy = FileOf(Spy), Merc = FileOf(Merc) }, ControlSettings.Json);
+    public string ToJson() => JsonSerializer.Serialize(
+        new BindingsFile { Spy = FileOf(Spy), Merc = FileOf(Merc), Hub = OpenScct.UnrealBridge.Hub.HubBindings.Version }, ControlSettings.Json);
 
     /// <summary>
     /// Reads bindings. A side's "keys" is the whole layout (a key left out is unbound, as the player left it); a
@@ -398,7 +407,7 @@ public sealed class ControlBindings
     public static ControlBindings FromJson(string json, string wheelMode = "Gadget")
     {
         BindingsFile file = JsonSerializer.Deserialize<BindingsFile>(json, ControlSettings.Json) ?? new BindingsFile();
-        return new ControlBindings(SideOf(file.Spy, merc: false, wheelMode), SideOf(file.Merc, merc: true, wheelMode));
+        return new ControlBindings(SideOf(file.Spy, merc: false, wheelMode, file.Hub), SideOf(file.Merc, merc: true, wheelMode, file.Hub));
     }
 
     /// <summary>Reads the bindings file; the defaults when there is none.</summary>
@@ -427,7 +436,7 @@ public sealed class ControlBindings
         Pad = side.Pad,
     };
 
-    private static SideBindings SideOf(SideFile? file, bool merc, string wheelMode)
+    private static SideBindings SideOf(SideFile? file, bool merc, string wheelMode, int hubVersion)
     {
         KeyLayout keys;
         if (file?.Keys is { } saved)
@@ -440,6 +449,12 @@ public sealed class ControlBindings
             }
 
             keys.UpgradeWheelBindings(wheelMode);
+
+            // A layout saved before the hub's keys gets them once; after that a hub key the player unbound stays unbound.
+            if (hubVersion < OpenScct.UnrealBridge.Hub.HubBindings.Version)
+            {
+                OpenScct.UnrealBridge.Hub.HubBindings.Upgrade(keys);
+            }
         }
         else
         {

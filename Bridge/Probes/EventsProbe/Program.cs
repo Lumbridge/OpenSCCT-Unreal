@@ -9,11 +9,12 @@ using OpenScct.Server;
 using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Events;
 
-// Usage: EventsProbe [contentRoot] [map] [seconds] [spy|merc]
+// Usage: EventsProbe [contentRoot] [map] [seconds] [spy|merc] [clean]   (clean: no forced dirty feet or flares)
 string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
 string map = args.Length > 1 ? args[1] : "AquaE";
 double seconds = args.Length > 2 ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 15;
 bool merc = args.Length <= 3 || args[3] != "spy";
+bool forceProjections = args.Length <= 4 || args[4] != "clean";
 
 // Indices into BridgeInput.Buttons (LocalInput.ButtonNames).
 const int Up = 0, Fire = 6, AltFire = 7;
@@ -41,6 +42,8 @@ unsafe
         (nameof(BridgeSimEvent), sizeof(BridgeSimEvent), 64), (nameof(BridgeSound), sizeof(BridgeSound), 100),
         (nameof(BridgeShot), sizeof(BridgeShot), 72), (nameof(BridgeEffectActor), sizeof(BridgeEffectActor), 148),
         (nameof(BridgeImpactMark), sizeof(BridgeImpactMark), 76), (nameof(BridgeAmbientSound), sizeof(BridgeAmbientSound), 44),
+        (nameof(BridgeMarkSurface), sizeof(BridgeMarkSurface), 32), // Runtime/ScctMarkSurfaceApi.h
+        (nameof(BridgeProjection), sizeof(BridgeProjection), 96), // Runtime/ScctProjectionsApi.h
     ];
     Console.WriteLine("record sizes: " + string.Join(", ", sizes.Select(s => $"{s.Name} {s.Size}")));
     if (sizes.Any(s => s.Size != s.Expected))
@@ -56,6 +59,11 @@ var shotBuffer = new BridgeShot[64];
 var effectBuffer = new BridgeEffectActor[256];
 var markBuffer = new BridgeImpactMark[64];
 var ambientBuffer = new BridgeAmbientSound[512];
+var projectionBuffer = new BridgeProjection[128];
+var projectionSerials = new HashSet<int>();
+var projectionClasses = new SortedDictionary<string, int>(StringComparer.Ordinal);
+ProjectionFeature projections = ProjectionFeature.Of(session);
+int projectionPeak = 0;
 
 var rawByKind = new SortedDictionary<int, int>();
 var notifies = new SortedDictionary<string, int>(StringComparer.Ordinal);
@@ -74,6 +82,7 @@ double drainMs = 0;
 var run = Stopwatch.StartNew();
 double nextReport = 2;
 bool fireHeld = false, altHeld = false;
+double lastDirt = -10, lastFlare = -10;
 while (run.Elapsed.TotalSeconds < seconds)
 {
     // The local player walks forward, turns and fires in bursts (the alternate fire for a second in every five).
@@ -99,6 +108,22 @@ while (run.Elapsed.TotalSeconds < seconds)
     }
 
     (fireHeld, altHeld) = (fire, alt);
+
+    // Abandoned projections: dirty feet on every pawn of the client world from 3 s (footprints), and a flare thrown
+    // ahead and down from the local pawn every 5 s (its burn mark), through the game's -ScctLevelDo entries.
+    if (forceProjections && t > 3 && t - lastDirt > 4)
+    {
+        lastDirt = t;
+        WorldDebugExports.DirtyFeet(session);
+    }
+
+    if (forceProjections && t > 4 && t - lastFlare > 5 && client.World.Level.Info.GetLocalPlayerController()?.Pawn is { } me)
+    {
+        lastFlare = t;
+        FRotator aim = me.Rotation;
+        aim.Pitch = -3000;
+        WorldDebugExports.ThrowFlare(session, me.Location + new FVector(0f, 0f, 40f) + (aim.Vector() * 40f), aim.Vector());
+    }
     input.MouseX = 3f;
     session.SetInput(in input);
     ticks += session.Update();
@@ -243,6 +268,17 @@ while (run.Elapsed.TotalSeconds < seconds)
         }
     }
 
+n = projections.Write(projectionBuffer);
+    projectionPeak = Math.Max(projectionPeak, n);
+    for (int i = 0; i < n; i++)
+    {
+        BridgeProjection p = projectionBuffer[i];
+        if (projectionSerials.Add(p.Serial) && (projectionClasses[EventNames.Text(p.ClassId)] = projectionClasses.GetValueOrDefault(EventNames.Text(p.ClassId)) + 1) <= 2)
+        {
+            Console.WriteLine($"   projection {p.Serial} '{EventNames.Text(p.ClassId)}' texture '{EventNames.Text(p.TextureId)}' asset '{EventNames.Text(p.AssetId)}' surface #{p.SurfaceActorId} flags {p.Flags} at ({p.X:F0},{p.Y:F0},{p.Z:F0}) normal ({p.NormalX:F2},{p.NormalY:F2},{p.NormalZ:F2}) u ({p.UX:F2},{p.UY:F2},{p.UZ:F2}) {p.Width:F1} x {p.Height:F1} cm tint ({p.TintR:F2},{p.TintG:F2},{p.TintB:F2},{p.TintA:F2}) life {p.Life:F1} s");
+        }
+    }
+
     int ambient = events.GetAmbientSounds(ambientBuffer);
     ambientPeak = Math.Max(ambientPeak, ambient);
     drainMs += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
@@ -275,6 +311,7 @@ foreach (KeyValuePair<int, int> f in files.OrderByDescending(f => f.Value).Take(
 Console.WriteLine($"shots (1 SMuzzleSticky 2 third-person muzzle 3 first-person muzzle 4 tracer): {string.Join(' ', shotKinds.Select(k => $"{k.Key}:{k.Value}"))}; feature counts {events.MuzzleFlashes} flashes, {events.Tracers} tracers");
 Console.WriteLine($"effect actors: {effectsSeen.Count} seen, {effectDeleted} told deleted; by class: {string.Join(", ", events.EffectActorsSeen.Select(k => $"{k.Key} x{k.Value}"))}");
 Console.WriteLine($"impact marks: {marksSeen} new marks seen");
+Console.WriteLine($"abandoned projections: {projectionSerials.Count} seen (at most {projectionPeak} at once), feature placed {projections.Placed}, missed {projections.Missed}; by class: {string.Join(", ", projectionClasses.Select(k => $"{k.Key} x{k.Value}"))}");
 int ambientCount = events.GetAmbientSounds(ambientBuffer);
 Console.WriteLine($"ambient sources now {ambientCount} (peak {ambientPeak}):");
 for (int i = 0; i < ambientCount; i++)

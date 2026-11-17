@@ -41,7 +41,10 @@ public sealed class OnlineMaster : IDisposable
     /// <summary>The master's address (never the original game's or Reloaded's), or null before <see cref="Configure"/>.</summary>
     public string? Url { get; private set; }
 
-    /// <summary>The invite key given with <see cref="Url"/>, or null; a listen host registers with the same one.</summary>
+    /// <summary>
+    /// The invite key given with <see cref="Url"/>, or null; a listen host registers with the same one, and a hub
+    /// this PC hosts lists itself with it.
+    /// </summary>
     public string? InviteKey { get; private set; }
 
     /// <summary>
@@ -49,6 +52,9 @@ public sealed class OnlineMaster : IDisposable
     /// master's reachability suggests, or direct, NAT punch or relay only.
     /// </summary>
     public ConnectPath Path { get; set; } = ConnectPath.Auto;
+
+    /// <summary>The master's client, carrying the signed-in token, for the hub's list and joins (Hub/HubBridge.Master.cs); null before <see cref="Configure"/>.</summary>
+    internal MasterClient? Client => _client;
 
     public OnlineMasterState State { get; private set; }
 

@@ -405,6 +405,19 @@ bool UScctOnlineSubsystem::SetSetupOptions(const FString& Options)
 	return true;
 }
 
+int32 UScctOnlineSubsystem::GetSetupOption(const TCHAR* Name, int32 Fallback) const
+{
+	// "?MapName=AquaE?TimeLimit=20...": the value runs to the next '?'.
+	const FString Key = FString(TEXT("?")) + Name + TEXT("=");
+	const int32 At = SetupOptions.Find(Key, ESearchCase::IgnoreCase);
+	if (At == INDEX_NONE)
+	{
+		return Fallback;
+	}
+	const FString Value = SetupOptions.Mid(At + Key.Len());
+	return Value.IsEmpty() ? Fallback : FCString::Atoi(*Value);
+}
+
 bool UScctOnlineSubsystem::GetResults(FScctOnlineResults& OutResults, TArray<FScctOnlineResultRow>& OutRows) const
 {
 	OutRows.Reset();
@@ -566,6 +579,8 @@ void UScctOnlineSubsystem::RefreshTexts()
 	SetupDescription = ReadText(EScctOnlineText::SetupDescription);
 	ConnectLog = ReadText(EScctOnlineText::ConnectLog);
 	MapToLoad = ReadText(EScctOnlineText::MapToLoad);
+	SetupOptions = ReadText(EScctOnlineText::SetupOptions);
+	Motd = ReadText(EScctOnlineText::MasterMotd);
 
 	// The setup and the lobby's players into the log when they change: what the host set up, and who it un-readied.
 	const FString NewSetup = ReadText(EScctOnlineText::SetupOptions);

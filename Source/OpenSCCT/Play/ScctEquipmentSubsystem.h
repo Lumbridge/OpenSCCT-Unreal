@@ -127,6 +127,12 @@ private:
 	/** The camera of this frame in the world. */
 	FTransform GetCamera() const;
 
+	/** What a pawn's weapon is doing this frame, for the moving parts of a model drawn in its place. */
+	static FScctWeaponMotion MotionOf(const FScctEquipment& Pawn);
+
+	/** The frame's length, for what UpdateAttachment animates. */
+	float FrameSeconds = 0.0f;
+
 	TWeakObjectPtr<UScctSessionSubsystem> Session;
 	FDelegateHandle StartedHandle;
 	FDelegateHandle StoppedHandle;

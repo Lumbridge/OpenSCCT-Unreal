@@ -1,128 +1,496 @@
 #include "Menu/SScctFrontEnd.h"
 
-#include "Brushes/SlateColorBrush.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformMisc.h"
-#include "Menu/SScctHostPage.h"
-#include "Menu/SScctLobbyPage.h"
-#include "Menu/SScctServerBrowserPage.h"
-#include "Menu/ScctMenuStyle.h"
+#include "Menu/ScctMenuDriver.h"
+#include "Menu/ScctMenuKit.h"
+#include "Menu/ScctMenuPage.h"
+#include "Menu/ScctMenuSubsystem.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
-#include "Widgets/Images/SImage.h"
-#include "Widgets/Input/SButton.h"
-#include "Widgets/Input/SEditableTextBox.h"
+#include "Fonts/FontMeasure.h"
+#include "Rendering/DrawElements.h"
 #include "Widgets/Layout/SBox.h"
-#include "Widgets/Layout/SScrollBox.h"
-#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/SLeafWidget.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
 
-// Short for the menus' own widgets (a using-directive would leak into the files built together with this one).
-namespace Ui = ScctMenuStyle;
-
 namespace
 {
-	const TCHAR* const MenuUserSection = TEXT("OpenSCCT.Online");
-
-	// The offline page's choices: what the player reads and what AScctGameMode's URL options take.
-	const TCHAR* const ModeLabels[] = { TEXT("Story"), TEXT("Disk Hunt"), TEXT("Deathmatch"), TEXT("Merc Deathmatch") };
-	const TCHAR* const ModeKeys[] = { TEXT("Story"), TEXT("DiskHunt"), TEXT("Deathmatch"), TEXT("MercDeathMatch") };
-	const int32 BotCounts[] = { 0, 1, 2, 3, 5, 7 };
-	const TCHAR* const SkillLabels[] = { TEXT("Easy"), TEXT("Normal"), TEXT("Hard"), TEXT("Expert") };
-	const int32 JoinSides[] = { -1, 0, 1, 255 };
-
-	constexpr float PageWidth = 560.0f;
-
-	TArray<FString> ToStrings(TConstArrayView<const TCHAR*> Texts)
+	/**
+	 * The shade over the backdrop: the left, where the type is, darkens to near black and the right keeps the scene;
+	 * the top and the bottom close in a little, as a lens does.
+	 */
+	class SScctBackdropShade : public SLeafWidget
 	{
-		TArray<FString> Strings;
-		for (const TCHAR* Text : Texts)
+	public:
+		SLATE_BEGIN_ARGS(SScctBackdropShade) {}
+		SLATE_END_ARGS()
+
+		void Construct(const FArguments& InArgs) {}
+		virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D::ZeroVector; }
+
+		virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& Culling, FSlateWindowElementList& Out, int32 Layer, const FWidgetStyle& Style, bool bParentEnabled) const override
 		{
-			Strings.Emplace(Text);
+			const FVector2D Size = Geometry.GetLocalSize();
+			const auto Gradient = [&](const FVector2D& Position, const FVector2D& Extent, TArray<FSlateGradientStop> Stops, EOrientation Orientation)
+			{
+				FSlateDrawElement::MakeGradient(Out, Layer, Geometry.ToPaintGeometry(FVector2f(Extent), FSlateLayoutTransform(FVector2f(Position))), MoveTemp(Stops), Orientation, ESlateDrawEffect::None);
+			};
+			const FLinearColor Ink(0.002f, 0.004f, 0.008f, 1.0f);
+			const auto At = [&Ink](float Alpha) { return FLinearColor(Ink.R, Ink.G, Ink.B, Alpha); };
+
+			// Left to right: the column of type sits on dark, the scene breathes on the right.
+			Gradient(FVector2D::ZeroVector, Size, {
+				FSlateGradientStop(FVector2D(0.0, 0.0), At(0.9f)),
+				FSlateGradientStop(FVector2D(Size.X * 0.34, 0.0), At(0.7f)),
+				FSlateGradientStop(FVector2D(Size.X * 0.7, 0.0), At(0.28f)),
+				FSlateGradientStop(FVector2D(Size.X, 0.0), At(0.18f)),
+			}, Orient_Vertical);
+			// Top and bottom.
+			Gradient(FVector2D::ZeroVector, FVector2D(Size.X, Size.Y * 0.22), {
+				FSlateGradientStop(FVector2D(0.0, 0.0), At(0.55f)),
+				FSlateGradientStop(FVector2D(0.0, Size.Y * 0.22), At(0.0f)),
+			}, Orient_Horizontal);
+			Gradient(FVector2D(0.0, Size.Y * 0.62), FVector2D(Size.X, Size.Y * 0.38), {
+				FSlateGradientStop(FVector2D(0.0, 0.0), At(0.0f)),
+				FSlateGradientStop(FVector2D(0.0, Size.Y * 0.38), At(0.8f)),
+			}, Orient_Horizontal);
+			return Layer + 1;
 		}
-		return Strings;
+	};
+
+	/** A title that types itself out, with a blinking cursor while it does, as the original's pages do. */
+	class SScctTypedTitle : public SLeafWidget
+	{
+	public:
+		SLATE_BEGIN_ARGS(SScctTypedTitle) {}
+			SLATE_ATTRIBUTE(FString, Text)
+		SLATE_END_ARGS()
+
+		void Construct(const FArguments& InArgs) { Text = InArgs._Text; }
+
+		virtual FVector2D ComputeDesiredSize(float) const override
+		{
+			const FVector2D Measured = FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(Text.Get() + TEXT("_"), ScctUi::H1());
+			return FVector2D(Measured.X, Measured.Y);
+		}
+
+		virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& Culling, FSlateWindowElementList& Out, int32 Layer, const FWidgetStyle& Style, bool bParentEnabled) const override
+		{
+			const FString Full = Text.Get();
+			if (Full != Last)
+			{
+				Last = Full;
+				Started = FPlatformTime::Seconds();
+			}
+			// About 40 letters a second: quick enough not to wait for, slow enough to read as typing.
+			const double Age = FPlatformTime::Seconds() - Started;
+			const int32 Count = FMath::Min(Full.Len(), static_cast<int32>(Age * 40.0));
+			FString Shown = Full.Left(Count);
+			if (Count < Full.Len() || FMath::Fmod(Age, 0.6) < 0.3 && Age < 1.2)
+			{
+				Shown += TEXT("_");
+			}
+			FSlateDrawElement::MakeText(Out, Layer, Geometry.ToPaintGeometry(), Shown, ScctUi::H1(), ESlateDrawEffect::None, Style.GetColorAndOpacityTint() * ScctHudStyle::Text());
+			return Layer + 1;
+		}
+
+	private:
+		TAttribute<FString> Text;
+		mutable FString Last;
+		mutable double Started = 0.0;
+	};
+
+	bool IsBackKey(const FKey& Key)
+	{
+		return Key == EKeys::Escape || Key == EKeys::Gamepad_FaceButton_Right;
 	}
 
-	/** A labelled block of a page: the label, a gap, the content, a larger gap. */
-	void AddBlock(const TSharedRef<SVerticalBox>& Box, const FString& LabelText, const TSharedRef<SWidget>& Content)
+	int32 TabDirection(const FKey& Key)
 	{
-		Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 7.0f)[ Ui::Label(LabelText) ];
-		Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 18.0f)[ Content ];
+		if (Key == EKeys::Q || Key == EKeys::PageUp || Key == EKeys::Gamepad_LeftShoulder) { return -1; }
+		if (Key == EKeys::E || Key == EKeys::PageDown || Key == EKeys::Gamepad_RightShoulder) { return 1; }
+		return 0;
 	}
+
+	const TCHAR* const OnlineSection = TEXT("OpenSCCT.Online");
+
+	FString MapTitle(const FString& Id)
+	{
+		UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
+		return Menu != nullptr ? Menu->GetMapTitle(Id) : Id.ToUpper();
+	}
+
+	/** A view of the visit (connecting, a failure): a page with nothing to go back to. */
+	class SScctVisitPage : public SScctMenuPage
+	{
+	public:
+		SLATE_BEGIN_ARGS(SScctVisitPage) {}
+		SLATE_END_ARGS()
+
+		void Construct(const FArguments&, const TSharedRef<SWidget>& Content, const TSharedPtr<SWidget>& Focus)
+		{
+			DefaultFocus = Focus;
+			ChildSlot.VAlign(VAlign_Center).HAlign(HAlign_Left).Padding(0.0f, 0.0f, 0.0f, 80.0f)
+			[
+				SNew(SBox).WidthOverride(720.0f)[ ScctUi::Panel(Content, FMargin(40.0f, 36.0f), 0.78f) ]
+			];
+		}
+
+		virtual FString GetTitle() const override { return FString(); }
+	};
 }
 
 void SScctFrontEnd::Construct(const FArguments& InArgs)
 {
 	Online = InArgs._Online;
+	SAssignNew(Dialogs, SScctDialogLayer);
+	Dialogs->FocusAfter = SharedThis(this);
 
-	static const FSlateColorBrush Dim(FLinearColor::White);
 	ChildSlot
 	[
 		SNew(SOverlay)
-		// The backdrop is a lit level: a wash keeps the type readable over its bright places.
+		+ SOverlay::Slot()[ SNew(SScctBackdropShade) ]
 		+ SOverlay::Slot()
 		[
-			SNew(SImage)
-			.Image(&Dim)
-			.ColorAndOpacity(FLinearColor(0.0f, 0.004f, 0.01f, 0.5f))
+			ScctUi::ScaleForSmallScreens(
+				SNew(SVerticalBox)
+				// The page: its title (when it has one) and its content.
+				+ SVerticalBox::Slot().FillHeight(1.0f).Padding(72.0f, 52.0f, 72.0f, 0.0f)
+				[
+					SAssignNew(PageBox, SBox)
+				]
+				// The keys that work here, and the build.
+				+ SVerticalBox::Slot().AutoHeight().Padding(72.0f, 18.0f, 72.0f, 26.0f)
+				[
+					BuildFooter()
+				])
 		]
-		+ SOverlay::Slot()
-		.HAlign(HAlign_Left)
-		.VAlign(VAlign_Center)
-		.Padding(96.0f, 60.0f)
+		+ SOverlay::Slot()[ Dialogs.ToSharedRef() ]
+	];
+
+	Open(TEXT("home"));
+
+	if (UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent())
+	{
+		Menu->SetMusicPlaying(true);
+	}
+}
+
+TSharedRef<SWidget> SScctFrontEnd::BuildFooter()
+{
+	const TSharedRef<SHorizontalBox> Hints = SNew(SHorizontalBox);
+	Hints->AddSlot().AutoWidth()[ ScctUi::KeyHint(TEXT("ENTER"), TEXT("A"), TEXT("Select")) ];
+	Hints->AddSlot().AutoWidth()
+	[
+		SNew(SBox).Visibility(TAttribute<EVisibility>::CreateLambda([this] { return Stack.Num() > 1 || VisitView != EVisitView::None ? EVisibility::Visible : EVisibility::Collapsed; }))
 		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight()
-			[
-				SNew(STextBlock)
-				.Text(FText::FromString(TEXT("OPENSCCT")))
-				.Font(ScctHudStyle::Font(ScctHudStyle::EWeight::Light, 46.0f, 420))
-				.ColorAndOpacity(ScctHudStyle::Text())
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 2.0f, 0.0f, 26.0f)
-			[
-				Ui::Label(TEXT("Spies versus mercenaries"), Ui::Accent())
-			]
-			+ SVerticalBox::Slot().AutoHeight()
-			[
-				SAssignNew(PageBox, SBox)
-			]
+			ScctUi::KeyHint(TEXT("ESC"), TEXT("B"), TEXT("Back"))
 		]
 	];
-	Rebuild();
+	Hints->AddSlot().AutoWidth()
+	[
+		SNew(SBox).Visibility(TAttribute<EVisibility>::CreateLambda([this]
+		{
+			const TSharedPtr<SScctMenuPage> Page = GetTopPage();
+			return Page.IsValid() && Page->HasTabs() ? EVisibility::Visible : EVisibility::Collapsed;
+		}))
+		[
+			ScctUi::KeyHint(TEXT("Q / E"), TEXT("LB / RB"), TEXT("Change tab"))
+		]
+	];
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)[ ScctUi::Rule(0.08f) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)[ Hints ]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Font(ScctUi::Caps(11.0f))
+				.ColorAndOpacity(ScctHudStyle::TextFaint())
+				.Text(TAttribute<FText>::CreateLambda([] { return FText::FromString(ScctUi::BuildLabel()); }))
+			]
+		];
+}
+
+TSharedPtr<SScctMenuPage> SScctFrontEnd::GetTopPage() const
+{
+	if (VisitView == EVisitView::Lobby)
+	{
+		return LobbyPage;
+	}
+	if (VisitView != EVisitView::None)
+	{
+		return VisitPage;
+	}
+	return VisitView == EVisitView::None && Stack.Num() > 0 ? Stack.Last() : nullptr;
+}
+
+void SScctFrontEnd::Open(const FString& Name)
+{
+	FScctMenuHost Host;
+	Host.Online = Online;
+	Host.Dialogs = Dialogs;
+	Host.Open = [this](const FString& Next) { Open(Next); };
+	Host.Back = [this] { GoBack(); };
+
+	FString Page = Name, Sub;
+	Name.Split(TEXT("/"), &Page, &Sub);
+	const TSharedPtr<SScctMenuPage> Made = ScctMenuPages::Make(Page, Host);
+	if (!Made.IsValid())
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Menu: no page is called '%s'"), *Page);
+		return;
+	}
+	Push(Made.ToSharedRef());
+	if (!Sub.IsEmpty())
+	{
+		Made->ShowSub(Sub);
+	}
+}
+
+void SScctFrontEnd::Push(const TSharedRef<SScctMenuPage>& Page)
+{
+	// The control that opened the page gets the focus back when it closes.
+	if (Stack.Num() > 0)
+	{
+		CoveredFocus.SetNum(Stack.Num());
+		const TSharedPtr<SWidget> Focused = FSlateApplication::Get().GetKeyboardFocusedWidget();
+		CoveredFocus.Last() = Focused.IsValid() && Stack.Last()->HasFocusedDescendants() ? Focused : TSharedPtr<SWidget>();
+	}
+	ReturnFocus.Reset();
+	Stack.Add(Page);
+	if (Stack.Num() > 1)
+	{
+		ScctUi::Play(EScctUiSound::Open);
+	}
+	Present();
+}
+
+void SScctFrontEnd::GoBack()
+{
+	if (Stack.Num() <= 1)
+	{
+		AskQuit();
+		return;
+	}
+	Stack.Last()->OnClosing();
+	Stack.Pop();
+	ReturnFocus = CoveredFocus.IsValidIndex(Stack.Num() - 1) ? CoveredFocus[Stack.Num() - 1] : TWeakPtr<SWidget>();
+	CoveredFocus.SetNum(Stack.Num() - 1);
+	ScctUi::Play(EScctUiSound::Back);
+	Present();
+}
+
+void SScctFrontEnd::AskQuit()
+{
+	ScctUi::Confirm(Dialogs,
+		ScctUi::GameText(TEXT("Menu_Multi"), TEXT("MainPage_Quit.Caption"), TEXT("Quit")),
+		ScctUi::GameText(TEXT("ConfirmQuitPage"), TEXT("LabelCaption"), TEXT("Are you sure you want to quit?")),
+		ScctUi::GameText(TEXT("ConfirmQuitPage"), TEXT("sBT_Yes"), TEXT("Quit Game")),
+		ScctUi::GameText(TEXT("ConfirmQuitPage"), TEXT("sBT_Cancel"), TEXT("Cancel")),
+		[] { UE_LOG(LogOpenSCCT, Log, TEXT("Menu: quit")); FPlatformMisc::RequestExit(false); }, true);
+}
+
+void SScctFrontEnd::Present()
+{
+	const TSharedPtr<SScctMenuPage> Page = GetTopPage();
+	TSharedRef<SWidget> Content = SNullWidget::NullWidget;
+	if (VisitView != EVisitView::None && VisitView != EVisitView::Lobby)
+	{
+		Content = BuildVisit();
+	}
+	else if (Page.IsValid())
+	{
+		const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
+		if (!Page->GetTitle().IsEmpty())
+		{
+			// The title block keeps its place whatever the page's height, so moving between pages does not jump.
+			const TWeakPtr<SScctMenuPage> Weak = Page;
+			Box->AddSlot().AutoHeight().Padding(2.0f, 0.0f, 0.0f, 4.0f)
+			[
+				SNew(STextBlock)
+				.Font(ScctUi::Caps(12.0f))
+				.ColorAndOpacity(ScctUi::Accent())
+				.Text(TAttribute<FText>::CreateLambda([Weak] { const TSharedPtr<SScctMenuPage> Pinned = Weak.Pin(); return Pinned.IsValid() ? FText::FromString(Pinned->GetKicker().ToUpper()) : FText::GetEmpty(); }))
+			];
+			Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 26.0f)
+			[
+				SNew(SScctTypedTitle).Text(TAttribute<FString>::CreateLambda([Weak] { const TSharedPtr<SScctMenuPage> Pinned = Weak.Pin(); return Pinned.IsValid() ? Pinned->GetTitle().ToUpper() : FString(); }))
+			];
+		}
+		Box->AddSlot().FillHeight(1.0f)[ Page.ToSharedRef() ];
+		Content = Box;
+	}
+	PageBox->SetContent(Content);
+	Shown = 0.0f;
+	PageBox->SetRenderOpacity(0.0f);
+	bFocusPending = true;
+}
+
+void SScctFrontEnd::ShowPageNamed(const FString& Name)
+{
+	// Back to the main menu first, so the page opens over it as if it had been chosen there.
+	while (Stack.Num() > 1)
+	{
+		// A page left this way still keeps what was changed on it (settings write their files).
+		Stack.Last()->OnClosing();
+		Stack.Pop();
+	}
+	CoveredFocus.Reset();
+	ReturnFocus.Reset();
+	if (Stack.IsEmpty())
+	{
+		Open(TEXT("home"));
+	}
+	if (Name.Equals(TEXT("home"), ESearchCase::IgnoreCase))
+	{
+		Present();
+	}
+	else if (Name.Equals(TEXT("quit"), ESearchCase::IgnoreCase))
+	{
+		Present();
+		AskQuit();
+	}
+	else if (Name.Equals(TEXT("start"), ESearchCase::IgnoreCase))
+	{
+		Open(TEXT("play/start"));
+	}
+	else
+	{
+		Open(Name);
+	}
+}
+
+FReply SScctFrontEnd::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
+{
+	const FKey Key = InKeyEvent.GetKey();
+	ScctUi::NoteInput(Key);
+	if (Dialogs->IsOpen())
+	{
+		return Dialogs->OnKeyDown(MyGeometry, InKeyEvent);
+	}
+	const TSharedPtr<SScctMenuPage> Page = GetTopPage();
+
+	if (IsBackKey(Key))
+	{
+		if (Page.IsValid() && Page->HandleBack())
+		{
+			return FReply::Handled();
+		}
+		if (VisitView != EVisitView::None)
+		{
+			// Leaving the lobby or giving up a connection is asked for on the page itself; Escape there only goes
+			// back where that is harmless.
+			if (VisitView == EVisitView::Failed && Online.IsValid())
+			{
+				ScctUi::Play(EScctUiSound::Back);
+				Online->Leave();
+			}
+			return FReply::Handled();
+		}
+		GoBack();
+		return FReply::Handled();
+	}
+
+	if (!ScctUi::IsTyping())
+	{
+		const int32 Direction = TabDirection(Key);
+		if (Direction != 0 && Page.IsValid() && Page->HasTabs())
+		{
+			Page->StepTab(Direction);
+			return FReply::Handled();
+		}
+		if (Page.IsValid() && Page->HandleShortcut(Key))
+		{
+			return FReply::Handled();
+		}
+	}
+
+	// The focus fell off the page (a click on nothing): the first arrow or stick push brings it back.
+	if (HasKeyboardFocus() && Page.IsValid() && Page->GetDefaultFocus().IsValid() && FSlateApplication::Get().GetNavigationDirectionFromKey(InKeyEvent) != EUINavigation::Invalid)
+	{
+		FSlateApplication::Get().SetKeyboardFocus(Page->GetDefaultFocus(), EFocusCause::Navigation);
+		return FReply::Handled();
+	}
+	return FReply::Unhandled();
 }
 
 void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
 {
 	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+
+	FScctMenuDriver::FHost DriverHost;
+	DriverHost.ShowPage = [this](const FString& Name) { ShowPageNamed(Name); };
+	FScctMenuDriver::Tick(InDeltaTime, DriverHost);
+
+	// The page slides up into place.
+	Shown = ScctHudStyle::Ease(Shown, 1.0f, FMath::Min(InDeltaTime, 0.05f), 12.0f);
+	PageBox->SetRenderOpacity(Shown);
+	PageBox->SetRenderTransform(FSlateRenderTransform(FVector2D(0.0, 16.0 * (1.0 - Shown))));
+
+	if (bFocusPending && !Dialogs->IsOpen())
+	{
+		const TSharedPtr<SScctMenuPage> Page = GetTopPage();
+		TSharedPtr<SWidget> Focus = ReturnFocus.Pin();
+		ReturnFocus.Reset();
+		if (!Focus.IsValid() || !Focus->GetVisibility().IsVisible() || !Focus->IsEnabled())
+		{
+			Focus = Page.IsValid() ? Page->GetDefaultFocus() : nullptr;
+		}
+		if (Focus.IsValid())
+		{
+			FSlateApplication::Get().SetKeyboardFocus(Focus, EFocusCause::SetDirectly);
+		}
+		else
+		{
+			FSlateApplication::Get().SetKeyboardFocus(SharedThis(this), EFocusCause::SetDirectly);
+		}
+		bFocusPending = false;
+	}
+	else if (!Dialogs->IsOpen() && !HasKeyboardFocus() && !HasFocusedDescendants())
+	{
+		// Something outside the menu took the focus (the viewport after a click on the 3D view): it comes back here,
+		// so the keyboard and the controller keep working.
+		FSlateApplication::Get().SetKeyboardFocus(SharedThis(this), EFocusCause::SetDirectly);
+	}
+
 	const UScctOnlineSubsystem* Visit = Online.Get();
 	if (Visit == nullptr)
 	{
 		return;
 	}
-
 	// A visit takes the screen over, whichever page it was started from, and gives that page back at its end.
-	const bool bVisiting = Visit->IsVisiting();
-	if (bVisiting && Page != EPage::Visit)
+	const EVisitView Wanted = Visit->IsVisiting() ? FindVisitView() : EVisitView::None;
+	if (Wanted != VisitView)
 	{
-		PageBeforeVisit = Page;
-		VisitView = FindVisitView();
-		ShowPage(EPage::Visit);
-	}
-	else if (!bVisiting && Page == EPage::Visit)
-	{
-		VisitView = EVisitView::None;
-		ShowPage(PageBeforeVisit);
-	}
-	else if (Page == EPage::Visit && FindVisitView() != VisitView)
-	{
-		VisitView = FindVisitView();
-		Rebuild();
+		VisitView = Wanted;
+		if (VisitView == EVisitView::Lobby && !LobbyPage.IsValid())
+		{
+			FScctMenuHost Host;
+			Host.Online = Online;
+			Host.Dialogs = Dialogs;
+			Host.Open = [this](const FString& Next) { Open(Next); };
+			// The lobby's Leave: asked first, as leaving gives up the place on the server.
+			Host.Back = [this]
+			{
+				ScctUi::Confirm(Dialogs, ScctUi::GameText(TEXT("Lobby_Create"), TEXT("ButtonB"), TEXT("Leave")), TEXT("Leave the server and go back to the menus?"),
+					ScctUi::GameText(TEXT("Lobby_Create"), TEXT("ButtonB"), TEXT("Leave")), TEXT("Stay"),
+					[this] { if (UScctOnlineSubsystem* Visit = Online.Get()) { ScctUi::Play(EScctUiSound::Back); Visit->Leave(); } }, true);
+			};
+			LobbyPage = ScctMenuPages::MakeLobby(Host);
+		}
+		else if (VisitView != EVisitView::Lobby)
+		{
+			LobbyPage.Reset();
+		}
+		Present();
 	}
 }
 
@@ -145,245 +513,10 @@ SScctFrontEnd::EVisitView SScctFrontEnd::FindVisitView() const
 	}
 }
 
-void SScctFrontEnd::ShowPageNamed(const FString& Name)
-{
-	if (Name.Equals(TEXT("offline"), ESearchCase::IgnoreCase))
-	{
-		ShowPage(EPage::Offline);
-	}
-	else if (Name.Equals(TEXT("join"), ESearchCase::IgnoreCase))
-	{
-		ShowPage(EPage::Join);
-	}
-	else if (Name.Equals(TEXT("servers"), ESearchCase::IgnoreCase))
-	{
-		ShowPage(EPage::Servers);
-	}
-	else if (Name.Equals(TEXT("host"), ESearchCase::IgnoreCase))
-	{
-		ShowPage(EPage::Host);
-	}
-	else if (Name.Equals(TEXT("start"), ESearchCase::IgnoreCase))
-	{
-		// Unattended: the offline page with its choices as they stand, and its START pressed.
-		ShowPage(EPage::Offline);
-		StartOffline();
-	}
-}
-
-void SScctFrontEnd::ShowPage(EPage NewPage)
-{
-	Page = NewPage;
-	Rebuild();
-}
-
-void SScctFrontEnd::Rebuild()
-{
-	TSharedRef<SWidget> Content = SNullWidget::NullWidget;
-	switch (Page)
-	{
-	case EPage::Home: Content = BuildHome(); break;
-	case EPage::Offline: Content = BuildOffline(); break;
-	case EPage::Join: Content = BuildJoin(); break;
-	case EPage::Visit: Content = BuildVisit(); break;
-	case EPage::Servers:
-		// The server list (Menu/SScctServerBrowserPage.h): the master, the LAN and the saved servers, with pings.
-		Content = SNew(SScctServerBrowserPage).Online(Online).OnBack(FSimpleDelegate::CreateLambda([this] { ShowPage(EPage::Home); }));
-		break;
-	case EPage::Host:
-		// Create Session (Menu/SScctHostPage.h); a hosted game's lobby then takes the screen over as any visit does.
-		Content = SNew(SScctHostPage).Online(Online).OnBack(FSimpleDelegate::CreateLambda([this] { ShowPage(EPage::Home); }));
-		break;
-	}
-	PageBox->SetContent(Content);
-	SeenRevision = -1;
-}
-
-TSharedRef<SWidget> SScctFrontEnd::Choice(const TArray<FString>& Labels, int32& Value, const FLinearColor& Colour)
-{
-	// The value lives in this widget, which outlives the buttons it owns.
-	int32* const Picked = &Value;
-	const TSharedRef<SWrapBox> Row = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6.0f, 6.0f));
-	for (int32 Index = 0; Index < Labels.Num(); ++Index)
-	{
-		Row->AddSlot()
-		[
-			Ui::Button(Ui::ToText(Labels[Index].ToUpper()),
-				FOnClicked::CreateLambda([Picked, Index] { *Picked = Index; return FReply::Handled(); }),
-				TAttribute<bool>::CreateLambda([Picked, Index] { return *Picked == Index; }), Colour)
-		];
-	}
-	return Row;
-}
-
-// ---- the menu's own pages -----------------------------------------------------------------------------------------
-
-TSharedRef<SWidget> SScctFrontEnd::BuildHome()
-{
-	const auto Entry = [this](const TCHAR* LabelText, EPage Target)
-	{
-		return Ui::Button(Ui::ToText(LabelText), FOnClicked::CreateSP(this, &SScctFrontEnd::HandleShowPage, Target), false, Ui::Accent(), 240.0f);
-	};
-
-	return SNew(SBox).WidthOverride(320.0f)
-	[
-		Ui::Glass(
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("PLAY OFFLINE"), EPage::Offline) ]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("HOST GAME"), EPage::Host) ]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("JOIN BY ADDRESS"), EPage::Join) ]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 20.0f)[ Entry(TEXT("SERVER LIST"), EPage::Servers) ]
-			+ SVerticalBox::Slot().AutoHeight()
-			[
-				Ui::Button(Ui::ToText(TEXT("QUIT")), FOnClicked::CreateLambda([] { FPlatformMisc::RequestExit(false); return FReply::Handled(); }))
-			])
-	];
-}
-
-FReply SScctFrontEnd::HandleShowPage(EPage Target)
-{
-	ShowPage(Target);
-	return FReply::Handled();
-}
-
-TSharedRef<SWidget> SScctFrontEnd::BuildOffline()
-{
-	if (Maps.IsEmpty())
-	{
-		Maps = UScctOnlineSubsystem::FindPlayableMaps();
-		// AquaE first if it is there: the map everything was first seen on.
-		MapIndex = FMath::Max(Maps.IndexOfByKey(FString(TEXT("AquaE"))), 0);
-	}
-
-	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 20.0f)[ Ui::Title(Ui::ToText(TEXT("PLAY OFFLINE")), 24.0f) ];
-	if (Maps.IsEmpty())
-	{
-		Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 18.0f)
-		[
-			Ui::Text(Ui::ToText(TEXT("No map can be played yet: the OpenSCCT content folder was not found, or no map has been imported into this game.")),
-				12.0f, FSlateColor(ScctHudStyle::Danger()), ScctHudStyle::EWeight::Regular, true)
-		];
-	}
-	else
-	{
-		AddBlock(Box, TEXT("Map"), Choice(Maps, MapIndex, Ui::Accent()));
-		AddBlock(Box, TEXT("Mode"), Choice(ToStrings(ModeLabels), ModeIndex, Ui::Accent()));
-		AddBlock(Box, TEXT("Side"), SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
-			[
-				Ui::Button(Ui::ToText(TEXT("SPY")), FOnClicked::CreateLambda([this] { SideIndex = 0; return FReply::Handled(); }),
-					TAttribute<bool>::CreateLambda([this] { return SideIndex == 0; }), ScctHudStyle::Accent(0), 110.0f)
-			]
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				Ui::Button(Ui::ToText(TEXT("MERCENARY")), FOnClicked::CreateLambda([this] { SideIndex = 1; return FReply::Handled(); }),
-					TAttribute<bool>::CreateLambda([this] { return SideIndex == 1; }), ScctHudStyle::Accent(1), 110.0f)
-			]);
-
-		TArray<FString> BotLabels;
-		for (const int32 Count : BotCounts)
-		{
-			BotLabels.Add(FString::FromInt(Count));
-		}
-		AddBlock(Box, TEXT("Bots"), Choice(BotLabels, BotsIndex, Ui::Accent()));
-		AddBlock(Box, TEXT("Bot skill"), Choice(ToStrings(SkillLabels), SkillIndex, Ui::Accent()));
-	}
-
-	Box->AddSlot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
-	[
-		SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
-		[
-			Ui::Button(Ui::ToText(TEXT("START")), FOnClicked::CreateLambda([this] { StartOffline(); return FReply::Handled(); }), !Maps.IsEmpty(), Ui::Accent(), 150.0f)
-		]
-		+ SHorizontalBox::Slot().AutoWidth()
-		[
-			Ui::Button(Ui::ToText(TEXT("BACK")), FOnClicked::CreateSP(this, &SScctFrontEnd::HandleShowPage, EPage::Home))
-		]
-	];
-	return SNew(SBox).WidthOverride(PageWidth)[ Ui::Glass(Box) ];
-}
-
-void SScctFrontEnd::StartOffline()
-{
-	UWorld* World = Online.IsValid() ? Online->GetWorld() : nullptr;
-	if (World == nullptr || GEngine == nullptr || !Maps.IsValidIndex(MapIndex))
-	{
-		return;
-	}
-
-	// AScctGameMode reads these (Play/ScctGameMode.h). A name with the URL's own separator would cut the options.
-	FString Url = FString::Printf(TEXT("%s?Mode=%s?Side=%s?Bots=%d?Difficulty=%d"), *UScctOnlineSubsystem::LevelOf(Maps[MapIndex]),
-		ModeKeys[ModeIndex], SideIndex == 1 ? TEXT("merc") : TEXT("spy"), BotCounts[BotsIndex], SkillIndex + 1);
-	const FString Name = Online->GetPlayerName().Replace(TEXT("?"), TEXT(""));
-	if (!Name.IsEmpty())
-	{
-		Url += TEXT("?Name=") + Name;
-	}
-	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: starting an offline match: %s"), *Url);
-	GEngine->SetClientTravel(World, *Url, TRAVEL_Absolute);
-}
-
-TSharedRef<SWidget> SScctFrontEnd::BuildJoin()
-{
-	FString LastAddress;
-	GConfig->GetString(MenuUserSection, TEXT("LastAddress"), LastAddress, GGameUserSettingsIni);
-	const FOnTextCommitted OnEnter = FOnTextCommitted::CreateLambda([this](const FText&, ETextCommit::Type Commit)
-	{
-		if (Commit == ETextCommit::OnEnter)
-		{
-			StartJoin();
-		}
-	});
-	NameBox = Ui::TextBox(TEXT("Player"), Online.IsValid() ? Online->GetPlayerName() : FString());
-	AddressBox = Ui::TextBox(TEXT("host or host:port"), LastAddress, false, OnEnter);
-	PasswordBox = Ui::TextBox(TEXT("only if the server asks for one"), FString(), true, OnEnter);
-
-	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 20.0f)[ Ui::Title(Ui::ToText(TEXT("JOIN BY ADDRESS")), 24.0f) ];
-	AddBlock(Box, TEXT("Your name"), NameBox.ToSharedRef());
-	AddBlock(Box, TEXT("Server address"), AddressBox.ToSharedRef());
-	AddBlock(Box, TEXT("Password"), PasswordBox.ToSharedRef());
-	AddBlock(Box, TEXT("Side"), Choice({ TEXT("Smaller side"), TEXT("Spy"), TEXT("Mercenary"), TEXT("Watch") }, JoinSideIndex, Ui::Accent()));
-	Box->AddSlot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
-	[
-		SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
-		[
-			Ui::Button(Ui::ToText(TEXT("CONNECT")), FOnClicked::CreateLambda([this] { StartJoin(); return FReply::Handled(); }), true, Ui::Accent(), 150.0f)
-		]
-		+ SHorizontalBox::Slot().AutoWidth()
-		[
-			Ui::Button(Ui::ToText(TEXT("BACK")), FOnClicked::CreateSP(this, &SScctFrontEnd::HandleShowPage, EPage::Home))
-		]
-	];
-	return SNew(SBox).WidthOverride(PageWidth)[ Ui::Glass(Box) ];
-}
-
-void SScctFrontEnd::StartJoin()
-{
-	UScctOnlineSubsystem* Visit = Online.Get();
-	if (Visit == nullptr || !AddressBox.IsValid())
-	{
-		return;
-	}
-
-	const FString Address = AddressBox->GetText().ToString().TrimStartAndEnd();
-	if (Address.IsEmpty())
-	{
-		FSlateApplication::Get().SetKeyboardFocus(AddressBox);
-		return;
-	}
-	Visit->SetPlayerName(NameBox->GetText().ToString());
-	GConfig->SetString(MenuUserSection, TEXT("LastAddress"), *Address, GGameUserSettingsIni);
-	GConfig->Flush(false, GGameUserSettingsIni);
-	// The server list asks every saved server for its info (and offers to remove it).
-	UScctOnlineSubsystem::AddSavedServer(Address);
-	Visit->Join(Address, PasswordBox->GetText().ToString(), JoinSides[JoinSideIndex]);
-}
-
-// ---- the visit ----------------------------------------------------------------------------------------------------
+// ---- the visit's own views ----------------------------------------------------------------------------------------
+//
+// The loading screen of a level change belongs in the Travelling and Round cases below (and in the match
+// overlay's banner, Menu/ScctMatchMenuWidget.cpp).
 
 TSharedRef<SWidget> SScctFrontEnd::BuildVisit()
 {
@@ -393,73 +526,123 @@ TSharedRef<SWidget> SScctFrontEnd::BuildVisit()
 	{
 		return SNullWidget::NullWidget;
 	}
-	if (VisitView == EVisitView::Lobby)
-	{
-		// The lobby is its own page (Menu/SScctLobbyPage.h): setup, launch feedback, Session Options.
-		return SNew(SScctLobbyPage).Online(Online);
-	}
 
-	FString Heading, LeaveLabel = TEXT("LEAVE");
+	FString Kicker = TEXT("ONLINE");
+	FString Heading;
+	FString PrimaryLabel;
+	FString SecondaryLabel = TEXT("Cancel");
+	TFunction<void()> OnPrimary;
 	TAttribute<FText> Body = FText::GetEmpty();
-	FLinearColor BodyColour = ScctHudStyle::TextDim();
+	bool bBusy = true;
+	bool bFailed = false;
 	switch (VisitView)
 	{
 	case EVisitView::Connecting:
-		Heading = TEXT("CONNECTING");
-		LeaveLabel = TEXT("CANCEL");
+		Heading = FString::Printf(TEXT("Connecting to %s"), Visit->GetServerName().IsEmpty() ? TEXT("the server") : *Visit->GetServerName());
 		// What the join has tried so far, one attempt per line.
-		Body = TAttribute<FText>::CreateLambda([Weak] { return Weak.IsValid() ? Ui::ToText(Weak->GetConnectLog()) : FText::GetEmpty(); });
+		Body = TAttribute<FText>::CreateLambda([Weak] { return Weak.IsValid() ? FText::FromString(Weak->GetConnectLog()) : FText::GetEmpty(); });
 		break;
 	case EVisitView::Travelling:
-		Heading = Visit->GetMapToLoad().IsEmpty() ? TEXT("RETURNING TO THE LOBBY") : FString::Printf(TEXT("TRAVELLING TO %s"), *Visit->GetMapToLoad().ToUpper());
-		Body = Ui::ToText(Visit->GetServerName());
+		Heading = Visit->GetMapToLoad().IsEmpty() ? TEXT("Returning to the lobby") : FString::Printf(TEXT("Travelling to %s"), *MapTitle(Visit->GetMapToLoad()));
+		Body = FText::FromString(Visit->GetServerName());
+		SecondaryLabel = TEXT("Leave");
 		break;
 	case EVisitView::Round:
+		SecondaryLabel = TEXT("Leave");
 		if (Visit->HasFlag(EScctOnlineStatusFlags::RoundRefused))
 		{
-			Heading = TEXT("ROUND IN PROGRESS");
-			Body = Ui::ToText(TEXT("The server is playing a map that is not installed here. You are back in the lobby when the round is over."));
+			Heading = TEXT("Round in progress");
+			Body = FText::FromString(TEXT("The server is playing a map that is not installed here. You are back in the lobby when the round is over."));
+			bBusy = false;
 		}
 		else
 		{
-			Heading = FString::Printf(TEXT("JOINING THE ROUND ON %s"), *Visit->GetMapToLoad().ToUpper());
-			Body = Ui::ToText(Visit->GetServerName());
+			Heading = FString::Printf(TEXT("Joining the round on %s"), *MapTitle(Visit->GetMapToLoad()));
+			Body = FText::FromString(Visit->GetServerName());
 		}
 		break;
 	default:
-		Heading = Visit->GetState() == EScctOnlineState::Left ? TEXT("YOU LEFT THE SERVER") : TEXT("CONNECTION FAILED");
-		LeaveLabel = TEXT("BACK");
-		Body = TAttribute<FText>::CreateLambda([Weak] { return Weak.IsValid() ? Ui::ToText(Weak->GetNotice()) : FText::GetEmpty(); });
-		BodyColour = ScctHudStyle::Text();
+	{
+		bBusy = false;
+		bFailed = Visit->GetState() != EScctOnlineState::Left;
+		Kicker = bFailed ? TEXT("CONNECTION") : TEXT("ONLINE");
+		Heading = bFailed ? TEXT("Could not join") : TEXT("You left the server");
+		SecondaryLabel = TEXT("Back");
+		Body = TAttribute<FText>::CreateLambda([Weak] { return Weak.IsValid() ? FText::FromString(Weak->GetNotice()) : FText::GetEmpty(); });
+		FString LastAddress;
+		GConfig->GetString(OnlineSection, TEXT("LastAddress"), LastAddress, GGameUserSettingsIni);
+		if (bFailed && !LastAddress.IsEmpty() && !Visit->HasFlag(EScctOnlineStatusFlags::Kicked))
+		{
+			PrimaryLabel = TEXT("Try again");
+			OnPrimary = [Weak, LastAddress]
+			{
+				if (UScctOnlineSubsystem* Pinned = Weak.Get())
+				{
+					Pinned->Leave();
+					Pinned->Join(LastAddress);
+				}
+			};
+		}
 		break;
 	}
+	}
 
-	return SNew(SBox).WidthOverride(PageWidth)
-	[
-		Ui::Glass(
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)
-			[
-				SNew(STextBlock)
-				.Text(Ui::ToText(Heading))
-				.Font(ScctHudStyle::Font(ScctHudStyle::EWeight::Light, 22.0f, 200))
-				.ColorAndOpacity(VisitView == EVisitView::Failed ? ScctHudStyle::Danger() : ScctHudStyle::Text())
-				.AutoWrapText(true)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 22.0f)
-			[
-				Ui::Text(Body, 12.5f, FSlateColor(BodyColour), ScctHudStyle::EWeight::Regular, true)
-			]
-			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)
-			[
-				Ui::Button(Ui::ToText(LeaveLabel), FOnClicked::CreateLambda([Weak]
+	const TSharedRef<SHorizontalBox> Buttons = SNew(SHorizontalBox);
+	TSharedPtr<SWidget> Focus;
+	if (OnPrimary)
+	{
+		TSharedPtr<SScctButton> Made;
+		Buttons->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 10.0f, 0.0f)
+		[
+			SAssignNew(Made, SScctButton).Look(EScctButtonLook::Primary).MinWidth(150.0f).Text(FText::FromString(PrimaryLabel.ToUpper()))
+			.OnPressed(FSimpleDelegate::CreateLambda([OnPrimary] { OnPrimary(); }))
+		];
+		Focus = Made;
+	}
+	{
+		TSharedPtr<SScctButton> Made;
+		Buttons->AddSlot().AutoWidth()
+		[
+			SAssignNew(Made, SScctButton).MinWidth(130.0f).Text(FText::FromString(SecondaryLabel.ToUpper()))
+			.OnPressed(FSimpleDelegate::CreateLambda([Weak, this]
+			{
+				if (VisitView == EVisitView::Failed || VisitView == EVisitView::Connecting)
 				{
-					if (Weak.IsValid())
-					{
-						Weak->Leave();
-					}
-					return FReply::Handled();
-				}), false, Ui::Accent(), 120.0f)
-			])
+					if (Weak.IsValid()) { Weak->Leave(); }
+					return;
+				}
+				ScctUi::Confirm(Dialogs, TEXT("Leave the server"), TEXT("Leave this server and go back to the main menu?"), TEXT("Leave"), TEXT("Stay"),
+					[Weak] { if (Weak.IsValid()) { Weak->Leave(); } }, true);
+			}))
+		];
+		if (!Focus.IsValid())
+		{
+			Focus = Made;
+		}
+	}
+
+	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ ScctUi::Label(Kicker, bFailed ? ScctHudStyle::Danger() : ScctUi::Accent(), 12.0f) ];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 18.0f)
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 16.0f, 0.0f)
+		[
+			SNew(SBox).Visibility(bBusy ? EVisibility::Visible : EVisibility::Collapsed)[ SNew(SScctSpinner).Size(30.0f) ]
+		]
+		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+		[
+			SNew(STextBlock).Font(ScctUi::H1()).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true).Text(FText::FromString(Heading.ToUpper()))
+		]
 	];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 18.0f)[ ScctUi::Rule(0.12f) ];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 28.0f)
+	[
+		SNew(STextBlock).Font(ScctUi::Body()).ColorAndOpacity(bFailed ? ScctHudStyle::Text() : ScctHudStyle::TextDim()).AutoWrapText(true).LineHeightPercentage(1.2f).Text(Body)
+	];
+	Box->AddSlot().AutoHeight().HAlign(HAlign_Left)[ Buttons ];
+
+	const TSharedRef<SScctVisitPage> Page = SNew(SScctVisitPage, Box, Focus);
+	VisitPage = Page;
+	return Page;
 }

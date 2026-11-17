@@ -1,11 +1,10 @@
 #include "Menu/ScctMatchMenuWidget.h"
 
 #include "Engine/World.h"
-#include "Menu/SScctResultsPanel.h"
+#include "Menu/SScctMatchMenu.h"
 #include "Menu/SScctRoundWaitList.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Online/ScctOnlineSubsystem.h"
-#include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SCompoundWidget.h"
@@ -16,9 +15,10 @@
 namespace Ui = ScctMenuStyle;
 
 /**
- * The layers of the match overlay. Nothing here takes the mouse while the menu is closed: the banner, the round's
- * waiting list and the results only show. Results ask for the menu when they arrive; while they are up they take
- * the menu's place, so their buttons are what the open menu offers.
+ * The layers of the match overlay: what the visit is waiting for (the banner, and while a network round loads the
+ * server's loading picture under the list of players it waits for, Menu/SScctRoundWaitList.h), and the menu with the
+ * round's results (Menu/SScctMatchMenu.h). Nothing here takes the mouse while the menu is closed: the banner, the
+ * waiting list and the results only show.
  */
 class SScctMatchOverlay : public SCompoundWidget
 {
@@ -37,9 +37,6 @@ public:
 	{
 		Online = InArgs._Online;
 		bOnlineLevel = InArgs._bOnlineLevel;
-		OnResume = InArgs._OnResume;
-		OnLeave = InArgs._OnLeave;
-		const bool bOnline = bOnlineLevel;
 
 		ChildSlot
 		[
@@ -65,51 +62,26 @@ public:
 				SAssignNew(WaitList, SScctRoundWaitList).Online(Online)
 			]
 
-			// The round's results; with the menu open they take its place and the mouse.
-			+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
+			// The in-match menu and the round's results.
+			+ SOverlay::Slot()
 			[
-				SAssignNew(Results, SScctResultsPanel)
-				.Online(Online)
+				SAssignNew(Menu, SScctMatchMenu)
+				.Online(InArgs._Online)
 				.World(InArgs._World)
-				.bOnlineLevel(bOnline)
-				.OnLeave(OnLeave)
-				.OnWantsInput(InArgs._OnWantsOpen)
-				.OnGone(FSimpleDelegate::CreateLambda([this] { if (bMenuOpen) { OnResume.ExecuteIfBound(); } }))
-			]
-
-			// The in-match menu.
-			+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
-			[
-				SNew(SBox)
-				.WidthOverride(320.0f)
-				.Visibility(TAttribute<EVisibility>::CreateLambda([this] { return bMenuOpen && !Results->IsShowing() ? EVisibility::Visible : EVisibility::Collapsed; }))
-				[
-					Ui::Glass(
-						SNew(SVerticalBox)
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 18.0f)[ Ui::Title(Ui::ToText(TEXT("MENU")), 22.0f) ]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
-						[
-							Ui::Button(Ui::ToText(TEXT("RESUME")), FOnClicked::CreateLambda([this] { OnResume.ExecuteIfBound(); return FReply::Handled(); }), true)
-						]
-						+ SVerticalBox::Slot().AutoHeight()
-						[
-							Ui::Button(Ui::ToText(bOnline ? TEXT("LEAVE THE SERVER") : TEXT("MAIN MENU")), FOnClicked::CreateLambda([this] { OnLeave.ExecuteIfBound(); return FReply::Handled(); }))
-						])
-				]
+				.bOnlineLevel(InArgs._bOnlineLevel)
+				.OnResume(InArgs._OnResume)
+				.OnLeave(InArgs._OnLeave)
+				.OnWantsOpen(InArgs._OnWantsOpen)
 			]
 		];
 	}
 
-	void SetMenuOpen(bool bOpen)
-	{
-		bMenuOpen = bOpen;
-		Results->SetInteractive(bOpen);
-	}
+	void SetMenuOpen(bool bOpen) { Menu->SetOpen(bOpen); }
 
 private:
 	EVisibility GetBannerVisibility() const
 	{
-		return bMenuOpen || Results->IsShowing() || WaitList->IsShowing() || GetBannerText().IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible;
+		return Menu->IsOpen() || Menu->IsShowingResults() || WaitList->IsShowing() || GetBannerText().IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible;
 	}
 
 	FText GetBannerText() const
@@ -130,12 +102,9 @@ private:
 	}
 
 	TWeakObjectPtr<UScctOnlineSubsystem> Online;
-	FSimpleDelegate OnResume;
-	FSimpleDelegate OnLeave;
-	TSharedPtr<SScctResultsPanel> Results;
+	TSharedPtr<SScctMatchMenu> Menu;
 	TSharedPtr<SScctRoundWaitList> WaitList;
 	bool bOnlineLevel = false;
-	bool bMenuOpen = false;
 };
 
 TSharedRef<SWidget> UScctMatchMenuWidget::RebuildWidget()

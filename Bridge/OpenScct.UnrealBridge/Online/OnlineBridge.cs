@@ -267,6 +267,7 @@ public sealed partial class OnlineBridge : IDisposable
         }
 
         StopRound();
+        Voice.VoiceBridge.Existing?.EndVisit();
         client.Changed -= Touch;
         client.SessionEnding -= OnSessionEnding;
         client.MessageReceived -= OnMessage;
@@ -470,6 +471,8 @@ public sealed partial class OnlineBridge : IDisposable
             round.Update();
         }
 
+        // Voice chat follows the visit to its current map (Voice/VoiceBridge.cs).
+        Voice.VoiceBridge.Instance.AfterVisitTick(client);
         return ran;
     }
 

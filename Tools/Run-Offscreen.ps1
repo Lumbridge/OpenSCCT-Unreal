@@ -36,7 +36,9 @@ param(
     # Draw the map in the runtime level from its render files even when it has an imported level (a map without one
     # always is: Source/OpenSCCT/Play/ScctRuntimeMapActor.h). Point -Extra "-ScctMaps=<dir>" at maps outside the content.
     [switch] $Runtime,
-    [string] $Engine = 'F:\UE_5.8'
+    [string] $Engine = 'F:\UE_5.8',
+    # A level to open instead of the imported map (-Map still names the log): /Game/OpenSCCT/Maps/L_FrontEnd for the menu.
+    [string] $Level = ''
 )
 
 function Format-Switch([string] $Key, [string] $Value) {
@@ -51,14 +53,17 @@ $shotDir = $ShotDir.Replace('\', '/')
 $log = (Join-Path $project "Saved\Logs\run-$Map$Tag.log").Replace('\', '/')
 $contentDir = "$Content".Replace('\', '/')
 New-Item -ItemType Directory -Force (Join-Path $project 'Saved\Logs') | Out-Null
-$level = "/Game/Imported/Maps/$Map/$Map"
-if ($Runtime -or -not (Test-Path (Join-Path $project "Content\Imported\Maps\$Map\$Map.umap"))) {
-    $level = "/Game/OpenSCCT/RuntimeMap/L_RuntimeMap?ScctMap=$Map"
+# PowerShell names are not case sensitive: $levelPath, not $level, which would be the -Level parameter.
+$levelPath = "/Game/Imported/Maps/$Map/$Map"
+if ($Level) {
+    $levelPath = $Level
+} elseif ($Runtime -or -not (Test-Path (Join-Path $project "Content\Imported\Maps\$Map\$Map.umap"))) {
+    $levelPath = "/Game/OpenSCCT/RuntimeMap/L_RuntimeMap?ScctMap=$Map"
 }
 
 $arguments = @(
     "`"$project\OpenSCCTUnreal.uproject`"",
-    "`"$level$Options`"",
+    "`"$levelPath$Options`"",
     '-game', '-RenderOffscreen', '-ResX=1920', '-ResY=1080', '-ForceRes', '-unattended', '-nosplash',
     $(if ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
     (Format-Switch 'ScctContent' $contentDir),

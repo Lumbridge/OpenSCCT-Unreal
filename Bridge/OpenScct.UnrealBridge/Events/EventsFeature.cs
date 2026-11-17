@@ -68,6 +68,10 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
         _resolver?.PlayLevelSong(world.TickCount);
     }
 
+    /// <summary>Starts a song as the music now, for a check (AudioCheckExports). False when it cannot play.</summary>
+    public bool PlayMusicForCheck(string song, float fadeIn) =>
+        _resolver?.PlayMusicForCheck(_session.Client.World.TickCount, song, fadeIn) ?? false;
+
     /// <summary>The feature of <paramref name="session"/>, started on first use. Events raised before that are not seen.</summary>
     public static EventsFeature Of(BridgeSession session) => session.Feature(static s => new EventsFeature(s));
 

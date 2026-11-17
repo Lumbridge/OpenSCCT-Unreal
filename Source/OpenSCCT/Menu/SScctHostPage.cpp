@@ -21,7 +21,7 @@ namespace Ui = ScctMenuStyle;
 namespace
 {
 	// The player's own settings (Saved/Config): the last session, as the Godot client keeps it in online.cfg.
-	const TCHAR* const UserSection = TEXT("OpenSCCT.Online");
+	const TCHAR* const HostUserSection = TEXT("OpenSCCT.Online");
 	const TCHAR* const KeyLastSetup = TEXT("HostSetup");
 	const TCHAR* const KeyLastName = TEXT("HostName");
 	const TCHAR* const KeyLastPlayersChosen = TEXT("HostPlayersChosen");
@@ -78,9 +78,9 @@ void SScctHostPage::Construct(const FArguments& InArgs)
 	// The last session when its map can still be shown here, else the first map's defaults (Steel when it is there,
 	// as in the Godot client).
 	FString Last, LastName;
-	GConfig->GetString(UserSection, KeyLastSetup, Last, GGameUserSettingsIni);
-	GConfig->GetString(UserSection, KeyLastName, LastName, GGameUserSettingsIni);
-	GConfig->GetBool(UserSection, KeyLastPlayersChosen, bPlayersChosen, GGameUserSettingsIni);
+	GConfig->GetString(HostUserSection, KeyLastSetup, Last, GGameUserSettingsIni);
+	GConfig->GetString(HostUserSection, KeyLastName, LastName, GGameUserSettingsIni);
+	GConfig->GetBool(HostUserSection, KeyLastPlayersChosen, bPlayersChosen, GGameUserSettingsIni);
 	const auto Shown = [this](const FString& Map) { return Maps.ContainsByPredicate([&Map](const FScctHostMap& Entry) { return Entry.Id.Equals(Map, ESearchCase::IgnoreCase); }); };
 	if (!Last.IsEmpty() && Shown(ScctHostSetup::Option(Last, TEXT("MapName"))))
 	{
@@ -97,7 +97,7 @@ void SScctHostPage::Construct(const FArguments& InArgs)
 	FString PlayerName = Online.IsValid() ? Online->GetPlayerName() : FString();
 	if (PlayerName.IsEmpty())
 	{
-		GConfig->GetString(UserSection, TEXT("PlayerName"), PlayerName, GGameUserSettingsIni);
+		GConfig->GetString(HostUserSection, TEXT("PlayerName"), PlayerName, GGameUserSettingsIni);
 	}
 	if (PlayerName.IsEmpty())
 	{
@@ -528,9 +528,9 @@ bool SScctHostPage::Create()
 	{
 		// Kept for the next time, as the Godot client keeps them: the hosting choices on the Online page, the session here.
 		Request.Remember();
-		GConfig->SetString(UserSection, KeyLastSetup, *Setup, GGameUserSettingsIni);
-		GConfig->SetString(UserSection, KeyLastName, *Request.Name, GGameUserSettingsIni);
-		GConfig->SetBool(UserSection, KeyLastPlayersChosen, bPlayersChosen, GGameUserSettingsIni);
+		GConfig->SetString(HostUserSection, KeyLastSetup, *Setup, GGameUserSettingsIni);
+		GConfig->SetString(HostUserSection, KeyLastName, *Request.Name, GGameUserSettingsIni);
+		GConfig->SetBool(HostUserSection, KeyLastPlayersChosen, bPlayersChosen, GGameUserSettingsIni);
 		GConfig->Flush(false, GGameUserSettingsIni);
 	}
 
