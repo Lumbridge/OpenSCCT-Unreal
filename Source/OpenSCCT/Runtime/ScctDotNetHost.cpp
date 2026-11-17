@@ -15,6 +15,14 @@ namespace
 	using FLoadAssemblyAndGetFunctionPointer = int32(__stdcall*)(
 		const TCHAR* AssemblyPath, const TCHAR* TypeName, const TCHAR* MethodName, const TCHAR* DelegateTypeName, void* Reserved, void** OutDelegate);
 
+	/** hostfxr_initialize_parameters: tells the host which install root to take the frameworks from. */
+	struct FHostFxrInitializeParameters
+	{
+		SIZE_T Size;
+		const TCHAR* HostPath;
+		const TCHAR* DotNetRoot;
+	};
+
 	constexpr int32 HostDelegateLoadAssemblyAndGetFunctionPointer = 5;
 	const TCHAR* const UnmanagedCallersOnlyMethod = reinterpret_cast<const TCHAR*>(static_cast<intptr_t>(-1));
 	const TCHAR* const BridgeAssemblyName = TEXT("OpenScct.UnrealBridge");
@@ -38,9 +46,11 @@ namespace
 	}
 }
 
-FString FScctDotNetHost::FindHostFxr()
+FString FScctDotNetHost::FindHostFxr(const FString& BridgeDirectory, FString& OutRoot)
 {
 	TArray<FString> Roots;
+	// A runtime shipped with the game wins over whatever the machine has installed.
+	Roots.Add(FPaths::ConvertRelativePathToFull(BridgeDirectory / TEXT("..") / TEXT("DotNet")));
 	const FString DotNetRoot = FPlatformMisc::GetEnvironmentVariable(TEXT("DOTNET_ROOT"));
 	if (!DotNetRoot.IsEmpty())
 	{
@@ -71,6 +81,7 @@ FString FScctDotNetHost::FindHostFxr()
 			const FString Library = FxrRoot / Best / TEXT("hostfxr.dll");
 			if (FPaths::FileExists(Library))
 			{
+				OutRoot = Root;
 				return Library;
 			}
 		}
@@ -94,10 +105,11 @@ bool FScctDotNetHost::Start(const FString& BridgeDirectory, FString& OutError)
 		return false;
 	}
 
-	const FString HostFxrPath = FindHostFxr();
+	FString DotNetRoot;
+	const FString HostFxrPath = FindHostFxr(Directory, DotNetRoot);
 	if (HostFxrPath.IsEmpty())
 	{
-		OutError = TEXT("The .NET runtime was not found (no hostfxr.dll under DOTNET_ROOT or Program Files\\dotnet).");
+		OutError = TEXT("The .NET runtime was not found (no hostfxr.dll under Binaries\\DotNet, DOTNET_ROOT or Program Files\\dotnet).");
 		return false;
 	}
 
@@ -108,30 +120,45 @@ bool FScctDotNetHost::Start(const FString& BridgeDirectory, FString& OutError)
 		return false;
 	}
 
+	// Until the runtime itself is loaded the host library is only a library: every failure up to there gives it back.
+	const auto FailBeforeRuntime = [this]()
+	{
+		FPlatformProcess::FreeDllHandle(HostFxrLibrary);
+		HostFxrLibrary = nullptr;
+		return false;
+	};
+
 	const auto Initialize = static_cast<FHostFxrInitializeForRuntimeConfig>(FPlatformProcess::GetDllExport(HostFxrLibrary, TEXT("hostfxr_initialize_for_runtime_config")));
 	const auto GetDelegate = static_cast<FHostFxrGetRuntimeDelegate>(FPlatformProcess::GetDllExport(HostFxrLibrary, TEXT("hostfxr_get_runtime_delegate")));
 	const auto Close = static_cast<FHostFxrClose>(FPlatformProcess::GetDllExport(HostFxrLibrary, TEXT("hostfxr_close")));
 	if (Initialize == nullptr || GetDelegate == nullptr || Close == nullptr)
 	{
 		OutError = FString::Printf(TEXT("%s does not have the hosting entry points."), *HostFxrPath);
-		return false;
+		return FailBeforeRuntime();
 	}
 
 	// The paths go to the runtime with the platform's separators.
 	FString NativeRuntimeConfig = RuntimeConfig;
 	FPaths::MakePlatformFilename(NativeRuntimeConfig);
 	FPaths::MakePlatformFilename(BridgeAssemblyPath);
+	FPaths::MakePlatformFilename(DotNetRoot);
+
+	// The frameworks come from the root the host was found in: a private runtime must not pick up the machine's.
+	FHostFxrInitializeParameters Parameters = {};
+	Parameters.Size = sizeof(Parameters);
+	Parameters.DotNetRoot = *DotNetRoot;
 
 	void* Handle = nullptr;
-	int32 Result = Initialize(*NativeRuntimeConfig, nullptr, &Handle);
+	int32 Result = Initialize(*NativeRuntimeConfig, &Parameters, &Handle);
 	if (Result < 0 || Handle == nullptr)
 	{
-		OutError = FString::Printf(TEXT("The .NET runtime did not start from %s (0x%08x)."), *NativeRuntimeConfig, static_cast<uint32>(Result));
+		OutError = FString::Printf(TEXT("The .NET runtime did not start from %s with the runtime at %s (0x%08x)."),
+			*NativeRuntimeConfig, *DotNetRoot, static_cast<uint32>(Result));
 		if (Handle != nullptr)
 		{
 			Close(Handle);
 		}
-		return false;
+		return FailBeforeRuntime();
 	}
 
 	void* Delegate = nullptr;
@@ -139,12 +166,13 @@ bool FScctDotNetHost::Start(const FString& BridgeDirectory, FString& OutError)
 	Close(Handle);
 	if (Result < 0 || Delegate == nullptr)
 	{
+		// The runtime may be loaded by now and it calls back into the host library, so that one stays loaded.
 		OutError = FString::Printf(TEXT("The .NET runtime gave no assembly loader (0x%08x)."), static_cast<uint32>(Result));
 		return false;
 	}
 
 	LoadAssemblyAndGetFunctionPointer = Delegate;
-	UE_LOG(LogOpenSCCT, Log, TEXT(".NET runtime started through %s"), *HostFxrPath);
+	UE_LOG(LogOpenSCCT, Log, TEXT(".NET runtime started through %s (runtime root %s)"), *HostFxrPath, *DotNetRoot);
 	return true;
 }
 

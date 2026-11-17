@@ -31,6 +31,31 @@ Needs Unreal Engine 5.8.4, Visual Studio with the C++ game workload and the .NET
 & "F:\UE_5.8\Engine\Build\BatchFiles\Build.bat" OpenSCCTEditor Win64 Development -project="$PWD\OpenSCCTUnreal.uproject" -waitmutex
 ```
 
+Build the bridge too, before the first run and after any C# change (output lands in `Binaries/Bridge`):
+
+```powershell
+dotnet build -c Release Bridge\OpenScct.UnrealBridge -p:OpenScctRoot=<OpenSCCT checkout>\
+```
+
+## Playing a level
+
+An imported level starts a local match with bots when it opens. Game URL options (all optional, see
+`Source/OpenSCCT/Play/ScctGameMode.h`): `?Side=spy|merc`, `?Bots=3`, `?Mode=Story`,
+`?Difficulty=easy|normal|hard|expert`, `?Sidearms=1`, `?Rifles=1`, `?Practice=1` (no time limit, unlimited
+lives), `?Name=Sam`, `?ScctMap=AquaE`. The converted content folder comes from `-ScctContent=<folder>`, else
+the `SVM_CONTENT` variable, else `ContentRoot` under `[OpenSCCT]` in the game ini.
+
+`Tools\Run-Offscreen.ps1 -Map AquaE -Content <folder> -Shots 3` plays a level with no window, saves
+screenshots to `Saved\ScctShots` and quits.
+
+## Packaging
+
+The bridge is staged with the game as loose files (`RuntimeDependencies` in `OpenSCCT.Build.cs`), so build
+it before packaging. The .NET runtime is looked for in this order: `Binaries/DotNet` (a private runtime laid
+out as a .NET install root: copy the contents of a .NET 10 runtime zip there and players need nothing
+installed), the `DOTNET_ROOT` variable, `Program Files\dotnet`. The converted content folder is not staged:
+it is the player's own.
+
 ## Content rule
 
 Original game content (maps, textures, meshes, sounds, animations, text) is never committed here, as in
