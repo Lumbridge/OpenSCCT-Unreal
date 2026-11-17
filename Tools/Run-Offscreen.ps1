@@ -52,7 +52,7 @@ New-Item -ItemType Directory -Force (Join-Path $project 'Saved\Logs') | Out-Null
 $arguments = @(
     "`"$project\OpenSCCTUnreal.uproject`"",
     "`"/Game/Imported/Maps/$Map/$Map$Options`"",
-    '-game', '-RenderOffscreen', '-ResX=1920', '-ResY=1080', '-unattended', '-nosplash',
+    '-game', '-RenderOffscreen', '-ResX=1920', '-ResY=1080', '-ForceRes', '-unattended', '-nosplash',
     $(if ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
     (Format-Switch 'ScctContent' $contentDir),
     "-ScctShots=$Shots",
