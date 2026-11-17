@@ -33,8 +33,8 @@ class UScctSessionSubsystem;
  * /Game/OpenSCCT/Materials/PawnSkins): a second draw of the same body, so the body keeps its own materials and the camo
  * suit's swap is never undone. The Stickess and wet skins are set per material slot (their textures follow each
  * slot's UVs: spy body and head, merc body; not the merc's face), the edge over the whole body. The states come from
- * the vision subsystem's rows of this frame (FScctVisionData), read on the session's OnFrame after the HUD refreshed
- * them.
+ * the vision subsystem's rows (FScctVisionData), read on the session's OnFrame; the HUD refreshes them on the same
+ * OnFrame after the skins have run, so the skins follow the rows one frame late.
  *
  * Unattended switches: -ScctForceSkin=sticky|immune|wet (several with commas) applies those skins to every pawn
  * whatever the simulation says; -ScctSkinCam[=spy|merc] puts the camera 2 m in front of the nearest other pawn (of
