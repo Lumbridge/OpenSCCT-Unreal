@@ -329,6 +329,8 @@ void SScctFrontEnd::ShowPageNamed(const FString& Name)
 	// Back to the main menu first, so the page opens over it as if it had been chosen there.
 	while (Stack.Num() > 1)
 	{
+		// A page left this way still keeps what was changed on it (settings write their files).
+		Stack.Last()->OnClosing();
 		Stack.Pop();
 	}
 	if (Stack.IsEmpty())
