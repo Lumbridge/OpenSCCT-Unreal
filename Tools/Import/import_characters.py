@@ -25,6 +25,8 @@ for package, mesh in MODELS:
     if not os.path.exists(path):
         log("missing " + path)
         continue
+    if unreal.EditorAssetLibrary.does_asset_exist("/Game/Imported/Chars/%s/%s/SkeletalMeshes/%s" % (package, mesh, mesh)):
+        continue  # already imported; only the materials below are refreshed
     task = unreal.AssetImportTask()
     task.filename = path
     task.destination_path = "/Game/Imported/Chars/%s" % package
@@ -39,10 +41,11 @@ unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
 materials_lib = unreal.MaterialEditingLibrary
 asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
 surface = unreal.load_asset("/Game/OpenSCCT/Materials/M_ScctSurface")
-if surface and not surface.get_editor_property("used_with_skeletal_mesh"):
+if surface and not (surface.get_editor_property("used_with_skeletal_mesh") and surface.get_editor_property("used_with_nanite")):
     surface.set_editor_property("used_with_skeletal_mesh", True)
+    surface.set_editor_property("used_with_nanite", True)
     materials_lib.recompile_material(surface)
-    unreal.EditorAssetLibrary.save_loaded_asset(surface)
+    unreal.EditorAssetLibrary.save_loaded_asset(surface, only_if_is_dirty=False)
 
 for package, mesh_name in MODELS:
     base = "/Game/Imported/Chars/%s/%s" % (package, mesh_name)
@@ -50,7 +53,8 @@ for package, mesh_name in MODELS:
     if not mesh or not surface:
         continue
     slots = mesh.get_editor_property("materials")
-    for slot in slots:
+    for index in range(len(slots)):
+        slot = slots[index]  # a copy: it is written back below
         imported = slot.get_editor_property("material_interface")
         if not imported:
             continue
@@ -69,7 +73,10 @@ for package, mesh_name in MODELS:
         materials_lib.set_material_instance_scalar_parameter_value(instance, "RoughnessBright", 0.5)
         materials_lib.update_material_instance(instance)
         slot.set_editor_property("material_interface", instance)
+        slots[index] = slot
     mesh.set_editor_property("materials", slots)
+    # Setting the slots does not mark the mesh as changed, so it is saved explicitly.
+    unreal.EditorAssetLibrary.save_loaded_asset(mesh, only_if_is_dirty=False)
     log("materials set on %s: %d slots" % (mesh_name, len(slots)))
 
 registry = unreal.AssetRegistryHelpers.get_asset_registry()

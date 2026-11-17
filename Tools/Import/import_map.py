@@ -150,6 +150,7 @@ def ensure_surface_material():
 
     # One material serves level surfaces and characters.
     material.set_editor_property("used_with_skeletal_mesh", True)
+    material.set_editor_property("used_with_nanite", True)
     materials_lib.recompile_material(material)
     editor_assets.save_asset(SURFACE_MATERIAL)
     log("made " + SURFACE_MATERIAL)
