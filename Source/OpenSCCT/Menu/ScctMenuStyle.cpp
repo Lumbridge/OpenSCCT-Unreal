@@ -145,7 +145,7 @@ namespace ScctMenuStyle
 		return Made;
 	}
 
-	TSharedRef<SEditableTextBox> TextBox(const FString& Hint, const FString& Initial, bool bPassword, FOnTextCommitted OnCommitted)
+	TSharedRef<SEditableTextBox> TextBox(const FString& Hint, const FString& Initial, bool bPassword, FOnTextCommitted OnCommitted, FOnTextChanged OnChanged)
 	{
 		return SNew(SEditableTextBox)
 			.Style(&TextBoxStyle())
@@ -154,6 +154,7 @@ namespace ScctMenuStyle
 			.Text(FText::FromString(Initial))
 			.IsPassword(bPassword)
 			.OnTextCommitted(OnCommitted)
+			.OnTextChanged(OnChanged)
 			.MinDesiredWidth(260.0f);
 	}
 

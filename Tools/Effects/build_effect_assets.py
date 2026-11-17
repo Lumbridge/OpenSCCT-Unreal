@@ -11,10 +11,12 @@ The materials go to /Game/OpenSCCT/Effects/ and are committed: they are ours, ma
   M_ScctFxDecal   deferred decal: a bullet hole with a ragged lip in a chipped ring; parameters Color, RimColor,
                   Strength and RimStrength
   M_ScctFxSolid   opaque surface with a glow, for stand-in shapes; parameters Color and Glow
+  M_ScctFxProjection  deferred decal of an abandoned projection (footprint, flare burn, pellet marks); parameters
+                  Texture, Tint, UseTint, FlipV and Opacity
 
 With a content root the original effect meshes (grenades, mines, gadgets, beams: shared/fx/meshes/*.glb) are
-imported to /Game/Imported/Fx/<Package>/ (never committed: original game content). An existing material is
-rebuilt only with --force as the last argument.
+imported to /Game/Imported/Fx/<Package>/ and the projections' textures to /Game/Imported/Fx/Textures/ (never
+committed: original game content). An existing material is rebuilt only with --force as the last argument.
 """
 import os
 import sys
@@ -288,6 +290,138 @@ def build_solid():
     finish(material)
 
 
+def build_projection():
+    material = new_material("M_ScctFxProjection")
+    if not material:
+        return
+    material.set_editor_property("material_domain", unreal.MaterialDomain.MD_DEFERRED_DECAL)
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+
+    # An abandoned projection (a footprint, a flare's burn mark, a shotgun's pellet marks): its texture, turned
+    # upside down for a right foot (FlipV 1). A tinted one (UseTint 1, a footprint's Combiner) takes its colour from
+    # Tint and its opacity from the texture's alpha times the tint's; any other is the texture as it is. Opacity
+    # fades it out at the end of its life.
+    uv = lib.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -1500, 0)
+    flip = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -1500, 150)
+    flip.set_editor_property("parameter_name", "FlipV")
+    flip.set_editor_property("default_value", 0.0)
+    flipped = lib.create_material_expression(material, unreal.MaterialExpressionCustom, -1250, 0)
+    flipped.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT2)
+    pins = []
+    for name in ("UV", "Flip"):
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    flipped.set_editor_property("inputs", pins)
+    flipped.set_editor_property("code", "return float2(UV.x, lerp(UV.y, 1.0 - UV.y, Flip));")
+    connect(uv, "", flipped, "UV")
+    connect(flip, "", flipped, "Flip")
+
+    # The texture goes into the node as a texture object and is sampled there: a sampler node's alpha output,
+    # wired by name from here, reached the node as its colour instead.
+    texture = lib.create_material_expression(material, unreal.MaterialExpressionTextureObjectParameter, -1000, 0)
+    texture.set_editor_property("parameter_name", "Texture")
+    default = unreal.load_asset("/Engine/EngineResources/DefaultTexture")
+    if default:
+        texture.set_editor_property("texture", default)
+
+    tint = lib.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -1000, -300)
+    tint.set_editor_property("parameter_name", "Tint")
+    tint.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
+    tint_alpha = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -1000, 200)
+    tint_alpha.set_editor_property("parameter_name", "TintAlpha")
+    tint_alpha.set_editor_property("default_value", 1.0)
+    use_tint = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -1000, 300)
+    use_tint.set_editor_property("parameter_name", "UseTint")
+    use_tint.set_editor_property("default_value", 0.0)
+    fade = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -1000, 420)
+    fade.set_editor_property("parameter_name", "Opacity")
+    fade.set_editor_property("default_value", 1.0)
+
+    look = lib.create_material_expression(material, unreal.MaterialExpressionCustom, -600, 0)
+    look.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT4)
+    pins = []
+    for name in ("Tex", "UV", "Tint", "TintAlpha", "UseTint", "Fade"):
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    look.set_editor_property("inputs", pins)
+    look.set_editor_property("code", "float4 t = Texture2DSample(Tex, TexSampler, UV);\n"
+                                     "float3 c = lerp(t.rgb, Tint.rgb, UseTint);\n"
+                                     "float a = t.a * lerp(1.0, TintAlpha, UseTint) * Fade;\n"
+                                     "return float4(c, saturate(a));")
+    connect(texture, "", look, "Tex")
+    connect(flipped, "", look, "UV")
+    connect(tint, "", look, "Tint")
+    connect(tint_alpha, "", look, "TintAlpha")
+    connect(use_tint, "", look, "UseTint")
+    connect(fade, "", look, "Fade")
+    colour = lib.create_material_expression(material, unreal.MaterialExpressionComponentMask, -300, -50)
+    for channel, on in (("r", True), ("g", True), ("b", True), ("a", False)):
+        colour.set_editor_property(channel, on)
+    connect(look, "", colour, "")
+    connect_output(colour, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    opacity = lib.create_material_expression(material, unreal.MaterialExpressionComponentMask, -300, 150)
+    for channel, on in (("r", False), ("g", False), ("b", False), ("a", True)):
+        opacity.set_editor_property(channel, on)
+    connect(look, "", opacity, "")
+    connect_output(opacity, "", unreal.MaterialProperty.MP_OPACITY)
+    rough = lib.create_material_expression(material, unreal.MaterialExpressionConstant, -300, 350)
+    rough.set_editor_property("r", 0.9)
+    connect_output(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    finish(material)
+
+
+# The textures the abandoned projections draw (Bridge/OpenScct.UnrealBridge/Events/ProjectionExports.cs): every
+# footprint texture, the flare's burn mark and the shotgun's pellet marks, by their object paths in
+# shared/fx/effects.json. Imported as /Game/Imported/Fx/Textures/<picture name> (sfx_step01), the name the bridge
+# hands with each projection.
+PROJECTION_TEXTURES = ("sfx.FootPrints.", "sfx.Flare.Burn_flare", "sfx.Impacts.FX_shothun_near")
+
+
+def import_projection_textures():
+    import json
+    folder = os.path.join(CONTENT_ROOT, "shared", "fx")
+    path = os.path.join(folder, "effects.json")
+    if not os.path.isfile(path):
+        log("no effect table at " + path)
+        return
+    with open(path, "r", encoding="utf-8") as handle:
+        textures = json.load(handle).get("textures", {})
+    tasks = []
+    pictures = set()
+    for name, entry in sorted(textures.items()):
+        png = entry.get("png")
+        if not png or not any(name == p or (p.endswith(".") and name.startswith(p)) for p in PROJECTION_TEXTURES):
+            continue
+        stem = os.path.splitext(os.path.basename(png))[0]
+        if stem in pictures:
+            continue
+        pictures.add(stem)
+        task = unreal.AssetImportTask()
+        task.filename = os.path.join(folder, png)
+        task.destination_path = "/Game/Imported/Fx/Textures"
+        task.destination_name = stem
+        task.automated = True
+        task.save = True
+        task.replace_existing = True
+        tasks.append(task)
+    asset_tools.import_asset_tasks(tasks)
+    imported = 0
+    for task in tasks:
+        texture = unreal.load_asset("/Game/Imported/Fx/Textures/" + task.destination_name)
+        if isinstance(texture, unreal.Texture2D):
+            # Marks on a surface: never streamed out to a blur, never wrapped at the edge.
+            texture.set_editor_property("never_stream", True)
+            texture.set_editor_property("address_x", unreal.TextureAddress.TA_CLAMP)
+            texture.set_editor_property("address_y", unreal.TextureAddress.TA_CLAMP)
+            editor_assets.save_loaded_asset(texture, only_if_is_dirty=False)
+            imported += 1
+        else:
+            log("projection texture NOT imported: " + task.filename)
+    log("projection textures imported: %d (%s)" % (imported, ", ".join(sorted(pictures))))
+
+
 def import_meshes():
     folder = os.path.join(CONTENT_ROOT, "shared", "fx", "meshes")
     if not os.path.isdir(folder):
@@ -330,6 +464,8 @@ build_glow()
 build_smoke()
 build_decal()
 build_solid()
+build_projection()
 if CONTENT_ROOT:
+    import_projection_textures()
     import_meshes()
 log("effect assets done")

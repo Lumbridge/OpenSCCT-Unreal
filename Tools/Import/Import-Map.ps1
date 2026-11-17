@@ -21,9 +21,14 @@ $normals = Join-Path $project "Saved\ScctImport\$Map\normals"
 python "$PSScriptRoot\prepare_textures.py" $render $normals
 if ($LASTEXITCODE -ne 0) { throw 'Texture preparation failed.' }
 
+# What stands in the rain's way in each rain volume (roofs, awnings, trees), for the rain and the wet ground.
+$rain = Join-Path $project "Saved\ScctImport\$Map\rain"
+python -B "$PSScriptRoot\prepare_rain_cover.py" (Join-Path $Content "svmap\$Map") $rain
+if ($LASTEXITCODE -ne 0) { throw 'Working out the rain cover failed.' }
+
 # A level that exists cannot be replaced from inside the editor's Python: it is rebuilt from nothing each import.
 Remove-Item (Join-Path $project "Content\Imported\Maps\$Map\$Map.umap") -ErrorAction SilentlyContinue
 
 . "$PSScriptRoot\..\EditorScript.ps1"
-Invoke-ScctEditorScript -Project $project -Engine $Engine -Name "import-$Map" -Script "$(Fwd "$PSScriptRoot\import_map.py") $(Fwd $Content) $Map $(Fwd $normals)" | Out-Null
+Invoke-ScctEditorScript -Project $project -Engine $Engine -Name "import-$Map" -Script "$(Fwd "$PSScriptRoot\import_map.py") $(Fwd $Content) $Map $(Fwd $normals) $(Fwd $rain)" | Out-Null
 Exit-ScctScripts

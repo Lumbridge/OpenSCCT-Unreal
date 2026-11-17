@@ -109,17 +109,11 @@ for (int i = 0; i < 8; i++)
 B /= 12.8;
 
 // The tube amplifies: darks are lifted hard, brights run into saturation and glow. Like a real tube it has an
-// automatic gain: the whole picture's brightness (twelve spots spread over it) turns the gain down, so a lit
-// room or a street under lamps is a readable green picture and not a white screen, and a dark cellar still
-// gets the full lift.
-float Mean = 0.0;
-for (int j = 0; j < 12; j++)
-{
-    float2 Spot = float2((j % 4) * 0.25 + 0.125, (j / 4) * 0.3333 + 0.1667);
-    Mean += dot(SceneTextureLookup(ViewportUVToSceneTextureUV(Spot, 14), 14, true).rgb, Lw);
-}
-Mean /= 12.0;
-float Gain = clamp(0.55 / max(Mean, 0.02), 0.9, 4.5);
+// automatic gain, so a lit room or a street under lamps is a readable green picture and not a white screen, and
+// a dark cellar still gets the full lift. The game sets Gain from the brightness of the whole picture as the
+// exposure measured it, bounded and eased over time (Source/OpenSCCT/Hud/ScctVisionSubsystem.cpp): measured here
+// from a handful of pixels it jumped whenever a lamp crossed one of them.
+float Gain = clamp(GainIn, 0.9, 4.5);
 float A = 1.0 - exp(-(L * Gain + B * Gain * 0.45));
 A += max(B * Gain / 4.5 - 0.32, 0.0) * 0.9;
 A += Grain * 0.12;
@@ -330,6 +324,12 @@ def build(name, code, scalars, vectors):
         if not library.connect_material_expressions(node, "", append, "A") or not library.connect_material_expressions(node, "A", append, "B"):
             log("could not join %s of %s" % (parameter, asset_name))
         inputs.append((parameter, append, ""))
+    if "GainIn" in code:
+        y = 950 + (len(scalars) + len(vectors)) * 150
+        gain = library.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -700, y)
+        gain.set_editor_property("parameter_name", "Gain")
+        gain.set_editor_property("default_value", 1.25)
+        inputs.append(("GainIn", gain, ""))
 
     custom = library.create_material_expression(material, unreal.MaterialExpressionCustom, -250, 300)
     custom.set_editor_property("description", "ScctVision" + name)

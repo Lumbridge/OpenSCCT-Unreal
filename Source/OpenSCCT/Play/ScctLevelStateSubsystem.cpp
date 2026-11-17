@@ -1,7 +1,9 @@
 #include "Play/ScctLevelStateSubsystem.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "Animation/AnimSequenceBase.h"
 #include "Animation/SkeletalMeshActor.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/LightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Light.h"
@@ -38,7 +40,7 @@ namespace
 	// is sampled in the mesh's own space, so the grain travels with a thing that moves.
 	constexpr int32 LevelLocalDetailSlot = 0;
 	// The importer gives up part of a map light's colour toward white (LIGHT_SATURATION in Tools/Import/import_map.py).
-	constexpr float LevelLightSaturation = 0.7f;
+	constexpr float LevelLightSaturation = 0.55f;
 	const TCHAR* const LevelLightTypeTagPrefix = TEXT("ScctLightType:");
 	const FName LevelLightTypeParameter(TEXT("LightType"));
 	const FName LevelCardBrightnessParameter(TEXT("Brightness"));
@@ -163,9 +165,16 @@ void UScctLevelStateSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	bLog = FParse::Param(FCommandLine::Get(), TEXT("ScctLevelLog"));
 
-	// -ScctLevelDo="movers@8;breaklights@14"
+	// -ScctLevelDo="movers@8;breaklights@14" (also flare: a merc flare thrown from the camera; dirtyfeet: every pawn's
+	// next steps leave footprints). -ScctMarkTest shoots the nearest doors and panes, then opens the
+	// doors and breaks the panes, so the marks can be seen to go with them.
 	FString Actions;
-	if (FParse::Value(FCommandLine::Get(), TEXT("ScctLevelDo="), Actions, false))
+	FParse::Value(FCommandLine::Get(), TEXT("ScctLevelDo="), Actions, false);
+	if (FParse::Param(FCommandLine::Get(), TEXT("ScctMarkTest")))
+	{
+		Actions += TEXT(";shootmovers@4;shootprops@4.5;movers@9;props@15");
+	}
+	if (!Actions.IsEmpty())
 	{
 		TArray<FString> Entries;
 		Actions.ParseIntoArray(Entries, TEXT(";"));
@@ -231,6 +240,9 @@ void UScctLevelStateSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	PlacementChecked = 0;
 	FMemory::Memzero(NumEvents);
 	NumEmittersReached = 0;
+	PropStates.Reset();
+	PropsReported.Reset();
+	NumPropsBound = NumPropsPlayed = NumBoneLights = 0;
 }
 
 void UScctLevelStateSubsystem::HandleMatchStarted()
@@ -453,6 +465,28 @@ void UScctLevelStateSubsystem::RestoreLevel()
 		}
 	}
 
+	// The props play what the importer gave them again (their transform went back with the actors above).
+	for (TPair<int32, FPropState>& Pair : PropStates)
+	{
+		FPropState& State = Pair.Value;
+		ASkeletalMeshActor* Actor = State.Actor.Get();
+		USkeletalMeshComponent* Component = Actor != nullptr ? Actor->GetSkeletalMeshComponent() : nullptr;
+		if (Component == nullptr || bTearingDown || !State.bDriven)
+		{
+			continue;
+		}
+		Component->SetAnimation(State.OriginalAnimation.Get());
+		Component->SetPosition(0.0f, false);
+		if (State.bOriginalPlaying)
+		{
+			Component->Play(State.bOriginalLooping);
+		}
+		else
+		{
+			Component->Stop();
+		}
+	}
+
 	for (AActor* Actor : Spawned)
 	{
 		if (IsValid(Actor))
@@ -629,6 +663,7 @@ void UScctLevelStateSubsystem::HandleFrame(float DeltaSeconds)
 	RefreshNames();
 	RunDebugActions();
 	UpdateActors();
+	UpdateProps();
 	UpdateLights(DeltaSeconds);
 	DrainEvents();
 
@@ -675,6 +710,29 @@ void UScctLevelStateSubsystem::RunDebugActions()
 		else if (Action.What == TEXT("emitters"))
 		{
 			Queued = Debug->FireEmitters();
+		}
+		else if (Action.What == TEXT("shootmovers"))
+		{
+			Queued = Debug->ShootNear(View.X, View.Y, View.Z, 2, 0);
+		}
+		else if (Action.What == TEXT("shootprops"))
+		{
+			Queued = Debug->ShootNear(View.X, View.Y, View.Z, 3, 1);
+		}
+		else if (Action.What == TEXT("flare"))
+		{
+			// Ahead of the camera and a little down, so it catches on the floor or the wall in front.
+			FRotator Aim(View.Pitch, View.Yaw, 0.0f);
+			Aim.Pitch = FMath::Min(Aim.Pitch, -12.0f);
+			const FVector Direction = Aim.Vector();
+			const FVector From = FVector(View.X, View.Y, View.Z) + Direction * 40.0;
+			Queued = Debug->ThrowFlare(From.X, From.Y, From.Z, Direction.X, Direction.Y, Direction.Z);
+		}
+		else if (Action.What == TEXT("dirtyfeet"))
+		{
+			const int32 Pawns = Debug->DirtyFeet();
+			UE_LOG(LogOpenSCCT, Log, TEXT("Level state: dirty feet on %d pawns of the client's world"), Pawns);
+			Queued = Pawns > 0 ? 1 : 0;
 		}
 		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: -ScctLevelDo '%s' at %.1f s (camera at %.0f, %.0f, %.0f): %s"), *Action.What, MatchSeconds, View.X, View.Y, View.Z,
 			Queued == 1 ? TEXT("handed to the server") : Queued == 0 ? TEXT("no local server to do it") : TEXT("not a known action"));
@@ -1088,9 +1146,13 @@ void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 				Light->SetLightColor(Color.Equals(State.FirstColor, 0.004f) ? State.OriginalColor : ToLightColor(Color));
 			}
 
-			// A lamp that rides a lift or a mover. Lights hung on a skeletal prop's bone stay where they were
-			// imported: the skeletal props are not drawn yet.
-			if ((Record.Flags & EScctWorldLightFlags::Moved) != 0 && (Record.Flags & EScctWorldLightFlags::OnBone) == 0 && State.Actor.IsValid())
+			// A lamp on a skeletal prop's bone goes with the bone; one that rides a lift or a mover goes where the
+			// table says.
+			if ((Record.Flags & EScctWorldLightFlags::OnBone) != 0)
+			{
+				FollowBone(State, Record);
+			}
+			else if ((Record.Flags & EScctWorldLightFlags::Moved) != 0 && State.Actor.IsValid())
 			{
 				const FVector Location(Record.X, Record.Y, Record.Z);
 				const FRotator Rotation = FScctWorld::ToRotator(Record.Pitch, Record.Yaw, Record.Roll);
@@ -1153,6 +1215,263 @@ void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 			}
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Skeletal props
+// ---------------------------------------------------------------------------------------------------------------
+
+void UScctLevelStateSubsystem::UpdateProps()
+{
+	int32 Total = World->GetAnimated(PropBuffer.GetData(), PropBuffer.Num());
+	if (Total > PropBuffer.Num())
+	{
+		PropBuffer.SetNumUninitialized(Total + 16);
+		Total = World->GetAnimated(PropBuffer.GetData(), PropBuffer.Num());
+	}
+	const int32 Count = FMath::Clamp(Total, 0, PropBuffer.Num());
+
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		const FScctWorldAnimated& Record = PropBuffer[Index];
+		if (Record.NameId <= 0)
+		{
+			continue;
+		}
+		FPropState& State = PropStates.FindOrAdd(Record.NameId);
+		if (!State.bBound)
+		{
+			BindProp(State, Record);
+		}
+		ASkeletalMeshActor* Actor = State.Actor.Get();
+		USkeletalMeshComponent* Component = Actor != nullptr ? Actor->GetSkeletalMeshComponent() : nullptr;
+		if (Component == nullptr)
+		{
+			continue;
+		}
+
+		// Its place: the table's, with the mesh's own rotation origin and scale on top as the importer put them.
+		// One that never left its first place keeps the importer's transform.
+		const FVector Location(Record.X, Record.Y, Record.Z);
+		const FQuat Turn = FScctWorld::ToRotator(Record.Pitch, Record.Yaw, Record.Roll).Quaternion();
+		if (State.bMoved || !Location.Equals(State.FirstLocation, 1.0) || Turn.AngularDistance(State.FirstQuat) > FMath::DegreesToRadians(0.5))
+		{
+			State.bMoved = true;
+			const FVector TableScale(Record.ScaleX, Record.ScaleY, Record.ScaleZ);
+			const FTransform Wanted(Turn * State.OriginQuat, Location + Turn.RotateVector(State.LocalOffset * TableScale), State.ScaleRatio * TableScale);
+			if (!Wanted.Equals(Actor->GetActorTransform(), 0.005))
+			{
+				Actor->SetActorTransform(Wanted);
+			}
+		}
+
+		// Its sequence.
+		if (Record.SequenceId != State.SequenceId)
+		{
+			State.SequenceId = Record.SequenceId;
+			State.Sequence = Record.SequenceId != 0 ? FindPropSequence(*Actor, GetName(Record.SequenceId)) : nullptr;
+			if (Record.SequenceId != 0 && !State.Sequence.IsValid())
+			{
+				const FString Key = GetName(Record.NameId) + TEXT("/") + GetName(Record.SequenceId);
+				if (!PropsReported.Contains(Key))
+				{
+					PropsReported.Add(Key);
+					UE_LOG(LogOpenSCCT, Warning, TEXT("Level state: skeletal prop '%s' plays '%s', which was not imported with its mesh; it keeps what it showed"),
+						*GetName(Record.NameId), *GetName(Record.SequenceId));
+				}
+			}
+			else if (State.Sequence.IsValid())
+			{
+				if (Component->GetAnimationMode() != EAnimationMode::AnimationSingleNode)
+				{
+					Component->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+				}
+				Component->SetAnimation(State.Sequence.Get());
+				State.AppliedFrame = -1.0f;
+				if (!State.bDriven)
+				{
+					State.bDriven = true;
+					++NumPropsPlayed;
+				}
+			}
+		}
+
+		UAnimSequenceBase* Sequence = State.Sequence.Get();
+		if (Sequence == nullptr)
+		{
+			continue;
+		}
+		if (Record.Frame < 0.0f)
+		{
+			// Only a loop is named (a fish swims): it plays at its own pace.
+			if (!Component->IsPlaying())
+			{
+				Component->Play(true);
+			}
+		}
+		else
+		{
+			// The frame the simulation is at, every frame: the channel's rate, its stops and its loops are its own.
+			if (Component->IsPlaying())
+			{
+				Component->Stop();
+			}
+			const float Frame = FMath::Clamp(Record.Frame, 0.0f, 1.0f);
+			if (Frame != State.AppliedFrame)
+			{
+				State.AppliedFrame = Frame;
+				Component->SetPosition(Frame * Sequence->GetPlayLength(), false);
+			}
+		}
+	}
+}
+
+void UScctLevelStateSubsystem::BindProp(FPropState& State, const FScctWorldAnimated& Record)
+{
+	State.bBound = true;
+	const FString& Name = GetName(Record.NameId);
+	ASkeletalMeshActor* Actor = Cast<ASkeletalMeshActor>(TaggedActors.FindRef(FScctWorld::LevelTag(*Name)).Get());
+	USkeletalMeshComponent* Component = Actor != nullptr ? Actor->GetSkeletalMeshComponent() : nullptr;
+	if (Component == nullptr)
+	{
+		return;
+	}
+
+	State.Actor = Actor;
+	State.FirstLocation = FVector(Record.X, Record.Y, Record.Z);
+	State.FirstQuat = FScctWorld::ToRotator(Record.Pitch, Record.Yaw, Record.Roll).Quaternion();
+	// The importer turned the mesh by its rotation origin first, then by the actor's rotation.
+	State.OriginQuat = State.FirstQuat.Inverse() * Actor->GetActorQuat();
+	const FVector Scale(Record.ScaleX, Record.ScaleY, Record.ScaleZ);
+	const FVector Imported = Actor->GetActorScale3D();
+	State.ScaleRatio = FVector(
+		FMath::Abs(Scale.X) > UE_SMALL_NUMBER ? Imported.X / Scale.X : 1.0,
+		FMath::Abs(Scale.Y) > UE_SMALL_NUMBER ? Imported.Y / Scale.Y : 1.0,
+		FMath::Abs(Scale.Z) > UE_SMALL_NUMBER ? Imported.Z / Scale.Z : 1.0);
+	// Any shift the importer gave the actor from the table's place (a pivot) goes with the prop when it moves,
+	// turned and scaled with it.
+	const FVector Shift = State.FirstQuat.UnrotateVector(Actor->GetActorLocation() - State.FirstLocation);
+	State.LocalOffset = FVector(
+		FMath::Abs(Scale.X) > UE_SMALL_NUMBER ? Shift.X / Scale.X : Shift.X,
+		FMath::Abs(Scale.Y) > UE_SMALL_NUMBER ? Shift.Y / Scale.Y : Shift.Y,
+		FMath::Abs(Scale.Z) > UE_SMALL_NUMBER ? Shift.Z / Scale.Z : Shift.Z);
+	if (Shift.Size() > 1.0)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: skeletal prop '%s' was imported %.1f cm from the table's place; the shift goes with it"), *Name, Shift.Size());
+	}
+	State.OriginalAnimation = Component->AnimationData.AnimToPlay;
+	if (UAnimationAsset* Original = Component->AnimationData.AnimToPlay)
+	{
+		PropAssets.AddUnique(Original);
+	}
+	State.bOriginalPlaying = Component->AnimationData.bSavedPlaying;
+	State.bOriginalLooping = Component->AnimationData.bSavedLooping;
+	++NumPropsBound;
+}
+
+UAnimSequenceBase* UScctLevelStateSubsystem::FindPropSequence(const ASkeletalMeshActor& Actor, const FString& Sequence)
+{
+	const USkeletalMeshComponent* Component = Actor.GetSkeletalMeshComponent();
+	const UObject* Mesh = Component != nullptr ? Component->GetSkinnedAsset() : nullptr;
+	if (Mesh == nullptr || Sequence.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	// The importer brings a prop's sequences in beside its mesh (Tools/Import/scct_fx.py, prop_assets).
+	const FString Folder = FPackageName::GetLongPackagePath(Mesh->GetOutermost()->GetName());
+	TArray<TWeakObjectPtr<UAnimSequenceBase>>* Found = PropSequences.Find(Folder);
+	if (Found == nullptr)
+	{
+		Found = &PropSequences.Add(Folder);
+		TArray<FAssetData> Assets;
+		ScanLevelFolder(Folder, UAnimSequenceBase::StaticClass(), Assets);
+		for (const FAssetData& Asset : Assets)
+		{
+			if (UAnimSequenceBase* Loaded = Cast<UAnimSequenceBase>(Asset.GetAsset()))
+			{
+				Found->Add(Loaded);
+				PropAssets.Add(Loaded);
+			}
+		}
+	}
+
+	// By name: the same letters, or the importer's mesh name put before the sequence's.
+	const FString Wanted = LevelKey(Sequence);
+	UAnimSequenceBase* Suffixed = nullptr;
+	for (const TWeakObjectPtr<UAnimSequenceBase>& Each : *Found)
+	{
+		UAnimSequenceBase* Candidate = Each.Get();
+		if (Candidate == nullptr)
+		{
+			continue;
+		}
+		const FString Key = LevelKey(Candidate->GetName());
+		if (Key == Wanted)
+		{
+			return Candidate;
+		}
+		if (Suffixed == nullptr && Key.EndsWith(Wanted))
+		{
+			Suffixed = Candidate;
+		}
+	}
+	// A file with one sequence comes in under the mesh's name ("<mesh>_Anim"), whatever the sequence was called.
+	if (Suffixed == nullptr && Found->Num() == 1)
+	{
+		Suffixed = (*Found)[0].Get();
+	}
+	return Suffixed;
+}
+
+bool UScctLevelStateSubsystem::FollowBone(FLightState& State, const FScctWorldLight& Record)
+{
+	AActor* LightActor = State.Actor.Get();
+	const FPropState* Prop = PropStates.Find(Record.AttachNameId);
+	const ASkeletalMeshActor* PropActor = Prop != nullptr ? Prop->Actor.Get() : nullptr;
+	const USkeletalMeshComponent* Component = PropActor != nullptr ? PropActor->GetSkeletalMeshComponent() : nullptr;
+	if (LightActor == nullptr || Component == nullptr)
+	{
+		return false;
+	}
+	const int32 Bone = Component->GetBoneIndex(FName(*GetName(Record.AttachBoneId)));
+	if (Bone == INDEX_NONE)
+	{
+		const FString Key = GetName(Record.NameId) + TEXT("@") + GetName(Record.AttachBoneId);
+		if (!PropsReported.Contains(Key))
+		{
+			PropsReported.Add(Key);
+			UE_LOG(LogOpenSCCT, Warning, TEXT("Level state: light '%s' hangs on bone '%s' of '%s', which the imported mesh does not have; it stays where it was imported"),
+				*GetName(Record.NameId), *GetName(Record.AttachBoneId), *GetName(Record.AttachNameId));
+		}
+		return false;
+	}
+
+	// Where the light was imported, against the bone as it stood when it was first seen: the importer placed both
+	// from the same first frame, so this keeps the original's offset without depending on the bone's axes.
+	FTransform BoneNow = Component->GetBoneTransform(Bone);
+	BoneNow.SetScale3D(FVector::OneVector);
+	if (!State.bOnBone)
+	{
+		State.bOnBone = true;
+		FTransform Placed = State.OriginalTransform;
+		Placed.SetScale3D(FVector::OneVector);
+		State.BoneOffset = Placed.GetRelativeTransform(BoneNow);
+		++NumBoneLights;
+		USceneComponent* Root = LightActor->GetRootComponent();
+		if (Root != nullptr && Root->Mobility != EComponentMobility::Movable)
+		{
+			Root->SetMobility(EComponentMobility::Movable);
+		}
+	}
+	FTransform Wanted = State.BoneOffset * BoneNow;
+	Wanted.SetScale3D(State.OriginalTransform.GetScale3D());
+	if (!Wanted.Equals(LightActor->GetActorTransform(), 0.005))
+	{
+		State.bMoved = true;
+		LightActor->SetActorTransform(Wanted);
+	}
+	return true;
 }
 
 void UScctLevelStateSubsystem::BindLight(FLightState& State, const FScctWorldLight& Record)
@@ -1591,4 +1910,12 @@ void UScctLevelStateSubsystem::LogSummary()
 		NumEvents[EScctWorldEventKind::MeshChanged], NumEvents[EScctWorldEventKind::SkinChanged], NumEvents[EScctWorldEventKind::GlassBroken],
 		NumEvents[EScctWorldEventKind::LightSwitched], NumEvents[EScctWorldEventKind::LightBreaking], NumEvents[EScctWorldEventKind::MarkerChanged],
 		NumEvents[EScctWorldEventKind::MoverMoving], NumEvents[EScctWorldEventKind::ShownChanged], NumEvents[EScctWorldEventKind::EmitterTriggered], NumEmittersReached);
+
+	int32 PropsMoved = 0;
+	for (const TPair<int32, FPropState>& Pair : PropStates)
+	{
+		PropsMoved += Pair.Value.bMoved ? 1 : 0;
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: skeletal props: %d listed, %d found in the level, %d played by the simulation, %d moved; %d lights followed a prop's bone"),
+		PropStates.Num(), NumPropsBound, NumPropsPlayed, PropsMoved, NumBoneLights);
 }

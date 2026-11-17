@@ -5,6 +5,7 @@
 #include "Layout/Geometry.h"
 
 class FSlateWindowElementList;
+struct FSlateBrush;
 
 /**
  * Draws the HUD's shapes into a Slate element list: glass panels, text, lines and arcs. Every HUD element paints
@@ -72,6 +73,12 @@ public:
 
 	/** A line with a soft wider stroke underneath: the HUD's "lit" accent. */
 	void GlowLine(const FVector2f& From, const FVector2f& To, const FLinearColor& Colour, float Thickness = 1.5f);
+
+	/**
+	 * Part of a texture (UScctHudTextures) stretched over the box and multiplied by Tint. UV is the 0..1 region of the
+	 * texture; a box whose right edge is left of its left edge shows the region mirrored.
+	 */
+	void Image(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint);
 
 private:
 	FPaintGeometry BoxGeometry(const FBox2f& Box) const;

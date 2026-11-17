@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "Runtime/ScctHudApi.h"
+#include "Runtime/ScctHudGadgetApi.h"
+#include "Runtime/ScctHudTextureApi.h"
 
 /**
  * The HUD's own labels. Their text is the original game's, read from the player's content with the bridge's
@@ -29,6 +31,13 @@ enum class EScctHudLabel : uint8
 	Watching,
 	RespawnIn,
 	NoRespawn,
+	StickyCamZoom,  // the sticky cam page's key help: "Zoom In / Zoom Out:"
+	StickyCamGas,   // "Release Gas:"
+	StickyCamExit,  // "Exit:"
+	CamNetworkZoom, // the camera network page's key help
+	CamNetworkNext, // "Next / Previous Camera:"
+	CamNetworkExit,
+	CamNetworkAlert, // the camera network page's Alert box: "ALERT"
 	Count,
 };
 
@@ -55,6 +64,14 @@ struct FScctHudMarker
 	bool bInFront = false;
 };
 
+/** A teammate's name placed over his head for this frame (ToggleTeammateNames). */
+struct FScctHudNameLabel
+{
+	FString Name;
+	FVector2f Screen = FVector2f::ZeroVector; // in the full-screen layer's units: where the bottom of the name goes
+	float Metres = 0.0f;                      // from the local player
+};
+
 /**
  * Everything the HUD draws from: the bridge's snapshot of the last simulation tick, the messages still on screen
  * and the values that are in motion (a number easing to its new value, a pulse fading out). The HUD subsystem
@@ -75,6 +92,39 @@ public:
 	TArray<FScctHudObjectiveLine> ObjectiveLines;
 	TArray<FScctHudScoreRow> Scores;
 	TArray<FScctHudMarker> Markers;
+
+	/** The names over the local player's teammates, drawn through walls; empty while the player has them off. */
+	TArray<FScctHudNameLabel> NameLabels;
+	/** The sticky cam menu (a spy) or the mine menu (a merc) while it is open; empty otherwise. */
+	TArray<FScctHudMenuLine> MenuLines;
+
+	/** The camera of the sticky cam or camera network view (View 0 outside one, or when the bridge lacks the table). */
+	FScctHudCameraView CameraView = {};
+
+	/** The names of the keys the gadget pages' key help shows, from the player's bindings (empty when unbound). */
+	struct FGadgetKeys
+	{
+		FString Zoom;    // "zoom in / zoom out": the wheel's two commands
+		FString Use;     // the sticky cam's gas; the network's next camera
+		FString Cameras; // the network's next / previous camera: Use, and the back-to-wall key when bound
+		FString Exit;    // Alt-fire leaves the view
+	} GadgetKeys;
+
+	/**
+	 * The coop icon shown (1 offer a ladder .. 4 be boosted up, 0 none: State.CoopIcon or the preview) and its clip's
+	 * pictures at this moment, in page units of the 640 x 480 Magma page; CoopBounds is the page box every pose of
+	 * the shown clip stays in. Filled by the HUD subsystem (ScctHudIcons.cpp).
+	 */
+	int32 CoopIcon = 0;
+	float CoopAge = 0.0f;
+	TArray<FScctHudTextureLayer> CoopLayers;
+	FBox2f CoopBounds = FBox2f(ForceInit);
+
+	/** Unattended look check only (-ScctHudCommands "PreviewCoop N"): shows coop icon N as if the game offered it; 0 off. */
+	int32 PreviewCoopIcon = 0;
+
+	/** The name of the Use key, which cycles the Merc Deathmatch respawn weapon (empty when unbound). */
+	FString RespawnUseKey;
 
 	/** The team of the player at this machine (0 spies, 1 mercs), from the scoreboard, else the side played. */
 	int32 LocalTeam = 0;
@@ -109,6 +159,12 @@ public:
 	float EndAge = -1.0f;         // seconds since the round ended, negative before
 	bool bScoreboardHeld = false;
 
+	/** The mission status page (DisplaySessionStatus): the scoreboard with the objective list, open until closed. */
+	bool bStatusPage = false;
+	float StatusShown = 0.0f;     // 0..1
+
+	/** The chat's composer is open (UScctChatSubsystem): the log above it stays readable and is not faded. */
+	bool bChatOpen = false;
 	/** The flash-bang after-image: the frame frozen at the flash and how much of it covers the picture (UScctScreenEffectsSubsystem fills both). */
 	const struct FSlateBrush* AfterImage = nullptr;
 	float AfterImageAlpha = 0.0f;
@@ -118,6 +174,15 @@ public:
 
 	/** Unattended look check only (-ScctHudCommands "PreviewEnd"): shows the end banner as if this team had won; -1 when off. */
 	int32 PreviewWinner = -1;
+
+	/**
+	 * Unattended look check only (-ScctHudCommands "PreviewCamAlert 1"): the camera network page shows its Alert box
+	 * as if a spy were hacking (a real alert needs a spy at an objective while the merc watches the cameras).
+	 */
+	bool bPreviewCamAlert = false;
+
+	/** The camera network page's Alert box is up: a spy is hacking (EScctHudEffectFlags::CamNetworkAlert), or the preview. */
+	bool CamNetworkAlert() const { return (State.EffectFlags & EScctHudEffectFlags::CamNetworkAlert) != 0 || bPreviewCamAlert; }
 
 	/** Unattended look check only (-ScctHudCommands "PreviewDamage"): plays the feedback of a hit on the player. */
 	void PreviewDamage() { DamagePulse = 1.0f; HealthLoss = 1.0f; }

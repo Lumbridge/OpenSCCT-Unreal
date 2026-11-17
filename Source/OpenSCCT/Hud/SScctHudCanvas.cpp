@@ -34,7 +34,9 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 	{
 		PaintScreenEffects(Painter, *Model);
 		PaintMarkers(Painter, *Model);
+		PaintTeammateNames(Painter, *Model);
 		PaintScope(Painter, *Model);
+		PaintCameraPages(Painter, *Model);
 		PaintCrosshair(Painter, *Model);
 	}
 	else
@@ -47,7 +49,10 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 		PaintStatus(Painter, *Model);
 		PaintEquipment(Painter, *Model);
 		PaintPrompt(Painter, *Model);
+		PaintGadgetMenu(Painter, *Model);
+		PaintCoopIcon(Painter, *Model);
 		PaintSpectator(Painter, *Model);
+		PaintRespawnWeapon(Painter, *Model);
 		PaintBanner(Painter, *Model);
 		PaintScoreboard(Painter, *Model);
 	}

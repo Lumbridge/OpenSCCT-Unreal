@@ -26,5 +26,7 @@
   <!-- The play session lives in the Godot project but has no Godot in it; it is linked, as OpenSCCT's map sweep does. -->
   <ItemGroup>
     <Compile Include="$(OpenScctRoot)game\Scripts\Play\Session\*.cs" Link="Linked\PlaySession\%(Filename)%(Extension)" />
+    <!-- Create Session's rules (Online/HostSetupModel.cs): the Godot page's model, which has no Godot in it either. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\UI\CreateSessionModel.cs" Link="Linked\UI\CreateSessionModel.cs" />
   </ItemGroup>
 </Project>

@@ -9,6 +9,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Play/ScctExposure.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 
@@ -20,7 +21,7 @@ namespace
 		const TCHAR* Material;
 	};
 
-	const FVisionMode Modes[] = {
+	const FVisionMode VisionModes[] = {
 		{ 34, TEXT("/Game/OpenSCCT/UI/Vision/M_ScctVisionNight.M_ScctVisionNight") },
 		{ 36, TEXT("/Game/OpenSCCT/UI/Vision/M_ScctVisionThermal.M_ScctVisionThermal") },
 		{ 37, TEXT("/Game/OpenSCCT/UI/Vision/M_ScctVisionMotion.M_ScctVisionMotion") },
@@ -28,6 +29,18 @@ namespace
 	};
 
 	const FName AmountParameter(TEXT("Amount"));
+	const FName GainParameter(TEXT("Gain"));
+
+	// The night vision gain: NightGainSettled for a picture the exposure has settled on (a readable green picture
+	// of a lit room, not a white screen), more as the picture gets darker than the exposure can follow, by the
+	// power NightGainSlope of how much darker, between the bounds; NightGainRate per second is how fast it moves.
+	constexpr int32 NightIndex = 0;
+	constexpr float SettledPictureLevel = 0.18f;
+	constexpr float NightGainSettled = 1.25f;
+	constexpr float NightGainSlope = 0.5f;
+	constexpr float NightGainLeast = 0.9f;
+	constexpr float NightGainMost = 4.5f;
+	constexpr float NightGainRate = 2.5f;
 }
 
 bool UScctVisionSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
@@ -77,9 +90,9 @@ bool UScctVisionSubsystem::EnsureVolume()
 	}
 	bTriedMaterials = true;
 
-	static_assert(UE_ARRAY_COUNT(Modes) == ModeCount, "One material per mode");
+	static_assert(UE_ARRAY_COUNT(VisionModes) == ModeCount, "One material per mode");
 	TArray<UMaterialInterface*> Loaded;
-	for (const FVisionMode& Mode : Modes)
+	for (const FVisionMode& Mode : VisionModes)
 	{
 		UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, Mode.Material);
 		if (Material == nullptr)
@@ -124,7 +137,7 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 	}
 	ShownMode = VisionMode;
 	bool bAnyMode = false;
-	for (const FVisionMode& Mode : Modes)
+	for (const FVisionMode& Mode : VisionModes)
 	{
 		bAnyMode |= Mode.Mode == VisionMode;
 	}
@@ -145,7 +158,7 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 	bool bAnyShown = false;
 	for (int32 Index = 0; Index < ModeCount; ++Index)
 	{
-		const float Target = Modes[Index].Mode == VisionMode ? 1.0f : 0.0f;
+		const float Target = VisionModes[Index].Mode == VisionMode ? 1.0f : 0.0f;
 		float& Amount = Amounts[Index];
 		// Goggles come on fast and go off a little faster.
 		Amount = ScctHudStyle::Ease(Amount, Target, DeltaSeconds, Target > 0.5f ? 9.0f : 14.0f);
@@ -154,6 +167,24 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 			Amount = Target;
 		}
 		Materials[Index]->SetScalarParameterValue(AmountParameter, Amount);
+		if (Index == NightIndex && Amount > 0.0f)
+		{
+			const float Level = FScctExposure::PictureLevel();
+			const float Wanted = Level > 0.0f
+				? FMath::Clamp(NightGainSettled * FMath::Pow(SettledPictureLevel / FMath::Max(Level, 0.002f), NightGainSlope), NightGainLeast, NightGainMost)
+				: NightGainSettled;
+			// In the logarithm: the tube opens as fast as it closes.
+			NightGain = NightGain > 0.0f
+				? FMath::Exp(FMath::FInterpTo(FMath::Loge(NightGain), FMath::Loge(Wanted), DeltaSeconds, NightGainRate))
+				: Wanted;
+			Materials[Index]->SetScalarParameterValue(GainParameter, NightGain);
+		}
+		else if (Index == NightIndex)
+		{
+			// Goggles off: the next time they come on the gain starts from that picture, not from wherever the
+			// last use left it (another room).
+			NightGain = 0.0f;
+		}
 		Volume->Settings.WeightedBlendables.Array[Index].Weight = Amount > 0.0f ? 1.0f : 0.0f;
 		bAnyShown |= Amount > 0.0f;
 	}
