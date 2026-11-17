@@ -263,12 +263,17 @@ void SScctMatchMenu::Tick(const FGeometry& AllottedGeometry, const double InCurr
 	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
 	Shown = ScctHudStyle::Ease(Shown, bOpen ? 1.0f : 0.0f, FMath::Min(InDeltaTime, 0.05f), 10.0f);
 
-	if (bOpen)
+	// Unattended runs only (-ScctMenuDo): a page asked for while the menu is closed opens it.
+	FScctMenuDriver::FHost DriverHost;
+	DriverHost.ShowPage = [this](const FString& Name)
 	{
-		FScctMenuDriver::FHost DriverHost;
-		DriverHost.ShowPage = [this](const FString& Name) { ShowNamed(Name); };
-		FScctMenuDriver::Tick(InDeltaTime, DriverHost);
-	}
+		if (!bOpen)
+		{
+			OnWantsOpen.ExecuteIfBound();
+		}
+		ShowNamed(Name);
+	};
+	FScctMenuDriver::Tick(InDeltaTime, DriverHost);
 
 	// The results: online when the server sent them, offline a moment after the round ended (the HUD's own end
 	// banner has the first seconds).
@@ -501,7 +506,7 @@ TSharedRef<SWidget> SScctMatchMenu::BuildPause()
 	return SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 		[
-			SNew(SBox).WidthOverride(520.0f)
+			SNew(SBox).WidthOverride(700.0f)
 			[
 				SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight().Padding(2.0f, 0.0f, 0.0f, 4.0f)
@@ -599,10 +604,15 @@ TSharedRef<SWidget> SScctMatchMenu::BuildResults()
 	const bool bHave = ReadResults(Winner, Reason, Rows, Teams, Local);
 
 	const FString WinText = ScctUi::GameText(TEXT("Ending_Menu"), TEXT("TextTeamWin"), TEXT("wins"));
-	const FString Headline = Winner == 0 || Winner == 1
+	const bool bDecided = Winner == 0 || Winner == 1;
+	const bool bEnded = bOnlineLevel || bResultsReady;
+	const FString Headline = bDecided
 		? FString::Printf(TEXT("%s %s"), *ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), Winner, Winner == 0 ? TEXT("Spy") : TEXT("Mercenary")), *WinText)
-		: FString(TEXT("Round over"));
-	const bool bLocalWon = (Winner == 0 || Winner == 1) && Winner == (IsMercLocal() ? 1 : 0);
+		: bEnded ? FString(TEXT("Round over")) : FString(TEXT("Scoreboard"));
+	const bool bLocalWon = bDecided && Winner == (IsMercLocal() ? 1 : 0);
+	const FString Kicker = !bEnded ? FString(TEXT("ROUND IN PROGRESS"))
+		: bLocalWon ? ScctUi::GameText(TEXT("Ending_Menu"), TEXT("txt_Victory"), TEXT("Victory")).ToUpper()
+		: bDecided ? FString(TEXT("DEFEAT")) : FString(TEXT("NO WINNER"));
 
 	// Two tables, one per side.
 	const auto SideTable = [&](int32 Team) -> TSharedRef<SWidget>
@@ -678,7 +688,7 @@ TSharedRef<SWidget> SScctMatchMenu::BuildResults()
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 30.0f, 0.0f, 0.0f)
 		[
-			ScctUi::Label(bLocalWon ? FString(ScctUi::GameText(TEXT("Ending_Menu"), TEXT("txt_Victory"), TEXT("Victory"))).ToUpper() : FString(TEXT("ROUND OVER")), ScctUi::Accent(), 14.0f)
+			ScctUi::Label(Kicker, bDecided && !bLocalWon ? ScctHudStyle::Danger() : ScctUi::Accent(), 14.0f)
 		]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 6.0f, 0.0f, 6.0f)
 		[

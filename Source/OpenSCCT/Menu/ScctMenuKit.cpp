@@ -49,7 +49,18 @@ namespace
 		return Brush.Get();
 	}
 
-	/** A white rounded outline with nothing inside. */
+	/** The outlines handed out by OutlineBrush, with their radius and width. */
+	TMap<const FSlateBrush*, FVector2f>& OutlineShapes()
+	{
+		static TMap<const FSlateBrush*, FVector2f> Shapes;
+		return Shapes;
+	}
+
+	/**
+	 * A rounded outline with nothing inside: FPainter::Box draws it as a line of the draw call's colour. (A rounded
+	 * box brush fills with the draw call's tint and takes its outline's colour from the brush, so drawn as a plain
+	 * box it would be a solid plate of the colour with a white edge.)
+	 */
 	const FSlateBrush* OutlineBrush(float Radius = ScctUi::Corner, float Width = 1.0f)
 	{
 		static TMap<int32, TSharedPtr<FSlateRoundedBoxBrush>> Brushes;
@@ -57,6 +68,7 @@ namespace
 		if (!Brush.IsValid())
 		{
 			Brush = MakeShared<FSlateRoundedBoxBrush>(FLinearColor::Transparent, Radius, FLinearColor::White, Width);
+			OutlineShapes().Add(Brush.Get(), FVector2f(Radius, Width));
 		}
 		return Brush.Get();
 	}
@@ -80,7 +92,18 @@ namespace
 		{
 			if (Colour.A > 0.002f && Size.X > 0.0 && Size.Y > 0.0)
 			{
-				FSlateDrawElement::MakeBox(Out, Layer + Above, Geometry.ToPaintGeometry(FVector2f(Size), FSlateLayoutTransform(FVector2f(Position))), Brush, ESlateDrawEffect::None, Mix(Colour));
+				const FPaintGeometry Paint = Geometry.ToPaintGeometry(FVector2f(Size), FSlateLayoutTransform(FVector2f(Position)));
+				if (const FVector2f* Shape = OutlineShapes().Find(Brush))
+				{
+					// The outline in the colour; the fill (the element's tint) left clear. The element copies the
+					// brush, so one on the stack is enough.
+					const FSlateRoundedBoxBrush Line(FLinearColor::White, Shape->X, Mix(Colour), Shape->Y);
+					FSlateDrawElement::MakeBox(Out, Layer + Above, Paint, &Line, ESlateDrawEffect::None, FLinearColor(1.0f, 1.0f, 1.0f, 0.0f));
+				}
+				else
+				{
+					FSlateDrawElement::MakeBox(Out, Layer + Above, Paint, Brush, ESlateDrawEffect::None, Mix(Colour));
+				}
 			}
 		}
 
@@ -478,7 +501,7 @@ int32 SScctButton::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeom
 		Painter.Box(FVector2D::ZeroVector, Size, OutlineBrush(), bSelected ? ScctHudStyle::Fade(Colour, 0.9f) : ScctUi::White(0.1f + 0.3f * Lit), 1);
 		break;
 	default:
-		Painter.Box(FVector2D::ZeroVector, Size, FillBrush(), ScctUi::White(0.07f + 0.11f * Lit + 0.08f * Press));
+		Painter.Box(FVector2D::ZeroVector, Size, FillBrush(), ScctHudStyle::Fade(FMath::Lerp(ScctUi::White(0.07f), ScctHudStyle::Fade(Colour, 0.34f), Lit), 1.0f + 0.5f * Press));
 		Painter.Box(FVector2D::ZeroVector, Size, OutlineBrush(), FMath::Lerp(ScctUi::White(0.14f), ScctHudStyle::Fade(Colour, 0.95f), Lit), 1);
 		break;
 	}
@@ -503,12 +526,14 @@ void SScctOptionRow::BuildRow(const FText& InCaption, const FText& InDescription
 	DescriptionText = InDescription;
 	ChildSlot
 	[
-		SNew(SBox).HeightOverride(ScctUi::RowHeight)
+		// A caption too long for its place wraps and the row grows: a caption is never cut off.
+		SNew(SBox).MinDesiredHeight(ScctUi::RowHeight)
 		[
 			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(18.0f, 0.0f, 12.0f, 0.0f)
+			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(18.0f, 4.0f, 12.0f, 4.0f)
 			[
 				SNew(STextBlock)
+				.AutoWrapText(true)
 				.Text(Caption)
 				.Font(ScctUi::Body())
 				.ColorAndOpacity(TAttribute<FSlateColor>::CreateLambda([this] { return FSlateColor(ScctHudStyle::Fade(ScctHudStyle::Text(), (IsEnabled() ? 1.0f : 0.4f) * (0.78f + 0.22f * Lit))); }))
@@ -530,7 +555,7 @@ bool SScctOptionRow::IsLit() const
 FVector2D SScctOptionRow::ComputeDesiredSize(float LayoutScaleMultiplier) const
 {
 	const FVector2D Size = SCompoundWidget::ComputeDesiredSize(LayoutScaleMultiplier);
-	return FVector2D(FMath::Max(Size.X, ControlWidth + 200.0), ScctUi::RowHeight);
+	return FVector2D(FMath::Max(Size.X, ControlWidth + 200.0), FMath::Max<double>(Size.Y, ScctUi::RowHeight));
 }
 
 FSlateRect SScctOptionRow::GetControlRect(const FGeometry& Geometry) const
@@ -618,7 +643,7 @@ int32 SScctOptionRow::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 	Lit = ScctHudStyle::Ease(Lit, IsLit() ? 1.0f : 0.0f, FrameSeconds(), 18.0f);
 	const FPainter Painter{ OutDrawElements, AllottedGeometry, LayerId, InWidgetStyle.GetColorAndOpacityTint() };
 	const FVector2D Size = AllottedGeometry.GetLocalSize();
-	Painter.Box(FVector2D(0.0, 1.0), Size - FVector2D(0.0, 2.0), FillBrush(), ScctUi::White(0.035f + 0.075f * Lit));
+	Painter.Box(FVector2D(0.0, 1.0), Size - FVector2D(0.0, 2.0), FillBrush(), FMath::Lerp(ScctUi::White(0.035f), ScctHudStyle::Fade(ScctUi::Accent(), 0.17f), Lit));
 	Painter.Box(FVector2D(0.0, 1.0), Size - FVector2D(0.0, 2.0), OutlineBrush(), ScctHudStyle::Fade(ScctUi::Accent(), 0.7f * Lit), 1);
 	Painter.Box(FVector2D(0.0, 9.0), FVector2D(3.0, Size.Y - 18.0), WhiteBrush(), ScctHudStyle::Fade(ScctUi::Accent(), Lit), 1);
 	return SCompoundWidget::OnPaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId + 2, InWidgetStyle, bParentEnabled);
@@ -942,7 +967,18 @@ int32 SScctKeyRow::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeom
 	float X = Rect.Right;
 	for (int32 Index = 0; Index < Keys.Num() && Index < 3; ++Index)
 	{
-		const FString Name = Keys[Index].ToUpper();
+		// "MiddleMouse" reads as "MIDDLE MOUSE".
+		FString Name;
+		const FString& Raw = Keys[Index];
+		for (int32 At = 0; At < Raw.Len(); ++At)
+		{
+			if (At > 0 && FChar::IsUpper(Raw[At]) && FChar::IsLower(Raw[At - 1]))
+			{
+				Name.AppendChar(TEXT(' '));
+			}
+			Name.AppendChar(Raw[At]);
+		}
+		Name.ToUpperInline();
 		const FVector2D TextSize = Measure(Name, Font);
 		const float Width = FMath::Max(TextSize.X + 20.0, 34.0);
 		X -= Width;

@@ -412,14 +412,14 @@ namespace
 					.Set([Weak, MapIds](int32 Value) { if (Weak.IsValid() && MapIds.IsValidIndex(Value)) { Weak->SetMatch(MapIds[Value], Weak->GetStatus().Mode); } })
 				];
 			}
-			TArray<FString> ModeNames;
-			for (int32 Index = 0; Index < 4; ++Index) { ModeNames.Add(Menu != nullptr ? Menu->GetModeName(Index) : UScctMenuSubsystem::ModeKey(Index)); }
+			TArray<FString> LobbyModeChoices;
+			for (int32 Index = 0; Index < 4; ++Index) { LobbyModeChoices.Add(Menu != nullptr ? Menu->GetModeName(Index) : UScctMenuSubsystem::ModeKey(Index)); }
 			Rows->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 3.0f)
 			[
 				SNew(SScctStepper)
 				.Label(FText::FromString(ScctUi::GameText(TEXT("Create_Match"), TEXT("Mode.Caption"), TEXT("Game Mode"))))
 				.Description(FText::FromString(TEXT("The mode of the next match. A mode the map does not have is refused by the server.")))
-				.Options(ModeNames)
+				.Options(LobbyModeChoices)
 				.Get([Weak] { return Weak.IsValid() ? LobbyModeIndex(Weak->GetStatus().Mode) : 0; })
 				.Set([Weak](int32 Value) { if (Weak.IsValid()) { Weak->SetMatch(Weak->GetSetupMap(), UScctMenuSubsystem::ModeId(Value)); } })
 			];

@@ -79,7 +79,7 @@ namespace
 				// The maps.
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 24.0f, 0.0f)
 				[
-					SNew(SBox).WidthOverride(350.0f)
+					SNew(SBox).WidthOverride(390.0f)
 					[
 						ScctUi::Card(FString::Printf(TEXT("Maps · %d"), MapIds.Num()), BuildMapList(), FMargin(12.0f, 18.0f, 6.0f, 12.0f))
 					]
@@ -92,7 +92,7 @@ namespace
 				// The match's settings.
 				+ SHorizontalBox::Slot().AutoWidth()
 				[
-					SNew(SBox).WidthOverride(520.0f)
+					SNew(SBox).WidthOverride(480.0f)
 					[
 						SNew(SVerticalBox)
 						+ SVerticalBox::Slot().FillHeight(1.0f)
@@ -212,13 +212,19 @@ namespace
 			for (int32 Index = 0; Index < MapIds.Num(); ++Index)
 			{
 				const FScctMenuMapInfo* Map = Menu->FindMap(MapIds[Index]);
-				FString Modes;
+				// Under the name: the modes (most maps play all four, which needs no list) and the players it is made for.
+				TArray<FString> ModeNames;
 				for (int32 Mode = 0; Map != nullptr && Mode < 4; ++Mode)
 				{
 					if (Map->Plays(Mode))
 					{
-						Modes += (Modes.IsEmpty() ? TEXT("") : TEXT(" · ")) + Menu->GetModeName(Mode);
+						ModeNames.Add(Menu->GetModeName(Mode));
 					}
+				}
+				FString Modes = ModeNames.Num() == 4 ? FString(TEXT("Every mode")) : FString::Join(ModeNames, TEXT(" · "));
+				if (Map != nullptr && Map->Data.RecommendedPlayers > 0)
+				{
+					Modes += FString::Printf(TEXT("%s%d players"), Modes.IsEmpty() ? TEXT("") : TEXT("  ·  "), Map->Data.RecommendedPlayers);
 				}
 				const FSlateBrush* Thumb = Menu->GetPicture(Menu->GetMapText(MapIds[Index], EScctMenuMapText::PreviewImage));
 				if (Thumb == nullptr)
@@ -248,12 +254,12 @@ namespace
 							SNew(SVerticalBox)
 							+ SVerticalBox::Slot().AutoHeight()
 							[
-								SNew(STextBlock).Font(ScctUi::Body(true)).ColorAndOpacity(ScctHudStyle::Text()).OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+								SNew(STextBlock).Font(ScctUi::Body(true)).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true)
 								.Text(FText::FromString(Map != nullptr ? Map->Title : MapIds[Index]))
 							]
 							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 3.0f, 0.0f, 0.0f)
 							[
-								SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+								SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
 								.Text(FText::FromString(Modes))
 							]
 						]
@@ -305,15 +311,22 @@ namespace
 					+ SVerticalBox::Slot().AutoHeight()
 					[
 						SNew(SOverlay)
-						+ SOverlay::Slot()[ ScctUi::Picture(Menu->GetMapPicture(Id, bMerc), 0.0f, 340.0f) ]
+						+ SOverlay::Slot()[ ScctUi::Picture(Menu->GetMapPicture(Id, bMerc), 0.0f, 300.0f) ]
 						+ SOverlay::Slot().VAlign(VAlign_Bottom).HAlign(HAlign_Left).Padding(18.0f, 0.0f, 0.0f, 14.0f)
 						[
 							ScctUi::Label(Players, ScctHudStyle::Text(), 11.0f)
 						]
 					]
+					// Below the picture the text scrolls, so a long briefing on a small screen is never cut off.
+					+ SVerticalBox::Slot().FillHeight(1.0f)
+					[
+					SNew(SScrollBox)
+					+ SScrollBox::Slot()
+					[
+					SNew(SVerticalBox)
 					+ SVerticalBox::Slot().AutoHeight().Padding(28.0f, 22.0f, 28.0f, 0.0f)
 					[
-						SNew(STextBlock).Font(ScctHudStyle::Font(ScctHudStyle::EWeight::Light, 34.0f, 120)).ColorAndOpacity(ScctHudStyle::Text()).Text(FText::FromString(MapTitle()))
+						SNew(STextBlock).Font(ScctHudStyle::Font(ScctHudStyle::EWeight::Light, 32.0f, 120)).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true).Text(FText::FromString(MapTitle()))
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(28.0f, 6.0f, 28.0f, 0.0f)
 					[
@@ -347,6 +360,8 @@ namespace
 								return FText::FromString(Objective.IsEmpty() ? TEXT("The map gives no objective text for this mode.") : Objective);
 							}))
 						]
+					]
+					]
 					],
 					FMargin(0.0f), 0.74f));
 		}

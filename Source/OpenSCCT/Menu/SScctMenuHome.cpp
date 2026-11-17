@@ -126,6 +126,29 @@ namespace
 		virtual FString GetTitle() const override { return FString(); }
 
 	private:
+		/** Whole sentences from the start of a text, as many as fit in about MaxChars (at least one): never a sentence cut off. */
+		static FString FirstSentences(const FString& Text, int32 MaxChars)
+		{
+			FString Out;
+			int32 Start = 0;
+			for (int32 Index = 0; Index < Text.Len(); ++Index)
+			{
+				const TCHAR Char = Text[Index];
+				const bool bEnd = (Char == TEXT('.') || Char == TEXT('!') || Char == TEXT('?')) && (Index + 1 == Text.Len() || FChar::IsWhitespace(Text[Index + 1]));
+				if (bEnd)
+				{
+					const FString Sentence = Text.Mid(Start, Index + 1 - Start).TrimStartAndEnd();
+					if (!Out.IsEmpty() && Out.Len() + 1 + Sentence.Len() > MaxChars)
+					{
+						return Out;
+					}
+					Out += (Out.IsEmpty() ? TEXT("") : TEXT(" ")) + Sentence;
+					Start = Index + 1;
+				}
+			}
+			return Out.IsEmpty() ? Text : Out;
+		}
+
 		TSharedRef<SWidget> BuildProfile()
 		{
 			const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Host.Online;
@@ -146,7 +169,7 @@ namespace
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
 					[
-						SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim())
+						SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
 						.Text(TAttribute<FText>::CreateLambda([Weak, IsSignedIn]
 						{
 							if (!Weak.IsValid() || !Weak->HasMaster()) { return FText::FromString(TEXT("Offline: no master server set")); }
@@ -179,20 +202,17 @@ namespace
 			{
 				Description = Menu->GetMapText(FeaturedMap, EScctMenuMapText::BriefSpy);
 			}
-			Description = Description.Replace(TEXT("|"), TEXT(" ")).TrimStartAndEnd();
+			Description = FirstSentences(Description.Replace(TEXT("|"), TEXT(" ")).TrimStartAndEnd(), 170);
 			return ScctUi::Card(FString::Printf(TEXT("%d map%s ready to play"), Count, Count == 1 ? TEXT("") : TEXT("s")),
 				SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Picture(Menu->GetMapPicture(FeaturedMap, false), 392.0f, 196.0f) ]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 4.0f)
 				[
-					SNew(STextBlock).Font(ScctUi::H2()).ColorAndOpacity(ScctHudStyle::Text()).Text(FText::FromString(Menu->GetMapTitle(FeaturedMap)))
+					SNew(STextBlock).Font(ScctUi::H2()).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true).Text(FText::FromString(Menu->GetMapTitle(FeaturedMap)))
 				]
 				+ SVerticalBox::Slot().AutoHeight()
 				[
-					SNew(SBox).MaxDesiredHeight(60.0f)
-					[
-						SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true).Text(FText::FromString(Description))
-					]
+					SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true).Text(FText::FromString(Description))
 				]);
 		}
 
