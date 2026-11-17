@@ -501,7 +501,9 @@ void UScctSessionSubsystem::TickAutoShots(float DeltaTime)
 	FString Directory = FPaths::ProjectSavedDir() / TEXT("ScctShots");
 	FParse::Value(FCommandLine::Get(), TEXT("ScctShotDir="), Directory);
 	const FString File = Directory / FString::Printf(TEXT("%s_%02d.png"), *GetWorld()->GetMapName(), ShotIndex++);
-	FScreenshotRequest::RequestScreenshot(File, false, false);
+	// -ScctShotUI: the screenshot includes the HUD and everything else Slate draws over the picture.
+	static const bool bShowUI = FParse::Param(FCommandLine::Get(), TEXT("ScctShotUI"));
+	FScreenshotRequest::RequestScreenshot(File, bShowUI, false);
 	bAdvanceTour = true;
 	UE_LOG(LogOpenSCCT, Log, TEXT("Screenshot %s (view valid %d at %.0f %.0f %.0f, session %d)"), *File, View.Valid, View.X, View.Y, View.Z, SessionId);
 

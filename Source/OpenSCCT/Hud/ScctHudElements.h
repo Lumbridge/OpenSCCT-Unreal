@@ -1,0 +1,73 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Hud/ScctHudModel.h"
+#include "Hud/ScctHudPainter.h"
+
+// The HUD's elements. Each function paints one block from the model and decides for itself whether it has
+// anything to show. The canvas (SScctHudCanvas) calls them in drawing order.
+//
+// Two layers: the full-screen layer covers the whole viewport (things that belong to the picture: washes, the
+// crosshair, world markers) and the safe-area layer stays inside the display's safe zone (everything to read).
+namespace ScctHudElements
+{
+	// --- Full-screen layer ---------------------------------------------------------------------------------
+	/** Washes over the picture: knock-out, flash, the red of a hit, the frame of a vision mode or gadget camera. */
+	void PaintScreenEffects(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** Objective markers in the world. */
+	void PaintMarkers(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** The crosshair with its spread and hit confirmation, what the laser holds, noise and hit arcs around it. */
+	void PaintCrosshair(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** Binoculars and the rifle scope. */
+	void PaintScope(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	// --- Safe-area layer -----------------------------------------------------------------------------------
+	/** Bottom left: health, lives, stance, the gauges and the vision mode. */
+	void PaintStatus(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** Bottom right: the weapon with its ammunition and fire mode, and the gadgets. */
+	void PaintEquipment(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** Bottom centre: what Use does now, or the list to choose from. */
+	void PaintPrompt(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** Top centre: the clock, both teams, objectives done and the countdowns. */
+	void PaintRound(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** Top left: the mission's objectives and what is being hacked right now. */
+	void PaintObjectives(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** Top right: the kill feed. */
+	void PaintFeed(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** Under the clock: briefings and objective headlines. */
+	void PaintHeadlines(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** Above the status block: the player's own state lines, zones and chat. */
+	void PaintLog(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** The map's name as the round starts, and who won as it ends. */
+	void PaintBanner(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** The scoreboard, while held. */
+	void PaintScoreboard(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	// --- Shared by the elements ----------------------------------------------------------------------------
+	/** A box from its top left corner and size. */
+	inline FBox2f HudBox(float X, float Y, float Width, float Height)
+	{
+		return FBox2f(FVector2f(X, Y), FVector2f(X + Width, Y + Height));
+	}
+
+	/** Lives as the original reads them: from 100 (a player) or 1000 (a team) up they are unlimited. */
+	FString LivesText(const FScctHudModel& Model, int32 Lives, int32 InfiniteFrom);
+
+	/** Seconds as m:ss. */
+	FString ClockText(int32 Seconds);
+
+	/** True when the player's own HUD blocks are to be drawn (a live pawn, not hidden by the game). */
+	bool ShowsPlayerHud(const FScctHudModel& Model);
+}
