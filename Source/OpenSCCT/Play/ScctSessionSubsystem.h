@@ -28,6 +28,8 @@ class AScctPawnProxy;
 //                                    caches the camera right after this tick, so it is never a frame behind.
 //   5. Pawns                         GetPawns and each pawn's pose: proxies are spawned, placed, posed and, for
 //                                    pawns that are gone, destroyed.
+//                                    A session that failed while steps 4 and 5 read it ends here as in "A
+//                                    session changes", and step 6 is not reached.
 //   6. OnFrame(DeltaSeconds)         Raised only while a match plays. Everything above is this frame's: features
 //                                    read their per-frame bridge state here and may use FindProxy, GetPawns,
 //                                    GetView and GetSessionInfo.
@@ -101,6 +103,10 @@ struct FScctLocalMatchOptions
  *   -ScctCams="x,y,z,yaw,pitch;..."                       take each screenshot from a fixed point instead
  *   -ScctCheckFeatures                                    fetch all six feature tables when a match starts and
  *                                                         log each one's version (or why it is missing)
+ *   -ScctShowLocalBody                                    draw the local player's body even when the view is from
+ *                                                         its own eyes (for tour cameras that look at the player)
+ *   -ScctRestartAfter=S                                   S seconds into the first match, start it again once
+ *                                                         (a second match in the same world: a new session id)
  */
 UCLASS()
 class OPENSCCT_API UScctSessionSubsystem : public UTickableWorldSubsystem
@@ -249,6 +255,13 @@ private:
 
 	/** Present sessions this world did not start (online rounds). */
 	bool bFollowBridge = false;
+
+	/** What the last StartMatch was asked for. */
+	FScctLocalMatchOptions LastOptions;
+
+	/** -ScctRestartAfter: seconds until the one restart; negative when none is due. */
+	float RestartTimer = -1.0f;
+	bool bRestarted = false;
 
 	int32 TicksThisFrame = 0;
 	FString Failure;

@@ -18,6 +18,10 @@ param(
     [string] $Content = $env:SVM_CONTENT,
     [int] $Shots = 3,
     [double] $Every = 6,
+    # Where the screenshots go (default: Saved\ScctShots in the project).
+    [string] $ShotDir = '',
+    # Added to the log's name (run-<Map><Tag>.log), so runs of one map do not overwrite each other's log.
+    [string] $Tag = '',
     # Game URL options, see Source/OpenSCCT/Play/ScctGameMode.h ("?Side=merc?Bots=3").
     [string] $Options = '',
     # Camera tour: "x,y,z,yaw,pitch;x,y,z,yaw,pitch" (one per screenshot) instead of the player's view.
@@ -36,8 +40,9 @@ function Format-Switch([string] $Key, [string] $Value) {
 }
 
 $project = (Resolve-Path "$PSScriptRoot\..").Path
-$shotDir = (Join-Path $project 'Saved\ScctShots').Replace('\', '/')
-$log = (Join-Path $project "Saved\Logs\run-$Map.log").Replace('\', '/')
+if (-not $ShotDir) { $ShotDir = Join-Path $project 'Saved\ScctShots' }
+$shotDir = $ShotDir.Replace('\', '/')
+$log = (Join-Path $project "Saved\Logs\run-$Map$Tag.log").Replace('\', '/')
 $contentDir = "$Content".Replace('\', '/')
 New-Item -ItemType Directory -Force (Join-Path $project 'Saved\Logs') | Out-Null
 
@@ -58,8 +63,8 @@ $arguments = @(
 # One ready-made command line, so PowerShell's own quoting of arguments cannot move the quotes.
 $run = Start-Process -FilePath "$Engine\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" -ArgumentList $arguments `
     -NoNewWindow -Wait -PassThru `
-    -RedirectStandardOutput (Join-Path $project "Saved\Logs\run-$Map.stdout.txt") `
-    -RedirectStandardError (Join-Path $project "Saved\Logs\run-$Map.stderr.txt")
+    -RedirectStandardOutput (Join-Path $project "Saved\Logs\run-$Map$Tag.stdout.txt") `
+    -RedirectStandardError (Join-Path $project "Saved\Logs\run-$Map$Tag.stderr.txt")
 "exit code $($run.ExitCode)"
 
 Select-String -Path $log -Pattern 'LogOpenSCCT' |

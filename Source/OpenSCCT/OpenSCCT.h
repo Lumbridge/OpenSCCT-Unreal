@@ -23,6 +23,7 @@ public:
 	 * The bridge's entry points, starting the .NET runtime on first use. Null with the reason in OutError when
 	 * the runtime or the bridge could not be loaded (that is final for this run: the runtime starts once per
 	 * process) or when the content folder is missing or refused (that is asked again on the next call).
+	 * Each reason is written to the log once, however often it is asked for.
 	 */
 	const FScctBridgeApi* GetBridge(FString& OutError);
 
@@ -67,6 +68,9 @@ private:
 	/** Loads the runtime and the core table. False with StartError set when that cannot work in this run. */
 	bool LoadTable();
 
+	/** GetBridge without its log line. */
+	const FScctBridgeApi* FindBridge(FString& OutError);
+
 	struct FFeature
 	{
 		/** The table's bytes as the bridge filled them; empty when the feature could not be fetched. */
@@ -85,6 +89,9 @@ private:
 
 	/** Why the runtime or the table could not be loaded. Final for the run. */
 	FString StartError;
+
+	/** The last GetBridge failure written to the log, so the same reason is not written again every call. */
+	FString LoggedBridgeError;
 
 	/** The feature tables fetched so far, by bridge class name; failures are kept too, so each is reported once. */
 	TMap<FString, FFeature> Features;

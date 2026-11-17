@@ -121,6 +121,18 @@ bool FOpenSCCTModule::LoadTable()
 
 const FScctBridgeApi* FOpenSCCTModule::GetBridge(FString& OutError)
 {
+	const FScctBridgeApi* Bridge = FindBridge(OutError);
+	if (Bridge == nullptr && OutError != LoggedBridgeError)
+	{
+		// Callers may ask every frame (a feature waiting for the bridge): each reason is written once.
+		LoggedBridgeError = OutError;
+		UE_LOG(LogOpenSCCT, Error, TEXT("OpenSCCT bridge unavailable: %s"), *OutError);
+	}
+	return Bridge;
+}
+
+const FScctBridgeApi* FOpenSCCTModule::FindBridge(FString& OutError)
+{
 	if (!LoadTable())
 	{
 		OutError = StartError;
@@ -146,6 +158,7 @@ const FScctBridgeApi* FOpenSCCTModule::GetBridge(FString& OutError)
 
 	UE_LOG(LogOpenSCCT, Log, TEXT("OpenSCCT bridge %d ready, content at %s"), Api.Version, *ContentRoot);
 	bConfigured = true;
+	LoggedBridgeError.Reset();
 	return &Api;
 }
 

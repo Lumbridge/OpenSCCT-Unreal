@@ -86,6 +86,8 @@ bool UScctSessionSubsystem::StartLocalMatch(const FString& Map, const FString& M
 bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 {
 	Failure.Reset();
+	LastOptions = Options;
+	RestartTimer = -1.0f;
 	if (!ConnectBridge())
 	{
 		return false;
@@ -128,6 +130,13 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 		return false;
 	}
 	ChangeSession(Info, true);
+
+	// -ScctRestartAfter=S: the unattended check of a second match in the same world, once.
+	float RestartAfter = 0.0f;
+	if (!bRestarted && FParse::Value(FCommandLine::Get(), TEXT("ScctRestartAfter="), RestartAfter) && RestartAfter > 0.0f)
+	{
+		RestartTimer = RestartAfter;
+	}
 	return true;
 }
 
@@ -256,6 +265,16 @@ void UScctSessionSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 	TickAutoShots(DeltaTime);
+	if (RestartTimer > 0.0f)
+	{
+		RestartTimer -= DeltaTime;
+		if (RestartTimer <= 0.0f)
+		{
+			bRestarted = true;
+			UE_LOG(LogOpenSCCT, Log, TEXT("-ScctRestartAfter: starting the match again (session %d, %d pawn bodies)"), SessionId, Proxies.Num());
+			StartMatch(FScctLocalMatchOptions(LastOptions));
+		}
+	}
 
 	// The order below is the contract written at the top of the header; keep the two together.
 	TicksThisFrame = 0;
@@ -292,6 +311,16 @@ void UScctSessionSubsystem::Tick(float DeltaTime)
 	}
 
 	UpdatePawns();
+	if (Api->GetState() != static_cast<int32>(EScctBridgeState::Playing))
+	{
+		// Reading the view, the pawns or a pose failed and the bridge ended the session: the features are not
+		// handed a frame of a match that is gone.
+		CheckSession();
+		if (SessionId == 0)
+		{
+			return;
+		}
+	}
 	OnFrame.Broadcast(DeltaTime);
 }
 
@@ -299,6 +328,16 @@ void UScctSessionSubsystem::UpdatePawns()
 {
 	PawnCount = FMath::Clamp(Api->GetPawns(PawnBuffer.GetData(), PawnBuffer.Num()), 0, PawnBuffer.Num());
 	LocalActorId = 0;
+
+	// -ScctShowLocalBody: the screenshot tour looks at the local player from outside, where the body belongs.
+	static const bool bShowLocalBody = FParse::Param(FCommandLine::Get(), TEXT("ScctShowLocalBody"));
+	if (bShowLocalBody)
+	{
+		for (int32 Index = 0; Index < PawnCount; ++Index)
+		{
+			PawnBuffer[Index].Flags &= ~EScctPawnFlags::FirstPerson;
+		}
+	}
 
 	TSet<int32, DefaultKeyFuncs<int32>, TInlineSetAllocator<MaxPawns>> Seen;
 	for (int32 Index = 0; Index < PawnCount; ++Index)
@@ -384,7 +423,7 @@ void UScctSessionSubsystem::Fail(const FString& Reason)
 	FirstLine.TrimStartAndEndInline();
 
 	Failure = FirstLine;
-	UE_LOG(LogOpenSCCT, Error, TEXT("OpenSCCT match stopped: %s"), *Reason);
+	UE_LOG(LogOpenSCCT, Error, TEXT("OpenSCCT match failed: %s"), *Reason);
 	if (GEngine != nullptr)
 	{
 		GEngine->AddOnScreenDebugMessage(INDEX_NONE, 20.0f, FColor::Red, FString::Printf(TEXT("OpenSCCT: %s"), *FirstLine));

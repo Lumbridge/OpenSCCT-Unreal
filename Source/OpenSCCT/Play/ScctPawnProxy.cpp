@@ -48,8 +48,9 @@ AScctPawnProxy::AScctPawnProxy()
 	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Body->SetCastShadow(true);
 	// A player looking through their own eyes still sees their shadow on the floor and walls: the body is hidden
-	// in game for that view (SetHiddenInGame in Present) and this keeps its shadow.
-	Body->bCastHiddenShadow = true;
+	// in game for that view and keeps its shadow through bCastHiddenShadow. Present switches that on only while
+	// the simulation shows the pawn, because the engine draws a hidden shadow for invisible components too.
+	Body->bCastHiddenShadow = false;
 
 	StandIn = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StandIn"));
 	StandIn->SetupAttachment(Root);
@@ -114,13 +115,28 @@ void AScctPawnProxy::Present(const FScctBridgePawn& NewPawn, TConstArrayView<FSc
 	SetActorLocationAndRotation(Location, FRotator(0.0, Pawn.Yaw, 0.0));
 
 	// Two different kinds of "not drawn". A pawn the simulation does not show is gone, shadow and all
-	// (visibility). The local player seen from their own eyes is only out of the main view: hidden in game,
-	// which with bCastHiddenShadow leaves the shadow. Both reach what features attached to the body.
+	// (visibility, and no hidden shadow: the engine would otherwise still draw the shadow of an invisible
+	// component that has bCastHiddenShadow). The local player seen from their own eyes is only out of the main
+	// view: hidden in game, which with bCastHiddenShadow leaves the shadow. Both reach what features attached
+	// to the body.
 	const bool bPosed = bHasModel && Pose.Num() > 0;
 	const bool bBodyVisible = IsShown() && bPosed;
 	if (Body->IsVisible() != bBodyVisible)
 	{
 		Body->SetVisibility(bBodyVisible, true);
+	}
+	if (static_cast<bool>(Body->bCastHiddenShadow) != bBodyVisible)
+	{
+		Body->SetCastHiddenShadow(bBodyVisible);
+		TArray<USceneComponent*> Attached;
+		Body->GetChildrenComponents(true, Attached);
+		for (USceneComponent* Child : Attached)
+		{
+			if (UPrimitiveComponent* Primitive = Cast<UPrimitiveComponent>(Child))
+			{
+				Primitive->SetCastHiddenShadow(bBodyVisible);
+			}
+		}
 	}
 	if (Body->bHiddenInGame != IsFirstPerson())
 	{
@@ -176,8 +192,7 @@ bool AScctPawnProxy::AttachToBone(USceneComponent* Component, const FString& Bri
 	// From here on it is part of the body: drawn, hidden and shadowed as the body is.
 	if (UPrimitiveComponent* Primitive = Cast<UPrimitiveComponent>(Component))
 	{
-		Primitive->bCastHiddenShadow = true;
-		Primitive->MarkRenderStateDirty();
+		Primitive->SetCastHiddenShadow(Body->bCastHiddenShadow);
 	}
 	Component->SetVisibility(Body->IsVisible(), true);
 	Component->SetHiddenInGame(Body->bHiddenInGame, true);

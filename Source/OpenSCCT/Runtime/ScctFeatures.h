@@ -44,12 +44,24 @@ SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);
 template <typename TTable>
 const TTable* ScctFeature(FString* OutError = nullptr)
 {
+	// Once fetched a table never changes or goes away while the game runs, so callers that ask every frame get
+	// it back without a lookup. A failure is asked again (the content folder may have been set since).
+	static const TTable* Kept = nullptr;
+	if (Kept != nullptr)
+	{
+		if (OutError != nullptr)
+		{
+			OutError->Reset();
+		}
+		return Kept;
+	}
+
 	FString Error;
-	const void* Table = FOpenSCCTModule::Get().FindFeatureTable(
-		TScctFeatureInfo<TTable>::TypeName(), sizeof(TTable), TScctFeatureInfo<TTable>::Version, Error);
+	Kept = static_cast<const TTable*>(FOpenSCCTModule::Get().FindFeatureTable(
+		TScctFeatureInfo<TTable>::TypeName(), sizeof(TTable), TScctFeatureInfo<TTable>::Version, Error));
 	if (OutError != nullptr)
 	{
 		*OutError = MoveTemp(Error);
 	}
-	return static_cast<const TTable*>(Table);
+	return Kept;
 }
