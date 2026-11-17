@@ -24,7 +24,7 @@ namespace Ui = ScctMenuStyle;
 
 namespace
 {
-	constexpr float LabelShare = 0.40f;
+	constexpr float BindingsLabelShare = 0.40f;
 	constexpr float SlotWidth = 178.0f;
 
 	/** Reads one of the tables' texts, which are handed over as "copy what fits, return the full length". */
@@ -939,10 +939,10 @@ void SScctBindingsPanel::Refresh()
 	List->AddSlot().AutoHeight().Padding(0.0f, 4.0f, 14.0f, 4.0f)
 	[
 		SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().FillWidth(LabelShare)[ Ui::Label(TEXT("Action")) ]
+		+ SHorizontalBox::Slot().FillWidth(BindingsLabelShare)[ Ui::Label(TEXT("Action")) ]
 		+ SHorizontalBox::Slot().AutoWidth()[ SNew(SBox).WidthOverride(SlotWidth + 8.0f)[ Ui::Label(TEXT("Primary")) ] ]
 		+ SHorizontalBox::Slot().AutoWidth()[ SNew(SBox).WidthOverride(SlotWidth)[ Ui::Label(TEXT("Secondary")) ] ]
-		+ SHorizontalBox::Slot().FillWidth(1.0f - LabelShare)
+		+ SHorizontalBox::Slot().FillWidth(1.0f - BindingsLabelShare)
 	];
 
 	FString Category;
@@ -955,7 +955,7 @@ void SScctBindingsPanel::Refresh()
 		}
 
 		const TSharedRef<SHorizontalBox> Line = SNew(SHorizontalBox);
-		Line->AddSlot().FillWidth(LabelShare).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 12.0f, 0.0f)
+		Line->AddSlot().FillWidth(BindingsLabelShare).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 12.0f, 0.0f)
 		[
 			Ui::Text(Ui::ToText(Row.Label), 13.0f, FSlateColor(Row.Keys.Num() > 0 ? ScctHudStyle::Text() : ScctHudStyle::TextDim()))
 		];
@@ -968,7 +968,7 @@ void SScctBindingsPanel::Refresh()
 				SNew(SBox).WidthOverride(SlotWidth)[ MakeSlot(Row, Row.Keys.IsValidIndex(Index) ? Row.Keys[Index] : FString()) ]
 			];
 		}
-		Line->AddSlot().FillWidth(1.0f - LabelShare);
+		Line->AddSlot().FillWidth(1.0f - BindingsLabelShare);
 
 		List->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 14.0f, 5.0f)
 		[

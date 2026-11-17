@@ -34,7 +34,7 @@ namespace
 
 	constexpr float ScreenWidth = 1040.0f;
 	constexpr float BodyHeight = 500.0f;
-	constexpr float LabelShare = 0.42f;
+	constexpr float OptionsLabelShare = 0.42f;
 
 	/** The sections of each page, drawn in the order they were registered. */
 	TMap<FName, TArray<FScctOptionsSection>>& Sections()
@@ -136,8 +136,8 @@ namespace
 			Desc.Choices = MoveTemp(Choices);
 			FScctSettings::Register(Desc);
 		};
-		const TArray<FText> Modes = { FText::FromString(TEXT("Windowed")), FText::FromString(TEXT("Borderless")), FText::FromString(TEXT("Fullscreen")) };
-		Add(TEXT("Test.WindowMode"), TEXT("Display"), TEXT("Window"), TEXT("Window mode"), EScctSettingType::Choice, TEXT("1"), 0.f, 2.f, 0.f, Modes);
+		const TArray<FText> WindowModes = { FText::FromString(TEXT("Windowed")), FText::FromString(TEXT("Borderless")), FText::FromString(TEXT("Fullscreen")) };
+		Add(TEXT("Test.WindowMode"), TEXT("Display"), TEXT("Window"), TEXT("Window mode"), EScctSettingType::Choice, TEXT("1"), 0.f, 2.f, 0.f, WindowModes);
 		Add(TEXT("Test.VSync"), TEXT("Display"), TEXT("Window"), TEXT("Vertical sync"), EScctSettingType::Bool, TEXT("true"));
 		Add(TEXT("Test.FrameCap"), TEXT("Display"), TEXT("Window"), TEXT("Frame rate cap"), EScctSettingType::Int, TEXT("120"), 30.f, 240.f, 10.f);
 		Add(TEXT("Test.Gamma"), TEXT("Display"), TEXT("Picture"), TEXT("Brightness"), EScctSettingType::Float, TEXT("1.0"), 0.5f, 1.5f, 0.05f);
@@ -443,7 +443,7 @@ void SScctOptionsPage::AddOptionRow(const TSharedRef<SVerticalBox>& Box, const F
 		.ToolTipText(Desc.Tooltip)
 		[
 			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(LabelShare).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 16.0f, 0.0f)
+			+ SHorizontalBox::Slot().FillWidth(OptionsLabelShare).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 16.0f, 0.0f)
 			[
 				// An edited option's label is lit until the edit is applied.
 				Ui::Text(Desc.Label, 13.0f, TAttribute<FSlateColor>::CreateLambda([this, Key]
@@ -451,7 +451,7 @@ void SScctOptionsPage::AddOptionRow(const TSharedRef<SVerticalBox>& Box, const F
 					return FSlateColor(Edits.Contains(Key) ? ScctHudStyle::Accent(1) : ScctHudStyle::Text());
 				}))
 			]
-			+ SHorizontalBox::Slot().FillWidth(1.0f - LabelShare).VAlign(VAlign_Center)[ MakeControl(Desc) ]
+			+ SHorizontalBox::Slot().FillWidth(1.0f - OptionsLabelShare).VAlign(VAlign_Center)[ MakeControl(Desc) ]
 		]
 	];
 }

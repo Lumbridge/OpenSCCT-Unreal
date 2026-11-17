@@ -110,6 +110,9 @@ unsafe
     // The sizes Source/OpenSCCT/Runtime/ScctBindingsApi.h and ScctMouseAimApi.h assert for their mirrors.
     Check(sizeof(BindingsApi) == 128, $"table size for the C++ mirror: {sizeof(BindingsApi)}");
     Check(sizeof(MouseAimApi) == 48, $"mouse and aim table size for the C++ mirror: {sizeof(MouseAimApi)}");
+    // And Runtime/ScctLoadoutApi.h (Bridge/Probes/LoadoutProbe checks each struct and plays a match with it).
+    Check(sizeof(LoadoutApi) == 112 && sizeof(BridgeLoadout) == 1280 && sizeof(BridgeGearItem) == 236 && sizeof(BridgeGearAnswer) == 200,
+        $"loadout table sizes for the C++ mirror: {sizeof(LoadoutApi)}, loadout {sizeof(BridgeLoadout)}, item {sizeof(BridgeGearItem)}, answer {sizeof(BridgeGearAnswer)}");
 }
 
 Console.WriteLine(failures == 0 ? "All bindings editor checks passed." : $"{failures} check(s) FAILED.");
