@@ -569,7 +569,7 @@ public static unsafe class WorldDebugExports
     /// <summary>The last exception an entry threw on the server thread (for the probes); null when none did.</summary>
     public static Exception? LastFailure { get; private set; }
 
-    private static int OnServer(BridgeSession current, Action<ServerHost> action)
+    internal static int OnServer(BridgeSession current, Action<ServerHost> action)
     {
         try
         {

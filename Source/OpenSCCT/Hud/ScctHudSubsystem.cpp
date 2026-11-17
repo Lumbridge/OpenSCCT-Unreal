@@ -1,4 +1,5 @@
 #include "Hud/ScctHudSubsystem.h"
+#include "Hud/ScctCrosshairShape.h"
 
 #include "Blueprint/WidgetLayoutLibrary.h"
 #include "Engine/GameViewportClient.h"
@@ -66,6 +67,7 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	InitBackpack();
 	InitBinoculars();
 	InitDetails();
+	ScctCrosshair::RegisterOptions();
 
 	// -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1"
 	FString Commands;
@@ -489,7 +491,7 @@ void UScctHudSubsystem::RunTimedCommands()
 		}
 		else if (RunIconCommand(Command.Name, Command.Argument) || RunRadarCommand(Command.Name, Command.Argument)
 			|| RunBackpackCommand(Command.Name, Command.Argument) || RunMotionCommand(Command.Name, Command.Argument)
-			|| RunDetailsCommand(Command.Name, Command.Argument)
+			|| RunDetailsCommand(Command.Name, Command.Argument) || ScctCrosshair::RunCommand(Command.Name, Command.Argument)
 			|| (GetWorld()->GetSubsystem<UScctTeamPingSubsystem>() != nullptr && GetWorld()->GetSubsystem<UScctTeamPingSubsystem>()->RunCommand(Command.Name, Command.Argument))
 			|| (GetWorld()->GetSubsystem<UScctTelemetrySubsystem>() != nullptr && GetWorld()->GetSubsystem<UScctTelemetrySubsystem>()->RunCommand(Command.Name, Command.Argument)))
 		{

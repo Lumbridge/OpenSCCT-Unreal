@@ -37,6 +37,7 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
     private readonly SoundLibrary? _library;
     private readonly SoundResolver? _resolver;
     private readonly AmbientSounds? _ambient;
+    private SequenceAudio? _sequenceAudio;
     private readonly EffectTracker _effects;
     private readonly BridgeSession _bridge;
     private AcousticMap? _acoustics;
@@ -267,6 +268,21 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
 
     /// <summary>The ambient sound sources of this frame.</summary>
     public int GetAmbientSounds(Span<BridgeAmbientSound> into) => _ambient?.Write(into) ?? 0;
+
+    /// <summary>The audio segments the client world's animation sequences play now (SequenceAudioExports).</summary>
+    internal int GetSequenceSounds(Span<BridgeSequenceSound> into)
+    {
+        if (_library is null || _resolver is null)
+        {
+            return 0;
+        }
+
+        _sequenceAudio ??= new SequenceAudio(_session, _library, _resolver);
+        return _sequenceAudio.Write(into);
+    }
+
+    /// <summary>Segments whose sound the library does not know, since the session started.</summary>
+    public int SequenceUnknownSounds => _sequenceAudio?.UnknownCount ?? 0;
 
     /// <summary>
     /// Where an actor is now (the simulation's location of the last tick), for a sound that follows its actor.
