@@ -160,6 +160,19 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 		bAnyShown |= Amount > 0.0f;
 	}
 	MarkCharacters(bAnyShown);
+
+	// The gadgets, devices and level meshes, for the mode furthest in (a mode fading out keeps its marks to the end).
+	int32 ObjectMode = 0;
+	float ObjectAmount = 0.0f;
+	for (int32 Index = 0; Index < ModeCount; ++Index)
+	{
+		if (Amounts[Index] > ObjectAmount)
+		{
+			ObjectAmount = Amounts[Index];
+			ObjectMode = Modes[Index].Mode;
+		}
+	}
+	Objects.Update(GetWorld(), ObjectMode, Data);
 }
 
 void UScctVisionSubsystem::Clear()
@@ -177,6 +190,7 @@ void UScctVisionSubsystem::Clear()
 	ShownMode = 0;
 	Data.Reset();
 	MarkCharacters(false);
+	Objects.Reset();
 }
 
 int32 UScctVisionSubsystem::PawnStencil(float Intensity, float Opacity)

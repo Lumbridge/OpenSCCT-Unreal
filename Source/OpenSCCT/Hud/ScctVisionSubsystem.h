@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Hud/ScctVisionData.h"
+#include "Hud/ScctVisionObjects.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctVisionSubsystem.generated.h"
 
@@ -25,7 +26,8 @@ class UPrimitiveComponent;
  * custom depth so the material lays it over the scene behind by its opacity; the stencil carries the level and the
  * opacity (PawnStencil). What hangs on the body follows it, at the glow of what it carries when that is more (the
  * spy's drawn pistol). Motion tracking still marks every body by side: 1 a spy, 2 a merc. Night vision reads no
- * marks. Other things only the goggles show are marked by whoever draws them
+ * marks. Gadgets, devices and the level's hot or electric meshes are marked the same way by their own heat and EMF
+ * values (FScctVisionObjects, Hud/ScctVisionObjects.h). Other things only the goggles show are marked by whoever draws them
  * (the detector beams: Play/ScctMarkersSubsystem): StencilEmfStreak is drawn as a dark grey streak in EMF, and
  * HeatStencil(Heat) as that heat in thermal.
  *
@@ -110,6 +112,9 @@ private:
 	int32 LastMode = 0;
 
 	FScctVisionData Data;
+
+	/** The gadgets, devices and level meshes thermal and EMF draw by their own values. */
+	FScctVisionObjects Objects;
 
 	/** The mode shown, after the forced one is applied. */
 	int32 ShownMode = 0;
