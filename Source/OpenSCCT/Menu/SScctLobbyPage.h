@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Online/ScctHostSetup.h"
+#include "Runtime/ScctOnlineApi.h"
 #include "UObject/StrongObjectPtr.h"
 #include "Widgets/SCompoundWidget.h"
 
@@ -31,7 +32,22 @@ struct FSlateBrush;
  * server's. Everyone else sees the same rows read-only. RANDOM MAP on the lobby itself draws a map that offers the
  * mode and sets it with its own rules (SetMatch).
  *
+ * Players (LobbyRoomScreen's rows): each row has a rank slot (the packed rank as "P2 41" with its title in the
+ * tooltip; the column is there only while somebody has a rank), the name, the HOST and ADMIN markers, the state and
+ * ping, the map check and VOICE BANNED. For the host or an admin (CanModerate) every other person's row has MANAGE,
+ * which opens the moderation bar under the sides: KICK, BAN and VOICE BAN (VOICE UNBAN when banned), each asked
+ * again as Godot does ("Do you want to kick NAME?") before it is sent. The bar is outside the rows, which are made
+ * again on every change of the lobby, so a ping update does not close it.
+ *
+ * Chat (LobbyRoomScreen.SendChat, ChatInput): ALL or TEAM, switched by the button beside the line or with Tab while
+ * typing; a team line needs a side. Team lines are marked (TEAM) in the side's colour. Admin box: on a dedicated
+ * server a password line logs in as an admin (AdminLogin), then the same line sends console commands (AdminCommand);
+ * on the player's own server it is the host's console at once. The answers come back as system chat lines.
+ *
  * Unattended switches:
+ *   -ScctLobbyManage=<name>[,kick|ban|voiceban]  open the moderation bar for that player when he is in the lobby,
+ *                                 and with an action its question too (YES is never pressed: -ScctKickAfter does that)
+ *   -ScctLobbyTeamChat            the chat starts on the TEAM channel
  *   -ScctLobbyOptions             open Session Options when the lobby is first shown (any player)
  *   -ScctLobbyApply=<line>        the controller opens Session Options and puts an options line into the draft:
  *                                 MapName and Mode (a mode key) or GameMode (a number) first, with their rules, then any
@@ -85,6 +101,19 @@ private:
 	void SendChat();
 	void RandomMap();
 
+	// Players, moderation, chat channel and the admin box.
+	enum class EModerate : uint8 { None, Kick, Ban, VoiceBan, VoiceUnban };
+	TSharedRef<SWidget> PlayerRow(const FScctOnlinePlayer& Player, bool bRanks);
+	TSharedRef<SWidget> ModerationBar();
+	TSharedRef<SWidget> AdminBox();
+	void Manage(int32 PlayerId);
+	void Ask(EModerate Action);
+	void Answer(bool bYes);
+	void ToggleChannel();
+	void SendAdmin();
+	FReply HandleChatKey(const FGeometry& Geometry, const FKeyEvent& Key);
+	bool ShowsAdminBox() const;
+
 	TSharedRef<SWidget> BuildLobby();
 	TSharedRef<SWidget> BuildOptions();
 	TSharedRef<SWidget> BuildRows();
@@ -115,6 +144,19 @@ private:
 	TSharedPtr<SScrollBox> ChatRows;
 	TSharedPtr<SEditableTextBox> ChatBox;
 	int32 ChatLinesShown = 0;
+	/** The chat goes to the player's own side only. */
+	bool bTeamChat = false;
+	/** Said under the chat line about the last send (a team line without a side). */
+	FString ChatNotice;
+	TSharedPtr<SEditableTextBox> AdminLine;
+	/** The player the moderation bar is open for (-1: closed), and the action it asks about. */
+	int32 ManagedPlayer = -1;
+	FString ManagedName;
+	EModerate Asking = EModerate::None;
+
+	// Unattended moderation bar.
+	FString PendingManage;
+	FString PendingManageAction;
 
 	// Session Options: the server's setup normalized by the model, and the controller's draft of the next one.
 	FString ServerSetup;

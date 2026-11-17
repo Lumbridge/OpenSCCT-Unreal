@@ -126,6 +126,15 @@ void SScctLobbyPage::Construct(const FArguments& InArgs)
 		bSwitchesRead = true;
 		const TCHAR* CommandLine = FCommandLine::Get();
 		bOptionsOpen = FParse::Param(CommandLine, TEXT("ScctLobbyOptions"));
+		bTeamChat = FParse::Param(CommandLine, TEXT("ScctLobbyTeamChat"));
+		FString Manage;
+		if (FParse::Value(CommandLine, TEXT("ScctLobbyManage="), Manage, false) && !Manage.IsEmpty())
+		{
+			if (!Manage.Split(TEXT(","), &PendingManage, &PendingManageAction))
+			{
+				PendingManage = Manage;
+			}
+		}
 		if (FParse::Value(CommandLine, TEXT("ScctLobbyApply="), PendingApply, false) && !PendingApply.IsEmpty())
 		{
 			ApplyAfter = 4.0f;
@@ -161,6 +170,13 @@ void SScctLobbyPage::HandleChanged()
 		return;
 	}
 	SeenRevision = Visit->GetRevision();
+	if (ManagedPlayer >= 0 && (Visit->FindPlayer(ManagedPlayer) == nullptr || !Visit->CanModerate()))
+	{
+		// The player left (or was kicked), or this player may no longer moderate: the bar has nothing to act on.
+		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby moderation bar for '%s' closed (%s)"), *ManagedName, Visit->FindPlayer(ManagedPlayer) == nullptr ? TEXT("the player is gone") : TEXT("no longer the host or an admin"));
+		ManagedPlayer = -1;
+		Asking = EModerate::None;
+	}
 	const bool bSetupChanged = SyncSetup();
 	LoadPicture(ServerMap());
 	if (CanControl() != bControlShown)
@@ -216,6 +232,26 @@ void SScctLobbyPage::Tick(const FGeometry& AllottedGeometry, const double InCurr
 	if (Visit == nullptr)
 	{
 		return;
+	}
+
+	// Unattended: the moderation bar for a named player once he is in and this player may moderate.
+	if (!PendingManage.IsEmpty() && Visit->CanModerate())
+	{
+		const FScctOnlinePlayer* Target = Visit->GetPlayers().FindByPredicate([this](const FScctOnlinePlayer& Player) { return PendingManage.Equals(Player.Name, ESearchCase::IgnoreCase); });
+		if (Target != nullptr)
+		{
+			Manage(Target->Id);
+			const bool bVoiceBanned = (Target->Flags & EScctOnlinePlayerFlags::VoiceBanned) != 0;
+			const EModerate Action = PendingManageAction.Equals(TEXT("kick"), ESearchCase::IgnoreCase) ? EModerate::Kick
+				: PendingManageAction.Equals(TEXT("ban"), ESearchCase::IgnoreCase) ? EModerate::Ban
+				: PendingManageAction.Equals(TEXT("voiceban"), ESearchCase::IgnoreCase) ? (bVoiceBanned ? EModerate::VoiceUnban : EModerate::VoiceBan)
+				: EModerate::None;
+			if (Action != EModerate::None)
+			{
+				Ask(Action);
+			}
+			PendingManage.Reset();
+		}
 	}
 
 	// Unattended: the draft is filled once the server's setup is in and this player may change it, APPLY a moment later.
@@ -632,6 +668,7 @@ void SScctLobbyPage::Rebuild()
 {
 	ChatRows.Reset();
 	ChatBox.Reset();
+	AdminLine.Reset();
 	RowsBox.Reset();
 	Picker.Reset();
 	for (TSharedPtr<SVerticalBox>& Rows3 : TeamRows)
@@ -698,13 +735,27 @@ TSharedRef<SWidget> SScctLobbyPage::BuildLobby()
 		];
 	}
 
-	ChatBox =Ui::TextBox(TEXT("Say something to the lobby"), FString(), false, FOnTextCommitted::CreateLambda([this](const FText&, ETextCommit::Type Commit)
+	ChatBox = Ui::TextBox(TEXT("Say something to the lobby"), FString(), false, FOnTextCommitted::CreateLambda([this](const FText&, ETextCommit::Type Commit)
 	{
 		if (Commit == ETextCommit::OnEnter)
 		{
 			SendChat();
 		}
 	}));
+	ChatBox->SetHintText(TAttribute<FText>::CreateLambda([this] { return Ui::ToText(bTeamChat ? TEXT("Say something to your team (Tab: everyone)") : TEXT("Say something to the lobby (Tab: team)")); }));
+	// Tab switches the channel while typing, as Godot's ChatInput does (it would otherwise move the focus away).
+	ChatBox->SetOnKeyDownHandler(FOnKeyDown::CreateSP(this, &SScctLobbyPage::HandleChatKey));
+
+	// The channel beside the line: ALL or TEAM in the local side's colour.
+	const TSharedRef<SWidget> ChatLine = SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+		[
+			Ui::Button(TAttribute<FText>::CreateLambda([this] { return Ui::ToText(bTeamChat ? TEXT("TEAM") : TEXT("ALL")); }),
+				FOnClicked::CreateLambda([this] { ToggleChannel(); return FReply::Handled(); }),
+				TAttribute<bool>::CreateLambda([this] { return bTeamChat; }),
+				ScctHudStyle::Accent(FMath::Clamp(Online.IsValid() ? Online->GetStatus().LocalTeam : 0, 0, 1)), 54.0f)
+		]
+		+ SHorizontalBox::Slot().FillWidth(1.0f)[ ChatBox.ToSharedRef() ];
 
 	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
 
@@ -786,6 +837,7 @@ TSharedRef<SWidget> SScctLobbyPage::BuildLobby()
 				[
 					SAssignNew(TeamRows[2], SVerticalBox)
 				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 0.0f)[ ModerationBar() ]
 			]
 		]
 		// The chat.
@@ -800,7 +852,16 @@ TSharedRef<SWidget> SScctLobbyPage::BuildLobby()
 					SAssignNew(ChatRows, SScrollBox)
 				]
 			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)[ ChatBox.ToSharedRef() ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)[ ChatLine ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
+			[
+				SNew(SBox)
+				.Visibility(TAttribute<EVisibility>::CreateLambda([this] { return ChatNotice.IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; }))
+				[
+					Ui::Text(TAttribute<FText>::CreateLambda([this] { return Ui::ToText(ChatNotice); }), 10.5f, FSlateColor(ScctHudStyle::Danger()))
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)[ AdminBox() ]
 		]
 	];
 	Box->AddSlot().AutoHeight().Padding(0.0f, 18.0f, 0.0f, 16.0f)[ Ui::Rule() ];
@@ -870,54 +931,22 @@ void SScctLobbyPage::RefillLobby()
 	{
 		Rows3->ClearChildren();
 	}
-	FString Watching;
+	// The Rank column only while somebody in the lobby has a rank to show (LobbyRoomScreen.Layout).
+	const bool bRanks = Visit->GetPlayers().ContainsByPredicate([](const FScctOnlinePlayer& Player) { return (Player.Rank & 0xFF) != 0; });
+	bool bAnyWatching = false;
 	for (const FScctOnlinePlayer& Player : Visit->GetPlayers())
 	{
 		if (!OnSide(Player))
 		{
-			Watching += (Watching.IsEmpty() ? TEXT("") : TEXT(", ")) + FString(Player.Name);
+			if (!bAnyWatching)
+			{
+				bAnyWatching = true;
+				TeamRows[2]->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ Ui::Label(TEXT("Watching"), ScctHudStyle::TextFaint()) ];
+			}
+			TeamRows[2]->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 9.0f)[ PlayerRow(Player, bRanks) ];
 			continue;
 		}
-
-		const bool bLocal = Player.Id == Visit->GetStatus().LocalId;
-		const bool bBot = (Player.Flags & EScctOnlinePlayerFlags::Bot) != 0;
-		const bool bReady = (Player.Flags & EScctOnlinePlayerFlags::Ready) != 0;
-		FString State = bBot ? TEXT("BOT")
-			: (Player.Flags & EScctOnlinePlayerFlags::InGame) != 0 ? TEXT("IN GAME")
-			: (Player.Flags & EScctOnlinePlayerFlags::Loading) != 0 ? TEXT("LOADING")
-			: bReady ? TEXT("READY") : TEXT("NOT READY");
-		if (!bBot)
-		{
-			State += FString::Printf(TEXT("   %d MS"), Player.PingMs);
-		}
-		if ((Player.Flags & EScctOnlinePlayerFlags::Host) != 0)
-		{
-			State = TEXT("HOST   ") + State;
-		}
-		// The map check (OnlineLobby.Members' note): without the host's map the player holds the launch.
-		const TCHAR* MapNote = Player.MapState == MapMissing ? TEXT("NO MAP") : Player.MapState == MapDiffers ? TEXT("OTHER MAP VERSION") : nullptr;
-
-		// The name, and under it the state and the map check (a column is too narrow for both on one line).
-		const TSharedRef<SHorizontalBox> Notes = SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 10.0f, 0.0f)[ Ui::Label(State, bReady || bBot ? ScctHudStyle::Good() : ScctHudStyle::TextFaint()) ];
-		if (MapNote != nullptr)
-		{
-			Notes->AddSlot().AutoWidth()[ Ui::Label(MapNote, ScctHudStyle::Danger()) ];
-		}
-		TeamRows[Player.Team]->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 9.0f)
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight()
-			[
-				Ui::Text(Ui::ToText(FString(Player.Name)), 13.5f, FSlateColor(bLocal ? ScctHudStyle::Accent(Player.Team) : ScctHudStyle::Text()),
-					bLocal ? ScctHudStyle::EWeight::Bold : ScctHudStyle::EWeight::Regular)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f, 0.0f, 0.0f)[ Notes ]
-		];
-	}
-	if (!Watching.IsEmpty())
-	{
-		TeamRows[2]->AddSlot().AutoHeight()[ Ui::Label(TEXT("Watching: ") + Watching, ScctHudStyle::TextFaint()) ];
+		TeamRows[Player.Team]->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 9.0f)[ PlayerRow(Player, bRanks) ];
 	}
 
 	// The chat is short (the subsystem keeps the last lines only), so it is written out again whole.
@@ -929,14 +958,19 @@ void SScctLobbyPage::RefillLobby()
 		[
 			Line.bSystem
 				? Ui::Text(Ui::ToText(Line.Text), 11.0f, FSlateColor(ScctHudStyle::TextFaint()), ScctHudStyle::EWeight::Regular, true)
+				// A team line is marked and written in its side's colour (LobbyRoomScreen: "(Team) Name: text").
 				: StaticCastSharedRef<SWidget>(SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, Line.bTeamOnly ? 6.0f : 0.0f, 0.0f)
+					[
+						Line.bTeamOnly ? Ui::Label(TEXT("(Team)"), ScctHudStyle::Accent(Line.Team)) : SNullWidget::NullWidget
+					]
 					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
 					[
 						Ui::Text(Ui::ToText(Line.Sender), 11.5f, FSlateColor(ScctHudStyle::Accent(Line.Team)), ScctHudStyle::EWeight::Bold)
 					]
 					+ SHorizontalBox::Slot().FillWidth(1.0f)
 					[
-						Ui::Text(Ui::ToText(Line.Text), 11.5f, FSlateColor(ScctHudStyle::Text()), ScctHudStyle::EWeight::Regular, true)
+						Ui::Text(Ui::ToText(Line.Text), 11.5f, FSlateColor(Line.bTeamOnly ? ScctHudStyle::Accent(Line.Team) : ScctHudStyle::Text()), ScctHudStyle::EWeight::Regular, true)
 					])
 		];
 	}
@@ -949,13 +983,326 @@ void SScctLobbyPage::RefillLobby()
 
 void SScctLobbyPage::SendChat()
 {
-	if (Online.IsValid() && ChatBox.IsValid())
+	if (!Online.IsValid() || !ChatBox.IsValid())
 	{
-		Online->SendChat(ChatBox->GetText().ToString());
-		ChatBox->SetText(FText::GetEmpty());
-		// Enter takes the focus away; the next line is usually typed straight after.
-		FSlateApplication::Get().SetKeyboardFocus(ChatBox);
+		return;
 	}
+	const FString Text = ChatBox->GetText().ToString().TrimStartAndEnd();
+	if (Text.IsEmpty())
+	{
+		return;
+	}
+	const int32 LocalTeam = Online->GetStatus().LocalTeam;
+	if (bTeamChat && LocalTeam != 0 && LocalTeam != 1)
+	{
+		// The server would send it to nobody: the line stays in the box.
+		ChatNotice = TEXT("Join a team before sending team chat.");
+		return;
+	}
+	ChatNotice.Reset();
+	Online->SendChat(Text, bTeamChat);
+	if (bTeamChat)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby chat sent to the team only"));
+	}
+	ChatBox->SetText(FText::GetEmpty());
+	// Enter takes the focus away; the next line is usually typed straight after.
+	FSlateApplication::Get().SetKeyboardFocus(ChatBox);
+}
+
+void SScctLobbyPage::ToggleChannel()
+{
+	bTeamChat = !bTeamChat;
+	ChatNotice.Reset();
+}
+
+FReply SScctLobbyPage::HandleChatKey(const FGeometry& Geometry, const FKeyEvent& Key)
+{
+	if (Key.GetKey() == EKeys::Tab && !Key.IsRepeat())
+	{
+		ToggleChannel();
+		return FReply::Handled();
+	}
+	return FReply::Unhandled();
+}
+
+// ---- players and moderation -------------------------------------------------------------------------------------
+
+TSharedRef<SWidget> SScctLobbyPage::PlayerRow(const FScctOnlinePlayer& Player, bool bRanks)
+{
+	const UScctOnlineSubsystem* Visit = Online.Get();
+	const bool bLocal = Visit != nullptr && Player.Id == Visit->GetStatus().LocalId;
+	const bool bBot = (Player.Flags & EScctOnlinePlayerFlags::Bot) != 0;
+	const bool bReady = (Player.Flags & EScctOnlinePlayerFlags::Ready) != 0;
+	const bool bWatching = !OnSide(Player);
+	FString State = bBot ? TEXT("BOT")
+		: (Player.Flags & EScctOnlinePlayerFlags::InGame) != 0 ? TEXT("IN GAME")
+		: (Player.Flags & EScctOnlinePlayerFlags::Loading) != 0 ? TEXT("LOADING")
+		: bWatching ? TEXT("WATCHING")
+		: bReady ? TEXT("READY") : TEXT("NOT READY");
+	if (!bBot)
+	{
+		State += FString::Printf(TEXT("   %d MS"), Player.PingMs);
+	}
+	// The map check (OnlineLobby.Members' note): without the host's map the player holds the launch.
+	const TCHAR* MapNote = bWatching ? nullptr : Player.MapState == MapMissing ? TEXT("NO MAP") : Player.MapState == MapDiffers ? TEXT("OTHER MAP VERSION") : nullptr;
+
+	// Under the name: the host and admin markers, the state and ping, the map check and a voice ban.
+	const TSharedRef<SHorizontalBox> Notes = SNew(SHorizontalBox);
+	if ((Player.Flags & EScctOnlinePlayerFlags::Host) != 0)
+	{
+		Notes->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 10.0f, 0.0f)[ Ui::Label(TEXT("Host"), Ui::Accent()) ];
+	}
+	if ((Player.Flags & EScctOnlinePlayerFlags::Admin) != 0)
+	{
+		Notes->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 10.0f, 0.0f)[ Ui::Label(TEXT("Admin"), Ui::Accent()) ];
+	}
+	Notes->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 10.0f, 0.0f)[ Ui::Label(State, bReady || bBot ? ScctHudStyle::Good() : ScctHudStyle::TextFaint()) ];
+	if (MapNote != nullptr)
+	{
+		Notes->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 10.0f, 0.0f)[ Ui::Label(MapNote, ScctHudStyle::Danger()) ];
+	}
+	if ((Player.Flags & EScctOnlinePlayerFlags::VoiceBanned) != 0)
+	{
+		Notes->AddSlot().AutoWidth()[ Ui::Label(TEXT("Voice banned"), ScctHudStyle::Danger()) ];
+	}
+
+	// The name line: the rank slot (kept empty for a player without a rank while others have one), the name, and for
+	// the host or an admin the way to this person's moderation bar.
+	const FString Rank = Visit != nullptr ? Visit->RankText(Player.Rank) : FString();
+	FString RankTag = Rank, RankTitle;
+	Rank.Split(TEXT(" · "), &RankTag, &RankTitle);
+	const TSharedRef<SHorizontalBox> NameLine = SNew(SHorizontalBox);
+	if (bRanks)
+	{
+		NameLine->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)
+		[
+			SNew(SBox).WidthOverride(52.0f).ToolTipText(Ui::ToText(Rank))
+			[
+				Ui::Label(RankTag, ScctHudStyle::TextDim())
+			]
+		];
+	}
+	FString Name = Player.Name;
+	if (bLocal)
+	{
+		Name += TEXT(" (you)");
+	}
+	NameLine->AddSlot().FillWidth(1.0f).VAlign(VAlign_Center)
+	[
+		Ui::Text(Ui::ToText(Name), 13.5f, FSlateColor(bLocal ? ScctHudStyle::Accent(FMath::Clamp(Player.Team, 0, 2)) : ScctHudStyle::Text()),
+			bLocal ? ScctHudStyle::EWeight::Bold : ScctHudStyle::EWeight::Regular)
+	];
+	if (Visit != nullptr && Visit->CanModerate() && !bLocal && !bBot)
+	{
+		const int32 Id = Player.Id;
+		NameLine->AddSlot().AutoWidth().VAlign(VAlign_Center)
+		[
+			Ui::Button(Ui::ToText(TEXT("MANAGE")), FOnClicked::CreateLambda([this, Id] { Manage(ManagedPlayer == Id ? -1 : Id); return FReply::Handled(); }),
+				TAttribute<bool>::CreateLambda([this, Id] { return ManagedPlayer == Id; }))
+		];
+	}
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()[ NameLine ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(bRanks ? 60.0f : 0.0f, 2.0f, 0.0f, 0.0f)[ Notes ];
+}
+
+void SScctLobbyPage::Manage(int32 PlayerId)
+{
+	const UScctOnlineSubsystem* Visit = Online.Get();
+	const FScctOnlinePlayer* Target = Visit != nullptr ? Visit->FindPlayer(PlayerId) : nullptr;
+	ManagedPlayer = Target != nullptr ? PlayerId : -1;
+	ManagedName = Target != nullptr ? FString(Target->Name) : FString();
+	Asking = EModerate::None;
+	if (Target != nullptr)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby moderation bar open for '%s' (player %d)"), *ManagedName, PlayerId);
+	}
+}
+
+void SScctLobbyPage::Ask(EModerate Action)
+{
+	Asking = ManagedPlayer >= 0 ? Action : EModerate::None;
+	static const TCHAR* const Names[] = { TEXT("nothing"), TEXT("kick"), TEXT("ban"), TEXT("voice ban"), TEXT("voice unban") };
+	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby asks whether to %s '%s'"), Names[static_cast<int32>(Asking)], *ManagedName);
+}
+
+void SScctLobbyPage::Answer(bool bYes)
+{
+	UScctOnlineSubsystem* Visit = Online.Get();
+	if (bYes && Visit != nullptr && ManagedPlayer >= 0)
+	{
+		switch (Asking)
+		{
+		case EModerate::Kick: Visit->Kick(ManagedPlayer); break;
+		case EModerate::Ban: Visit->Ban(ManagedPlayer); break;
+		case EModerate::VoiceBan: Visit->SetVoiceBanned(ManagedPlayer, true); break;
+		case EModerate::VoiceUnban: Visit->SetVoiceBanned(ManagedPlayer, false); break;
+		default: break;
+		}
+		// A kick or a ban takes the player away; a voice ban leaves the bar open on the player, now with VOICE UNBAN.
+		if (Asking == EModerate::Kick || Asking == EModerate::Ban)
+		{
+			ManagedPlayer = -1;
+		}
+	}
+	Asking = EModerate::None;
+}
+
+TSharedRef<SWidget> SScctLobbyPage::ModerationBar()
+{
+	const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Online;
+	const auto VoiceBanned = [this, Weak]
+	{
+		const FScctOnlinePlayer* Target = Weak.IsValid() ? Weak->FindPlayer(ManagedPlayer) : nullptr;
+		return Target != nullptr && (Target->Flags & EScctOnlinePlayerFlags::VoiceBanned) != 0;
+	};
+	const auto Shown = [this](bool bQuestion)
+	{
+		return TAttribute<EVisibility>::CreateLambda([this, bQuestion] { return (Asking != EModerate::None) == bQuestion ? EVisibility::Visible : EVisibility::Collapsed; });
+	};
+
+	// The actions for the managed player, then (in the same place) the question that confirms one.
+	const TSharedRef<SWidget> Actions = SNew(SHorizontalBox)
+		.Visibility(Shown(false))
+		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 10.0f, 0.0f)
+		[
+			Ui::Text(TAttribute<FText>::CreateLambda([this] { return Ui::ToText(ManagedName); }), 13.0f, FSlateColor(ScctHudStyle::Text()), ScctHudStyle::EWeight::Bold)
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+		[
+			Ui::Button(Ui::ToText(TEXT("KICK")), FOnClicked::CreateLambda([this] { Ask(EModerate::Kick); return FReply::Handled(); }), false, ScctHudStyle::Danger())
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+		[
+			Ui::Button(Ui::ToText(TEXT("BAN")), FOnClicked::CreateLambda([this] { Ask(EModerate::Ban); return FReply::Handled(); }), false, ScctHudStyle::Danger())
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+		[
+			Ui::Button(TAttribute<FText>::CreateLambda([VoiceBanned] { return Ui::ToText(VoiceBanned() ? TEXT("VOICE UNBAN") : TEXT("VOICE BAN")); }),
+				FOnClicked::CreateLambda([this, VoiceBanned] { Ask(VoiceBanned() ? EModerate::VoiceUnban : EModerate::VoiceBan); return FReply::Handled(); }))
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			Ui::Button(Ui::ToText(TEXT("CLOSE")), FOnClicked::CreateLambda([this] { Manage(-1); return FReply::Handled(); }))
+		];
+
+	// LobbyRoomScreen.AskKick's questions.
+	const TSharedRef<SWidget> Question = SNew(SHorizontalBox)
+		.Visibility(Shown(true))
+		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 10.0f, 0.0f)
+		[
+			Ui::Text(TAttribute<FText>::CreateLambda([this]
+			{
+				switch (Asking)
+				{
+				case EModerate::Ban: return Ui::ToText(FString::Printf(TEXT("Do you want to ban %s from this server?"), *ManagedName));
+				case EModerate::VoiceBan: return Ui::ToText(FString::Printf(TEXT("Do you want to ban %s from voice chat?"), *ManagedName));
+				case EModerate::VoiceUnban: return Ui::ToText(FString::Printf(TEXT("Do you want to let %s use voice chat again?"), *ManagedName));
+				default: return Ui::ToText(FString::Printf(TEXT("Do you want to kick %s?"), *ManagedName));
+				}
+			}), 12.5f, FSlateColor(ScctHudStyle::Text()), ScctHudStyle::EWeight::Regular, true)
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+		[
+			Ui::Button(Ui::ToText(TEXT("YES")), FOnClicked::CreateLambda([this] { Answer(true); return FReply::Handled(); }), true, ScctHudStyle::Danger(), 70.0f)
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			Ui::Button(Ui::ToText(TEXT("NO")), FOnClicked::CreateLambda([this] { Answer(false); return FReply::Handled(); }), false, Ui::Accent(), 70.0f)
+		];
+
+	return SNew(SBox)
+		.Visibility(TAttribute<EVisibility>::CreateLambda([this] { return ManagedPlayer >= 0 ? EVisibility::Visible : EVisibility::Collapsed; }))
+		[
+			Ui::Glass(
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Ui::Label(TEXT("Manage player"), ScctHudStyle::TextFaint()) ]
+				+ SVerticalBox::Slot().AutoHeight()[ Actions ]
+				+ SVerticalBox::Slot().AutoHeight()[ Question ],
+				FMargin(14.0f, 10.0f), 0.5f)
+		];
+}
+
+// ---- the admin box ----------------------------------------------------------------------------------------------
+
+bool SScctLobbyPage::ShowsAdminBox() const
+{
+	// A dedicated server has admins who log in; the player's own server has its host's console.
+	return Online.IsValid() && (Online->HasFlag(EScctOnlineStatusFlags::Dedicated) || Online->IsHosting());
+}
+
+TSharedRef<SWidget> SScctLobbyPage::AdminBox()
+{
+	const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Online;
+	const auto Commands = [Weak] { return Weak.IsValid() && (Weak->IsLocalAdmin() || Weak->IsHosting()); };
+	AdminLine = Ui::TextBox(TEXT("Admin password"), FString(), true, FOnTextCommitted::CreateLambda([this](const FText&, ETextCommit::Type Commit)
+	{
+		if (Commit == ETextCommit::OnEnter)
+		{
+			SendAdmin();
+		}
+	}));
+	// Before the login the line is the password (never shown); afterwards the console's command line.
+	AdminLine->SetIsPassword(TAttribute<bool>::CreateLambda([Commands] { return !Commands(); }));
+	AdminLine->SetHintText(TAttribute<FText>::CreateLambda([Commands]
+	{
+		return Ui::ToText(Commands() ? TEXT("Command: status, players, kick <name>, map <map>, say <text>...") : TEXT("Admin password"));
+	}));
+
+	return SNew(SBox)
+		.Visibility(TAttribute<EVisibility>::CreateLambda([this] { return ShowsAdminBox() ? EVisibility::Visible : EVisibility::Collapsed; }))
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)
+			[
+				SNew(STextBlock)
+				.Font(ScctHudStyle::Label(9.0f))
+				.ColorAndOpacity(ScctHudStyle::TextDim())
+				.Text(TAttribute<FText>::CreateLambda([Weak]
+				{
+					return Ui::ToText(!Weak.IsValid() ? FString()
+						: Weak->IsHosting() ? FString(TEXT("HOST CONSOLE  (answers appear in the chat)"))
+						: Weak->IsLocalAdmin() ? FString(TEXT("ADMIN CONSOLE  (answers appear in the chat)"))
+						: FString(TEXT("ADMIN LOGIN")));
+				}))
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, 6.0f, 0.0f)[ AdminLine.ToSharedRef() ]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					Ui::Button(TAttribute<FText>::CreateLambda([Commands] { return Ui::ToText(Commands() ? TEXT("SEND") : TEXT("LOG IN")); }),
+						FOnClicked::CreateLambda([this] { SendAdmin(); return FReply::Handled(); }), false, Ui::Accent(), 70.0f)
+				]
+			]
+		];
+}
+
+void SScctLobbyPage::SendAdmin()
+{
+	UScctOnlineSubsystem* Visit = Online.Get();
+	if (Visit == nullptr || !AdminLine.IsValid())
+	{
+		return;
+	}
+	const FString Line = AdminLine->GetText().ToString().TrimStartAndEnd();
+	if (Line.IsEmpty())
+	{
+		return;
+	}
+	if (Visit->IsLocalAdmin() || Visit->IsHosting())
+	{
+		Visit->AdminCommand(Line);
+	}
+	else
+	{
+		Visit->AdminLogin(Line);
+	}
+	AdminLine->SetText(FText::GetEmpty());
+	FSlateApplication::Get().SetKeyboardFocus(AdminLine);
 }
 
 // ---- Session Options --------------------------------------------------------------------------------------------

@@ -26,7 +26,7 @@ namespace
 	const TCHAR* const KeyLastName = TEXT("HostName");
 	const TCHAR* const KeyLastPlayersChosen = TEXT("HostPlayersChosen");
 
-	constexpr float PageWidth = 1260.0f;
+	constexpr float HostPageWidth = 1260.0f;
 	constexpr float SettingsHeight = 560.0f;
 
 	/** Sets Key in an options line, replacing its value or adding it at the end. */
@@ -154,7 +154,7 @@ void SScctHostPage::Construct(const FArguments& InArgs)
 
 	ChildSlot
 	[
-		SNew(SBox).WidthOverride(PageWidth)
+		SNew(SBox).WidthOverride(HostPageWidth)
 		[
 			Ui::Glass(
 				SNew(SVerticalBox)

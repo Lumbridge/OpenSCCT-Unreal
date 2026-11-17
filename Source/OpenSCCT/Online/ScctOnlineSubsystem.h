@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
 #include "Runtime/ScctHostApi.h"
+#include "Runtime/ScctLobbyApi.h"
 #include "Runtime/ScctOnlineApi.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "ScctOnlineSubsystem.generated.h"
@@ -88,6 +89,12 @@ DECLARE_MULTICAST_DELEGATE(FScctOnlineChanged);
  *   -ScctLaunchWhen=N         the host launches once N players are in the lobby and the others are ready (default 2);
  *                             -ScctSide picks the host's own side
  *   -ScctOnlineSettingsDump   log every option of the Online settings page with its value at start
+ *   -ScctChatTeam=<text>      say this once in the lobby to the player's own side only
+ *   -ScctChatWhen=N           -ScctChatTeam waits until N players are in the lobby (default 1)
+ *   -ScctKickAfter=<name>,S   the host or admin kicks the player called <name> S seconds after he is in the lobby;
+ *                             -ScctBanAfter and -ScctVoiceBanAfter do the same with a ban and a voice ban
+ *   -ScctAdmin=<pw>;cmd;cmd   on a dedicated server: log in as an admin, then send each command once logged in (one a
+ *                             second); on the player's own server the commands go to the host's console, no login
  *
  * Hosting (Online/ScctOnlineHost.cpp): a listen server in this process, which the local player joins as the
  * lobby's host; from then on it is an ordinary visit (lobby, rounds, results) and Leave closes the server. The
@@ -217,6 +224,42 @@ public:
 	/** The lobby's setup as an options line (LobbySetup.ToOptions), as of the last revision; empty outside a visit. */
 	const FString& GetSetupOptions() const { return SetupOptions; }
 
+	// ---- moderation and the admin console (ScctOnlineModeration.cpp) ----------------------------------------
+
+	/** The local player of the session, or null before the server said hello. */
+	const FScctOnlinePlayer* FindLocalPlayer() const;
+	const FScctOnlinePlayer* FindPlayer(int32 PlayerId) const;
+
+	/** The local player is the host or an admin: he may kick, ban and voice-ban (the server checks it again). */
+	bool CanModerate() const;
+
+	/** The local player is logged in as an admin of this server. */
+	bool IsLocalAdmin() const;
+
+	/**
+	 * Asks the server to kick, ban or voice-ban a player (Runtime/ScctLobbyApi.h). False when not sent: no visit, not
+	 * the host or an admin, the player is a bot, oneself or not in the session. What happened comes back with the
+	 * players (the kicked one is gone, VoiceBanned is set) and as a system chat line.
+	 */
+	bool Kick(int32 PlayerId);
+	bool Ban(int32 PlayerId);
+	bool SetVoiceBanned(int32 PlayerId, bool bBanned);
+
+	/** A packed rank (FScctOnlinePlayer::Rank) as the lobby shows it ("P2 41", the title after it), empty for none. */
+	FString RankText(int32 PackedRank) const;
+
+	/** Logs in as an admin of a dedicated server; the answer arrives as a system chat line and the Admin flag. */
+	void AdminLogin(const FString& Password);
+
+	/**
+	 * An admin console command (status, players, kick, map, set, say...); the answers arrive as system chat lines. On
+	 * the player's own server it goes to the host's console (HostCommand) and needs no login. False when not sent.
+	 */
+	bool AdminCommand(const FString& Command);
+
+	/** Chat and system lines received since the start of the run (GetChat keeps the last ones only). */
+	int32 GetChatReceived() const { return ChatReceived; }
+
 	// ---- identity, master, account ---------------------------------------------------------------------------
 
 	const FString& GetPlayerName() const { return PlayerName; }
@@ -290,6 +333,13 @@ private:
 	void RunUnattendedHost();
 	void LogHostStatus();
 	void Touch();
+
+	// Moderation (ScctOnlineModeration.cpp).
+
+	const FScctLobbyApi* ConnectLobby() const;
+	bool CanActOn(int32 PlayerId, const TCHAR* What) const;
+	void ReadModerationSwitches();
+	void RunUnattendedModeration(float DeltaSeconds);
 
 	FString ReadText(EScctOnlineText Kind) const;
 	void LoadIdentity();
@@ -366,4 +416,26 @@ private:
 	bool bLaunchWhenGiven = false;
 	bool bAutoLaunched = false;
 	int32 AutoSideRevision = -1;
+
+	int32 ChatReceived = 0;
+
+	// Unattended moderation switches (ScctOnlineModeration.cpp).
+	struct FAutoModeration
+	{
+		/** kick, ban or voiceban */
+		FString Action;
+		FString Name;
+		float After = 0.0f;
+		/** Seconds the named player has been in the lobby; negative until he is. */
+		float Seen = -1.0f;
+		bool bDone = false;
+	};
+	TArray<FAutoModeration> AutoModeration;
+	FString AutoTeamChat;
+	int32 AutoChatWhen = 1;
+	bool bAutoTeamChatSent = false;
+	FString AutoAdminPassword;
+	TArray<FString> AutoAdminCommands;
+	bool bAutoAdminLoggedIn = false;
+	float AutoAdminWait = 0.0f;
 };

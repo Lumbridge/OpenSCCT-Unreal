@@ -113,6 +113,7 @@ void UScctOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	FParse::Value(CommandLine, TEXT("ScctLeaveAfter="), LeaveAfter);
 	FParse::Value(CommandLine, TEXT("ScctChat="), AutoChat, false);
 	ReadHostSwitches();
+	ReadModerationSwitches();
 	// The status lines are for unattended runs; a player's log is not filled with them.
 	LogEvery = AutoJoin.IsEmpty() && AutoHostPort < 0 ? 0.0f : 2.0f;
 	FParse::Value(CommandLine, TEXT("ScctOnlineLog="), LogEvery);
@@ -605,7 +606,10 @@ void UScctOnlineSubsystem::DrainChat()
 		Entry.Team = Line.Team;
 		Entry.Sender = Line.Sender;
 		Entry.Text = Line.Text;
-		UE_LOG(LogOpenSCCT, Log, TEXT("Online chat: %s%s"), Entry.bSystem ? TEXT("[server] ") : *FString::Printf(TEXT("<%s> "), *Entry.Sender), *Entry.Text);
+		// A team line says so, and whose side it was for: only that side's players receive one.
+		const FString Team = Entry.bTeamOnly ? FString::Printf(TEXT("[team only, %s] "), Entry.Team == 0 ? TEXT("spies") : Entry.Team == 1 ? TEXT("mercs") : TEXT("?")) : FString();
+		UE_LOG(LogOpenSCCT, Log, TEXT("Online chat: %s%s%s"), *Team, Entry.bSystem ? TEXT("[server] ") : *FString::Printf(TEXT("<%s> "), *Entry.Sender), *Entry.Text);
+		++ChatReceived;
 		bAny = true;
 	}
 	if (bAny)
@@ -629,7 +633,7 @@ void UScctOnlineSubsystem::HandleStateChange(EScctOnlineState Old, EScctOnlineSt
 		{
 			Notice = TEXT("The connection to the server was lost.");
 		}
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Online: the visit failed%s: %s"), HasFlag(EScctOnlineStatusFlags::Kicked) ? TEXT(" (the server ended it)") : TEXT(""), *Notice);
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Online: the visit failed%s: %s"), HasFlag(EScctOnlineStatusFlags::Kicked) ? TEXT(" (status Kicked: the server kicked or banned this player)") : TEXT(""), *Notice);
 	}
 	else if (New == EScctOnlineState::Match && MatchSeconds < 0.0f)
 	{
@@ -796,6 +800,7 @@ void UScctOnlineSubsystem::RunUnattended(float DeltaSeconds)
 			SendChat(AutoChat);
 		}
 	}
+	RunUnattendedModeration(DeltaSeconds);
 
 	if (MatchSeconds >= 0.0f && !bLeftOnTimer && LeaveAfter > 0.0f)
 	{

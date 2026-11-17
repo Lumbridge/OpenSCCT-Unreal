@@ -355,6 +355,15 @@ public sealed partial class OnlineBridge : IDisposable
     /// <summary>Logs in as an admin of a dedicated server.</summary>
     public void Admin(string password) => Client?.Admin(password);
 
+    /// <summary>Host or admin: removes a player from the server (the server refuses it for anyone else, a bot or oneself).</summary>
+    public void Kick(int playerId) => Client?.Kick(playerId);
+
+    /// <summary>Host or admin: removes a player and keeps him out (his install id and address go on the server's ban list).</summary>
+    public void Ban(int playerId) => Client?.Ban(playerId);
+
+    /// <summary>Host or admin: bans a player from voice chat, or lifts it; the player's VoiceBanned flag follows.</summary>
+    public void SetVoiceBanned(int playerId, bool banned) => Client?.SetVoiceBanned(playerId, banned);
+
     /// <summary>An admin console command (status, map, set...); the answers arrive as system chat lines.</summary>
     public void Command(string command) => Client?.Command(command);
 
