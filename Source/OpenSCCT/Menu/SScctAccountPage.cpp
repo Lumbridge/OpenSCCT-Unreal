@@ -21,31 +21,31 @@ namespace AccountUi = ScctMenuStyle;
 
 namespace
 {
-	constexpr float NarrowWidth = 640.0f;
-	constexpr float WideWidth = 1060.0f;
-	constexpr float ColumnGap = 18.0f;
+	constexpr float AcctNarrowWidth = 640.0f;
+	constexpr float AcctWideWidth = 1060.0f;
+	constexpr float AcctColumnGap = 18.0f;
 
 	/** OpenSCCT's PlayerNames.MinClaimLength and MaxClaimLength, for the help line. */
-	constexpr int32 MinNameLength = 3;
-	constexpr int32 MaxNameLength = 16;
+	constexpr int32 AcctMinNameLength = 3;
+	constexpr int32 AcctMaxNameLength = 16;
 
-	/** OpenSCCT's ProgressionK.MaxLevel and MaxPrestige. */
-	constexpr int32 MaxLevel = 55;
-	constexpr int32 MaxPrestige = 10;
+	/** OpenSCCT's ProgressionK.MaxLevel and AcctMaxPrestige. */
+	constexpr int32 AcctMaxLevel = 55;
+	constexpr int32 AcctMaxPrestige = 10;
 
-	TSharedRef<SWidget> Note(const TAttribute<FText>& Text)
+	TSharedRef<SWidget> AcctNote(const TAttribute<FText>& Text)
 	{
 		return AccountUi::Text(Text, 10.5f, FSlateColor(ScctHudStyle::TextFaint()), ScctHudStyle::EWeight::Regular, true);
 	}
 
-	TSharedRef<SWidget> Line(const FString& Text, float Size = 12.0f, const FLinearColor& Colour = ScctHudStyle::Text(),
+	TSharedRef<SWidget> AcctLine(const FString& Text, float Size = 12.0f, const FLinearColor& Colour = ScctHudStyle::Text(),
 		ScctHudStyle::EWeight Weight = ScctHudStyle::EWeight::Regular)
 	{
 		return AccountUi::Text(AccountUi::ToText(Text), Size, FSlateColor(Colour), Weight, true);
 	}
 
 	/** A card of the page: a dim panel with a small caption. */
-	TSharedRef<SWidget> Card(const FString& Caption, const TSharedRef<SWidget>& Content)
+	TSharedRef<SWidget> AcctCard(const FString& Caption, const TSharedRef<SWidget>& Content)
 	{
 		static const FSlateColorBrush Panel(FLinearColor::White);
 		return SNew(SOverlay)
@@ -59,15 +59,15 @@ namespace
 	}
 
 	/** One row of the career snapshot: what, then the number at the right. */
-	TSharedRef<SWidget> StatRow(const FString& What, int32 Value)
+	TSharedRef<SWidget> AcctStatRow(const FString& What, int32 Value)
 	{
 		return SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.0f)[ Line(What, 12.0f, ScctHudStyle::TextDim()) ]
-			+ SHorizontalBox::Slot().AutoWidth()[ Line(FText::AsNumber(Value).ToString(), 12.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Bold) ];
+			+ SHorizontalBox::Slot().FillWidth(1.0f)[ AcctLine(What, 12.0f, ScctHudStyle::TextDim()) ]
+			+ SHorizontalBox::Slot().AutoWidth()[ AcctLine(FText::AsNumber(Value).ToString(), 12.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Bold) ];
 	}
 
 	/** A bar filled to Fraction in Colour. */
-	TSharedRef<SWidget> Bar(float Fraction, const FLinearColor& Colour)
+	TSharedRef<SWidget> AcctBar(float Fraction, const FLinearColor& Colour)
 	{
 		static const FSlateColorBrush Fill(FLinearColor::White);
 		Fraction = FMath::Clamp(Fraction, 0.0f, 1.0f);
@@ -85,12 +85,12 @@ namespace
 	}
 
 	/** A row of action buttons with gaps. */
-	TSharedRef<SHorizontalBox> Actions()
+	TSharedRef<SHorizontalBox> AcctActions()
 	{
 		return SNew(SHorizontalBox);
 	}
 
-	void AddAction(const TSharedRef<SHorizontalBox>& Row, const TSharedRef<SWidget>& Button)
+	void AcctAddAction(const TSharedRef<SHorizontalBox>& Row, const TSharedRef<SWidget>& Button)
 	{
 		Row->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)[ Button ];
 	}
@@ -154,7 +154,7 @@ void SScctAccountPage::Construct(const FArguments& InArgs)
 		SNew(SBox)
 		.WidthOverride_Lambda([Weak]
 		{
-			return Weak.IsValid() && Weak->GetView() == EScctAccountView::SignedIn ? WideWidth : NarrowWidth;
+			return Weak.IsValid() && Weak->GetView() == EScctAccountView::SignedIn ? AcctWideWidth : AcctNarrowWidth;
 		})
 		[
 			AccountUi::Glass(Box)
@@ -237,7 +237,7 @@ void SScctAccountPage::Rebuild()
 	TSharedRef<SWidget> Content = SNullWidget::NullWidget;
 	if (Subsystem == nullptr || !Subsystem->IsReady())
 	{
-		Content = Line(TEXT("Connecting to the account service..."), 13.0f, ScctHudStyle::TextDim());
+		Content = AcctLine(TEXT("Connecting to the account service..."), 13.0f, ScctHudStyle::TextDim());
 	}
 	else
 	{
@@ -266,10 +266,10 @@ void SScctAccountPage::Rebuild()
 
 TSharedRef<SWidget> SScctAccountPage::BuildNoMaster()
 {
-	return Card(TEXT("Play your way"), SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Line(TEXT("Connect your account"), 22.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light) ]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Line(TEXT("This game has no master server set, so there are no accounts to sign in to.")) ]
-		+ SVerticalBox::Slot().AutoHeight()[ Note(AccountUi::ToText(TEXT("Offline and LAN play remain available without an account."))) ]);
+	return AcctCard(TEXT("Play your way"), SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ AcctLine(TEXT("Connect your account"), 22.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ AcctLine(TEXT("This game has no master server set, so there are no accounts to sign in to.")) ]
+		+ SVerticalBox::Slot().AutoHeight()[ AcctNote(AccountUi::ToText(TEXT("Offline and LAN play remain available without an account."))) ]);
 }
 
 TSharedRef<SWidget> SScctAccountPage::BuildSignedOut()
@@ -277,13 +277,13 @@ TSharedRef<SWidget> SScctAccountPage::BuildSignedOut()
 	const auto Benefit = [](const FString& Caption, const FString& Text)
 	{
 		return SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)[ Line(Caption, 13.0f, AccountUi::Accent(), ScctHudStyle::EWeight::Bold) ]
-			+ SVerticalBox::Slot().AutoHeight()[ Note(AccountUi::ToText(Text)) ];
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)[ AcctLine(Caption, 13.0f, AccountUi::Accent(), ScctHudStyle::EWeight::Bold) ]
+			+ SVerticalBox::Slot().AutoHeight()[ AcctNote(AccountUi::ToText(Text)) ];
 	};
 	const TWeakObjectPtr<UScctAccountSubsystem> Weak = Account;
-	return Card(TEXT("Your OpenSCCT account"), SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ Line(TEXT("Make your progress count"), 22.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light) ]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)[ Line(TEXT("Sign in with Discord to claim your player name and keep your career with you.")) ]
+	return AcctCard(TEXT("Your OpenSCCT account"), SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ AcctLine(TEXT("Make your progress count"), 22.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)[ AcctLine(TEXT("Sign in with Discord to claim your player name and keep your career with you.")) ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 16.0f)
 		[
 			SNew(SHorizontalBox)
@@ -302,16 +302,16 @@ TSharedRef<SWidget> SScctAccountPage::BuildSignedOut()
 				return FReply::Handled();
 			}), true, AccountUi::Accent(), 240.0f)
 		]
-		+ SVerticalBox::Slot().AutoHeight()[ Note(AccountUi::ToText(TEXT("You can still play on servers that allow guests, offline and on LAN without signing in."))) ]);
+		+ SVerticalBox::Slot().AutoHeight()[ AcctNote(AccountUi::ToText(TEXT("You can still play on servers that allow guests, offline and on LAN without signing in."))) ]);
 }
 
 TSharedRef<SWidget> SScctAccountPage::BuildSigningIn()
 {
 	const TWeakObjectPtr<UScctAccountSubsystem> Weak = Account;
 	const TWeakObjectPtr<UScctOnlineSubsystem> WeakOnline = Online;
-	return Card(TEXT("Discord sign-in"), SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ Line(TEXT("Finish signing in with your browser"), 20.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light) ]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ Line(TEXT("Check the browser shows this code, then sign in with Discord. This page will update by itself.")) ]
+	return AcctCard(TEXT("Discord sign-in"), SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ AcctLine(TEXT("Finish signing in with your browser"), 20.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ AcctLine(TEXT("Check the browser shows this code, then sign in with Discord. This page will update by itself.")) ]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 0.0f, 0.0f, 10.0f)
 		[
 			AccountUi::Text(TAttribute<FText>::CreateLambda([Weak]
@@ -319,7 +319,7 @@ TSharedRef<SWidget> SScctAccountPage::BuildSigningIn()
 				return Weak.IsValid() ? AccountUi::ToText(Weak->GetText(EScctAccountText::SignInCode)) : FText::GetEmpty();
 			}), 32.0f, FSlateColor(AccountUi::Accent()), ScctHudStyle::EWeight::Light)
 		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ Note(AccountUi::ToText(TEXT("Waiting for Discord…"))) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ AcctNote(AccountUi::ToText(TEXT("Waiting for Discord…"))) ]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)
 		[
 			AccountUi::Button(AccountUi::ToText(TEXT("CANCEL SIGN-IN")), FOnClicked::CreateLambda([WeakOnline]
@@ -351,14 +351,14 @@ TSharedRef<SWidget> SScctAccountPage::BuildPickName()
 	}
 
 	const bool bClaiming = Subsystem->HasFlag(EScctAccountFlags::Claiming);
-	const TSharedRef<SHorizontalBox> Buttons = Actions();
+	const TSharedRef<SHorizontalBox> Buttons = AcctActions();
 	const TSharedRef<SButton> ClaimButton = AccountUi::Button(AccountUi::ToText(bChangingName ? TEXT("SAVE NAME") : TEXT("CLAIM NAME")),
 		FOnClicked::CreateLambda([this] { Claim(); return FReply::Handled(); }), true, AccountUi::Accent(), 160.0f);
 	ClaimButton->SetEnabled(!bClaiming);
-	AddAction(Buttons, ClaimButton);
+	AcctAddAction(Buttons, ClaimButton);
 	if (bChangingName)
 	{
-		AddAction(Buttons, AccountUi::Button(AccountUi::ToText(TEXT("CANCEL")), FOnClicked::CreateLambda([this]
+		AcctAddAction(Buttons, AccountUi::Button(AccountUi::ToText(TEXT("CANCEL")), FOnClicked::CreateLambda([this]
 		{
 			bChangingName = false;
 			Rebuild();
@@ -368,7 +368,7 @@ TSharedRef<SWidget> SScctAccountPage::BuildPickName()
 	else
 	{
 		const TWeakObjectPtr<UScctAccountSubsystem> Weak = Account;
-		AddAction(Buttons, AccountUi::Button(AccountUi::ToText(TEXT("SIGN OUT")), FOnClicked::CreateLambda([Weak]
+		AcctAddAction(Buttons, AccountUi::Button(AccountUi::ToText(TEXT("SIGN OUT")), FOnClicked::CreateLambda([Weak]
 		{
 			if (Weak.IsValid())
 			{
@@ -378,14 +378,14 @@ TSharedRef<SWidget> SScctAccountPage::BuildPickName()
 		})));
 	}
 
-	return Card(bChangingName ? TEXT("Your identity") : TEXT("One last step"), SNew(SVerticalBox)
+	return AcctCard(bChangingName ? TEXT("Your identity") : TEXT("One last step"), SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)
 		[
-			Line(bChangingName ? TEXT("Change your player name") : TEXT("Choose your player name"), 22.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light)
+			AcctLine(bChangingName ? TEXT("Change your player name") : TEXT("Choose your player name"), 22.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light)
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
 		[
-			Line(FString::Printf(TEXT("The name other players see. %d to %d letters, digits, _ - and .; nobody else can use it while it is yours."), MinNameLength, MaxNameLength))
+			AcctLine(FString::Printf(TEXT("The name other players see. %d to %d letters, digits, _ - and .; nobody else can use it while it is yours."), AcctMinNameLength, AcctMaxNameLength))
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 12.0f)[ NameBox.ToSharedRef() ]
 		+ SVerticalBox::Slot().AutoHeight()[ Buttons ]);
@@ -410,13 +410,13 @@ TSharedRef<SWidget> SScctAccountPage::BuildSignedIn()
 {
 	NameBox->SetText(FText::GetEmpty());
 	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, ColumnGap)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, AcctColumnGap)
 		[
 			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, ColumnGap, 0.0f)
+			+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, AcctColumnGap, 0.0f)
 			[
 				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, ColumnGap)[ BuildIdentity() ]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, AcctColumnGap)[ BuildIdentity() ]
 				+ SVerticalBox::Slot().AutoHeight()[ BuildCareer() ]
 			]
 			+ SHorizontalBox::Slot().FillWidth(1.0f)
@@ -433,7 +433,7 @@ TSharedRef<SWidget> SScctAccountPage::BuildIdentity()
 	const bool bLocked = Subsystem->HasFlag(EScctAccountFlags::NameLocked);
 	const TWeakObjectPtr<UScctAccountSubsystem> Weak = Account;
 
-	const TSharedRef<SHorizontalBox> Buttons = Actions();
+	const TSharedRef<SHorizontalBox> Buttons = AcctActions();
 	const TSharedRef<SButton> Change = AccountUi::Button(AccountUi::ToText(TEXT("CHANGE NAME")), FOnClicked::CreateLambda([this]
 	{
 		bChangingName = true;
@@ -441,7 +441,7 @@ TSharedRef<SWidget> SScctAccountPage::BuildIdentity()
 		return FReply::Handled();
 	}));
 	Change->SetEnabled(!bLocked && !Subsystem->HasFlag(EScctAccountFlags::Preview));
-	AddAction(Buttons, Change);
+	AcctAddAction(Buttons, Change);
 	const TSharedRef<SButton> Out = AccountUi::Button(AccountUi::ToText(TEXT("SIGN OUT")), FOnClicked::CreateLambda([Weak]
 	{
 		if (Weak.IsValid())
@@ -451,7 +451,7 @@ TSharedRef<SWidget> SScctAccountPage::BuildIdentity()
 		return FReply::Handled();
 	}));
 	Out->SetEnabled(!Subsystem->HasFlag(EScctAccountFlags::SigningOut));
-	AddAction(Buttons, Out);
+	AcctAddAction(Buttons, Out);
 
 	// Where the settings sync stands.
 	FString Sync;
@@ -476,26 +476,26 @@ TSharedRef<SWidget> SScctAccountPage::BuildIdentity()
 	}
 
 	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)[ Line(Name, 26.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light) ];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)[ AcctLine(Name, 26.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light) ];
 	if (Subsystem->HasFlag(EScctAccountFlags::Known) && Subsystem->GetInfo().TitleChosen >= 0)
 	{
-		Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ Line(Subsystem->GetText(EScctAccountText::Title), 12.0f, AccountUi::Accent()) ];
+		Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ AcctLine(Subsystem->GetText(EScctAccountText::Title), 12.0f, AccountUi::Accent()) ];
 	}
 	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
 	[
-		Note(AccountUi::ToText(TEXT("Settings and controls follow your account. Display, graphics, performance, network and device settings stay on this PC.")))
+		AcctNote(AccountUi::ToText(TEXT("Settings and controls follow your account. Display, graphics, performance, network and device settings stay on this PC.")))
 	];
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ Line(Sync, 11.0f, ScctHudStyle::TextDim()) ];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ AcctLine(Sync, 11.0f, ScctHudStyle::TextDim()) ];
 	if (Subsystem->HasFlag(EScctAccountFlags::RefreshFailed))
 	{
-		Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Line(TEXT("The master server did not answer; this is your account as last seen."), 11.0f, ScctHudStyle::Danger()) ];
+		Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ AcctLine(TEXT("The master server did not answer; this is your account as last seen."), 11.0f, ScctHudStyle::Danger()) ];
 	}
 	Box->AddSlot().AutoHeight()[ Buttons ];
 	if (bLocked)
 	{
-		Box->AddSlot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)[ Note(AccountUi::ToText(Subsystem->GetText(EScctAccountText::NameCooldown))) ];
+		Box->AddSlot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)[ AcctNote(AccountUi::ToText(Subsystem->GetText(EScctAccountText::NameCooldown))) ];
 	}
-	return Card(Caption, Box);
+	return AcctCard(Caption, Box);
 }
 
 TSharedRef<SWidget> SScctAccountPage::BuildRank()
@@ -504,11 +504,11 @@ TSharedRef<SWidget> SScctAccountPage::BuildRank()
 	const FScctAccountInfo& Info = Subsystem->GetInfo();
 	if (!Subsystem->HasFlag(EScctAccountFlags::Known))
 	{
-		return Card(TEXT("Rank & progression"), Line(TEXT("Asking the master server…"), 12.0f, ScctHudStyle::TextDim()));
+		return AcctCard(TEXT("Rank & progression"), AcctLine(TEXT("Asking the master server…"), 12.0f, ScctHudStyle::TextDim()));
 	}
 	if (!Subsystem->HasFlag(EScctAccountFlags::HasProgress))
 	{
-		return Card(TEXT("Rank & progression"), Line(TEXT("This master server has no levels yet."), 12.0f, ScctHudStyle::TextDim()));
+		return AcctCard(TEXT("Rank & progression"), AcctLine(TEXT("This master server has no levels yet."), 12.0f, ScctHudStyle::TextDim()));
 	}
 
 	const FLinearColor Colour = UScctAccountSubsystem::ToColour(Info.RankColour);
@@ -520,22 +520,22 @@ TSharedRef<SWidget> SScctAccountPage::BuildRank()
 		SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 14.0f, 0.0f)
 		[
-			Line(Subsystem->GetText(EScctAccountText::RankTag), 30.0f, Colour, ScctHudStyle::EWeight::Bold)
+			AcctLine(Subsystem->GetText(EScctAccountText::RankTag), 30.0f, Colour, ScctHudStyle::EWeight::Bold)
 		]
 		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
 		[
-			Line(Subsystem->GetText(EScctAccountText::RankDescription), 13.0f, ScctHudStyle::Text())
+			AcctLine(Subsystem->GetText(EScctAccountText::RankDescription), 13.0f, ScctHudStyle::Text())
 		]
 	];
 	const float Fraction = Info.XpForNext > 0 ? static_cast<float>(Info.XpIntoLevel) / static_cast<float>(Info.XpForNext) : 1.0f;
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ Bar(Fraction, Colour) ];
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 2.0f)[ Line(Subsystem->GetText(EScctAccountText::NextLevel), 13.0f) ];
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ Line(Subsystem->GetText(EScctAccountText::TotalXp), 11.0f, ScctHudStyle::TextDim()) ];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ AcctBar(Fraction, Colour) ];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 2.0f)[ AcctLine(Subsystem->GetText(EScctAccountText::NextLevel), 13.0f) ];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ AcctLine(Subsystem->GetText(EScctAccountText::TotalXp), 11.0f, ScctHudStyle::TextDim()) ];
 	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 2.0f)
 	[
-		Note(AccountUi::ToText(TEXT("Earn XP through score, wins, objectives and achievements on official servers.")))
+		AcctNote(AccountUi::ToText(TEXT("Earn XP through score, wins, objectives and achievements on official servers.")))
 	];
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ Note(AccountUi::ToText(Subsystem->GetText(EScctAccountText::XpRules))) ];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ AcctNote(AccountUi::ToText(Subsystem->GetText(EScctAccountText::XpRules))) ];
 
 	// Prestige: pressed once it says what happens, pressed again it is done.
 	if (Subsystem->HasFlag(EScctAccountFlags::CanPrestige))
@@ -543,18 +543,18 @@ TSharedRef<SWidget> SScctAccountPage::BuildRank()
 		const int32 Next = Info.Prestige + 1;
 		Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)
 		[
-			Line(bPrestigeArmed
+			AcctLine(bPrestigeArmed
 				? FString::Printf(TEXT("Prestige %d puts you back to level 1 with a new emblem and title. Level-based pistols and finishes relock. Your achievements, mastery rewards, titles and stats stay. Press again to confirm."), Next)
 				: Subsystem->GetText(EScctAccountText::PrestigeHelp), 12.0f, bPrestigeArmed ? ScctHudStyle::Accent(1) : ScctHudStyle::Text())
 		];
-		const TSharedRef<SHorizontalBox> Buttons = Actions();
+		const TSharedRef<SHorizontalBox> Buttons = AcctActions();
 		const TSharedRef<SButton> Press = AccountUi::Button(AccountUi::ToText(bPrestigeArmed ? FString(TEXT("CONFIRM PRESTIGE")) : FString::Printf(TEXT("ENTER PRESTIGE %d"), Next)),
 			FOnClicked::CreateLambda([this] { PressPrestige(); return FReply::Handled(); }), bPrestigeArmed, ScctHudStyle::Accent(1), 190.0f);
 		Press->SetEnabled(!Subsystem->HasFlag(EScctAccountFlags::Prestiging));
-		AddAction(Buttons, Press);
+		AcctAddAction(Buttons, Press);
 		if (bPrestigeArmed)
 		{
-			AddAction(Buttons, AccountUi::Button(AccountUi::ToText(TEXT("CANCEL")), FOnClicked::CreateLambda([this]
+			AcctAddAction(Buttons, AccountUi::Button(AccountUi::ToText(TEXT("CANCEL")), FOnClicked::CreateLambda([this]
 			{
 				bPrestigeArmed = false;
 				Rebuild();
@@ -565,7 +565,7 @@ TSharedRef<SWidget> SScctAccountPage::BuildRank()
 	}
 	else if (Subsystem->HasFlag(EScctAccountFlags::Master))
 	{
-		Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ Line(Subsystem->GetText(EScctAccountText::PrestigeHelp), 12.0f, ScctHudStyle::TextDim()) ];
+		Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ AcctLine(Subsystem->GetText(EScctAccountText::PrestigeHelp), 12.0f, ScctHudStyle::TextDim()) ];
 	}
 	else
 	{
@@ -576,16 +576,16 @@ TSharedRef<SWidget> SScctAccountPage::BuildRank()
 	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ AccountUi::Label(TEXT("Prestige emblems")) ];
 	const TSharedRef<SWrapBox> Emblems = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5.0f, 5.0f));
 	static const FSlateColorBrush Chip(FLinearColor::White);
-	for (int32 P = 1; P <= MaxPrestige + 1; ++P)
+	for (int32 P = 1; P <= AcctMaxPrestige + 1; ++P)
 	{
-		const bool bMasterEmblem = P > MaxPrestige;
+		const bool bMasterEmblem = P > AcctMaxPrestige;
 		const bool bReached = bMasterEmblem ? Subsystem->HasFlag(EScctAccountFlags::Master) : Info.Prestige >= P;
 		const FLinearColor EmblemColour = ScctHudStyle::Fade(Subsystem->EmblemColour(P), bReached ? 1.0f : 0.22f);
 		Emblems->AddSlot()
 		[
 			SNew(SBox).WidthOverride(34.0f).HeightOverride(30.0f)
 			.ToolTipText(AccountUi::ToText(bMasterEmblem
-				? FString::Printf(TEXT("Master Prestige%s"), bReached ? TEXT("") : *FString::Printf(TEXT(" (reach level %d at prestige %d)"), MaxLevel, MaxPrestige))
+				? FString::Printf(TEXT("Master Prestige%s"), bReached ? TEXT("") : *FString::Printf(TEXT(" (reach level %d at prestige %d)"), AcctMaxLevel, AcctMaxPrestige))
 				: FString::Printf(TEXT("Prestige %d%s"), P, bReached ? TEXT("") : TEXT(" (not reached yet)"))))
 			[
 				SNew(SOverlay)
@@ -598,7 +598,7 @@ TSharedRef<SWidget> SScctAccountPage::BuildRank()
 		];
 	}
 	Box->AddSlot().AutoHeight()[ Emblems ];
-	return Card(TEXT("Rank & progression"), Box);
+	return AcctCard(TEXT("Rank & progression"), Box);
 }
 
 void SScctAccountPage::PressPrestige()
@@ -629,11 +629,11 @@ TSharedRef<SWidget> SScctAccountPage::BuildCareer()
 			{ TEXT("Losses"), Info.Losses }, { TEXT("Kills"), Info.Kills }, { TEXT("Deaths"), Info.Deaths } };
 		for (const TPair<const TCHAR*, int32>& Row : Rows)
 		{
-			Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)[ StatRow(Row.Key, Row.Value) ];
+			Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)[ AcctStatRow(Row.Key, Row.Value) ];
 		}
 	}
-	Box->AddSlot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)[ Note(AccountUi::ToText(Subsystem->GetText(EScctAccountText::CareerHelp))) ];
-	return Card(TEXT("Career snapshot"), Box);
+	Box->AddSlot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)[ AcctNote(AccountUi::ToText(Subsystem->GetText(EScctAccountText::CareerHelp))) ];
+	return AcctCard(TEXT("Career snapshot"), Box);
 }
 
 TSharedRef<SWidget> SScctAccountPage::BuildTitles()
@@ -681,10 +681,10 @@ TSharedRef<SWidget> SScctAccountPage::BuildTitles()
 	}
 
 	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)[ Line(Subsystem->GetText(EScctAccountText::Title), 18.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light) ];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)[ AcctLine(Subsystem->GetText(EScctAccountText::Title), 18.0f, ScctHudStyle::Text(), ScctHudStyle::EWeight::Light) ];
 	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
 	[
-		Note(AccountUi::ToText(FString::Printf(TEXT("Shown under your name in lobbies and the hub. %d of %d unlocked."), Info.TitlesUnlocked, Info.TitlesTotal)))
+		AcctNote(AccountUi::ToText(FString::Printf(TEXT("Shown under your name in lobbies and the hub. %d of %d unlocked."), Info.TitlesUnlocked, Info.TitlesTotal)))
 	];
 	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ Unlocked ];
 	if (LockedCount > 0)
@@ -703,5 +703,5 @@ TSharedRef<SWidget> SScctAccountPage::BuildTitles()
 			Box->AddSlot().AutoHeight()[ Locked ];
 		}
 	}
-	return Card(TEXT("Player title"), Box);
+	return AcctCard(TEXT("Player title"), Box);
 }
