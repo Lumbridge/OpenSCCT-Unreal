@@ -88,9 +88,6 @@ public:
 	void Tick(UWorld* World, float DeltaSeconds, bool bVerbose);
 	void Stop();
 
-	static const TCHAR* const JukeboxVolumeSetting;
-	static const TCHAR* const ChimesVolumeSetting;
-
 private:
 	struct FStream
 	{

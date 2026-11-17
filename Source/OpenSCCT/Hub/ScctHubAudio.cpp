@@ -7,7 +7,7 @@
 #include "Hub/ScctHubActivities.h"
 #include "OpenSCCT.h"
 #include "Play/ScctAudioSubsystem.h"
-#include "Settings/ScctSettings.h"
+#include "Menu/ScctUserSettings.h"
 #include "Sound/SoundWaveProcedural.h"
 
 namespace
@@ -204,9 +204,6 @@ void FScctHubChimes::Render(float* Out, int32 Frames)
 
 // ---- the hub's sounds -----------------------------------------------------------------------------------------------
 
-const TCHAR* const FScctHubAudio::JukeboxVolumeSetting = TEXT("Audio.HubJukebox");
-const TCHAR* const FScctHubAudio::ChimesVolumeSetting = TEXT("Audio.HubChimes");
-
 FScctHubAudio::FScctHubAudio(TSharedPtr<FScctHubActivities> InActivities)
 	: Activities(MoveTemp(InActivities))
 	, Synth(MixRate)
@@ -214,25 +211,7 @@ FScctHubAudio::FScctHubAudio(TSharedPtr<FScctHubActivities> InActivities)
 {
 	bAtJukebox = FParse::Param(FCommandLine::Get(), TEXT("ScctHubJukebox"));
 
-	FScctSettingDesc Jukebox;
-	Jukebox.Key = JukeboxVolumeSetting;
-	Jukebox.Page = TEXT("Audio");
-	Jukebox.Group = NSLOCTEXT("ScctHub", "HubAudioGroup", "Hub");
-	Jukebox.Label = NSLOCTEXT("ScctHub", "HubJukebox", "Jukebox music");
-	Jukebox.Tooltip = NSLOCTEXT("ScctHub", "HubJukeboxTip", "How loud the hub's jukebox plays when you stand near it.");
-	Jukebox.Type = EScctSettingType::Float;
-	Jukebox.Default = TEXT("1");
-	Jukebox.Min = 0.0f;
-	Jukebox.Max = 1.0f;
-	Jukebox.Step = 0.05f;
-	FScctSettings::Register(Jukebox);
-
-	FScctSettingDesc ChimesDesc = Jukebox;
-	ChimesDesc.Key = ChimesVolumeSetting;
-	ChimesDesc.Label = NSLOCTEXT("ScctHub", "HubChimes", "Activity chimes");
-	ChimesDesc.Tooltip = NSLOCTEXT("ScctHub", "HubChimesTip", "How loud the chimes of the hub's courses, aim range and ball game play.");
-	FScctSettings::Register(ChimesDesc);
-
+	// The two volumes are UScctUserSettings' (the Audio tab's Hub section), as every other volume.
 	SummaryHandle = UScctAudioSubsystem::OnSummary().AddRaw(this, &FScctHubAudio::AddSummaryNotes);
 }
 
@@ -384,11 +363,11 @@ void FScctHubAudio::Tick(UWorld* World, float DeltaSeconds, bool bVerbose)
 		{
 			// -ScctHubJukebox puts the sound at the ear too, so it is heard wherever the camera is.
 			Component->SetWorldLocation(bAtJukebox ? Activities->GetEye() : JukeboxAt + FVector(0.0, 0.0, 96.0));
-			Component->SetVolumeMultiplier(FScctSettings::GetFloat(JukeboxVolumeSetting));
+			Component->SetVolumeMultiplier(UScctUserSettings::Get()->GetGain(EScctSoundKind::HubJukebox));
 		}
 		if (UAudioComponent* Component = Chime.Component.Get())
 		{
-			Component->SetVolumeMultiplier(FScctSettings::GetFloat(ChimesVolumeSetting));
+			Component->SetVolumeMultiplier(UScctUserSettings::Get()->GetGain(EScctSoundKind::HubChimes));
 		}
 		const float MusicGain = Gain;
 		MusicPlayedFrames = Fill(Music, [this, MusicGain](float* Out, int32 Frames) { Synth.Render(Out, Frames, MusicGain); });

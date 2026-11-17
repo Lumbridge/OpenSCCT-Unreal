@@ -41,11 +41,20 @@ public sealed class OnlineMaster : IDisposable
     /// <summary>The master's address (never the original game's or Reloaded's), or null before <see cref="Configure"/>.</summary>
     public string? Url { get; private set; }
 
+    /// <summary>
+    /// The invite key given with <see cref="Url"/>, or null; a listen host registers with the same one, and a hub
+    /// this PC hosts lists itself with it.
+    /// </summary>
+    public string? InviteKey { get; private set; }
+
+    /// <summary>
+    /// Which way a listed server is reached (the Online settings' Connect mode, the Godot browser's Path): what the
+    /// master's reachability suggests, or direct, NAT punch or relay only.
+    /// </summary>
+    public ConnectPath Path { get; set; } = ConnectPath.Auto;
+
     /// <summary>The master's client, carrying the signed-in token, for the hub's list and joins (Hub/HubBridge.Master.cs); null before <see cref="Configure"/>.</summary>
     internal MasterClient? Client => _client;
-
-    /// <summary>The invite key given with the master's address (a hub this PC hosts lists itself with it), or null.</summary>
-    internal string? InviteKey { get; private set; }
 
     public OnlineMasterState State { get; private set; }
 
@@ -85,6 +94,7 @@ public sealed class OnlineMaster : IDisposable
         _list = null;
         _join = null;
         Url = null;
+        InviteKey = null;
 
         // Answers of the old master's client are not waited for: they would arrive as failures of a disposed
         // client and show as a refused account or sign-in on the new master. A sign-in in progress starts over.
@@ -274,7 +284,7 @@ public sealed class OnlineMaster : IDisposable
             return;
         }
 
-        _bridge.Join(JoinTarget.FromJoin(answer), join.Password, answer.Ticket, join.PreferredTeam);
+        _bridge.Join(JoinTarget.FromJoin(answer, Path), join.Password, answer.Ticket, join.PreferredTeam);
     }
 
     private void PumpAccount()

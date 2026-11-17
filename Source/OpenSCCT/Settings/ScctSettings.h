@@ -6,12 +6,18 @@
  * The player's settings, as one registry every feature puts its own options into.
  *
  * A feature (audio, voice, the HUD, graphics, the crosshair...) registers each option it reads once, at module or
- * subsystem start, with its page, label, type and default. The Options screen draws every registered option of a
+ * subsystem start, with its page, label, type and default. The settings page (Menu/SScctSettingsPanel.h) draws every registered option of a
  * page without knowing the feature, and the feature reads the value back (and listens to OnChanged to apply a change
  * at once). Values are kept as text in GGameUserSettingsIni under [OpenSCCT.Settings], so they survive a restart.
  *
- * Pages are plain names; the Options screen shows the ones below in this order and any other page after them:
- *   Spy, Mercenary, Display, Graphics, Performance, Audio, Voice, Hud, Controller, Online
+ * Pages are plain names. The settings page draws Display, Graphics and Performance at the end of its Video tab, Audio at
+ * the end of its Audio tab, Spy, Mercenary and Controller at the end of its Controls tab, and any other page (Hud,
+ * Online, Voice...) as a tab of its own, in this order: Spy, Mercenary, Display, Graphics, Performance, Audio, Voice,
+ * Hud, Controller, Online, then the rest.
+ *
+ * Options the settings page has a row of its own for are NOT registered: those values have one home elsewhere
+ * (volumes, gamma, render scale and motion blur in UScctUserSettings; window mode, resolution, vertical sync, frame
+ * limit and quality in UGameUserSettings; the widescreen field of view in UScctControlSettings).
  * Key bindings are not here: they live in UScctControlSettings with the rest of the controls.
  */
 enum class EScctSettingType : uint8
@@ -43,8 +49,13 @@ struct OPENSCCT_API FScctSettingDesc
 	TArray<FText> Choices;
 	/** Lower sorts first within the page; ties keep registration order. */
 	int32 Order = 0;
-	/** False hides the option from the Options screen (a value only code or the console sets). */
+	/** False hides the option from the settings page (a value only code or the console sets). */
 	bool bVisible = true;
+	/**
+	 * For Float and Int: how the settings page writes a value beside its slider ("Unlimited", "+10%"); unset writes
+	 * the number. Asked each time the value is drawn, so it may read the moment (the monitor's refresh rate).
+	 */
+	TFunction<FString(float)> FormatValue;
 };
 
 namespace FScctSettings
@@ -57,10 +68,13 @@ namespace FScctSettings
 	/** The visible options of a page, sorted by Order then registration. */
 	OPENSCCT_API TArray<const FScctSettingDesc*> OptionsOf(FName Page);
 
-	/** Every page that has at least one visible option, in the Options screen's order. */
+	/** Every page that has at least one visible option, in the settings page's order. */
 	OPENSCCT_API TArray<FName> Pages();
 
-	/** The stored text, or the default when the player never set it (empty for an unknown key). */
+	/**
+	 * The stored text, or the default when the player never set it (empty for an unknown key). A value forced for
+	 * the run with -ScctSettingSet (Settings/ScctSettingsForced.h) comes before both until the option is set.
+	 */
 	OPENSCCT_API FString GetString(FName Key);
 	OPENSCCT_API bool GetBool(FName Key);
 	OPENSCCT_API float GetFloat(FName Key);
