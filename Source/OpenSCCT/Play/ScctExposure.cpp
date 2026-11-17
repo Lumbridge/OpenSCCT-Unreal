@@ -66,6 +66,11 @@ float FScctExposure::Get()
 
 float FScctExposure::FlashScale()
 {
+	return PictureScale(LeastFlashScale, MostFlashScale);
+}
+
+float FScctExposure::PictureScale(float Least, float Most)
+{
 	const float Exposure = LastExposure.load(std::memory_order_relaxed);
-	return Exposure > 0.0f ? FMath::Clamp(ReferenceExposure / Exposure, LeastFlashScale, MostFlashScale) : 1.0f;
+	return Exposure > 0.0f ? FMath::Clamp(ReferenceExposure / Exposure, Least, Most) : 1.0f;
 }

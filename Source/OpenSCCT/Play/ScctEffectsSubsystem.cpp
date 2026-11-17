@@ -11,6 +11,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/CommandLine.h"
+#include "HAL/IConsoleManager.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
 #include "Play/ScctEquipmentSubsystem.h"
@@ -24,9 +25,13 @@ namespace
 {
 	// The light on the bodies of the local player's side (UpdateBodyFill): its strength in a moderately lit room, in the
 	// map lights' units, how far it reaches from the camera and how far above the camera it sits.
+	// scct.BodyFill changes the strength while the game runs (0 switches the light off).
 	constexpr float BodyFillIntensity = 2.4f;
 	constexpr float BodyFillRadius = 700.0f;
 	constexpr float BodyFillRaise = 25.0f;
+
+	TAutoConsoleVariable<float> CVarBodyFill(TEXT("scct.BodyFill"), BodyFillIntensity,
+		TEXT("Strength of the soft light from the camera on the bodies of the local player's own side (0: off)."), ECVF_Default);
 
 	constexpr int32 MaxLights = 16;
 	constexpr int32 MaxMeshes = 96;
@@ -41,15 +46,15 @@ namespace
 	// (Tools/Import/import_map.py); an effect's light is a flash that has to read against them.
 	constexpr float CandelasPerBrightness = 2.0f;
 
-	// A bullet mark is about 12 cm across in the original.
 	// Half the width of a bullet mark, cm, by what was hit (the mark's own DrawScale is laid over it): the hole
-	// is the middle third of that and the chipped ring around it the rest. A rifle round leaves a crater the
+	// is the middle third of that and the chipped ring around it the rest (the original's mark was about 12 cm
+	// across; smaller than these it cannot be made out from two metres). A rifle round leaves a crater the
 	// size of a coin in concrete, a clean hole with a bright lip in sheet metal, a wider star in glass.
-	constexpr float DecalHalfSizeConcrete = 3.4f;
-	constexpr float DecalHalfSizeMetal = 2.0f;
-	constexpr float DecalHalfSizeWood = 2.4f;
-	constexpr float DecalHalfSizeGlass = 4.2f;
-	constexpr float DecalHalfSizeSoft = 2.8f;
+	constexpr float DecalHalfSizeConcrete = 5.5f;
+	constexpr float DecalHalfSizeMetal = 3.6f;
+	constexpr float DecalHalfSizeWood = 4.4f;
+	constexpr float DecalHalfSizeGlass = 6.5f;
+	constexpr float DecalHalfSizeSoft = 4.6f;
 
 	const TCHAR* const GlowMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxGlow.M_ScctFxGlow");
 	const TCHAR* const SmokeMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxSmoke.M_ScctFxSmoke");
@@ -243,6 +248,9 @@ bool UScctEffectsSubsystem::EnsureScene()
 	BodyFill->SetCastShadows(false);
 	BodyFill->SetSpecularScale(0.6f);
 	BodyFill->SetLightingChannels(false, true, false);
+	// Lighting channels do not hold for the air: without this the light, which sits at the camera, lights the haze
+	// right in front of the lens and a foggy yard turns into a flat grey wash.
+	BodyFill->SetVolumetricScatteringIntensity(0.0f);
 	BodyFill->SetVisibility(false);
 	BodyFill->SetupAttachment(Root);
 	BodyFill->RegisterComponent();
@@ -356,7 +364,9 @@ void UScctEffectsSubsystem::UpdateBodyFill()
 
 	const FScctBridgeView& View = Session->GetView();
 	BodyFill->SetWorldLocation(FVector(View.X, View.Y, View.Z + BodyFillRaise));
-	BodyFill->SetIntensity(BodyFillIntensity * FScctExposure::FlashScale());
+	// Over the whole exposure range, not a flash's narrower one: it lights nothing but these bodies, and with the
+	// flash's upper bound a spy in a brightly lit room was a flat black cut-out again.
+	BodyFill->SetIntensity(FMath::Max(CVarBodyFill.GetValueOnGameThread(), 0.0f) * FScctExposure::PictureScale(0.03f, 16.0f));
 	if (!BodyFill->IsVisible())
 	{
 		BodyFill->SetVisibility(true);
@@ -1093,8 +1103,8 @@ float UScctEffectsSubsystem::TintDecal(UMaterialInstanceDynamic* Tint, const FSt
 	if (Is(TEXT("Wood")))
 	{
 		Hole = FLinearColor(0.02f, 0.012f, 0.006f);
-		Rim = FLinearColor(0.2f, 0.135f, 0.07f);
-		RimStrength = 0.5f;
+		Rim = FLinearColor(0.46f, 0.34f, 0.2f); // fresh splinters, paler than the board
+		RimStrength = 0.75f;
 		HalfSize = DecalHalfSizeWood;
 	}
 	else if (Is(TEXT("Metal")) || Is(TEXT("Fence")) || Is(TEXT("Armor")))

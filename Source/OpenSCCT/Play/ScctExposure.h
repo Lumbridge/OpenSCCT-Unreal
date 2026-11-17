@@ -30,4 +30,7 @@ namespace FScctExposure
 	 * or hide a flash.
 	 */
 	OPENSCCT_API float FlashScale();
+
+	/** The same factor with the caller's own bounds, for a light that must keep up over the whole exposure range. */
+	OPENSCCT_API float PictureScale(float Least, float Most);
 }
