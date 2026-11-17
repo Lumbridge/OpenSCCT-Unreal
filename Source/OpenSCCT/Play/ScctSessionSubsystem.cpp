@@ -245,22 +245,6 @@ void UScctSessionSubsystem::CheckSession()
 	ChangeSession(bFollowBridge ? Info : FScctBridgeSessionInfo{}, false);
 }
 
-void UScctSessionSubsystem::SetInput(const FScctBridgeInput& Input)
-{
-	if (SessionId != 0)
-	{
-		Api->SetInput(&Input);
-	}
-}
-
-void UScctSessionSubsystem::SendCommand(const TCHAR* Name, int32 Arg)
-{
-	if (SessionId != 0)
-	{
-		Api->Command(Name, Arg);
-	}
-}
-
 void UScctSessionSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);

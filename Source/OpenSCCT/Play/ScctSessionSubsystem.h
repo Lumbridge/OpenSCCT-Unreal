@@ -17,7 +17,10 @@ class AScctPawnProxy;
 //   1. OnBeforeTicks(DeltaSeconds)   Raised every frame the bridge is connected, match or no match. What must
 //                                    reach the bridge before the simulation runs goes here: the controls feed
 //                                    their input (Controls.Frame), the online visit runs its Update (which may
-//                                    put a round in the bridge's session slot or take one out).
+//                                    put a round in the bridge's session slot or take one out). The player's
+//                                    input has one way in, the player controller's Controls.Frame: nothing
+//                                    else writes the simulation's input (unattended switches press keys on
+//                                    the controller instead, AScctPlayerController::HoldScriptedAction).
 //   2. Session check                 GetSession. A session id other than the one this world presents is a new
 //                                    match: see "A session changes" below.
 //   3. Simulation ticks              UpdateSession(id) runs the client ticks that are due (none, one or several;
@@ -156,12 +159,6 @@ public:
 
 	/** How many simulation ticks step 3 of this frame ran. */
 	int32 GetTicksThisFrame() const { return TicksThisFrame; }
-
-	/** The input the next simulation ticks take. Not to be mixed with the controls table's Frame. */
-	void SetInput(const FScctBridgeInput& Input);
-
-	/** Queues one of the simulation's exec commands (Jump, SwitchHeadset...). */
-	void SendCommand(const TCHAR* Name, int32 Arg = 0);
 
 	/** See "The order of a frame" at the top of this file for when each of these is raised. */
 	FScctFrameEvent OnBeforeTicks;

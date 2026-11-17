@@ -247,6 +247,11 @@ bool UScctEquipmentSubsystem::FindMuzzle(int32 ActorId, FTransform& OutWorld) co
 	return Found != nullptr && Found->Slots[EScctAttachmentSlot::Weapon].View.FindMuzzle(OutWorld);
 }
 
+bool UScctEquipmentSubsystem::DrawsLocalMuzzleFlash() const
+{
+	return IsValid(FirstPersonView) && FirstPersonView->IsShown();
+}
+
 FTransform UScctEquipmentSubsystem::GetCamera() const
 {
 	const FScctBridgeView& View = Session->GetView();
@@ -433,6 +438,10 @@ void UScctEquipmentSubsystem::UpdateAttachment(const FScctEquipmentApi& Api, FPa
 		Slot.View.ResetPose();
 	}
 	Slot.bAnimated = bAnimated;
+	if (Attachment.Slot == EScctAttachmentSlot::Weapon)
+	{
+		Slot.View.LogProbe(Proxy.GetBodyMesh());
+	}
 
 	if (Slot.Skin != Attachment.Skin && Slot.View.GetModel() != nullptr)
 	{

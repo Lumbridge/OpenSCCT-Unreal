@@ -17,6 +17,15 @@ class APlayerController;
 class FScctControlAutoplay
 {
 public:
+	/**
+	 * The key the default bindings put a named action on ("fire", "forward"... the names of the script's grammar),
+	 * or an invalid key for a name that is not one.
+	 */
+	static FKey FindActionKey(const FString& Action);
+
+	/** Raises one key event on Controller as the keyboard or mouse would. */
+	static void SendKey(APlayerController& Controller, const FKey& Key, bool bPressed);
+
 	/** Reads a script. False with the reason when a step is not understood; nothing is kept then. */
 	bool Parse(const FString& Script, FString& OutError);
 

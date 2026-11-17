@@ -40,7 +40,13 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(FScctLocalCommandEvent, FName /*Name*/, i
  * the local player aims, the rifle aim blend).
  *
  * INTERFACE COMMANDS. Bindings that are not for the pawn (ShowMenu, Talk, HoldScoreboard, DisplayStrategicMap,
- * PushToTalk, Quit...) arrive through OnLocalCommand, on the press and again on the release.
+ * PushToTalk, Quit...) arrive through OnLocalCommand, on the press and again on the release. The game mode opens
+ * the in-match menu on ShowMenu and Quit; the HUD takes HoldScoreboard, ShowConnectedPlayers and
+ * SwitchEnhancedReality. Nothing reads a fixed key for any of these.
+ *
+ * MENUS. While a menu is open (SetMenuOpen) the bridge is told the game does not have the input: everything held
+ * is released and no key or mouse movement reaches the player. The keys bound to a command can still be asked for
+ * (FindKeysBoundTo), which is how the menu's own key closes it again.
  *
  * CONSOLE (until there is a settings menu):
  *   ScctInvertY 0|1        look up and down the other way round
@@ -56,7 +62,8 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(FScctLocalCommandEvent, FName /*Name*/, i
  *   -ScctAutoplay="<step>;<step>;..."
  * plays keys and mouse movements once the local player has a body. The steps become ordinary Unreal input events
  * on this controller (see ScctControlAutoplay.h), so they take the same path as real keys, bindings included.
- * While it is given the game counts as having the input even though its window has no focus. Steps:
+ * While it is given the game counts as having the input even though its window has no focus (and so it does
+ * once another feature's unattended switch has used HoldScriptedAction or TapBoundCommand). Steps:
  *   forward|back|left|right|fire|altfire|jump|crouch|use|roll|reload|weapon|walk|firstperson [seconds]
  *                            hold the key the default bindings put that action on (W S A D, left and right
  *                            mouse button, Space, C, Shift, Q, R, E, middle mouse button, X); 0.1 s when no
@@ -97,8 +104,35 @@ public:
 	/** The controller did something in the last frame: show its button prompts instead of the keys'. */
 	bool IsPadActive() const;
 
-	/** The game has the keys and the mouse this frame (focused, no menu with a cursor up). */
+	/** The game has the keys and the mouse this frame (focused, no menu open). */
 	bool HasPlayInput() const;
+
+	/**
+	 * A menu over the match opened or closed. While one is open the player's keys and mouse do not reach the
+	 * simulation, whoever is at the keyboard (a person, an autoplay script, another unattended switch).
+	 */
+	void SetMenuOpen(bool bOpen);
+	bool IsMenuOpen() const { return bMenuOpen; }
+
+	/**
+	 * The Unreal keys the current side's bindings put a command on, compared by the command's name alone
+	 * ("ShowMenu") or with its number ("SwitchHeadset 1"). Keys bound with a modifier (Ctrl+F) are left out.
+	 */
+	TArray<FKey> FindKeysBoundTo(const FString& Command) const;
+
+	/**
+	 * For the unattended switches of other features (-ScctAutoFire, -ScctAutoWalk, -ScctHudCommands): holds or lets
+	 * go the key the default bindings put one of the autoplay's named actions on ("fire", "altfire", "forward"...),
+	 * as an ordinary Unreal input event, so it takes the same path as a real key and never fights the bridge's
+	 * input mapper. False for a name that is not an action.
+	 */
+	bool HoldScriptedAction(const FString& Action, bool bHeld);
+
+	/**
+	 * The same for a command of the bindings ("SwitchHeadset 1", "ShowMenu"): presses the key the current side
+	 * has it on and lets it go a frame later. False (and a log line) when no plain key is bound to it.
+	 */
+	bool TapBoundCommand(const FString& Command);
 
 	FScctLocalCommandEvent OnLocalCommand;
 
@@ -159,6 +193,14 @@ private:
 	TMap<int32, FName> CommandNames;
 
 	FScctControlAutoplay Autoplay;
+
+	/** Another feature's unattended switch plays keys (HoldScriptedAction, TapBoundCommand): the game has the input. */
+	bool bScripted = false;
+
+	/** Keys TapBoundCommand pressed, each let go on a later frame. */
+	TArray<FKey> TappedKeys;
+
+	bool bMenuOpen = false;
 
 	/** The local player has had a body, so the script runs (and keeps running through a death). */
 	bool bAutoplayStarted = false;

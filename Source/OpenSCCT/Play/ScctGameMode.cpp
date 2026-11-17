@@ -139,9 +139,26 @@ void AScctGameMode::Tick(float DeltaSeconds)
 		GiveInputToGame(Player);
 	}
 
-	if (Player->WasInputKeyJustPressed(EKeys::Escape))
+	// The menu opens on the player's own binding (ShowMenu, Quit), which arrives as an interface command.
+	AScctPlayerController* ScctPlayer = Cast<AScctPlayerController>(Player);
+	if (ScctPlayer != nullptr && CommandSource.Get() != ScctPlayer)
 	{
-		SetMenuOpen(!MatchMenu->IsMenuOpen());
+		CommandSource = ScctPlayer;
+		ScctPlayer->OnLocalCommand.AddUObject(this, &AScctGameMode::HandleLocalCommand);
+	}
+
+	// While it is open the controls raise no commands (the player's keys are held back), so the keys that close
+	// it are read here.
+	if (MatchMenu->IsMenuOpen())
+	{
+		for (const FKey& Key : CloseKeys)
+		{
+			if (Player->WasInputKeyJustPressed(Key))
+			{
+				SetMenuOpen(false);
+				break;
+			}
+		}
 	}
 	if (OpenMenuIn >= 0.0f)
 	{
@@ -159,6 +176,16 @@ void AScctGameMode::Tick(float DeltaSeconds)
 			UE_LOG(LogOpenSCCT, Log, TEXT("-ScctLeaveMatchAfter: leaving the match as the in-match menu's last button does"));
 			MatchMenu->LeaveMatch();
 		}
+	}
+}
+
+void AScctGameMode::HandleLocalCommand(FName Name, int32 Arg, bool bPressed)
+{
+	// Quit is the original's "leave the game" key: here it brings up the menu that has the way out, so a slip of
+	// the finger does not end a match.
+	if (bPressed && IsValid(MatchMenu) && !MatchMenu->IsMenuOpen() && (Name == TEXT("ShowMenu") || Name == TEXT("Quit")))
+	{
+		SetMenuOpen(true);
 	}
 }
 
@@ -196,8 +223,20 @@ void AScctGameMode::SetMenuOpen(bool bOpen)
 		return;
 	}
 
-	// The match goes on underneath (it is the server's, or the bots'): the menu only takes the mouse.
+	// The match goes on underneath (it is the server's, or the bots'): the menu takes the mouse and the keys, and
+	// the controls let go of everything the player held.
+	AScctPlayerController* ScctPlayer = Cast<AScctPlayerController>(Player);
+	if (bOpen && !MatchMenu->IsMenuOpen())
+	{
+		CloseKeys = ScctPlayer != nullptr ? ScctPlayer->FindKeysBoundTo(TEXT("ShowMenu")) : TArray<FKey>();
+		CloseKeys.AddUnique(EKeys::Escape);
+	}
 	MatchMenu->SetMenuOpen(bOpen);
+	if (ScctPlayer != nullptr)
+	{
+		ScctPlayer->SetMenuOpen(bOpen);
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("In-match menu %s"), bOpen ? TEXT("opened") : TEXT("closed"));
 	if (bOpen)
 	{
 		Player->SetShowMouseCursor(true);

@@ -24,7 +24,10 @@ class UScctMatchMenuWidget;
  *                       starts a local match, and a visit that was under way is left.
  * A switch counts as on when it is given without a value or with anything but 0, false, no or off.
  *
- * Keys read here: Escape opens and closes the in-match menu (Menu/ScctMatchMenuWidget.h).
+ * Keys: none of its own. The in-match menu (Menu/ScctMatchMenuWidget.h) opens on the interface commands ShowMenu
+ * and Quit as the player's bindings raise them (AScctPlayerController::OnLocalCommand; Escape and F11 by default).
+ * While it is open the controls hold the player's keys and mouse back, so the bindings raise nothing; the menu
+ * then closes on the keys bound to ShowMenu, read from Unreal directly, and on Escape whatever is bound.
  *
  * Unattended switch (off by default):
  *   -ScctMatchMenu=S    open the in-match menu S seconds after the level started (for screenshots)
@@ -45,8 +48,11 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
-	/** Opens or closes the in-match menu and hands the mouse to it or back to the game. */
+	/** Opens or closes the in-match menu and hands the keys and the mouse to it or back to the game. */
 	void SetMenuOpen(bool bOpen);
+
+	/** The player controller's OnLocalCommand. */
+	void HandleLocalCommand(FName Name, int32 Arg, bool bPressed);
 
 	/** Gives the keyboard and the mouse to the match (the front end's menu, or the in-match menu, had them). */
 	void GiveInputToGame(APlayerController* Player);
@@ -58,6 +64,12 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UScctMatchMenuWidget> MatchMenu;
+
+	/** The keys that close the open menu: those bound to ShowMenu when it opened, and Escape. */
+	TArray<FKey> CloseKeys;
+
+	/** The controller whose interface commands are listened to. */
+	TWeakObjectPtr<class AScctPlayerController> CommandSource;
 
 	/** -ScctMatchMenu: seconds until the menu is opened once; negative when not asked for or done. */
 	float OpenMenuIn = -1.0f;

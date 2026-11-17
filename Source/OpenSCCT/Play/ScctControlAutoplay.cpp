@@ -35,7 +35,7 @@ namespace
 	constexpr float MouseSeconds = 0.5f;
 	constexpr float WaitSeconds = 1.0f;
 
-	void SendKey(APlayerController& Controller, const FKey& Key, EInputEvent Event)
+	void RaiseKey(APlayerController& Controller, const FKey& Key, EInputEvent Event)
 	{
 		Controller.InputKey(FInputKeyEventArgs::CreateSimulated(Key, Event, Event == IE_Released ? 0.0f : 1.0f));
 	}
@@ -45,6 +45,17 @@ namespace
 		// One sample: the mouse keys are only read as axes when an event says it carries samples.
 		Controller.InputKey(FInputKeyEventArgs::CreateSimulated(Key, IE_Axis, Delta, 1));
 	}
+}
+
+FKey FScctControlAutoplay::FindActionKey(const FString& Action)
+{
+	const FNamedKey* Found = Algo::FindByPredicate(NamedKeys, [&Action](const FNamedKey& Named) { return Action.Equals(Named.Name, ESearchCase::IgnoreCase); });
+	return Found != nullptr ? FKey(FName(Found->Key)) : FKey();
+}
+
+void FScctControlAutoplay::SendKey(APlayerController& Controller, const FKey& Key, bool bPressed)
+{
+	RaiseKey(Controller, Key, bPressed ? IE_Pressed : IE_Released);
 }
 
 bool FScctControlAutoplay::Parse(const FString& Script, FString& OutError)
@@ -175,7 +186,7 @@ void FScctControlAutoplay::Tick(float DeltaSeconds, APlayerController& Controlle
 	{
 		for (const FKey& Key : Step.Keys)
 		{
-			SendKey(Controller, Key, IE_Released);
+			RaiseKey(Controller, Key, IE_Released);
 		}
 		++Index;
 		bBegun = false;
@@ -191,15 +202,15 @@ void FScctControlAutoplay::Begin(const FStep& Step, APlayerController& Controlle
 
 	for (const FKey& Key : Step.Keys)
 	{
-		SendKey(Controller, Key, IE_Pressed);
+		RaiseKey(Controller, Key, IE_Pressed);
 	}
 
 	// A wheel notch arrives from Unreal's viewport as a press and release of the scroll key plus the wheel axis.
 	const FKey ScrollKey = Step.WheelNotches > 0 ? EKeys::MouseScrollUp : EKeys::MouseScrollDown;
 	for (int32 Notch = 0; Notch < FMath::Abs(Step.WheelNotches); ++Notch)
 	{
-		SendKey(Controller, ScrollKey, IE_Pressed);
-		SendKey(Controller, ScrollKey, IE_Released);
+		RaiseKey(Controller, ScrollKey, IE_Pressed);
+		RaiseKey(Controller, ScrollKey, IE_Released);
 		SendAxis(Controller, EKeys::MouseWheelAxis, Step.WheelNotches > 0 ? 1.0f : -1.0f);
 	}
 }

@@ -13,7 +13,9 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Play/ScctEquipmentSubsystem.h"
 #include "Play/ScctPawnProxy.h"
+#include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 
@@ -152,7 +154,7 @@ void UScctEffectsSubsystem::ResetMatch()
 	Sprites.Clear();
 	MatchSeconds = 0.0f;
 	bFireHeld = bAltFireHeld = false;
-	NumFlashes = NumTracers = NumImpacts = NumActors = NumStandIns = PeakSprites = 0;
+	NumFlashes = NumFlashesLeftToViewModel = NumTracers = NumImpacts = NumActors = NumStandIns = PeakSprites = 0;
 }
 
 void UScctEffectsSubsystem::HandleMatchStarted()
@@ -247,21 +249,22 @@ void UScctEffectsSubsystem::HandleBeforeTicks(float DeltaSeconds)
 		return;
 	}
 
-	// -ScctAutoFire: this runs after the player controller handed over the (idle) keys of an unattended run, so
-	// it replaces them. A press also needs the simulation's command on its edge, as a real key press sends it.
+	// -ScctAutoFire: the fire keys go down and come up on the player controller as under a finger, so the shots
+	// take the path real ones take (Unreal's key state, the bridge's bindings, the simulation).
+	AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController());
+	if (Player == nullptr)
+	{
+		return;
+	}
 	const bool bFire = MatchSeconds > 3.0f && FMath::Fmod(MatchSeconds, 1.0f) < 0.5f;
 	const bool bAltFire = MatchSeconds > 3.0f && FMath::Fmod(MatchSeconds, 6.0f) > 5.6f;
-	FScctBridgeInput Input = {};
-	Input.Buttons[static_cast<int32>(EScctButton::Fire)] = bFire ? 1 : 0;
-	Input.Buttons[static_cast<int32>(EScctButton::AltFire)] = bAltFire ? 1 : 0;
-	Session->SetInput(Input);
-	if (bFire && !bFireHeld)
+	if (bFire != bFireHeld)
 	{
-		Session->SendCommand(TEXT("Fire"));
+		Player->HoldScriptedAction(TEXT("fire"), bFire);
 	}
-	if (bAltFire && !bAltFireHeld)
+	if (bAltFire != bAltFireHeld)
 	{
-		Session->SendCommand(TEXT("AltFire"));
+		Player->HoldScriptedAction(TEXT("altfire"), bAltFire);
 	}
 	bFireHeld = bFire;
 	bAltFireHeld = bAltFire;
@@ -306,6 +309,13 @@ FVector UScctEffectsSubsystem::FindMuzzle(const FScctShot& Shot) const
 	if (Proxy == nullptr || !Proxy->HasModel() || !Proxy->IsShown() || Proxy->IsFirstPerson())
 	{
 		return Estimate;
+	}
+	// The gun drawn on the body knows where its barrel ends (a replacement model's muzzle socket included).
+	FTransform Barrel;
+	const UScctEquipmentSubsystem* Equipment = GetWorld()->GetSubsystem<UScctEquipmentSubsystem>();
+	if (Equipment != nullptr && Equipment->FindMuzzle(Shot.ShooterId, Barrel))
+	{
+		return Barrel.GetLocation();
 	}
 	const FName Hand = Proxy->FindMeshBoneName(TEXT("B R Hand"));
 	if (Hand.IsNone())
@@ -357,10 +367,25 @@ void UScctEffectsSubsystem::DrainShots()
 				continue;
 			}
 
-			++NumFlashes;
-			const FVector Muzzle = FindMuzzle(Shot);
 			const bool bSticky = Shot.Kind == EScctShotKind::MuzzleSticky;
 			const bool bFirstPerson = Shot.Kind == EScctShotKind::FirstPersonMuzzle;
+			if (bFirstPerson)
+			{
+				// One owner for the local player's own flash: while the equipment draws a view model the flash
+				// sits on that model's muzzle and is drawn there; a second one here would double it.
+				const UScctEquipmentSubsystem* Equipment = GetWorld()->GetSubsystem<UScctEquipmentSubsystem>();
+				if (Equipment != nullptr && Equipment->DrawsLocalMuzzleFlash())
+				{
+					++NumFlashesLeftToViewModel;
+					if (bLog)
+					{
+						UE_LOG(LogOpenSCCT, Log, TEXT("Effects: the local first-person flash of pawn %d is the view model's"), Shot.ShooterId);
+					}
+					continue;
+				}
+			}
+			++NumFlashes;
+			const FVector Muzzle = FindMuzzle(Shot);
 			const float Scale = (Shot.Flags & EScctShotFlags::Pistol) != 0 ? 0.6f : 1.0f;
 			if (bLog)
 			{

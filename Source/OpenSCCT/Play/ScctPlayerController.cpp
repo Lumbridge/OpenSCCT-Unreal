@@ -107,13 +107,109 @@ void AScctPlayerController::PlayerTick(float DeltaTime)
 		}
 	}
 
+	// A tapped key was down for the whole of the frame before; it comes up now.
+	for (const FKey& Key : TappedKeys)
+	{
+		FScctControlAutoplay::SendKey(*this, Key, false);
+	}
+	TappedKeys.Reset();
+
 	Super::PlayerTick(DeltaTime);
+}
+
+void AScctPlayerController::SetMenuOpen(bool bOpen)
+{
+	if (bMenuOpen != bOpen)
+	{
+		bMenuOpen = bOpen;
+		UE_LOG(LogOpenSCCT, Log, TEXT("Controls: %s"), bOpen ? TEXT("a menu is open, the player's keys and mouse are held back") : TEXT("the menu closed, the keys and the mouse are the player's again"));
+	}
+}
+
+TArray<FKey> AScctPlayerController::FindKeysBoundTo(const FString& Command) const
+{
+	TArray<FKey> Found;
+	const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>();
+	if (Controls == nullptr)
+	{
+		return Found;
+	}
+
+	// "SwitchHeadset 1" is asked for with its number, "ShowMenu" by its name whatever number follows it.
+	const FString Wanted = Command.TrimStartAndEnd();
+	const bool bWithNumber = Wanted.Contains(TEXT(" "));
+	const int32 bMerc = Controls->GetSide() == 1 ? 1 : 0;
+	const TArray<TPair<FKey, FKey>>& Table = FScctControls::Keys();
+	for (int32 Code = 0; Code < Table.Num(); ++Code)
+	{
+		TCHAR KeyName[64] = {};
+		TCHAR Bound[512] = {};
+		if (!Table[Code].Key.IsValid() || Controls->GetKeyName(Code, KeyName, UE_ARRAY_COUNT(KeyName) - 1) <= 0
+			|| Controls->GetBinding(bMerc, 0, KeyName, Bound, UE_ARRAY_COUNT(Bound) - 1) <= 0)
+		{
+			continue;
+		}
+
+		// A binding is a list of actions: "Button bFire | Function Fire | GadgetQuickChoice 0".
+		TArray<FString> Actions;
+		FString(Bound).ParseIntoArray(Actions, TEXT("|"));
+		for (FString& Action : Actions)
+		{
+			Action.TrimStartAndEndInline();
+			Action.RemoveFromStart(TEXT("Function "), ESearchCase::IgnoreCase);
+			Action.TrimStartAndEndInline();
+			int32 Space = INDEX_NONE;
+			if (!bWithNumber && Action.FindChar(TEXT(' '), Space))
+			{
+				Action.LeftInline(Space);
+			}
+			if (Action.Equals(Wanted, ESearchCase::IgnoreCase))
+			{
+				Found.Add(Table[Code].Key);
+				break;
+			}
+		}
+	}
+	return Found;
+}
+
+bool AScctPlayerController::HoldScriptedAction(const FString& Action, bool bHeld)
+{
+	const FKey Key = FScctControlAutoplay::FindActionKey(Action);
+	if (!Key.IsValid())
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Controls: '%s' is not an action a script can hold"), *Action);
+		return false;
+	}
+	bScripted = true;
+	FScctControlAutoplay::SendKey(*this, Key, bHeld);
+	return true;
+}
+
+bool AScctPlayerController::TapBoundCommand(const FString& Command)
+{
+	const TArray<FKey> Keys = FindKeysBoundTo(Command);
+	if (Keys.Num() == 0)
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Controls: no key of the current side is bound to '%s', so a script cannot press it"), *Command);
+		return false;
+	}
+	bScripted = true;
+	FScctControlAutoplay::SendKey(*this, Keys[0], true);
+	TappedKeys.Add(Keys[0]);
+	return true;
 }
 
 bool AScctPlayerController::HasPlayInput() const
 {
+	// A menu over the match has the keys and the mouse, whoever plays.
+	if (bMenuOpen)
+	{
+		return false;
+	}
+
 	// Nobody is at the keyboard of an autoplay run and its window never has focus: the script is the player.
-	if (Autoplay.HasSteps())
+	if (Autoplay.HasSteps() || bScripted)
 	{
 		return true;
 	}

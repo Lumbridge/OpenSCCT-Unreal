@@ -9,6 +9,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 
@@ -382,16 +383,19 @@ void UScctOnlineSubsystem::PresentIn(UScctSessionSubsystem* Session)
 
 void UScctOnlineSubsystem::HandleBeforeTicks(float DeltaSeconds)
 {
-	// -ScctAutoWalk: the local player holds "forward". It is set before the visit's Update, which runs the round's
-	// ticks, and after the player controller has set its own input for the frame (which this replaces).
-	if (bAutoWalk && GetState() == EScctOnlineState::Match)
+	// -ScctAutoWalk: the local player's "forward" key goes down while a round is played, on the player controller
+	// as under a finger, so it takes the path a real key takes through the bridge's bindings.
+	if (bAutoWalk)
 	{
 		const UWorld* World = GetGameInstance()->GetWorld();
-		if (UScctSessionSubsystem* Session = World != nullptr ? World->GetSubsystem<UScctSessionSubsystem>() : nullptr)
+		AScctPlayerController* Player = World != nullptr ? Cast<AScctPlayerController>(World->GetFirstPlayerController()) : nullptr;
+		const bool bWalk = GetState() == EScctOnlineState::Match;
+		if (Player != nullptr && (bWalk != bAutoWalkHeld || AutoWalkPlayer.Get() != Player))
 		{
-			FScctBridgeInput Input = {};
-			Input.Buttons[static_cast<int32>(EScctButton::Up)] = 1;
-			Session->SetInput(Input);
+			// A new level has a new controller: the key is pressed again there.
+			AutoWalkPlayer = Player;
+			bAutoWalkHeld = bWalk;
+			Player->HoldScriptedAction(TEXT("forward"), bWalk);
 		}
 	}
 

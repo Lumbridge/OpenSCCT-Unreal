@@ -231,6 +231,8 @@ private:
 	int32 AutoSide = -1;
 	bool bAutoReady = false;
 	bool bAutoWalk = false;
+	bool bAutoWalkHeld = false;
+	TWeakObjectPtr<class AScctPlayerController> AutoWalkPlayer;
 	int32 AutoReadyRevision = -1;
 	bool bAutoJoined = false;
 	bool bAutoListed = false;

@@ -19,8 +19,10 @@ class UStaticMeshComponent;
  * Draws the match's transient effects from the bridge's events feature (Runtime/ScctEventsApi.h), each frame on
  * the session subsystem's OnFrame:
  *
- *   - shots: a muzzle flash with its light at the shooter's gun hand (the first-person gun's flash at the
- *     simulation's muzzle estimate until view models are drawn), and tracers as fast thin streaks;
+ *   - shots: a muzzle flash with its light where the shooter's barrel ends (asked of the equipment subsystem,
+ *     which draws the guns), and tracers as fast thin streaks. The local player's own first-person flash is the
+ *     equipment's while it draws a view model (UScctEquipmentSubsystem::DrawsLocalMuzzleFlash); only when there
+ *     is no view model is it drawn here, at the simulation's muzzle estimate;
  *   - impact marks: a decal per live mark and a burst of sparks, dust, splinters or spray by the surface;
  *   - effect actors: grenades, mines and gadgets as their original meshes (imported by
  *     Tools/Effects/build_effect_assets.py; a small glowing stand-in shape where a mesh is missing), explosions,
@@ -221,6 +223,7 @@ private:
 
 	// Counters for the summary line when the match ends.
 	int32 NumFlashes = 0;
+	int32 NumFlashesLeftToViewModel = 0;
 	int32 NumTracers = 0;
 	int32 NumImpacts = 0;
 	int32 NumActors = 0;

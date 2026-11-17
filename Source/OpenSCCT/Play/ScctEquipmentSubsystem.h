@@ -34,7 +34,7 @@ class UStaticMeshComponent;
  * (UScctWeaponSet, /Game/OpenSCCT/Weapons/DA_ScctWeapons).
  *
  * Muzzle flashes of other pawns, tracers and impacts are not drawn here: those belong to the match effects, which
- * can ask FindMuzzle for where a pawn's barrel ends.
+ * ask FindMuzzle for where a pawn's barrel ends and DrawsLocalMuzzleFlash for whether the local flash is theirs.
  *
  * Unattended switches (off by default; for runs with nobody at the keyboard):
  *   -ScctForceCloak=<0..1>   draw every pawn and the view model with that much of the camo suit on (the suit is
@@ -63,6 +63,13 @@ public:
 	 * local player while it is drawn, else the muzzle of the gun on the body. False when the pawn shows no gun.
 	 */
 	bool FindMuzzle(int32 ActorId, FTransform& OutWorld) const;
+
+	/**
+	 * The local player's own muzzle flash is this subsystem's while it draws a view model: the flash sits on that
+	 * model's muzzle. The match effects draw the local first-person flash only while this is false (no view model:
+	 * the equipment table is missing, -ScctNoViewModel, a tour camera).
+	 */
+	bool DrawsLocalMuzzleFlash() const;
 
 	/** The first-person view model of this frame as the bridge described it; Kind is None when none is drawn. */
 	const FScctFirstPerson& GetFirstPerson() const { return FirstPerson; }

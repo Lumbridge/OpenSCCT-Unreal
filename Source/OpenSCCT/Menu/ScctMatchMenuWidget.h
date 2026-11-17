@@ -9,7 +9,7 @@ class SScctMatchOverlay;
 /**
  * What a match level shows over the HUD: the in-match menu (resume, leave the server or go back to the main
  * menu) and, in an online round, what the visit is waiting for and the round's results. Built in code; the
- * widgets are in the .cpp. AScctGameMode owns it and opens the menu on Escape.
+ * widgets are in the .cpp. AScctGameMode owns it and opens the menu on the player's ShowMenu binding.
  */
 UCLASS()
 class OPENSCCT_API UScctMatchMenuWidget : public UUserWidget

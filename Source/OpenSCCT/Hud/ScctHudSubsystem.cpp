@@ -7,10 +7,10 @@
 #include "Hud/ScctHudModel.h"
 #include "Hud/ScctHudWidget.h"
 #include "Hud/ScctVisionSubsystem.h"
-#include "InputCoreTypes.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 
@@ -49,7 +49,6 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Session->OnSessionChanged.AddUObject(this, &UScctHudSubsystem::HandleSessionChanged);
 	Session->OnMatchStopped.AddUObject(this, &UScctHudSubsystem::HandleMatchStopped);
 	Session->OnFrame.AddUObject(this, &UScctHudSubsystem::HandleFrame);
-	Session->OnBeforeTicks.AddUObject(this, &UScctHudSubsystem::HandleBeforeTicks);
 
 	FParse::Value(FCommandLine::Get(), TEXT("ScctHudLog="), LogEvery);
 
@@ -81,7 +80,10 @@ void UScctHudSubsystem::Deinitialize()
 		Session->OnSessionChanged.RemoveAll(this);
 		Session->OnMatchStopped.RemoveAll(this);
 		Session->OnFrame.RemoveAll(this);
-		Session->OnBeforeTicks.RemoveAll(this);
+	}
+	if (CommandSource.IsValid())
+	{
+		CommandSource->OnLocalCommand.Remove(CommandHandle);
 	}
 	HideWidget();
 	Super::Deinitialize();
@@ -96,7 +98,8 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	ViewportSize = FIntPoint::ZeroValue;
 	LogTimer = 0.0f;
 	bScoreboardForced = false;
-	bFireForced = false;
+	bScoreboardKeyHeld = false;
+	bScoreboardToggled = false;
 	for (FTimedCommand& Command : TimedCommands)
 	{
 		Command.bDone = false;
@@ -107,17 +110,21 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	}
 }
 
-void UScctHudSubsystem::HandleBeforeTicks(float DeltaSeconds)
+void UScctHudSubsystem::HandleLocalCommand(FName Name, int32 Arg, bool bPressed)
 {
-	// -ScctHudCommands "Fire 1": the trigger is held for the simulation in place of the player's own input.
-	if (bFireForced)
+	// The bridge sends the release of a held command when the keys are taken away (a menu opens), so a held
+	// scoreboard never sticks.
+	if (Name == TEXT("HoldScoreboard"))
 	{
-		if (UScctSessionSubsystem* Session = GetWorld()->GetSubsystem<UScctSessionSubsystem>())
-		{
-			FScctBridgeInput Input = {};
-			Input.Buttons[static_cast<int32>(EScctButton::Fire)] = 1;
-			Session->SetInput(Input);
-		}
+		bScoreboardKeyHeld = bPressed;
+	}
+	else if (bPressed && Name == TEXT("ShowConnectedPlayers"))
+	{
+		bScoreboardToggled = !bScoreboardToggled;
+	}
+	else if (bPressed && Name == TEXT("SwitchEnhancedReality") && Api != nullptr)
+	{
+		Api->SetOption(EScctHudOption::SwitchEnhancedReality, 0);
 	}
 }
 
@@ -193,8 +200,14 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 	ProjectMarkers();
 	RunTimedCommands();
 
-	const APlayerController* Player = GetWorld()->GetFirstPlayerController();
-	Model->bScoreboardHeld = bScoreboardForced || (Player != nullptr && Player->IsInputKeyDown(EKeys::Tab));
+	// The scoreboard follows the player's bindings, which arrive as interface commands.
+	AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController());
+	if (Player != nullptr && CommandSource.Get() != Player)
+	{
+		CommandSource = Player;
+		CommandHandle = Player->OnLocalCommand.AddUObject(this, &UScctHudSubsystem::HandleLocalCommand);
+	}
+	Model->bScoreboardHeld = bScoreboardForced || bScoreboardKeyHeld || bScoreboardToggled;
 	Model->Advance(DeltaSeconds);
 
 	if (UScctVisionSubsystem* Vision = GetWorld()->GetSubsystem<UScctVisionSubsystem>())
@@ -282,11 +295,10 @@ void UScctHudSubsystem::RunTimedCommands()
 		}
 		else if (Command.Name.Equals(TEXT("Fire"), ESearchCase::IgnoreCase))
 		{
-			// A shot is the simulation's Fire command with the button held after it.
-			bFireForced = Command.Argument != 0;
-			if (UScctSessionSubsystem* Session = bFireForced ? GetWorld()->GetSubsystem<UScctSessionSubsystem>() : nullptr)
+			// The fire key goes down or comes up, as under a finger.
+			if (AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController()))
 			{
-				Session->SendCommand(TEXT("Fire"), 0);
+				Player->HoldScriptedAction(TEXT("fire"), Command.Argument != 0);
 			}
 		}
 		else if (Command.Name.Equals(TEXT("PreviewDamage"), ESearchCase::IgnoreCase))
@@ -301,9 +313,18 @@ void UScctHudSubsystem::RunTimedCommands()
 		{
 			Api->SetOption(EScctHudOption::SwitchEnhancedReality, 0);
 		}
-		else if (UScctSessionSubsystem* Session = GetWorld()->GetSubsystem<UScctSessionSubsystem>())
+		else if (AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController()))
 		{
-			Session->SendCommand(*Command.Name, Command.Argument);
+			// Anything else is a command of the bindings: its key is pressed. A binding that carries a number
+			// ("SwitchHeadset 1") is looked for with it first, then by its name alone ("ShowMenu").
+			if (Player->FindKeysBoundTo(FString::Printf(TEXT("%s %d"), *Command.Name, Command.Argument)).Num() > 0)
+			{
+				Player->TapBoundCommand(FString::Printf(TEXT("%s %d"), *Command.Name, Command.Argument));
+			}
+			else
+			{
+				Player->TapBoundCommand(Command.Name);
+			}
 		}
 	}
 }
