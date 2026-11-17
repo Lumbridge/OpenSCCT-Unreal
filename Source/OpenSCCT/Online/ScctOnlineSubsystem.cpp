@@ -330,9 +330,24 @@ void UScctOnlineSubsystem::SendChat(const FString& Text, bool bTeamOnly)
 	}
 }
 
-bool UScctOnlineSubsystem::SetMatchMap(const FString& Map)
+bool UScctOnlineSubsystem::SetMatch(const FString& Map, int32 Mode)
 {
-	return Api != nullptr && Api->SetMatch(*Map, -1) != 0;
+	if (Api == nullptr || Api->SetMatch(*Map, Mode) == 0)
+	{
+		return false;
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: asked the server for the next match: map %s, mode %d, the map's own settings"), Map.IsEmpty() ? *SetupMap : *Map, Mode);
+	return true;
+}
+
+bool UScctOnlineSubsystem::SetSetupOptions(const FString& Options)
+{
+	if (Api == nullptr || Options.IsEmpty() || Api->SetSetupOptions(*Options) == 0)
+	{
+		return false;
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: asked the server to change the setup: %s"), *Options);
+	return true;
 }
 
 bool UScctOnlineSubsystem::GetResults(FScctOnlineResults& OutResults, TArray<FScctOnlineResultRow>& OutRows) const
@@ -496,6 +511,36 @@ void UScctOnlineSubsystem::RefreshTexts()
 	SetupDescription = ReadText(EScctOnlineText::SetupDescription);
 	ConnectLog = ReadText(EScctOnlineText::ConnectLog);
 	MapToLoad = ReadText(EScctOnlineText::MapToLoad);
+
+	// The setup and the lobby's players into the log when they change: what the host set up, and who it un-readied.
+	const FString NewSetup = ReadText(EScctOnlineText::SetupOptions);
+	if (NewSetup != SetupOptions)
+	{
+		SetupOptions = NewSetup;
+		if (!SetupOptions.IsEmpty())
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("Online: the lobby's setup is now %s (%s)"), *SetupOptions, *SetupDescription);
+		}
+	}
+	FString Roster;
+	if (GetState() == EScctOnlineState::Lobby)
+	{
+		for (const FScctOnlinePlayer& Player : Players)
+		{
+			static const TCHAR* const MapStates[] = { TEXT("map ?"), TEXT("map ok"), TEXT("map MISSING"), TEXT("map OTHER VERSION") };
+			Roster += FString::Printf(TEXT("%s%s (%s, %s, %s)"), Roster.IsEmpty() ? TEXT("") : TEXT(", "), Player.Name,
+				Player.Team == 0 ? TEXT("spy") : Player.Team == 1 ? TEXT("merc") : TEXT("watching"),
+				(Player.Flags & EScctOnlinePlayerFlags::Ready) != 0 ? TEXT("ready") : TEXT("not ready"), MapStates[FMath::Clamp(Player.MapState, 0, 3)]);
+		}
+	}
+	if (Roster != LoggedRoster)
+	{
+		LoggedRoster = Roster;
+		if (!Roster.IsEmpty())
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("Online: lobby players: %s"), *Roster);
+		}
+	}
 
 	if (Status.MasterState != LastMasterState)
 	{

@@ -199,8 +199,23 @@ public:
 	void Launch();
 	void SendChat(const FString& Text, bool bTeamOnly = false);
 
-	/** With CanControl: the next match is played on Map (its own default settings). False when not sent. */
-	bool SetMatchMap(const FString& Map);
+	/**
+	 * With CanControl: the next match is Map (empty: keep) in Mode (EGameMode, negative: keep) with that map's own
+	 * default settings, the revenge and games in a row kept (the Godot lobby's DefaultsFor). False when not sent: the
+	 * map is not installed here, or the visit is not in the lobby.
+	 */
+	bool SetMatch(const FString& Map, int32 Mode = -1);
+	bool SetMatchMap(const FString& Map) { return SetMatch(Map, -1); }
+
+	/**
+	 * With CanControl: changes the values an options line names ("?TimeLimit=5?SvmBots=2", the names of
+	 * GetSetupOptions); the others keep the server's. The server clamps and checks, un-readies the players and sends
+	 * the new setup back (the revision moves). False when not sent.
+	 */
+	bool SetSetupOptions(const FString& Options);
+
+	/** The lobby's setup as an options line (LobbySetup.ToOptions), as of the last revision; empty outside a visit. */
+	const FString& GetSetupOptions() const { return SetupOptions; }
 
 	// ---- identity, master, account ---------------------------------------------------------------------------
 
@@ -293,7 +308,9 @@ private:
 	TArray<FScctOnlinePlayer> Players;
 	TArray<FScctOnlineServerEntry> Servers;
 	TArray<FScctOnlineChatEntry> Chat;
-	FString ServerName, SetupMap, ModeName, SetupDescription, ConnectLog, MapToLoad;
+	FString ServerName, SetupMap, ModeName, SetupDescription, ConnectLog, MapToLoad, SetupOptions;
+	/** The lobby's players as last logged (name, side, ready, map state), so a change is logged once. */
+	FString LoggedRoster;
 	FString MasterError, AccountName, AccountError, SignInCode;
 	FString Notice;
 

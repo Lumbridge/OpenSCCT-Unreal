@@ -13,8 +13,8 @@ class UScctOnlineSubsystem;
 
 /**
  * The front end: the pages of the main menu and, while the player visits a server, the visit's pages (connecting,
- * the lobby, travelling, a failure). It is one widget whose middle is rebuilt when the page changes; the lobby's
- * player lists and chat are refilled whenever the online subsystem's revision changes.
+ * the lobby, travelling, a failure). It is one widget whose middle is rebuilt when the page changes; the lobby is its
+ * own widget (Menu/SScctLobbyPage.h), which refills itself whenever the online subsystem's revision changes.
  *
  *   Home      play offline, join by address, server list, quit
  *   Offline   map, mode, side, bots and their skill, start
@@ -69,14 +69,10 @@ private:
 	TSharedRef<SWidget> BuildJoin();
 	TSharedRef<SWidget> BuildServers();
 	TSharedRef<SWidget> BuildVisit();
-	TSharedRef<SWidget> BuildLobby();
 
-	void RefillLobby();
 	void RefillServers();
 	void StartOffline();
 	void StartJoin();
-	void SendChat();
-	void PickNextMap();
 
 	/** A row of buttons of which one is picked: Value is set to the index clicked. */
 	TSharedRef<SWidget> Choice(const TArray<FString>& Labels, int32& Value, const FLinearColor& Colour);
@@ -104,10 +100,4 @@ private:
 
 	// Servers page.
 	TSharedPtr<SVerticalBox> ServerRows;
-
-	// Lobby.
-	TSharedPtr<SVerticalBox> TeamRows[3];
-	TSharedPtr<SScrollBox> ChatRows;
-	TSharedPtr<SEditableTextBox> ChatBox;
-	int32 ChatLinesShown = 0;
 };

@@ -102,7 +102,9 @@ public sealed class BridgeSession : IDisposable
     /// <summary>Sets the converted content folder (the one holding <c>svmap</c> and <c>shared</c>).</summary>
     public static void Configure(string contentRoot)
     {
-        ContentPaths.Configure(contentRoot, exeDir: null);
+        // OPENSCCT_PACKS moves the downloaded packs' folder (default %LOCALAPPDATA%\OpenSCCT\packs), so a test process
+        // can run without the maps downloaded on this machine (a lobby guest that lacks the host's map).
+        ContentPaths.Configure(contentRoot, exeDir: null, packs: Environment.GetEnvironmentVariable("OPENSCCT_PACKS"));
     }
 
     /// <summary>Hosts <paramref name="map"/> locally and joins it. Blocks while the map loads.</summary>

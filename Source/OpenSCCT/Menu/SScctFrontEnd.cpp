@@ -6,6 +6,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformMisc.h"
 #include "Menu/SScctHostPage.h"
+#include "Menu/SScctLobbyPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -35,7 +36,6 @@ namespace
 	const int32 JoinSides[] = { -1, 0, 1, 255 };
 
 	constexpr float PageWidth = 560.0f;
-	constexpr float LobbyWidth = 1120.0f;
 
 	/** A server's mode as the lobby names it (EGameMode). */
 	const TCHAR* ModeNameOf(int32 Mode)
@@ -140,11 +140,7 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 	if (Visit->GetRevision() != SeenRevision)
 	{
 		SeenRevision = Visit->GetRevision();
-		if (Page == EPage::Visit && VisitView == EVisitView::Lobby)
-		{
-			RefillLobby();
-		}
-		else if (Page == EPage::Servers)
+		if (Page == EPage::Servers)
 		{
 			RefillServers();
 		}
@@ -209,11 +205,6 @@ void SScctFrontEnd::ShowPage(EPage NewPage)
 void SScctFrontEnd::Rebuild()
 {
 	ServerRows.Reset();
-	ChatRows.Reset();
-	for (TSharedPtr<SVerticalBox>& Rows : TeamRows)
-	{
-		Rows.Reset();
-	}
 
 	TSharedRef<SWidget> Content = SNullWidget::NullWidget;
 	switch (Page)
@@ -561,7 +552,8 @@ TSharedRef<SWidget> SScctFrontEnd::BuildVisit()
 	}
 	if (VisitView == EVisitView::Lobby)
 	{
-		return BuildLobby();
+		// The lobby is its own page (Menu/SScctLobbyPage.h): setup, launch feedback, Session Options.
+		return SNew(SScctLobbyPage).Online(Online);
 	}
 
 	FString Heading, LeaveLabel = TEXT("LEAVE");
@@ -627,258 +619,4 @@ TSharedRef<SWidget> SScctFrontEnd::BuildVisit()
 				}), false, Ui::Accent(), 120.0f)
 			])
 	];
-}
-
-TSharedRef<SWidget> SScctFrontEnd::BuildLobby()
-{
-	const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Online;
-	const auto HasFlag = [Weak](int32 Flag) { return Weak.IsValid() && Weak->HasFlag(Flag); };
-	const auto ShownWith = [HasFlag](int32 Flag)
-	{
-		return TAttribute<EVisibility>::CreateLambda([HasFlag, Flag] { return HasFlag(Flag) ? EVisibility::Visible : EVisibility::Collapsed; });
-	};
-	const auto TeamButton = [Weak](const TCHAR* LabelText, int32 Team, const FLinearColor& Colour)
-	{
-		return Ui::Button(Ui::ToText(LabelText),
-			FOnClicked::CreateLambda([Weak, Team] { if (Weak.IsValid()) { Weak->SetTeam(Team); } return FReply::Handled(); }),
-			TAttribute<bool>::CreateLambda([Weak, Team] { return Weak.IsValid() && Weak->GetStatus().LocalTeam == Team; }), Colour, 110.0f);
-	};
-	const auto TeamColumn = [this](const TCHAR* Name, int32 Team)
-	{
-		return SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Ui::Label(Name, ScctHudStyle::Accent(Team)) ]
-			+ SVerticalBox::Slot().AutoHeight()[ SAssignNew(TeamRows[Team], SVerticalBox) ];
-	};
-
-	ChatBox = Ui::TextBox(TEXT("Say something to the lobby"), FString(), false, FOnTextCommitted::CreateLambda([this](const FText&, ETextCommit::Type Commit)
-	{
-		if (Commit == ETextCommit::OnEnter)
-		{
-			SendChat();
-		}
-	}));
-
-	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
-
-	// Which server, what it is about to play, and what the lobby is waiting for.
-	Box->AddSlot().AutoHeight()
-	[
-		Ui::Title(TAttribute<FText>::CreateLambda([Weak] { return Weak.IsValid() ? Ui::ToText(Weak->GetServerName().ToUpper()) : FText::GetEmpty(); }), 24.0f)
-	];
-	Box->AddSlot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 4.0f)
-	[
-		Ui::Text(TAttribute<FText>::CreateLambda([Weak] { return Weak.IsValid() ? Ui::ToText(Weak->GetSetupDescription()) : FText::GetEmpty(); }),
-			12.0f, FSlateColor(ScctHudStyle::TextDim()), ScctHudStyle::EWeight::Regular, true)
-	];
-	Box->AddSlot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 14.0f)
-	[
-		SNew(STextBlock)
-		.Font(ScctHudStyle::Label(10.0f))
-		.ColorAndOpacity(Ui::Accent())
-		.Text(TAttribute<FText>::CreateLambda([Weak]
-		{
-			const UScctOnlineSubsystem* Visit = Weak.Get();
-			if (Visit == nullptr)
-			{
-				return FText::GetEmpty();
-			}
-			if (Visit->GetStatus().Countdown > 0.0f)
-			{
-				return FText::FromString(FString::Printf(TEXT("STARTING IN %d"), FMath::CeilToInt32(Visit->GetStatus().Countdown)));
-			}
-			if (Visit->HasFlag(EScctOnlineStatusFlags::PreparingBots))
-			{
-				return Ui::ToText(TEXT("THE SERVER IS PREPARING ITS BOTS"));
-			}
-			return Ui::ToText(Visit->HasFlag(EScctOnlineStatusFlags::CanStart) ? TEXT("EVERYONE IS READY") : TEXT("WAITING FOR PLAYERS TO BE READY"));
-		}))
-	];
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 16.0f)[ Ui::Rule() ];
-
-	Box->AddSlot().AutoHeight()
-	[
-		SNew(SHorizontalBox)
-		// The two sides, and whoever watches.
-		+ SHorizontalBox::Slot().FillWidth(0.56f).Padding(0.0f, 0.0f, 28.0f, 0.0f)
-		[
-			SNew(SBox).MinDesiredHeight(300.0f)
-			[
-				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, 18.0f, 0.0f)[ TeamColumn(TEXT("Spies"), 0) ]
-					+ SHorizontalBox::Slot().FillWidth(1.0f)[ TeamColumn(TEXT("Mercenaries"), 1) ]
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 16.0f, 0.0f, 0.0f)
-				[
-					SAssignNew(TeamRows[2], SVerticalBox)
-				]
-			]
-		]
-		// The chat.
-		+ SHorizontalBox::Slot().FillWidth(0.44f)
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Ui::Label(TEXT("Chat")) ]
-			+ SVerticalBox::Slot().AutoHeight()
-			[
-				SNew(SBox).HeightOverride(240.0f)
-				[
-					SAssignNew(ChatRows, SScrollBox)
-				]
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)[ ChatBox.ToSharedRef() ]
-		]
-	];
-	Box->AddSlot().AutoHeight().Padding(0.0f, 18.0f, 0.0f, 16.0f)[ Ui::Rule() ];
-
-	Box->AddSlot().AutoHeight()
-	[
-		SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)[ TeamButton(TEXT("SPIES"), 0, ScctHudStyle::Accent(0)) ]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)[ TeamButton(TEXT("MERCENARIES"), 1, ScctHudStyle::Accent(1)) ]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 22.0f, 0.0f)[ TeamButton(TEXT("WATCH"), 255, ScctHudStyle::Accent(2)) ]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
-		[
-			Ui::Button(TAttribute<FText>::CreateLambda([HasFlag] { return Ui::ToText(HasFlag(EScctOnlineStatusFlags::LocalReady) ? TEXT("READY") : TEXT("NOT READY")); }),
-				FOnClicked::CreateLambda([Weak, HasFlag] { if (Weak.IsValid()) { Weak->SetReady(!HasFlag(EScctOnlineStatusFlags::LocalReady)); } return FReply::Handled(); }),
-				TAttribute<bool>::CreateLambda([HasFlag] { return HasFlag(EScctOnlineStatusFlags::LocalReady); }), ScctHudStyle::Good(), 130.0f)
-		]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
-		[
-			SNew(SBox).Visibility(ShownWith(EScctOnlineStatusFlags::CanLaunch))
-			[
-				// The same request cancels a countdown that is running.
-				Ui::Button(TAttribute<FText>::CreateLambda([Weak] { return Ui::ToText(Weak.IsValid() && Weak->GetStatus().Countdown > 0.0f ? TEXT("CANCEL START") : TEXT("START")); }),
-					FOnClicked::CreateLambda([Weak] { if (Weak.IsValid()) { Weak->Launch(); } return FReply::Handled(); }))
-			]
-		]
-		+ SHorizontalBox::Slot().AutoWidth()
-		[
-			SNew(SBox).Visibility(ShownWith(EScctOnlineStatusFlags::CanControl))
-			[
-				Ui::Button(Ui::ToText(TEXT("NEXT MAP")), FOnClicked::CreateLambda([this] { PickNextMap(); return FReply::Handled(); }))
-			]
-		]
-		+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right)
-		[
-			Ui::Button(Ui::ToText(TEXT("LEAVE")), FOnClicked::CreateLambda([Weak] { if (Weak.IsValid()) { Weak->Leave(); } return FReply::Handled(); }),
-				false, Ui::Accent(), 110.0f)
-		]
-	];
-	return SNew(SBox).WidthOverride(LobbyWidth)[ Ui::Glass(Box) ];
-}
-
-void SScctFrontEnd::RefillLobby()
-{
-	const UScctOnlineSubsystem* Visit = Online.Get();
-	if (Visit == nullptr || !TeamRows[0].IsValid() || !ChatRows.IsValid())
-	{
-		return;
-	}
-
-	for (const TSharedPtr<SVerticalBox>& Rows : TeamRows)
-	{
-		Rows->ClearChildren();
-	}
-	FString Watching;
-	for (const FScctOnlinePlayer& Player : Visit->GetPlayers())
-	{
-		if (Player.Team != 0 && Player.Team != 1)
-		{
-			Watching += (Watching.IsEmpty() ? TEXT("") : TEXT(", ")) + FString(Player.Name);
-			continue;
-		}
-
-		const bool bLocal = Player.Id == Visit->GetStatus().LocalId;
-		const bool bBot = (Player.Flags & EScctOnlinePlayerFlags::Bot) != 0;
-		const bool bReady = (Player.Flags & EScctOnlinePlayerFlags::Ready) != 0;
-		FString State = bBot ? TEXT("BOT")
-			: (Player.Flags & EScctOnlinePlayerFlags::InGame) != 0 ? TEXT("IN GAME")
-			: (Player.Flags & EScctOnlinePlayerFlags::Loading) != 0 ? TEXT("LOADING")
-			: bReady ? TEXT("READY") : TEXT("NOT READY");
-		if (!bBot)
-		{
-			State += FString::Printf(TEXT("   %d MS"), Player.PingMs);
-		}
-		if ((Player.Flags & EScctOnlinePlayerFlags::Host) != 0)
-		{
-			State = TEXT("HOST   ") + State;
-		}
-
-		TeamRows[Player.Team]->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 7.0f)
-		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-			[
-				Ui::Text(Ui::ToText(FString(Player.Name)), 13.5f, FSlateColor(bLocal ? ScctHudStyle::Accent(Player.Team) : ScctHudStyle::Text()),
-					bLocal ? ScctHudStyle::EWeight::Bold : ScctHudStyle::EWeight::Regular)
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				Ui::Label(State, bReady || bBot ? ScctHudStyle::Good() : ScctHudStyle::TextFaint())
-			]
-		];
-	}
-	if (!Watching.IsEmpty())
-	{
-		TeamRows[2]->AddSlot().AutoHeight()[ Ui::Label(TEXT("Watching: ") + Watching, ScctHudStyle::TextFaint()) ];
-	}
-
-	// The chat is short (the subsystem keeps the last lines only), so it is written out again whole.
-	const TArray<FScctOnlineChatEntry>& Chat = Visit->GetChat();
-	ChatRows->ClearChildren();
-	for (const FScctOnlineChatEntry& Line : Chat)
-	{
-		ChatRows->AddSlot().Padding(0.0f, 0.0f, 0.0f, 5.0f)
-		[
-			Line.bSystem
-				? Ui::Text(Ui::ToText(Line.Text), 11.0f, FSlateColor(ScctHudStyle::TextFaint()), ScctHudStyle::EWeight::Regular, true)
-				: StaticCastSharedRef<SWidget>(SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
-					[
-						Ui::Text(Ui::ToText(Line.Sender), 11.5f, FSlateColor(ScctHudStyle::Accent(Line.Team)), ScctHudStyle::EWeight::Bold)
-					]
-					+ SHorizontalBox::Slot().FillWidth(1.0f)
-					[
-						Ui::Text(Ui::ToText(Line.Text), 11.5f, FSlateColor(ScctHudStyle::Text()), ScctHudStyle::EWeight::Regular, true)
-					])
-		];
-	}
-	if (Chat.Num() != ChatLinesShown)
-	{
-		ChatLinesShown = Chat.Num();
-		ChatRows->ScrollToEnd();
-	}
-}
-
-void SScctFrontEnd::SendChat()
-{
-	if (Online.IsValid() && ChatBox.IsValid())
-	{
-		Online->SendChat(ChatBox->GetText().ToString());
-		ChatBox->SetText(FText::GetEmpty());
-		// Enter takes the focus away; the next line is usually typed straight after.
-		FSlateApplication::Get().SetKeyboardFocus(ChatBox);
-	}
-}
-
-void SScctFrontEnd::PickNextMap()
-{
-	UScctOnlineSubsystem* Visit = Online.Get();
-	if (Visit == nullptr)
-	{
-		return;
-	}
-	if (Maps.IsEmpty())
-	{
-		Maps = UScctOnlineSubsystem::FindImportedMaps();
-	}
-	if (!Maps.IsEmpty())
-	{
-		// Only maps that can be shown here are offered; the server refuses what it does not have.
-		const int32 Current = Maps.IndexOfByKey(Visit->GetSetupMap());
-		Visit->SetMatchMap(Maps[(Current + 1) % Maps.Num()]);
-	}
 }

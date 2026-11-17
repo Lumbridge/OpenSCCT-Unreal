@@ -1,6 +1,7 @@
 #include "Menu/SScctHostPage.h"
 
 #include "Menu/SScctMapPicker.h"
+#include "Menu/ScctSetupRowsView.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
@@ -55,15 +56,8 @@ namespace
 		return Value == TEXT("1") || Value.Equals(TEXT("true"), ESearchCase::IgnoreCase) || Value.Equals(TEXT("yes"), ESearchCase::IgnoreCase);
 	}
 
-	TSharedRef<SWidget> Heading(const FString& Text)
-	{
-		return SNew(SBox).Padding(0.0f, 10.0f, 0.0f, 8.0f)[ Ui::Label(Text, Ui::Accent()) ];
-	}
-
-	TSharedRef<SWidget> Note(const TAttribute<FText>& Text)
-	{
-		return SNew(SBox).Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Ui::Text(Text, 10.5f, FSlateColor(ScctHudStyle::TextDim()), ScctHudStyle::EWeight::Regular, true) ];
-	}
+	using ScctSetupRowsView::Heading;
+	using ScctSetupRowsView::Note;
 }
 
 void SScctHostPage::Construct(const FArguments& InArgs)
@@ -282,68 +276,7 @@ void SScctHostPage::Refresh()
 
 TSharedRef<SWidget> SScctHostPage::RowWidget(const FString& Name)
 {
-	const FScctSetupRow* Found = FindRow(Name);
-	if (Found == nullptr || !Found->bVisible)
-	{
-		return SNullWidget::NullWidget;
-	}
-
-	const FScctSetupRow Row = *Found;
-	const TSharedRef<SWidget> Caption = Ui::Text(Ui::ToText(Row.Caption), 12.0f);
-	TSharedRef<SWidget> Control = SNullWidget::NullWidget;
-	switch (Row.Kind)
-	{
-	case FScctSetupRow::EKind::Number:
-		Control = SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				SNew(SBox).IsEnabled(Row.Value > Row.Min)
-				[
-					Ui::Button(Ui::ToText(TEXT("-")), FOnClicked::CreateLambda([this, Row] { Edit(FString::Printf(TEXT("%s %d"), *Row.Row, Row.Value - 1)); return FReply::Handled(); }))
-				]
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(SBox).WidthOverride(58.0f).HAlign(HAlign_Center)[ Ui::Text(Ui::ToText(Row.Shown), 13.0f, FSlateColor(ScctHudStyle::Text()), ScctHudStyle::EWeight::Bold) ]
-			]
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				SNew(SBox).IsEnabled(Row.Value < Row.Max)
-				[
-					Ui::Button(Ui::ToText(TEXT("+")), FOnClicked::CreateLambda([this, Row] { Edit(FString::Printf(TEXT("%s %d"), *Row.Row, Row.Value + 1)); return FReply::Handled(); }))
-				]
-			];
-		break;
-	case FScctSetupRow::EKind::Check:
-		Control = Ui::Button(Ui::ToText(Row.Value != 0 ? TEXT("YES") : TEXT("NO")),
-			FOnClicked::CreateLambda([this, Row] { Edit(FString::Printf(TEXT("%s %d"), *Row.Row, Row.Value != 0 ? 0 : 1)); return FReply::Handled(); }),
-			Row.Value != 0, Ui::Accent(), 70.0f);
-		break;
-	case FScctSetupRow::EKind::Choice:
-	{
-		// A choice is a caption over its buttons; the page is too narrow to put them beside it.
-		const TSharedRef<SWrapBox> Buttons = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6.0f, 6.0f));
-		for (int32 Index = 0; Index < Row.Choices.Num(); ++Index)
-		{
-			Buttons->AddSlot()
-			[
-				Ui::Button(Ui::ToText(Row.Choices[Index].ToUpper()),
-					FOnClicked::CreateLambda([this, Row, Index] { Edit(FString::Printf(TEXT("%s %d"), *Row.Row, Index)); return FReply::Handled(); }),
-					Index == Row.Value)
-			];
-		}
-		return SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 6.0f)[ Caption ]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Buttons ];
-	}
-	}
-
-	return SNew(SBox).Padding(0.0f, 2.0f, 0.0f, 5.0f)
-	[
-		SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)[ Caption ]
-		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[ Control ]
-	];
+	return ScctSetupRowsView::Row(FindRow(Name), [this](const FString& Change) { Edit(Change); }, true);
 }
 
 void SScctHostPage::AddRows(const TSharedRef<SVerticalBox>& Box, std::initializer_list<const TCHAR*> Names)
@@ -467,80 +400,6 @@ TSharedRef<SWidget> SScctHostPage::BuildSettings()
 TSharedRef<SWidget> SScctHostPage::BuildAlternate()
 {
 	const TArray<FScctAlternateRow> Alternate = ScctHostSetup::AlternateRows(Setup, PlayersArgument());
-	const auto Side = [this, &Alternate](int32 Team)
-	{
-		const TSharedRef<SVerticalBox> Column = SNew(SVerticalBox);
-		Column->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ Ui::Label(Team == 0 ? TEXT("Spies") : TEXT("Mercenaries"), ScctHudStyle::Accent(Team)) ];
-		for (const FScctAlternateRow::EKind Kind : { FScctAlternateRow::EKind::Ability, FScctAlternateRow::EKind::Gadget, FScctAlternateRow::EKind::Slots })
-		{
-			if (Kind != FScctAlternateRow::EKind::Slots)
-			{
-				Column->AddSlot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 4.0f)[ Ui::Label(Kind == FScctAlternateRow::EKind::Ability ? TEXT("Abilities") : TEXT("Gadgets")) ];
-			}
-			for (const FScctAlternateRow& Row : Alternate)
-			{
-				if (Row.Kind != Kind || Row.Side != Team)
-				{
-					continue;
-				}
-
-				TSharedRef<SWidget> Control = SNullWidget::NullWidget;
-				FString Caption = Row.Caption;
-				if (Kind == FScctAlternateRow::EKind::Slots)
-				{
-					Caption = TEXT("Number of gadgets");
-					Control = SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().AutoWidth()
-						[
-							SNew(SBox).IsEnabled(Row.Value > 0)
-							[
-								Ui::Button(Ui::ToText(TEXT("-")), FOnClicked::CreateLambda([this, Row] { EditAlternate(FString::Printf(TEXT("slots %d %d"), Row.Side, Row.Value - 1)); return FReply::Handled(); }))
-							]
-						]
-						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-						[
-							SNew(SBox).WidthOverride(34.0f).HAlign(HAlign_Center)[ Ui::Text(Ui::ToText(FString::FromInt(Row.Value)), 12.0f, FSlateColor(ScctHudStyle::Text()), ScctHudStyle::EWeight::Bold) ]
-						]
-						+ SHorizontalBox::Slot().AutoWidth()
-						[
-							SNew(SBox).IsEnabled(Row.Value < Row.Most)
-							[
-								Ui::Button(Ui::ToText(TEXT("+")), FOnClicked::CreateLambda([this, Row] { EditAlternate(FString::Printf(TEXT("slots %d %d"), Row.Side, Row.Value + 1)); return FReply::Handled(); }))
-							]
-						];
-				}
-				else
-				{
-					const FString Change = Kind == FScctAlternateRow::EKind::Ability
-						? FString::Printf(TEXT("ability %d %d"), Row.Id, Row.Value != 0 ? 0 : 1)
-						: FString::Printf(TEXT("gadget %d %d %d"), Row.Side, Row.Id, Row.Value != 0 ? 0 : 1);
-					Control = Ui::Button(Ui::ToText(Row.Value != 0 ? TEXT("ON") : TEXT("OFF")),
-						FOnClicked::CreateLambda([this, Change] { EditAlternate(Change); return FReply::Handled(); }), Row.Value != 0, ScctHudStyle::Accent(Team), 56.0f);
-				}
-				Column->AddSlot().AutoHeight().Padding(0.0f, 1.0f, 0.0f, 3.0f)
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)[ Ui::Text(Ui::ToText(Caption), 11.0f) ]
-					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[ Control ]
-				];
-			}
-		}
-		return Column;
-	};
-
-	const FScctAlternateRow* Cinematic = Alternate.FindByPredicate([](const FScctAlternateRow& Row) { return Row.Kind == FScctAlternateRow::EKind::Ability && Row.Side == 2; });
-	TSharedRef<SWidget> CinematicRow = SNullWidget::NullWidget;
-	if (Cinematic != nullptr)
-	{
-		const FString Change = FString::Printf(TEXT("ability %d %d"), Cinematic->Id, Cinematic->Value != 0 ? 0 : 1);
-		CinematicRow = SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)[ Ui::Text(Ui::ToText(Cinematic->Caption), 12.0f) ]
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				Ui::Button(Ui::ToText(Cinematic->Value != 0 ? TEXT("ON") : TEXT("OFF")), FOnClicked::CreateLambda([this, Change] { EditAlternate(Change); return FReply::Handled(); }),
-					Cinematic->Value != 0, Ui::Accent(), 56.0f)
-			];
-	}
 
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)[ Ui::Label(TEXT("Alternate rules"), Ui::Accent()) ]
@@ -550,14 +409,7 @@ TSharedRef<SWidget> SScctHostPage::BuildAlternate()
 			SNew(SScrollBox)
 			+ SScrollBox::Slot().Padding(0.0f, 0.0f, 14.0f, 0.0f)
 			[
-				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, 18.0f, 0.0f)[ Side(0) ]
-					+ SHorizontalBox::Slot().FillWidth(1.0f)[ Side(1) ]
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 0.0f)[ CinematicRow ]
+				ScctSetupRowsView::Alternate(Alternate, [this](const FString& Change) { EditAlternate(Change); }, true)
 			]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 0.0f)
