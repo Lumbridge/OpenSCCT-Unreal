@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Runtime/ScctHudApi.h"
+#include "Runtime/ScctHudBackpackApi.h"
 #include "Runtime/ScctHudGadgetApi.h"
 #include "Runtime/ScctHudRadarApi.h"
 #include "Runtime/ScctHudTextureApi.h"
@@ -123,6 +124,10 @@ public:
 	/** The player's radar options (Hud.RadarScale, Hud.RadarRotate in the settings registry), read with the snapshot. */
 	float RadarScale = 1.0f;
 	bool bRadarRotate = true;
+
+	/** The merc backpack panels (which show, their titles and mates' names) and their gadget rows, read with the snapshot. */
+	FScctHudBackpackState Backpack = {};
+	TArray<FScctHudBackpackRow> BackpackRows;
 
 	/** The name of the Use key, which cycles the Merc Deathmatch respawn weapon (empty when unbound). */
 	FString RespawnUseKey;

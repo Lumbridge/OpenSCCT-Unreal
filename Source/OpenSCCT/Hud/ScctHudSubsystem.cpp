@@ -54,6 +54,7 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	InitGadgetViews();
 	InitIcons();
 	InitRadar();
+	InitBackpack();
 
 	// -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1"
 	FString Commands;
@@ -119,6 +120,7 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	LastRespawnTile = FIntPoint(-1, -1);
 	RespawnKeyAge = -100.0f;
 	LastHeartCone = 0;
+	LastBackpackSignature = 0;
 	bRadarTextureMissingLogged = false;
 	if (NewSessionId != 0 && Api == nullptr)
 	{
@@ -250,6 +252,7 @@ void UScctHudSubsystem::ReadSnapshot()
 	ReadRows(M.Radar, 64, Api->GetRadar);
 	ReadGadgetViews();
 	ReadRadar();
+	ReadBackpack();
 
 	M.LocalTeam = M.State.Side;
 	for (const FScctHudScoreRow& Row : M.Scores)
@@ -340,7 +343,8 @@ void UScctHudSubsystem::RunTimedCommands()
 		{
 			Api->SetOption(EScctHudOption::SwitchEnhancedReality, 0);
 		}
-		else if (RunIconCommand(Command.Name, Command.Argument) || RunRadarCommand(Command.Name, Command.Argument))
+		else if (RunIconCommand(Command.Name, Command.Argument) || RunRadarCommand(Command.Name, Command.Argument)
+			|| RunBackpackCommand(Command.Name, Command.Argument))
 		{
 		}
 		else if (AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController()))
@@ -387,6 +391,7 @@ void UScctHudSubsystem::LogSnapshot(float DeltaSeconds)
 		M.Scores.Num(), M.ObjectiveLines.Num(), M.Markers.Num(), M.Feed.Num(), M.Headlines.Num(), M.Log.Num(),
 		S.DamageCount, *M.Text(R.WatchedNameId), R.RespawnIn, R.NoRespawn);
 	LogRadar();
+	LogBackpack();
 
 	// The scoreboard's rows while it is up (and once near the start), for the same check.
 	constexpr float FirstRows = 2.0f;

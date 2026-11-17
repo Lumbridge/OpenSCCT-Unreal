@@ -38,6 +38,13 @@ namespace ScctHudElements
 	/** Bottom right: the weapon with its ammunition and fire mode, and the gadgets. */
 	void PaintEquipment(FScctHudPainter& Painter, const FScctHudModel& Model);
 
+	/**
+	 * Bottom right, left of the equipment, a merc's backpack panels: his own share and his two mates' shares (each
+	 * gadget's icon with the charges the backpack holds for it) while he holds the backpack, or only the share a mate
+	 * carries for him while the refill entry is focused. ScctHudElementsBackpack.cpp.
+	 */
+	void PaintBackpack(FScctHudPainter& Painter, const FScctHudModel& Model);
+
 	/** Bottom centre: what Use does now, or the list to choose from. */
 	void PaintPrompt(FScctHudPainter& Painter, const FScctHudModel& Model);
 

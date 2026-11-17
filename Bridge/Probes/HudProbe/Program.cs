@@ -49,6 +49,13 @@ if (args.Length > 5 && args[5].Equals("radar", StringComparison.OrdinalIgnoreCas
     return RadarRun(content, map, mode, merc, seconds);
 }
 
+Console.WriteLine($"sizes: HudBackpackState {Unsafe.SizeOf<HudBackpackState>()}, HudBackpackRow {Unsafe.SizeOf<HudBackpackRow>()}, HudBackpackApi {Unsafe.SizeOf<HudBackpackApi>()}");
+
+if (args.Length > 5 && args[5].Equals("backpack", StringComparison.OrdinalIgnoreCase))
+{
+    return BackpackRun(content, map, mode, merc, seconds);
+}
+
 BridgeSession.Configure(content);
 var load = Stopwatch.StartNew();
 using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
@@ -701,6 +708,131 @@ static unsafe int RadarRun(string content, string map, string mode, bool merc, d
 
     Console.WriteLine($"radar summary: highest cone {maxCone}, scan pings asked {sensor.CheckSounds}, heartbeats asked {sensor.DetectedSounds}, raised {sensor.SoundsRaised}, " +
         $"sound records resolved: echo_indic1 {pings}, Heart_Beat {beats}");
+    return 0;
+}
+
+// The merc backpack panels (five bots, so a merc has two merc mates): backpacks given to every merc at 1.2 s, every merc's gadgets and backpack slots on the server at 2 s, the backpack selected at 3 s,
+// the panels each second (own share and both mates' shares with icons), and from 8 s for 5 s the mate carrying the
+// player's share held in front of him with one of his charges spent, so the refill entry offers that share.
+static unsafe int BackpackRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 5);
+    HudFeature hud = HudFeature.Of(session);
+    hud.SetViewport(1920, 1080);
+    var input = default(BridgeInput);
+    var rows = new System.Collections.Generic.List<HudBackpackRow>();
+    var run = Stopwatch.StartNew();
+    bool given = false, listed = false, selected = false, forced = false;
+    double nextReport = 1;
+    int maxMode = 0, sharePanels = 0;
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        if (!given && t > 1.2 && session.Session.Host is { } giveHost && session.Session.LocalController?.PlayerReplicationInfo is { } me)
+        {
+            given = true;
+            int id = me.PlayerID;
+            void Give(OpenScct.Server.ServerHost running)
+            {
+                running.BeforeWorldTick -= Give;
+                Console.WriteLine($"t={run.Elapsed.TotalSeconds:F1} GiveOnServer(player {id}, all mercs) -> {HudBackpackExports.GiveOnServer(running, id, true)} backpacks given");
+            }
+
+            giveHost.BeforeWorldTick += Give;
+        }
+
+        if (!listed && t > 2.5 && session.Session.Host is { } host)
+        {
+            listed = true;
+            void List(OpenScct.Server.ServerHost running)
+            {
+                running.BeforeWorldTick -= List;
+                foreach (OpenScct.Game.SBase.SBasePawn p in running.World.Level.AllActors<OpenScct.Game.SBase.SBasePawn>())
+                {
+                    var names = new System.Collections.Generic.List<string>();
+                    for (OpenScct.Game.SBase.SGadget? g = p.MyGadget; g is not null; g = g.MyGadget)
+                    {
+                        names.Add($"{g.GetType().Name}({g.Charge})");
+                    }
+
+                    string who = (p.Controller?.PlayerReplicationInfo ?? p.PlayerReplicationInfo)?.PlayerName ?? "?";
+                    Console.WriteLine($"   server pawn '{who}' type {p.SPawnType} health {p.Health}: {string.Join(" ", names)} | A '{p.aBackPackOwner_A?.PlayerReplicationInfo?.PlayerName}' " +
+                        $"{p.aIDGad_Mate_A0}:{p.aNbChargesGad_Mate_A0} {p.aIDGad_Mate_A1}:{p.aNbChargesGad_Mate_A1} | B '{p.aBackPackOwner_B?.PlayerReplicationInfo?.PlayerName}' {p.aIDGad_Mate_B0}:{p.aNbChargesGad_Mate_B0} {p.aIDGad_Mate_B1}:{p.aNbChargesGad_Mate_B1}");
+                }
+            }
+
+            host.BeforeWorldTick += List;
+        }
+
+        if (!selected && t > 3)
+        {
+            selected = true;
+            Console.WriteLine($"t={t:F1} SelectBackpack -> {HudBackpackExports.Select(session.Session.LocalController)}");
+        }
+
+        if (!forced && t > 8 && session.Session.Host is { } h && session.Session.LocalController?.PlayerReplicationInfo is { } pri)
+        {
+            forced = true;
+            Console.WriteLine($"t={t:F1} ForceRefill 5 s for player {pri.PlayerID}");
+            HudBackpackExports.Queue(h, pri.PlayerID, 5f);
+        }
+
+        if (forced && t >= nextReport && session.Session.LocalController is { } lpc && lpc.SBPawn is { } lp)
+        {
+            // What the refill entry sees on the client: its focus, whether it can be used, the mate found and where
+            // the nearest mate stands.
+            var entry = lpc.IManager?.Interactions.Length > 0 ? lpc.IManager.Interactions[0] : null;
+            string near = "";
+            foreach (OpenScct.Game.SBase.SBasePawn p in lp.XLevel.AllActors<OpenScct.Game.SBase.SBasePawn>())
+            {
+                if (!ReferenceEquals(p, lp) && p.SPawnType == lp.SPawnType)
+                {
+                    near += $"'{p.PlayerReplicationInfo?.PlayerName}' {(p.Location - lp.Location).Size():F0} uu yaw {p.Rotation.Yaw & 0xFFFF} (mine {lp.Rotation.Yaw & 0xFFFF}) ";
+                }
+            }
+            string charges = "";
+            for (OpenScct.Game.SBase.SGadget? g = lp.MyGadget; g is not null; g = g.MyGadget)
+            {
+                charges += $"{g.GetType().Name}({g.Charge}) ";
+            }
+
+            Console.WriteLine($"   refill entry {entry?.GetType().Name} focus {(entry as OpenScct.Game.SBase.SInteractObject)?.bHasFocus} canUse {entry?.CanUse(lpc)} " +
+                $"mate '{(entry as OpenScct.Game.SBase.SMateInteraction)?.Mate?.PlayerReplicationInfo?.PlayerName}' selected {lpc.IManager?.SelectedInteractions} of {lpc.IManager?.NbObjects} | {near} | {charges}");
+        }
+
+        if (forced && t < 13 && session.Session.LocalController is { } focusPc)
+        {
+            HudBackpackExports.FocusRefill(focusPc);
+        }
+
+        HudBackpackState s = HudBackpackExports.Read(session.Session.LocalController, hud, rows);
+        maxMode = Math.Max(maxMode, s.Mode);
+        sharePanels += s.Mode == 2 ? 1 : 0;
+        if (t >= nextReport || (s.Mode == 2 && sharePanels == 1))
+        {
+            nextReport = Math.Floor(t) + 1;
+            string text = string.Join(" ", rows.Select(r => $"[p{r.Panel} r{r.Row} id{r.GadgetId} {r.Charges}/{r.Max} {r.TextureName()} ({r.U0},{r.V0})-({r.U1},{r.V1})]"));
+            Console.WriteLine($"t={t:F1} backpack mode {s.Mode} rows {s.Rows} panels {s.Panels} labels '{hud.Texts.Text(s.SelfLabelId)}'/'{hud.Texts.Text(s.MateLabelId)}' " +
+                $"mates '{hud.Texts.Text(s.MateANameId)}' '{hud.Texts.Text(s.MateBNameId)}' | {s.RowCount} rows {text}");
+        }
+
+        Thread.Sleep(4);
+    }
+
+    Console.WriteLine($"backpack summary: highest mode {maxMode}, frames with the refill share {sharePanels}");
     return 0;
 }
 

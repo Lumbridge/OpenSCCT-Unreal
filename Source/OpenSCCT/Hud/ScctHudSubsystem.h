@@ -33,6 +33,10 @@ class UScctHudWidget;
  *        Heart 1 selects the local spy's heart beat sensor; Weapon 1/0 holds or lets go of the weapon key (a spy
  *        draws the Shocker with it, which starts the sensor's scan). RadarRotate 0/1 and RadarScale P (percent) set
  *        the player's radar options for the run without saving them.
+ *        GiveBackpack 1/2 gives the local merc (2: every merc of his side) the backpack in his last gadget slot on the
+ *        local match's server, as a gear change would; Backpack 1 selects it; Refill S holds the mate carrying the
+ *        player's share in front of him for S seconds with one of his charges spent and the refill entry focused, as
+ *        when the player opens the interaction menu next to him.
  *   -ScctHudTexture=Package.Name[,Package.Name...]
  *        loads those textures of the content as the session starts and logs their size ("ScctHudTextures: ...").
  *   -ScctHudLog=S
@@ -135,6 +139,15 @@ private:
 	void LogRadar();
 	int32 LastHeartCone = 0;
 	bool bRadarTextureMissingLogged = false;
+
+	// The merc backpack panels (ScctHudBackpack.cpp): the bridge's backpack table into the model, a log line when the
+	// panels change and with each snapshot line, and the timed commands GiveBackpack, Backpack and Refill.
+	void InitBackpack();
+	void ReadBackpack();
+	bool RunBackpackCommand(const FString& Name, int32 Argument);
+	void LogBackpack();
+	uint32 LastBackpackSignature = 0;
+	bool bBackpackTableMissingLogged = false;
 
 	float GadgetKeysAge = 0.0f;
 	int32 LastGadgetView = 0;
