@@ -357,6 +357,8 @@ public sealed class BridgeSession : IDisposable
     {
         float alpha = Alpha;
         bool hideLocal = HideLocalBody;
+        // A demo's first-person camera watches another player from inside: that body is hidden as the local one is.
+        int observed = _session.FirstPersonOverride?.Invoke() is { bDeleteMe: false } seen ? seen.ActorId : 0;
         int count = 0;
         foreach (int id in _order)
         {
@@ -380,7 +382,7 @@ public sealed class BridgeSession : IDisposable
                 Team = now.Team,
                 Health = now.Health,
                 Flags = (now.Visible ? BridgePawnFlags.Visible : 0) | (now.Local ? BridgePawnFlags.Local : 0) |
-                    (now.Local && hideLocal ? BridgePawnFlags.FirstPerson : 0),
+                    (now.Local && hideLocal || (observed != 0 && id == observed) ? BridgePawnFlags.FirstPerson : 0),
                 X = location.X,
                 Y = location.Y,
                 Z = location.Z,

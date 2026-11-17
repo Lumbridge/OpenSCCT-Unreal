@@ -118,11 +118,17 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
 
     public long Tracers => _effects.Tracers;
 
+    /// <summary>
+    /// The ticks being run are not presented (a demo seek fast-forwarding hundreds of ticks in a frame, docs/DEMOS.md):
+    /// their sounds, shots and effects are dropped instead of all playing at once.
+    /// </summary>
+    public bool Quiet { get; set; }
+
     /// <summary>The tick's own events, right after the tick (the world's event sink).</summary>
     public void OnSimEvents(long tick, ReadOnlySpan<SimEvent> events)
     {
         _next?.OnSimEvents(tick, events);
-        if (!_ended)
+        if (!_ended && !Quiet)
         {
             Take(tick, events, late: false);
         }

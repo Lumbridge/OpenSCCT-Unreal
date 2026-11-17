@@ -92,6 +92,9 @@ namespace ScctMenuPages
 	/** The Account page (Menu/SScctAccountPage.h) and a friend's join's password page: Menu/SScctMenuSocial.cpp. */
 	TSharedRef<SScctMenuPage> MakeAccount(const FScctMenuHost& Host);
 	TSharedRef<SScctMenuPage> MakeJoinPassword(const FScctMenuHost& Host, const FScctSocialPasswordPrompt& Prompt);
+
+	/** The Demos page: the demos on this computer, the recent online ones, match history (Menu/SScctDemosPage.cpp). */
+	TSharedRef<SScctMenuPage> MakeDemos(const FScctMenuHost& Host);
 }
 
 namespace ScctUi

@@ -37,5 +37,7 @@
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\InGameMenuModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
     <!-- Create Session's rules (Online/HostSetupModel.cs): the Godot page's model, which has no Godot in it either. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\CreateSessionModel.cs" Link="Linked\UI\CreateSessionModel.cs" />
+    <!-- Demo playback's chase camera (Demo/DemoPlayback.cs), Godot-free like the session. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\Play\Demo\DemoChaseCamera.cs" Link="Linked\Demo\DemoChaseCamera.cs" />
   </ItemGroup>
 </Project>
