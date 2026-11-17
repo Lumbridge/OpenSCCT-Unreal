@@ -12,7 +12,7 @@
 // lobby; RANDOM MAP draws a map that offers the mode.
 //
 // Unattended switches:
-//   -ScctLobbyManage=<name>[,kick|ban|voiceban]  ask what to do with that player when he is in the lobby, and with an
+//   -ScctLobbyManage=<name>[,kick|ban|voiceban]  ask what to do with that player once in the lobby, and with an
 //                                 action its question too (YES is never pressed: -ScctKickAfter does that)
 //   -ScctLobbyTeamChat            the chat starts on the TEAM channel
 //   -ScctLobbyOptions             open Session Options when the lobby is first shown (any player)
@@ -24,6 +24,7 @@
 //   -ScctLobbyApplyWhen=N         how many players that is (default 1: the host alone)
 
 #include "Menu/ScctMenuPage.h"
+#include "Menu/ScctOverlayPages.h"
 
 #include "Framework/Application/SlateApplication.h"
 #include "Menu/SScctSessionOptions.h"
@@ -111,6 +112,9 @@ namespace
 			TSharedPtr<SScctButton> ReadyButton;
 			ChildSlot
 			[
+				SNew(SOverlay)
+				+ SOverlay::Slot()
+				[
 				SAssignNew(Switcher, SWidgetSwitcher)
 				+ SWidgetSwitcher::Slot()
 				[
@@ -186,6 +190,12 @@ namespace
 							.Visibility_Lambda([this] { return LaunchLine().IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
 							.Text_Lambda([this] { return FText::FromString(LaunchLine()); })
 						]
+						// The kit the player takes into the round for the player's side (the spy's while spectating), the
+						// Equipment page under the lobby's rules and the lobby map's strategic map (Menu/ScctOverlayPages.cpp).
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
+						[
+							ScctOverlayPages::MakeRow(Weak, [this] { OpenGear(); }, [this] { OpenStrategicMap(); })
+						]
 						+ SVerticalBox::Slot().AutoHeight()
 						[
 							SNew(SHorizontalBox)
@@ -260,6 +270,9 @@ namespace
 					.Online(Host.Online)
 					.OnClose(FSimpleDelegate::CreateLambda([this] { ShowOptions(false); }))
 				]
+				]
+				// The Equipment page and the strategic map open over the lobby.
+				+ SOverlay::Slot()[ SAssignNew(PageLayer, SOverlay) ]
 			];
 			DefaultFocus = ReadyButton;
 			ReadUnattended();
@@ -295,6 +308,11 @@ namespace
 		/** Escape or B: closes Session Options (its draft kept), else the same question as Leave (Stay has the focus). */
 		virtual bool HandleBack() override
 		{
+			// A page over the lobby goes back first.
+			if (ScctOverlayPages::Back(PageLayer))
+			{
+				return true;
+			}
 			if (bOptionsOpen)
 			{
 				ShowOptions(false);
@@ -366,6 +384,12 @@ namespace
 		}
 
 	private:
+		void OpenGear() { ScctOverlayPages::OpenGear(PageLayer, Host); }
+		void OpenStrategicMap() { ScctOverlayPages::OpenStrategicMap(PageLayer); }
+
+		/** The Equipment page and the strategic map, over the lobby. */
+		TSharedPtr<SOverlay> PageLayer;
+
 		// The chat: the other team's chat line in the match HUD is separate (Play/ScctHudWidget).
 		void SendChat(const FText& Text, ETextCommit::Type Commit)
 		{

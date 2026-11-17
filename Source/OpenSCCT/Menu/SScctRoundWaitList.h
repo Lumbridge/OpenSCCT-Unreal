@@ -12,8 +12,8 @@ struct FSlateBrush;
 /**
  * While a network round waits for its players to load (the Godot client's RoundStartList, the original's
  * Loading_Menu list): the round map's loading picture (the one the server's seed picks, so every player sees the
- * same), "Waiting for players (n / m)" and a line per player: "is ready" once his game reports waiting to play, "is
- * connecting" while it loads, "Loading..." before he is on the map here, and "Player timed out..." for one the server
+ * same), "Waiting for players (n / m)" and a line per player: "is ready" once that player's game reports waiting to
+ * play, "is connecting" while it loads, "Loading..." before that player is on the map here, and "Player timed out..." for one the server
  * dropped for not loading in time. The lines come from the bridge's round table (Runtime/ScctRoundApi.h); it only
  * shows, it never takes the mouse.
  */

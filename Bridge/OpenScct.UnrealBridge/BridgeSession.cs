@@ -44,6 +44,8 @@ public sealed record LocalMatch
     /// </summary>
     public bool OfflineRules { get; init; }
 
+    /// <summary>Visit a Map practice: unlimited ammunition and gadgets, instant gear changes, and Switch Team in the menu.</summary>
+    public bool UnlimitedGear { get; init; }
     /// <summary>The player's own rules over the map's (and over the practice rules): minutes (0 for no limit), lives of
     /// each spy and merc (0 for unlimited) and the respawn's seconds; negative keeps what the rules gave.</summary>
     public int TimeLimit { get; init; } = -1;
@@ -152,7 +154,7 @@ public sealed class BridgeSession : IDisposable
             OfflineRules = match.OfflineRules,
             // The map folders Unreal names (-ScctMaps, maps next to the game) and the content's maps.
             MapRoots = Online.MapFolders.ExtraRoots(),
-            UnlimitedGear = match.OfflineRules,
+            UnlimitedGear = match.OfflineRules || match.UnlimitedGear,
             StartAt = match.StartAt,
             Rules = match.PlayLevel ? PlayRules.PlayLevel : PlayRules.MapSettings,
             HostMode = match.InlineHost ? PlayHostMode.Inline : PlayHostMode.Thread,

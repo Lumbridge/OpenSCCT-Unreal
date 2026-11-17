@@ -5,6 +5,7 @@
 #include "ScctFrontEndGameMode.generated.h"
 
 class UScctFrontEndWidget;
+class ULevelStreamingDynamic;
 
 /**
  * The game mode of the front end level (/Game/OpenSCCT/Maps/L_FrontEnd, made by Tools/Menu/build_front_end.py).
@@ -32,6 +33,7 @@ public:
 private:
 	void ShowMenu();
 	void MoveCamera();
+	void RevealBackdrop();
 
 	UPROPERTY(Transient)
 	TObjectPtr<UScctFrontEndWidget> Menu;
@@ -41,4 +43,18 @@ private:
 	FRotator CameraRotation = FRotator(-6.0, 0.0, 0.0);
 	float CameraSway = 4.0f;
 	float Seconds = 0.0f;
+
+	/**
+	 * The imported map streaming in behind the menu. It loads hidden while the level's own scene stays on screen,
+	 * and takes its place (with its camera) once it is loaded and its shaders are ready, so the menu never sits on
+	 * a black or untextured picture while the map loads.
+	 */
+	UPROPERTY(Transient)
+	TObjectPtr<ULevelStreamingDynamic> BackdropLevel;
+	const TCHAR* BackdropMap = nullptr;
+	FVector BackdropLocation = FVector::ZeroVector;
+	FRotator BackdropRotation = FRotator::ZeroRotator;
+	float BackdropSway = 0.0f;
+	/** When the map started loading (wall clock): past a limit it is shown even with shaders still compiling. */
+	double BackdropStarted = 0.0;
 };

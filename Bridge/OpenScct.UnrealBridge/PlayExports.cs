@@ -35,45 +35,6 @@ public unsafe struct PlayApi
     public delegate* unmanaged[Cdecl]<char*, int, char*, int, int> GetLoadingImage;
 }
 
-/// <summary>
-/// The local player's gear as the level's <see cref="ILoadoutSource"/> (the Godot client's SettingsLoadoutSource):
-/// the side's fixed gadgets and weapon, and the sidearm picked with <c>SetSidearm</c>. The simulation asks for it
-/// each time the server wants this machine's kit; without a source a merc is given no sidearm at all, whatever the
-/// host allows (Loadouts.UpdateInventory).
-/// </summary>
-public sealed class BridgeLoadout : ILoadoutSource
-{
-    public static BridgeLoadout Instance { get; } = new();
-
-    /// <summary>The sidearm a merc brings where the host allows sidearms; null for none.</summary>
-    public SidearmKind? Sidearm { get; set; } = SidearmKind.Unsuppressed;
-
-    private static bool s_installed;
-
-    /// <summary>Puts the loadout on every level the play loaders load from now on (local matches and online rounds).</summary>
-    public static void Install()
-    {
-        if (s_installed)
-        {
-            return;
-        }
-
-        s_installed = true;
-        Action<Level>? before = PlayMapLoader.AddLevelServices;
-        PlayMapLoader.AddLevelServices = level =>
-        {
-            before?.Invoke(level);
-            level.SetService<ILoadoutSource>(Instance);
-        };
-    }
-
-    public ClassRef[] Gadgets(bool Spy) => Spy ? Loadouts.SpyFixedGadgets : Loadouts.MercFixedGadgets;
-
-    public ClassRef Weapon(bool Spy) => Spy ? Loadouts.SpyWeapon : Loadouts.MercWeapon;
-
-    ClassRef ILoadoutSource.Sidearm() => Sidearm is { } kind ? new ClassRef(Sidearms.Get(kind).CarryId) : default;
-}
-
 public static unsafe class PlayExports
 {
     public const int ApiVersion = 1;
@@ -98,11 +59,15 @@ public static unsafe class PlayExports
         ("ZOOMOUT", "zoomout", "zoomout"), ("ER", "er", "er"), ("INGAMEMENU", "menu", "menu"),
     ];
 
-    /// <summary>Fills <paramref name="api"/>. Returns the API version. Asking for the table also installs the loadout.</summary>
+    /// <summary>
+    /// Fills <paramref name="api"/>. Returns the API version. Asking for the table also makes sure the player's gear
+    /// (Loadout/LoadoutServices: the saved kit, which the sidearm stepper and the Equipment page both write) is on
+    /// every level the play loaders load.
+    /// </summary>
     [UnmanagedCallersOnly]
     public static int GetApi(PlayApi* api)
     {
-        BridgeLoadout.Install();
+        Loadout.LoadoutServices.Hook();
         if (api == null)
         {
             return ApiVersion;
@@ -122,13 +87,28 @@ public static unsafe class PlayExports
     /// <summary>
     /// The sidearm the local merc brings to matches that allow sidearms: 0 suppressed, 1 automatic, 2 .44 Magnum,
     /// 3 Desert Eagle, 4 unsuppressed (<see cref="SidearmKind"/>); anything else for none. It is read when the
-    /// server asks for the kit, so set it before a match starts.
+    /// server asks for the kit, so set it before a match starts. It goes into the gear in use (the Equipment page shows
+    /// it), not into the saved file; whether the match carries sidearms at all is the match's own Sidearms switch.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void SetSidearm(int kind)
     {
-        BridgeLoadout.Install();
-        BridgeLoadout.Instance.Sidearm = kind >= 0 && kind < Sidearms.All.Count ? (SidearmKind)kind : null;
+        try
+        {
+            Loadout.LoadoutServices.Hook();
+            if (kind < 0 || kind >= Sidearms.All.Count)
+            {
+                return;
+            }
+
+            Loadout.LoadoutChoice choice = Loadout.LoadoutStore.Current.Clone();
+            choice.MercSidearm = Sidearms.Get((SidearmKind)kind).CarryId;
+            Loadout.LoadoutStore.Set(choice);
+        }
+        catch (Exception e)
+        {
+            Exports.ReportFailure(e.ToString());
+        }
     }
 
     /// <summary>

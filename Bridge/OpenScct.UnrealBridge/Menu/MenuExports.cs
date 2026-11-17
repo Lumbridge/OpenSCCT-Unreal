@@ -409,15 +409,15 @@ public static unsafe class MenuExports
 
     /// <summary>
     /// Copies the keys (or, with <paramref name="pad"/>, the pad controls) of one side that do an action, one per
-    /// line. A key counts when its binding holds every part of the action's command. Returns the text's full length.
+    /// line (ActionBindings.KeysOf). Returns the text's full length.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int GetActionKeys(int merc, int pad, char* action, char* buffer, int capacity)
     {
         try
         {
-            return action != null && Find(new string(action)) is { } found
-                ? Copy(string.Join('\n', KeysOf(ControlsStore.Bindings.Of(merc != 0), pad != 0, found)), buffer, capacity)
+            return action != null && ActionBindings.Find(new string(action)) is { } found
+                ? Copy(string.Join('\n', ActionBindings.KeysOf(ControlsStore.Bindings.Of(merc != 0), pad != 0, found)), buffer, capacity)
                 : Copy("", buffer, capacity);
         }
         catch (Exception e)
@@ -436,23 +436,9 @@ public static unsafe class MenuExports
     {
         try
         {
-            if (key == null)
-            {
-                return Copy("", buffer, capacity);
-            }
-
-            SideBindings side = ControlsStore.Bindings.Of(merc != 0);
-            string name = new(key);
-            var labels = new List<string>();
-            foreach (ControlAction candidate in ControlActions.All)
-            {
-                if ((merc != 0 ? candidate.Merc : candidate.Spy) && KeysOf(side, pad != 0, candidate).Contains(Canonical(name, pad != 0), StringComparer.OrdinalIgnoreCase))
-                {
-                    labels.Add(candidate.Label);
-                }
-            }
-
-            return Copy(string.Join('\n', labels), buffer, capacity);
+            return key == null
+                ? Copy("", buffer, capacity)
+                : Copy(string.Join('\n', ActionBindings.LabelsOf(ControlsStore.Bindings.Of(merc != 0), merc != 0, pad != 0, new string(key))), buffer, capacity);
         }
         catch (Exception e)
         {
@@ -462,107 +448,24 @@ public static unsafe class MenuExports
     }
 
     /// <summary>
-    /// Binds an action of one side. The keys that did it stop doing it (their other actions stay), then
-    /// <paramref name="key"/> does it and nothing else; a null or empty key only clears. With <paramref name="pad"/>
-    /// the same for pad controls. Returns 1, or 0 for an unknown action or a name that is not a key. Not saved until
-    /// the controls table's SaveBindings.
+    /// Binds an action of one side in place of what did it (ActionBindings.Bind). Returns 1, or 0 for an unknown
+    /// action or a name that is not a key. Not saved until the controls table's SaveBindings.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int BindAction(int merc, int pad, char* action, char* key, int keepOthers)
     {
         try
         {
-            if (action == null || Find(new string(action)) is not { } found)
-            {
-                return 0;
-            }
-
-            SideBindings side = ControlsStore.Bindings.Of(merc != 0);
-            string name = key == null ? "" : new string(key).Trim();
-            if (pad != 0)
-            {
-                if (name.Length > 0 && Array.IndexOf(ControlBindings.PadControls, name) < 0)
-                {
-                    return 0;
-                }
-
-                if (keepOthers == 0)
-                {
-                    foreach (string control in KeysOf(side, true, found))
-                    {
-                        side.SetPad(control, "");
-                    }
-                }
-
-                if (name.Length > 0)
-                {
-                    side.SetPad(name, ControlActions.PadPrefix + found.Id);
-                }
-
-                return 1;
-            }
-
-            if (name.Length > 0 && !BindingKey.TryParse(name, out _))
-            {
-                return 0;
-            }
-
-            string[] parts = Parts(found.Command);
-            if (keepOthers == 0)
-            {
-                foreach (string held in KeysOf(side, false, found))
-                {
-                    string rest = string.Join(" | ", Parts(side.Keys.Bindings[held]).Where(p => !parts.Contains(p, StringComparer.OrdinalIgnoreCase)));
-                    side.Keys.Bind(held, rest);
-                }
-            }
-
-            return name.Length == 0 || side.Keys.Bind(name, found.Command) ? 1 : 0;
+            return action != null && ActionBindings.Find(new string(action)) is { } found
+                && ActionBindings.Bind(ControlsStore.Bindings.Of(merc != 0), pad != 0, found, key == null ? null : new string(key), keepOthers != 0)
+                ? 1
+                : 0;
         }
         catch (Exception e)
         {
             Exports.ReportFailure(e.ToString());
             return 0;
         }
-    }
-
-    private static ControlAction? Find(string id) =>
-        ControlActions.All.FirstOrDefault(a => string.Equals(a.Id, id, StringComparison.OrdinalIgnoreCase));
-
-    private static string[] Parts(string command) =>
-        command.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-
-    private static string Canonical(string key, bool pad) =>
-        !pad && BindingKey.TryParse(key, out BindingKey parsed) ? parsed.Canonical : key;
-
-    private static List<string> KeysOf(SideBindings side, bool pad, ControlAction action)
-    {
-        var keys = new List<string>();
-        if (pad)
-        {
-            string wanted = ControlActions.PadPrefix + action.Id;
-            foreach (string control in ControlBindings.PadControls)
-            {
-                if (side.Pad.TryGetValue(control, out string? bound) && string.Equals(bound, wanted, StringComparison.Ordinal))
-                {
-                    keys.Add(control);
-                }
-            }
-
-            return keys;
-        }
-
-        string[] parts = Parts(action.Command);
-        foreach (KeyValuePair<string, string> binding in side.Keys.Bindings)
-        {
-            string[] held = Parts(binding.Value);
-            if (parts.Length > 0 && parts.All(p => held.Contains(p, StringComparer.OrdinalIgnoreCase)))
-            {
-                keys.Add(binding.Key);
-            }
-        }
-
-        return keys;
     }
 
     private static void Fill(string text, char* buffer, int capacity)
