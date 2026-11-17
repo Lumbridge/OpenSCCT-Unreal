@@ -24,9 +24,9 @@ FScctVoiceCapture::~FScctVoiceCapture()
 TArray<FString> FScctVoiceCapture::ListDevices()
 {
 	TArray<FString> Names;
-	Audio::FAudioCapture Probe;
+	Audio::FAudioCapture Enumerator;
 	TArray<Audio::FCaptureDeviceInfo> Devices;
-	Probe.GetCaptureDevicesAvailable(Devices);
+	Enumerator.GetCaptureDevicesAvailable(Devices);
 	for (const Audio::FCaptureDeviceInfo& Info : Devices)
 	{
 		Names.Add(Info.DeviceName);

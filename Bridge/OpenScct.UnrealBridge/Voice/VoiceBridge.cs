@@ -27,7 +27,7 @@ namespace OpenScct.UnrealBridge.Voice;
 /// </summary>
 public sealed class VoiceBridge : IDisposable
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     /// <summary>The talker id the echo test comes back on (<see cref="ReadFrame"/>).</summary>
     public const int EchoTalker = VoiceEchoTest.Talker;
@@ -39,6 +39,9 @@ public sealed class VoiceBridge : IDisposable
     private OnlineClient? _visit;
     private OnlineVoice? _online;
     private VoiceEchoTest? _echo;
+    private readonly VoiceSettings _meterSettings = new();
+    private VoiceClient? _meter;
+    private bool _meterWanted;
     private int _captureRate = VoiceK.SampleRate;
     private bool _talkKey;
     private bool _teamKey;
@@ -57,8 +60,11 @@ public sealed class VoiceBridge : IDisposable
     /// <summary>The visit's voice, or null when not online.</summary>
     public OnlineVoice? Online => _online;
 
-    /// <summary>The client the microphone goes to: the echo test's while it runs, else the visit's, else none.</summary>
-    public VoiceClient? Capturing => _echo is { Running: true } echo ? echo.Client : _online?.Voice;
+    /// <summary>
+    /// The client the microphone goes to: the echo test's while it runs, else the visit's, else the Voice page's level
+    /// meter while it is wanted, else none.
+    /// </summary>
+    public VoiceClient? Capturing => _echo is { Running: true } echo ? echo.Client : _online?.Voice ?? _meter;
 
     internal VoiceEchoTest? Echo => _echo;
 
@@ -121,6 +127,7 @@ public sealed class VoiceBridge : IDisposable
         _captureRate = Math.Clamp(sampleRate, 8000, 192000);
         _online?.Voice.SetCaptureRate(_captureRate);
         _echo?.Client.SetCaptureRate(_captureRate);
+        _meter?.SetCaptureRate(_captureRate);
     }
 
     /// <summary>Microphone samples, mono, -1 to 1, at the capture rate. Dropped when nothing listens.</summary>
@@ -212,12 +219,12 @@ public sealed class VoiceBridge : IDisposable
         status.Transmitting = client.Transmitting ? 1 : 0;
         status.Channel = (int)client.TransmitChannel;
         status.LocalTalker = client.LocalTalker;
-        status.TalkerCount = ListenerOf().Talkers.Count;
+        status.TalkerCount = ListenerOf()?.Talkers.Count ?? 0;
         status.InputLevel = client.InputLevel;
         status.AutoGain = client.AutoGain;
         status.FramesCaptured = client.Stats.FramesCaptured;
         status.FramesSent = client.Stats.FramesSent;
-        status.PacketsReceived = ListenerOf().Stats.PacketsReceived;
+        status.PacketsReceived = ListenerOf()?.Stats.PacketsReceived ?? 0;
         return status;
     }
 
@@ -369,7 +376,74 @@ public sealed class VoiceBridge : IDisposable
         }
     }
 
-    private VoiceClient ListenerOf() => _online is null && _echo is { } echo ? echo.Listener : _online!.Voice;
+    /// <summary>The client whose talkers Unreal hears: the echo test's listener, else the visit's; none for the meter.</summary>
+    private VoiceClient? ListenerOf() => _online is null && _echo is { } echo ? echo.Listener : _online?.Voice;
+
+    // ---- the lobby's "Restrict Mic to Team" ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Sends the lobby's "Restrict Mic to Team" (SPlayerController.ServerSetTeamVoiceOnly through the session's
+    /// "teamvoice" line); the server keeps it across the maps. False when there is no visit to send it on.
+    /// </summary>
+    public bool SetTeamVoiceOnly(bool only)
+    {
+        if (_visit is not { } client)
+        {
+            return false;
+        }
+
+        client.SetTeamVoiceOnly(only);
+        return true;
+    }
+
+    /// <summary>The local player's "Restrict Mic to Team" as the server last sent it: -1 when not known (no visit, or no
+    /// lobby row for him yet), else 0 or 1.</summary>
+    public int TeamVoiceOnly => _visit?.Lobby.Local is { } local ? (local.TeamVoiceOnly ? 1 : 0) : -1;
+
+    // ---- the Voice page's level meter ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// The Voice page's microphone level outside a visit (Godot's OptionsMenu meter): while wanted, and neither a visit
+    /// nor the echo test has the microphone, an unconnected voice client takes the microphone through the player's
+    /// clean-up and gain, so <c>GetState</c>'s input level is what the gate would see. It sends nothing.
+    /// </summary>
+    public void SetMeter(bool on)
+    {
+        _meterWanted = on;
+        if (!on)
+        {
+            StopMeter();
+        }
+    }
+
+    private void UpdateMeter()
+    {
+        if (!_meterWanted || _online is not null || _echo is { Running: true })
+        {
+            StopMeter();
+            return;
+        }
+
+        // The player's clean-up and gain; never muted or gated off, and no voices to cancel.
+        Copy(_settings, _meterSettings);
+        _meterSettings.Enabled = true;
+        _meterSettings.MicMuted = false;
+        _meterSettings.PushToTalk = false;
+        _meterSettings.EchoCancellation = false;
+        if (_meter is null)
+        {
+            _meter = new VoiceClient(_meterSettings, UnrealBridge.Online.OnlineBridge.Instance.Clock);
+            _meter.SetCaptureRate(_captureRate);
+        }
+
+        _meter.Update();
+    }
+
+    private void StopMeter()
+    {
+        _meter?.Dispose();
+        _meter = null;
+    }
 
     // ---- the echo test ------------------------------------------------------------------------------------------
 
@@ -396,12 +470,17 @@ public sealed class VoiceBridge : IDisposable
         _echo = null;
     }
 
-    /// <summary>Once a frame while the echo test runs: moves its datagrams and records what came back.</summary>
-    public void Update() => _echo?.Update(_settings);
+    /// <summary>Once a frame: the echo test moves its datagrams and records what came back; the level meter runs.</summary>
+    public void Update()
+    {
+        _echo?.Update(_settings);
+        UpdateMeter();
+    }
 
     public void Dispose()
     {
         StopEchoTest();
+        StopMeter();
         EndVisit();
         if (ReferenceEquals(s_instance, this))
         {

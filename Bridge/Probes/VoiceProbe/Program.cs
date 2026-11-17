@@ -75,6 +75,7 @@ internal static unsafe class Probe
 
         ok &= EchoTest(recordSeconds: 2);
         ok &= EchoTest(recordSeconds: 0);
+        ok &= Meter();
 
         BridgeSession.Configure(content);
         string work = Path.Combine(Path.GetTempPath(), "osu-voice-probe-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
@@ -137,7 +138,7 @@ internal static unsafe class Probe
             ("VoiceSettingsBlock", sizeof(VoiceSettingsBlock), 48),
             ("VoiceStatus", sizeof(VoiceStatus), 64),
             ("VoiceTalkerInfo", sizeof(VoiceTalkerInfo), 176),
-            ("VoiceApi", sizeof(VoiceApi), 8 + 15 * sizeof(void*)),
+            ("VoiceApi", sizeof(VoiceApi), 8 + 18 * sizeof(void*)),
         ];
         bool ok = true;
         foreach ((string name, int size, int expected) in sizes)
@@ -208,6 +209,45 @@ internal static unsafe class Probe
         bool done = recordSeconds == 0 || status.EchoPhase == (int)VoiceEchoPhase.Done;
         return done && heard.Count >= (recordSeconds > 0 ? recordSeconds * 35 : 80) * VoiceK.FrameSamples && rms is > 0.15 and < 0.3 &&
             Math.Abs(hz - ToneHz) < 15 && row.DecodeErrors == 0;
+    }
+
+    /// <summary>
+    /// The Voice page's level meter: with no visit and no echo test, the tone's level after the gain comes back in the
+    /// state (0.21 at gain 1, 0.42 at gain 2, 0 at gain 0), and nothing once the meter is off.
+    /// </summary>
+    private static bool Meter()
+    {
+        VoiceSettingsBlock saved = default;
+        s_voice.GetSettings(&saved);
+        VoiceSettingsBlock settings = saved;
+        var scratch = new float[VoiceK.FrameSamples];
+        float LevelAt(float gain, bool meter)
+        {
+            VoiceSettingsBlock s = settings;
+            s.InputGain = gain;
+            s_voice.ApplySettings(&s);
+            s_voice.SetMeter(meter ? 1 : 0);
+            double from = Now;
+            double fed = 0;
+            VoiceStatus status = default;
+            while (Now - from < 0.5)
+            {
+                fed = FeedTone(from, fed, scratch);
+                s_voice.Update();
+                Thread.Sleep(10);
+            }
+
+            s_voice.GetState(&status);
+            return status.InputLevel;
+        }
+
+        float one = LevelAt(1f, true);
+        float two = LevelAt(2f, true);
+        float zero = LevelAt(0f, true);
+        float off = LevelAt(1f, false);
+        s_voice.ApplySettings(&saved);
+        Console.WriteLine($"meter: level {one:F3} at gain 1, {two:F3} at gain 2, {zero:F3} at gain 0, {off:F3} with the meter off");
+        return one is > 0.18f and < 0.24f && two is > 0.38f and < 0.46f && zero < 0.001f && off == 0f;
     }
 
     /// <summary>Feeds the tone that is due by the clock since <paramref name="from"/> into SubmitCapture.</summary>
@@ -429,8 +469,19 @@ internal static unsafe class Probe
             s_voice.SetMuted(otherTalker, 0);
             s_voice.SetVolume(otherTalker, 1f);
 
-            Console.WriteLine($"bridge talks {(okA ? "ok" : "FAILED")}, bridge hears {(okB ? "ok" : "FAILED")}, volume and mute {(okC ? "ok" : "FAILED")}");
-            return okA && okB && okC;
+            // "Restrict Mic to Team" through the voice table: the server takes it and every client sees it.
+            int knownBefore = s_voice.GetTeamVoiceOnly();
+            int sent = s_voice.SetTeamVoiceOnly(1);
+            bool restricted = Wait(() => s_voice.GetTeamVoiceOnly() == 1 &&
+                other.Lobby.Players.Any(p => p.Name == "UnrealVoice" && p.TeamVoiceOnly), 10);
+            s_voice.SetTeamVoiceOnly(0);
+            bool unrestricted = Wait(() => s_voice.GetTeamVoiceOnly() == 0 &&
+                other.Lobby.Players.Any(p => p.Name == "UnrealVoice" && !p.TeamVoiceOnly), 10);
+            Console.WriteLine($"t={Now:F1} restrict mic to team: before {knownBefore}, sent {sent}, restricted {restricted}, unrestricted {unrestricted}");
+            bool okD = knownBefore == 0 && sent == 1 && restricted && unrestricted;
+
+            Console.WriteLine($"bridge talks {(okA ? "ok" : "FAILED")}, bridge hears {(okB ? "ok" : "FAILED")}, volume and mute {(okC ? "ok" : "FAILED")}, team only {(okD ? "ok" : "FAILED")}");
+            return okA && okB && okC && okD;
         }
         finally
         {

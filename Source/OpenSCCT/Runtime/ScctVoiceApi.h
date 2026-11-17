@@ -13,7 +13,7 @@
 // The visit's voice is ticked by the online table's Update (after the visit's own ticks); Update here only runs the
 // microphone test.
 
-constexpr int32 ScctVoiceApiVersion = 1;
+constexpr int32 ScctVoiceApiVersion = 2;
 
 /** Samples in one voice frame: 20 ms at 48 kHz, what ReadFrame writes. */
 constexpr int32 ScctVoiceFrameSamples = 960;
@@ -146,9 +146,19 @@ struct FScctVoiceApi
 	void (__cdecl* StopEchoTest)();
 	/** The last failure inside a voice entry into the buffer; returns its full length (0: none). */
 	int32 (__cdecl* GetError)(TCHAR* Buffer, int32 Capacity);
+
+	// Version 2: the Voice page's level meter and the lobby's "Restrict Mic to Team".
+
+	/** The Voice page's level meter (1 on): outside a visit and the echo test, the microphone goes through the player's
+	 *  clean-up and gain into an unconnected client, so GetState's InputLevel reads the microphone. Sends nothing. */
+	void (__cdecl* SetMeter)(int32 On);
+	/** Sends "Restrict Mic to Team" on the online visit (OnlineClient.SetTeamVoiceOnly); 1 sent, 0 no visit. */
+	int32 (__cdecl* SetTeamVoiceOnly)(int32 Only);
+	/** The local player's "Restrict Mic to Team" as the server has it: -1 not known (no visit yet), else 0 or 1. */
+	int32 (__cdecl* GetTeamVoiceOnly)();
 };
 
 static_assert(sizeof(FScctVoiceSettings) == 48, "FScctVoiceSettings does not match VoiceSettingsBlock");
 static_assert(sizeof(FScctVoiceStatus) == 64, "FScctVoiceStatus does not match VoiceStatus");
 static_assert(sizeof(FScctVoiceTalker) == 176, "FScctVoiceTalker does not match VoiceTalkerInfo");
-static_assert(sizeof(FScctVoiceApi) == 8 + 15 * sizeof(void*), "FScctVoiceApi does not match VoiceApi");
+static_assert(sizeof(FScctVoiceApi) == 8 + 18 * sizeof(void*), "FScctVoiceApi does not match VoiceApi");

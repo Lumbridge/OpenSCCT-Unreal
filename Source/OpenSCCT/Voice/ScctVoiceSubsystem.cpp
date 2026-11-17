@@ -5,6 +5,7 @@
 #include "Components/AudioComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
+#include "HAL/IConsoleManager.h"
 #include "ISubmixBufferListener.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -17,29 +18,37 @@
 #include "Sound/SoundSubmix.h"
 #include "Sound/SoundWaveProcedural.h"
 #include "Voice/ScctVoiceCapture.h"
+#include "Voice/ScctVoiceSettings.h"
 
 #define LOCTEXT_NAMESPACE "ScctVoice"
 
 namespace
 {
-	const FName EnabledKey(TEXT("Voice.Enabled"));
-	const FName PushToTalkKey(TEXT("Voice.PushToTalk"));
-	const FName MicMutedKey(TEXT("Voice.MicMuted"));
-	const FName InputDeviceKey(TEXT("Voice.InputDevice"));
-	const FName ThresholdKey(TEXT("Voice.ActivationThreshold"));
-	const FName HoldKey(TEXT("Voice.ActivationHoldMs"));
-	const FName InputGainKey(TEXT("Voice.InputGain"));
-	const FName AutoGainKey(TEXT("Voice.AutoGain"));
-	const FName NoiseKey(TEXT("Voice.NoiseSuppression"));
-	const FName NoiseLevelKey(TEXT("Voice.NoiseLevel"));
-	const FName EchoKey(TEXT("Voice.EchoCancellation"));
-	const FName JitterKey(TEXT("Voice.JitterFrames"));
-	/** UScctAudioMix's "Voice chat volume", which the voice client keeps as its output volume. */
-	const FName OutputVolumeKey(TEXT("Audio.Voice"));
+	using namespace ScctVoiceSettings;
 
-	/** Godot's GameSettings.NoiseLevelDecibels: Low, Standard, High, Extreme. */
-	constexpr int32 NoiseDecibels[] = { 15, 30, 45, 60 };
+	/** Seconds the microphone test records before it plays back, as Godot's MicTestSeconds. */
+	constexpr int32 TestSeconds = 3;
+	/** Seconds between two looks at the system's input devices. */
+	constexpr float DevicePollSeconds = 5.0f;
 
+	/** Sets an option from the console as the Options screen would: "scct.Voice.Set Voice.InputGain 2" or "... default". */
+	FAutoConsoleCommand SetCommand(TEXT("scct.Voice.Set"),
+		TEXT("Sets a registered option (any page, e.g. Voice.InputGain 2, Voice.Enabled false, Voice.Test true) or back to its default with 'default'. Applies at once."),
+		FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+		{
+			if (Args.Num() != 2 || !ScctVoiceSettings::SetFromText(Args[0] + TEXT("=") + Args[1]))
+			{
+				UE_LOG(LogOpenSCCT, Warning, TEXT("ScctVoice: usage: scct.Voice.Set <registered key> <value|default>"));
+			}
+		}));
+
+	/** Lists a page's options with their defaults and values: "scct.Voice.Options" (the Voice page) or "... Audio". */
+	FAutoConsoleCommand OptionsCommand(TEXT("scct.Voice.Options"),
+		TEXT("Logs every option of a settings page (default Voice) with its type, range, default and value."),
+		FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+		{
+			ScctVoiceSettings::LogPage(Args.Num() > 0 ? FName(*Args[0]) : FName(TEXT("Voice")));
+		}));
 	/** Decoded frames kept queued in a talker's wave (60 ms): the jitter buffer banks, the wave bridges game frames. */
 	constexpr int32 QueuedFrames = 3;
 	constexpr int32 MaxTalkerRows = 32;
@@ -50,7 +59,7 @@ namespace
 	bool IsVoiceKey(FName Key)
 	{
 		static const FName Keys[] = { EnabledKey, PushToTalkKey, MicMutedKey, ThresholdKey, HoldKey, InputGainKey, AutoGainKey,
-			NoiseKey, NoiseLevelKey, EchoKey, JitterKey, OutputVolumeKey };
+			NoiseKey, NoiseDbKey, EchoKey, JitterKey, OutputVolumeKey };
 		for (const FName& Known : Keys)
 		{
 			if (Known == Key)
@@ -196,57 +205,7 @@ UScctVoiceSubsystem::~UScctVoiceSubsystem() = default;
 
 void UScctVoiceSubsystem::RegisterSettings()
 {
-	// Godot's GameSettings voice section (game/Scripts/Options/GameSettings.cs) and its Voice page, with its defaults.
-	int32 Order = 0;
-	const auto Add = [&Order](FName Key, FText Group, FText Label, FText Tooltip, EScctSettingType Type, const TCHAR* Default, float Min = 0.0f, float Max = 1.0f, float Step = 0.0f)
-	{
-		FScctSettingDesc Desc;
-		Desc.Key = Key;
-		Desc.Page = TEXT("Voice");
-		Desc.Group = MoveTemp(Group);
-		Desc.Label = MoveTemp(Label);
-		Desc.Tooltip = MoveTemp(Tooltip);
-		Desc.Type = Type;
-		Desc.Default = Default;
-		Desc.Min = Min;
-		Desc.Max = Max;
-		Desc.Step = Step;
-		Desc.Order = Order++;
-		return Desc;
-	};
-	const FText Chat = LOCTEXT("GroupChat", "Voice chat");
-	const FText Microphone = LOCTEXT("GroupMicrophone", "Microphone");
-	const FText Activation = LOCTEXT("GroupActivation", "Voice activation");
-	const FText Network = LOCTEXT("GroupNetwork", "Network");
-
-	FScctSettings::Register(Add(EnabledKey, Chat, LOCTEXT("Enabled", "Enable voice chat"),
-		LOCTEXT("EnabledTip", "Off: you hear nobody and nobody hears you."), EScctSettingType::Bool, TEXT("true")));
-	FScctSettings::Register(Add(PushToTalkKey, Chat, LOCTEXT("PushToTalk", "Push to talk"),
-		LOCTEXT("PushToTalkTip", "Transmit only while Push To Talk (or Team Push To Talk) is held. Off: your voice opens the microphone when it is loud enough."), EScctSettingType::Bool, TEXT("false")));
-	FScctSettings::Register(Add(MicMutedKey, Chat, LOCTEXT("MicMuted", "Mute microphone"),
-		LOCTEXT("MicMutedTip", "Nothing is sent; everyone else is still heard. The Toggle microphone mute key flips it."), EScctSettingType::Bool, TEXT("false")));
-	FScctSettings::Register(Add(InputDeviceKey, Microphone, LOCTEXT("InputDevice", "Input device"),
-		LOCTEXT("InputDeviceTip", "The microphone's name as the system lists it (the log lists them under 'ScctVoice: input devices'). Empty: the system's input device."), EScctSettingType::Text, TEXT("")));
-	FScctSettings::Register(Add(InputGainKey, Microphone, LOCTEXT("InputGain", "Microphone volume"),
-		LOCTEXT("InputGainTip", "Gain before sending (1 = unchanged). Not used while the automatic adjustment is on."), EScctSettingType::Float, TEXT("1.0"), 0.0f, 8.0f, 0.1f));
-	FScctSettings::Register(Add(AutoGainKey, Microphone, LOCTEXT("AutoGain", "Auto-adjust microphone volume"),
-		LOCTEXT("AutoGainTip", "Keeps your voice at a steady level."), EScctSettingType::Bool, TEXT("true")));
-	FScctSettings::Register(Add(NoiseKey, Microphone, LOCTEXT("Noise", "Noise suppression"),
-		LOCTEXT("NoiseTip", "Steady background noise is taken out before the voice activation decides."), EScctSettingType::Bool, TEXT("true")));
-	{
-		FScctSettingDesc Desc = Add(NoiseLevelKey, Microphone, LOCTEXT("NoiseLevel", "Noise suppression level"),
-			LOCTEXT("NoiseLevelTip", "How hard noise is suppressed: 15, 30, 45 or 60 dB."), EScctSettingType::Choice, TEXT("1"), 0.0f, 3.0f, 1.0f);
-		Desc.Choices = { LOCTEXT("Low", "Low"), LOCTEXT("Standard", "Standard"), LOCTEXT("High", "High"), LOCTEXT("Extreme", "Extreme") };
-		FScctSettings::Register(Desc);
-	}
-	FScctSettings::Register(Add(EchoKey, Microphone, LOCTEXT("Echo", "Echo cancellation (experimental)"),
-		LOCTEXT("EchoTip", "Takes what your speakers play back out of the microphone."), EScctSettingType::Bool, TEXT("false")));
-	FScctSettings::Register(Add(ThresholdKey, Activation, LOCTEXT("Threshold", "Activation threshold"),
-		LOCTEXT("ThresholdTip", "How loud the microphone must be to transmit when push to talk is off: 0 always, 1 never."), EScctSettingType::Float, TEXT("0.02"), 0.0f, 1.0f, 0.01f));
-	FScctSettings::Register(Add(HoldKey, Activation, LOCTEXT("Hold", "Release time (ms)"),
-		LOCTEXT("HoldTip", "How long transmission goes on after you stop speaking."), EScctSettingType::Int, TEXT("300"), 0.0f, 5000.0f, 50.0f));
-	FScctSettings::Register(Add(JitterKey, Network, LOCTEXT("Jitter", "Buffering (20 ms frames)"),
-		LOCTEXT("JitterTip", "More smooths a bumpy connection, at the cost of delay."), EScctSettingType::Int, TEXT("3"), 1.0f, 12.0f, 1.0f));
+	ScctVoiceSettings::Register();
 }
 
 bool UScctVoiceSubsystem::ShouldCreateSubsystem(UObject* Outer) const
@@ -277,11 +236,28 @@ void UScctVoiceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		ForcedPushToTalk = ForcedPushToTalk != 0 ? 1 : 0;
 	}
 
-	Capture = MakeUnique<FScctVoiceCapture>();
-	if (ToneHz <= 0.0f)
+	bForceMeter = FParse::Param(CommandLine, TEXT("ScctVoiceMeter"));
+	FString DumpPage;
+	if (FParse::Value(CommandLine, TEXT("ScctVoiceOptions="), DumpPage))
 	{
-		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: input devices: %s"), *FString::Join(FScctVoiceCapture::ListDevices(), TEXT(", ")));
+		OptionsToLog = DumpPage;
 	}
+	else if (FParse::Param(CommandLine, TEXT("ScctVoiceOptions")))
+	{
+		OptionsToLog = TEXT("Voice");
+	}
+	FString Assignments;
+	if (FParse::Value(CommandLine, TEXT("ScctVoiceSet="), Assignments, false))
+	{
+		ParseScheduledSettings(Assignments);
+	}
+
+	// The test switch is a button: never on when the game starts, whatever a saved file says.
+	FScctSettings::Reset(TestKey);
+	TestState = LOCTEXT("TestIdle", "Hear exactly what other players hear from you.");
+
+	Capture = MakeUnique<FScctVoiceCapture>();
+	RefreshDevices();
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: microphone %s%s%s%s"),
 		ToneHz > 0.0f ? *FString::Printf(TEXT("is a %.0f Hz tone (-ScctVoiceTone)"), ToneHz) : TEXT("is the input device"),
 		bForceTalk ? TEXT(", talk key held (-ScctVoiceTalk)") : TEXT(""),
@@ -310,7 +286,8 @@ void UScctVoiceSubsystem::Deinitialize()
 	if (Api != nullptr)
 	{
 		Api->SetKeys(0, 0);
-		if (bEchoStarted)
+		Api->SetMeter(0);
+		if (bEchoStarted || bTestRunning)
 		{
 			Api->StopEchoTest();
 		}
@@ -336,10 +313,26 @@ bool UScctVoiceSubsystem::Tick(float DeltaTime)
 		}
 		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: the bridge's voice table is ready"));
 		ApplySettings();
+		if (!OptionsToLog.IsEmpty())
+		{
+			// Every subsystem has registered its options by now.
+			ScctVoiceSettings::LogPage(FName(*OptionsToLog));
+		}
+	}
+
+	ReadyTime += DeltaTime;
+	RunScheduledSettings();
+	DevicePoll += DeltaTime;
+	if (DevicePoll >= DevicePollSeconds)
+	{
+		DevicePoll = 0.0f;
+		RefreshDevices();
 	}
 
 	BindCommands();
 	SendKeys();
+	SendMeter();
+	SyncTeamOnly();
 	if (EchoSeconds >= 0 && !bEchoStarted)
 	{
 		bEchoStarted = true;
@@ -356,6 +349,7 @@ bool UScctVoiceSubsystem::Tick(float DeltaTime)
 		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: microphone test %s (sent %lld frames)"), EchoPhaseName(Status.EchoPhase), Status.FramesSent);
 		LastEchoPhase = Status.EchoPhase;
 	}
+	FollowTest();
 	if (Status.Connected != LastConnected)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: voice client %s (local talker %d)"), Status.Connected != 0 ? TEXT("connected") : TEXT("disconnected"), Status.LocalTalker);
@@ -441,13 +435,49 @@ void UScctVoiceSubsystem::HandleSettingChanged(FName Key)
 {
 	if (Key == InputDeviceKey)
 	{
+		// Only the player's pick names a new device; a new device list just moves the index to the same device.
+		if (!bSyncingDevices)
+		{
+			ScctVoiceSettings::RememberChosenDevice();
+			FScctSettings::Save();
+		}
+		return;
+	}
+	if (Key == InputDeviceNameKey)
+	{
 		// Reopened on the new device by the next frame's capture update.
+		const FString Device = ScctVoiceSettings::ChosenDevice();
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: input device changed to %s"), Device.IsEmpty() ? TEXT("the system's") : *FString::Printf(TEXT("'%s'"), *Device));
+		if (bDevicesKnown && !bSyncingDevices)
+		{
+			// The name set on its own (the console, a saved file): the choice points at it, listed as not connected if so.
+			bSyncingDevices = true;
+			ScctVoiceSettings::RegisterDevices(KnownDevices);
+			bSyncingDevices = false;
+		}
 		if (Capture.IsValid() && Capture->IsOpen())
 		{
 			Capture->Close();
-			UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: input device changed to '%s'"), *FScctSettings::GetString(InputDeviceKey));
+			SentCaptureRate = 0;
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: microphone closed to reopen it on the new device"));
 		}
 		CaptureRetry = 0.0f;
+		return;
+	}
+	if (Key == TeamOnlyKey)
+	{
+		if (!bSyncingTeamOnly)
+		{
+			const bool bOnly = FScctSettings::GetBool(TeamOnlyKey);
+			const bool bSent = Api != nullptr && Api->SetTeamVoiceOnly(bOnly ? 1 : 0) != 0;
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: restrict mic to team %s %s"), bOnly ? TEXT("on") : TEXT("off"),
+				bSent ? TEXT("sent to the server") : TEXT("kept for the next server joined"));
+		}
+		return;
+	}
+	if (Key == TestKey)
+	{
+		HandleTestSwitch();
 		return;
 	}
 	if (IsVoiceKey(Key))
@@ -472,7 +502,7 @@ void UScctVoiceSubsystem::ApplySettings()
 	Settings.OutputVolume = FMath::Clamp(FScctSettings::GetFloat(OutputVolumeKey), 0.0f, 1.0f);
 	Settings.JitterFrames = FMath::Clamp(FScctSettings::GetInt(JitterKey), 1, 12);
 	Settings.NoiseSuppression = FScctSettings::GetBool(NoiseKey) ? 1 : 0;
-	Settings.NoiseSuppressionDecibels = NoiseDecibels[FMath::Clamp(FScctSettings::GetInt(NoiseLevelKey), 0, 3)];
+	Settings.NoiseSuppressionDecibels = ScctVoiceSettings::NoiseDecibels();
 	Settings.AutoGain = FScctSettings::GetBool(AutoGainKey) ? 1 : 0;
 	Settings.EchoCancellation = FScctSettings::GetBool(EchoKey) ? 1 : 0;
 	if (ToneHz > 0.0f)
@@ -493,13 +523,230 @@ void UScctVoiceSubsystem::ApplySettings()
 		Settings.AutoGain, Settings.NoiseSuppression, Settings.NoiseSuppressionDecibels, Settings.EchoCancellation, Settings.JitterFrames, Settings.OutputVolume);
 }
 
+void UScctVoiceSubsystem::RefreshDevices()
+{
+	TArray<FString> Devices;
+	for (const FString& Device : FScctVoiceCapture::ListDevices())
+	{
+		// "Default" is the choice's own first entry, as Godot leaves the system's "Default" out of its list.
+		if (!Device.Equals(TEXT("Default"), ESearchCase::IgnoreCase) && !Devices.Contains(Device))
+		{
+			Devices.Add(Device);
+		}
+	}
+	if (bDevicesKnown && Devices == KnownDevices)
+	{
+		return;
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: input devices%s: %s"), bDevicesKnown ? TEXT(" changed") : TEXT(""),
+		Devices.Num() > 0 ? *FString::Join(Devices, TEXT(", ")) : TEXT("(none)"));
+	bDevicesKnown = true;
+	KnownDevices = Devices;
+	bSyncingDevices = true;
+	ScctVoiceSettings::RegisterDevices(Devices);
+	bSyncingDevices = false;
+}
+
+void UScctVoiceSubsystem::ParseScheduledSettings(const FString& Text)
+{
+	// "Key=Value;4:Key=Value": an optional "Seconds:" counts from the voice table being ready.
+	TArray<FString> Entries;
+	Text.ParseIntoArray(Entries, TEXT(";"));
+	for (FString& Entry : Entries)
+	{
+		Entry.TrimStartAndEndInline();
+		FScheduledSetting Scheduled;
+		FString Seconds;
+		FString Rest;
+		if (Entry.Split(TEXT(":"), &Seconds, &Rest) && Seconds.IsNumeric())
+		{
+			Scheduled.Seconds = FCString::Atof(*Seconds);
+			Scheduled.Assignment = Rest;
+		}
+		else
+		{
+			Scheduled.Assignment = Entry;
+		}
+		if (!Scheduled.Assignment.IsEmpty())
+		{
+			ScheduledSettings.Add(MoveTemp(Scheduled));
+		}
+	}
+	ScheduledSettings.StableSort([](const FScheduledSetting& A, const FScheduledSetting& B) { return A.Seconds < B.Seconds; });
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: %d option changes scheduled (-ScctVoiceSet)"), ScheduledSettings.Num());
+}
+
+void UScctVoiceSubsystem::RunScheduledSettings()
+{
+	while (ScheduledSettings.Num() > 0 && ScheduledSettings[0].Seconds <= ReadyTime)
+	{
+		const FScheduledSetting Next = ScheduledSettings[0];
+		ScheduledSettings.RemoveAt(0);
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: t=%.1f s -ScctVoiceSet %s"), ReadyTime, *Next.Assignment);
+		const bool bOptions = Next.Assignment.Equals(TEXT("options"), ESearchCase::IgnoreCase) || Next.Assignment.StartsWith(TEXT("options="), ESearchCase::IgnoreCase);
+		const FString Page = bOptions ? Next.Assignment.Mid(8) : FString();
+		if (bOptions)
+		{
+			// "options" or "options=Page": the page as it stands now, into the log.
+			ScctVoiceSettings::LogPage(FName(Page.IsEmpty() ? TEXT("Voice") : *Page));
+		}
+		else if (!ScctVoiceSettings::SetFromText(Next.Assignment))
+		{
+			UE_LOG(LogOpenSCCT, Warning, TEXT("ScctVoice: -ScctVoiceSet: '%s' is not Key=Value of a registered option"), *Next.Assignment);
+		}
+	}
+}
+
+void UScctVoiceSubsystem::SetMeterWanted(bool bWanted)
+{
+	bMeterWanted = bWanted;
+}
+
+void UScctVoiceSubsystem::SendMeter()
+{
+	const bool bMeter = bMeterWanted || bForceMeter;
+	if (bMeter == bMeterSent)
+	{
+		return;
+	}
+	bMeterSent = bMeter;
+	Api->SetMeter(bMeter ? 1 : 0);
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: level meter %s"), bMeter ? TEXT("on") : TEXT("off"));
+}
+
+void UScctVoiceSubsystem::SyncTeamOnly()
+{
+	const int32 Server = Api->GetTeamVoiceOnly();
+	if (Server == LastServerTeamOnly)
+	{
+		return;
+	}
+	const bool bWanted = FScctSettings::GetBool(TeamOnlyKey);
+	if (Server >= 0 && LastServerTeamOnly < 0)
+	{
+		// A server joined: it hears the player's choice (it keeps it across its maps from then on).
+		if (bWanted != (Server != 0))
+		{
+			Api->SetTeamVoiceOnly(bWanted ? 1 : 0);
+		}
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: restrict mic to team: the server has it %s%s"), Server != 0 ? TEXT("on") : TEXT("off"),
+			bWanted != (Server != 0) ? (bWanted ? TEXT(", turned on") : TEXT(", turned off")) : TEXT(""));
+	}
+	else if (Server >= 0)
+	{
+		// The server's answer, or a change made elsewhere (a lobby toggle): the option follows it.
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: restrict mic to team is %s on the server"), Server != 0 ? TEXT("on") : TEXT("off"));
+		if (bWanted != (Server != 0))
+		{
+			bSyncingTeamOnly = true;
+			FScctSettings::SetBool(TeamOnlyKey, Server != 0);
+			bSyncingTeamOnly = false;
+		}
+	}
+	LastServerTeamOnly = Server;
+}
+
+void UScctVoiceSubsystem::HandleTestSwitch()
+{
+	const bool bOn = FScctSettings::GetBool(TestKey);
+	if (bOn == bTestRunning)
+	{
+		return;
+	}
+	if (!bOn)
+	{
+		// Turned off while it ran: stopped where it is.
+		bTestRunning = false;
+		if (Api != nullptr)
+		{
+			Api->StopEchoTest();
+		}
+		TestState = LOCTEXT("TestIdle", "Hear exactly what other players hear from you.");
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: microphone test stopped (Voice.Test)"));
+		return;
+	}
+
+	if (Api == nullptr || Api->StartEchoTest(TestSeconds) == 0)
+	{
+		// The bridge refuses while an online visit has the microphone, as Godot's page does.
+		TestState = Api == nullptr ? LOCTEXT("TestNoVoice", "Voice chat is not running.") : LOCTEXT("TestOnline", "Leave the session to test the microphone.");
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: microphone test refused (%s)"), *TestState.ToString());
+		FScctSettings::SetBool(TestKey, false);
+		return;
+	}
+	bTestRunning = true;
+	bEchoStarted = false;
+	EchoSeconds = -1;
+	TestState = LOCTEXT("TestRecording", "Recording - speak now");
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: microphone test started (Voice.Test): %d s recorded, then played back"), TestSeconds);
+}
+
+void UScctVoiceSubsystem::FollowTest()
+{
+	if (!bTestRunning)
+	{
+		return;
+	}
+	switch (static_cast<EScctVoiceEchoPhase>(Status.EchoPhase))
+	{
+	case EScctVoiceEchoPhase::Playing:
+		TestState = LOCTEXT("TestPlaying", "Playing it back");
+		break;
+	case EScctVoiceEchoPhase::Done:
+	case EScctVoiceEchoPhase::NothingCaptured:
+	case EScctVoiceEchoPhase::Off:
+		TestState = Status.EchoPhase == static_cast<int32>(EScctVoiceEchoPhase::NothingCaptured)
+			? LOCTEXT("TestNothing", "Nothing was captured. Check the microphone device.")
+			: LOCTEXT("TestIdle", "Hear exactly what other players hear from you.");
+		// The switch goes back off by itself, as Godot's button comes back when the test is over.
+		bTestRunning = false;
+		Api->StopEchoTest();
+		FScctSettings::SetBool(TestKey, false);
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: microphone test over: %s"), *TestState.ToString());
+		break;
+	default:
+		break;
+	}
+}
+
+FText UScctVoiceSubsystem::GetMicState() const
+{
+	// Godot's Voice page label beside the level bar.
+	if (FScctSettings::GetBool(MicMutedKey))
+	{
+		return LOCTEXT("MicMutedState", "muted");
+	}
+	if (FScctSettings::GetBool(PushToTalkKey))
+	{
+		return LOCTEXT("MicPushState", "push to talk");
+	}
+	return Status.InputLevel >= FScctSettings::GetFloat(ThresholdKey) ? LOCTEXT("MicOpenState", "transmitting") : LOCTEXT("MicSilentState", "silent");
+}
+
 // ---- the microphone -------------------------------------------------------------------------------------------
 
 void UScctVoiceSubsystem::UpdateCapture(float DeltaTime)
 {
 	// A finished microphone test still reads as connected until it is stopped; it needs no microphone any more.
-	const bool bWanted = Status.Enabled != 0 && ((Status.Connected != 0 && Status.EchoPhase == static_cast<int32>(EScctVoiceEchoPhase::Off))
-		|| Status.EchoPhase == static_cast<int32>(EScctVoiceEchoPhase::Recording) || Status.EchoPhase == static_cast<int32>(EScctVoiceEchoPhase::Live));
+	const bool bTestCapturing = Status.EchoPhase == static_cast<int32>(EScctVoiceEchoPhase::Recording) || Status.EchoPhase == static_cast<int32>(EScctVoiceEchoPhase::Live);
+	const bool bOnline = Status.Connected != 0 && Status.EchoPhase == static_cast<int32>(EScctVoiceEchoPhase::Off);
+	// The level meter is the page's, like Godot's: it reads the microphone whether voice chat is on or not.
+	const bool bMetering = bMeterSent && !bOnline && !bTestCapturing;
+	const bool bWanted = (Status.Enabled != 0 && (bOnline || bTestCapturing)) || bMetering;
+	const TCHAR* Reason = bOnline ? TEXT("online visit") : bTestCapturing ? TEXT("microphone test") : bMetering ? TEXT("level meter") : nullptr;
+	if (bWanted != bCaptureWanted || (bWanted && CaptureReason != Reason))
+	{
+		if (bWanted)
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: capture wanted for the %s"), Reason);
+		}
+		else
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: capture not wanted (%s)"), Status.Enabled == 0 ? TEXT("voice chat is off") : TEXT("voice chat has nowhere to send"));
+		}
+		bCaptureWanted = bWanted;
+		CaptureReason = bWanted ? Reason : nullptr;
+	}
 
 	if (ToneHz > 0.0f)
 	{
@@ -527,7 +774,7 @@ void UScctVoiceSubsystem::UpdateCapture(float DeltaTime)
 		if (!Capture->IsOpen() && CaptureRetry <= 0.0f)
 		{
 			FString Problem;
-			const FString Device = FScctSettings::GetString(InputDeviceKey);
+			const FString Device = ScctVoiceSettings::ChosenDevice();
 			if (Capture->Open(Device, Problem))
 			{
 				UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: microphone open on '%s'%s%s"), *Capture->GetDeviceName(), Problem.IsEmpty() ? TEXT("") : TEXT(": "), *Problem);
@@ -542,12 +789,13 @@ void UScctVoiceSubsystem::UpdateCapture(float DeltaTime)
 	}
 	else if (Capture->IsOpen())
 	{
+		// Turned off: closed at once. Nowhere to send: a moment later, since a travel or a test's end is brief.
 		IdleSeconds += DeltaTime;
-		if (IdleSeconds >= CloseAfterSeconds)
+		if (Status.Enabled == 0 || IdleSeconds >= CloseAfterSeconds)
 		{
 			Capture->Close();
 			SentCaptureRate = 0;
-			UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: microphone closed (voice chat has nowhere to send)"));
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: microphone closed (%s)"), Status.Enabled == 0 ? TEXT("voice chat is off") : TEXT("voice chat has nowhere to send"));
 		}
 	}
 
@@ -810,7 +1058,7 @@ void UScctVoiceSubsystem::LogSecond()
 {
 	int32 OutputSamples = 0;
 	const float OutputRms = OutputTap.IsValid() ? OutputTap->TakeRms(OutputSamples) : 0.0f;
-	if (Status.Connected == 0 && Status.EchoPhase == 0 && Outputs.Num() == 0)
+	if (Status.Connected == 0 && Status.EchoPhase == 0 && Outputs.Num() == 0 && !bMeterSent)
 	{
 		return;
 	}

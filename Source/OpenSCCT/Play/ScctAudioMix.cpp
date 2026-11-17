@@ -31,7 +31,7 @@ namespace
 	/** The option of each category, in EScctAudioCategory order. */
 	const FName CategoryKeys[NumCategories] = {
 		TEXT("Audio.Effects"), TEXT("Audio.RoundMusic"), TEXT("Audio.MenuMusic"), TEXT("Audio.Objective"),
-		TEXT("Audio.MenuSounds"), TEXT("Audio.Voice") };
+		TEXT("Audio.MenuSounds"), TEXT("Voice.OutputVolume") };
 
 	bool ParseCategory(const FString& Name, int32& OutIndex);
 
@@ -154,7 +154,7 @@ void UScctAudioMix::RegisterSettings()
 		{ CategoryKeys[2], LOCTEXT("MenuMusic", "Menu music volume"), LOCTEXT("MenuMusicTip", "The music of the main menu and the lobby."), TEXT("0.5") },
 		{ CategoryKeys[3], LOCTEXT("Objective", "Objective sounds"), LOCTEXT("ObjectiveTip", "The jingles that mark an objective. At 0 they are not played at all."), TEXT("0.5") },
 		{ CategoryKeys[4], LOCTEXT("MenuSounds", "Menu sounds"), LOCTEXT("MenuSoundsTip", "The menus' own sounds: button feedback, the join sound."), TEXT("0.5") },
-		{ CategoryKeys[5], LOCTEXT("Voice", "Voice chat volume"), LOCTEXT("VoiceTip", "Other players' voices."), TEXT("1.0") },
+		{ CategoryKeys[5], LOCTEXT("Voice", "Other players' voice volume"), LOCTEXT("VoiceTip", "Other players' voices (voice chat)."), TEXT("1.0") },
 	};
 	int32 Order = 0;
 	for (const FOption& Option : Options)
@@ -171,6 +171,14 @@ void UScctAudioMix::RegisterSettings()
 		Desc.Max = 1.0f;
 		Desc.Step = 0.05f;
 		Desc.Order = Order++;
+		if (Option.Key == CategoryKeys[static_cast<int32>(EScctAudioCategory::Voice)])
+		{
+			// As in Godot, the voice chat volume is on the Voice page, under its playback group (ScctVoiceSettings).
+			Desc.Page = TEXT("Voice");
+			Desc.Group = NSLOCTEXT("ScctVoice", "GroupPlayback", "Playback & devices");
+			Desc.Step = 0.01f;
+			Desc.Order = 2;
+		}
 		FScctSettings::Register(Desc);
 	}
 }

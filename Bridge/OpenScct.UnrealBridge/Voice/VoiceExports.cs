@@ -61,6 +61,17 @@ public unsafe struct VoiceApi
 
     /// <summary>The last failure inside a voice entry point into the buffer; returns its full length (0: none).</summary>
     public delegate* unmanaged[Cdecl]<char*, int, int> GetError;
+
+    // Version 2: the Voice page's level meter and the lobby's "Restrict Mic to Team".
+
+    /// <summary>The Voice page's level meter outside a visit and the echo test, 0 or 1.</summary>
+    public delegate* unmanaged[Cdecl]<int, void> SetMeter;
+
+    /// <summary>Sends "Restrict Mic to Team" on the visit (OnlineClient.SetTeamVoiceOnly); 1 sent, 0 no visit.</summary>
+    public delegate* unmanaged[Cdecl]<int, int> SetTeamVoiceOnly;
+
+    /// <summary>The local player's "Restrict Mic to Team" as the server has it: -1 not known, else 0 or 1.</summary>
+    public delegate* unmanaged[Cdecl]<int> GetTeamVoiceOnly;
 }
 
 public static unsafe class VoiceExports
@@ -90,6 +101,9 @@ public static unsafe class VoiceExports
         api->StartEchoTest = &StartEchoTest;
         api->StopEchoTest = &StopEchoTest;
         api->GetError = &GetError;
+        api->SetMeter = &SetMeter;
+        api->SetTeamVoiceOnly = &SetTeamVoiceOnly;
+        api->GetTeamVoiceOnly = &GetTeamVoiceOnly;
         return VoiceBridge.ApiVersion;
     }
 
@@ -282,6 +296,47 @@ public static unsafe class VoiceExports
         catch (Exception e)
         {
             Fail(e);
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void SetMeter(int on)
+    {
+        try
+        {
+            Voice.SetMeter(on != 0);
+        }
+        catch (Exception e)
+        {
+            Fail(e);
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int SetTeamVoiceOnly(int only)
+    {
+        try
+        {
+            return Voice.SetTeamVoiceOnly(only != 0) ? 1 : 0;
+        }
+        catch (Exception e)
+        {
+            Fail(e);
+            return 0;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetTeamVoiceOnly()
+    {
+        try
+        {
+            return Voice.TeamVoiceOnly;
+        }
+        catch (Exception e)
+        {
+            Fail(e);
+            return -1;
         }
     }
 
