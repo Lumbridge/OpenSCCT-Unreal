@@ -67,6 +67,21 @@ public sealed record LocalMatch
     /// <summary>The server ticks on the caller's thread just before the client (the drills read it between ticks).</summary>
     public bool InlineHost { get; init; }
 
+    /// <summary>
+    /// The server and the client talk over a simulated link with these latency, jitter and loss figures instead of
+    /// loopback (the netcode checks, Test/NetLinkLaunch.cs); the server then ticks inline. Null for loopback.
+    /// </summary>
+    public SimLinkProfile? SimLink { get; init; }
+
+    /// <summary>The server's network behaviour: OpenSCCT's tuned rates (Enhanced) or the original's (Stock).</summary>
+    public NetProfile NetworkProfile { get; init; } = NetProfile.Enhanced;
+
+    /// <summary>
+    /// Builds the play session itself from the settings and clock instead of the usual local host (a check's
+    /// dedicated server on a simulated link), or null.
+    /// </summary>
+    public Func<PlaySettings, IClock, PlaySession>? CreateSession { get; init; }
+
     /// <summary>The folder the match is recorded into as a demo (PlaySettings.DemoFolder, Demo/DemoSaving.cs), or null.</summary>
     public string? DemoFolder { get; init; }
 }
@@ -131,7 +146,9 @@ public sealed class BridgeSession : IDisposable
     /// <summary>Sets the converted content folder (the one holding <c>svmap</c> and <c>shared</c>).</summary>
     public static void Configure(string contentRoot)
     {
-        ContentPaths.Configure(contentRoot, exeDir: null);
+        // The bridge's own folder stands for the exe's: its maps/ holds the maps shipped with the bridge (TestBox).
+        // The runtime Unreal hosts has no base directory of its own, so the default catalog cannot find them there.
+        ContentPaths.Configure(contentRoot, exeDir: Path.GetDirectoryName(typeof(BridgeSession).Assembly.Location));
     }
 
     /// <summary>Hosts <paramref name="map"/> locally and joins it. Blocks while the map loads.</summary>
@@ -156,10 +173,13 @@ public sealed class BridgeSession : IDisposable
             UnlimitedGear = match.OfflineRules || match.UnlimitedGear,
             StartAt = match.StartAt,
             Rules = match.PlayLevel ? PlayRules.PlayLevel : PlayRules.MapSettings,
-            HostMode = match.InlineHost ? PlayHostMode.Inline : PlayHostMode.Thread,
+            HostMode = match.InlineHost || match.SimLink is not null ? PlayHostMode.Inline : PlayHostMode.Thread,
+            SimLink = match.SimLink,
+            NetworkProfile = match.NetworkProfile,
             DemoFolder = match.DemoFolder,
         }.ForLocalLaunch();
-        var session = new PlaySession(settings, new StopwatchClock());
+        var clock = new StopwatchClock();
+        var session = match.CreateSession?.Invoke(settings, clock) ?? new PlaySession(settings, clock);
         OverrideRules(session, match);
         return Wrap(session);
     }

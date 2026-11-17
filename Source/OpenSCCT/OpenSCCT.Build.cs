@@ -36,7 +36,8 @@ public class OpenSCCT : ModuleRules
 			"MoviePlayer",
 			"Projects",
 			"RenderCore",
-			// The flash-bang after-image is copied out of the post-processing chain (Hud/ScctScreenEffectsSubsystem).
+			// The frame recorder of the named tests reads the GPU frame time and the pipeline cache's counters (Test/ScctFrameRecorder);
+			// the flash-bang after-image is copied out of the post-processing chain (Hud/ScctScreenEffectsSubsystem).
 			"Renderer",
 			"RHI",
 			"Slate",

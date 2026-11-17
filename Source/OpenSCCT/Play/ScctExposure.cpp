@@ -56,20 +56,20 @@ namespace
 		}
 	};
 
-	TSharedPtr<FScctExposureProbe, ESPMode::ThreadSafe> Probe;
+	TSharedPtr<FScctExposureProbe, ESPMode::ThreadSafe> ScctExposureProbeInstance;
 }
 
 void FScctExposure::Start()
 {
-	if (!Probe.IsValid() && GEngine != nullptr && GEngine->ViewExtensions.IsValid())
+	if (!ScctExposureProbeInstance.IsValid() && GEngine != nullptr && GEngine->ViewExtensions.IsValid())
 	{
-		Probe = FSceneViewExtensions::NewExtension<FScctExposureProbe>();
+		ScctExposureProbeInstance = FSceneViewExtensions::NewExtension<FScctExposureProbe>();
 	}
 }
 
 void FScctExposure::Stop()
 {
-	Probe.Reset();
+	ScctExposureProbeInstance.Reset();
 }
 
 float FScctExposure::Get()

@@ -4,6 +4,9 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "Misc/ScopeExit.h"
 #include "OpenSCCT.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -144,8 +147,25 @@ void AScctPawnProxy::Present(const FScctBridgePawn& NewPawn, TConstArrayView<FSc
 	}
 	StandIn->SetVisibility(IsShown() && !bHasModel && !IsFirstPerson());
 
-	if (bPosed)
+	// -ScctTestFreezePose (a check of the play inspector, Test/ScctPlayInspector.h): every body keeps its first pose,
+	// so the inspector's animation area must fail. The kept pose is written again every frame, because features that
+	// turn bones after Present (the arm's aim) build on whatever pose the body holds.
+	static const bool bFreezePose = FParse::Param(FCommandLine::Get(), TEXT("ScctTestFreezePose"));
+	if (bPosed && bFreezePose && bPosedOnce && FrozenBones.Num() == Body->BoneSpaceTransforms.Num())
 	{
+		Body->BoneSpaceTransforms = FrozenBones;
+		Body->RefreshBoneTransforms();
+	}
+	else if (bPosed)
+	{
+		ON_SCOPE_EXIT
+		{
+			bPosedOnce = true;
+			if (bFreezePose)
+			{
+				FrozenBones = Body->BoneSpaceTransforms;
+			}
+		};
 		TArray<FTransform>& Local = Body->BoneSpaceTransforms;
 		const int32 Count = FMath::Min(Pose.Num(), BoneMap.Num());
 		for (int32 Index = 0; Index < Count; ++Index)

@@ -25,7 +25,9 @@
 #include "Runtime/ScctVoiceApi.h"
 #include "Runtime/ScctWorldApi.h"
 #include "Test/ScctGrabAreaApi.h"
+#include "Test/ScctInspectApi.h"
 #include "Test/ScctLessonApi.h"
+#include "Test/ScctTestApi.h"
 
 // The bridge's feature tables by their C++ type: which bridge class hands each one over and which version the
 // header here mirrors. A feature subsystem asks for its table like this, at any time and as often as it likes
@@ -70,6 +72,8 @@ SCCT_FEATURE_TABLE(FScctVoiceApi, "VoiceExports", ScctVoiceApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);
 SCCT_FEATURE_TABLE(FScctGrabAreaApi, "GrabAreaExports", ScctGrabAreaApiVersion);
 SCCT_FEATURE_TABLE(FScctLessonApi, "LessonExports", ScctLessonApiVersion);
+SCCT_FEATURE_TABLE(FScctTestApi, "TestExports", ScctTestApiVersion);
+SCCT_FEATURE_TABLE(FScctInspectApi, "InspectExports", ScctInspectApiVersion);
 
 #undef SCCT_FEATURE_TABLE
 
