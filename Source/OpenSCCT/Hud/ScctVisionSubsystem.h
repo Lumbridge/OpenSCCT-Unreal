@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Hud/ScctVisionData.h"
+#include "Hud/ScctVisionMotion.h"
 #include "Hud/ScctVisionObjects.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctVisionSubsystem.generated.h"
@@ -25,8 +26,9 @@ class UPrimitiveComponent;
  * nor the custom depth, as the original discards it); a see-through one (opacity below 0.99) is drawn only into the
  * custom depth so the material lays it over the scene behind by its opacity; the stencil carries the level and the
  * opacity (PawnStencil). What hangs on the body follows it, at the glow of what it carries when that is more (the
- * spy's drawn pistol). Motion tracking still marks every body by side: 1 a spy, 2 a merc. Night vision reads no
- * marks. Gadgets, devices and the level's hot or electric meshes are marked the same way by their own heat and EMF
+ * spy's drawn pistol). Motion tracking marks no body: it shows the blurred scene as the level's navy to red ramp and
+ * the scene sharp only in the tracker's clean rectangles round the pawns it has locked (FScctVisionMotion), and does
+ * not draw a fully cloaked spy. Night vision reads no marks. Gadgets, devices and the level's hot or electric meshes are marked the same way by their own heat and EMF
  * values (FScctVisionObjects, Hud/ScctVisionObjects.h). Other things only the goggles show are marked by whoever draws them
  * (the detector beams: Play/ScctMarkersSubsystem): StencilEmfStreak is drawn as a dark grey streak in EMF, and
  * HeatStencil(Heat) as that heat in thermal.
@@ -93,6 +95,9 @@ protected:
 private:
 	static constexpr int32 ModeCount = 4;
 
+	/** Motion tracking's place in the modes and materials (mode 37). */
+	static constexpr int32 MotionIndex = 2;
+
 	/** Spawns the unbound volume that carries the materials; false when the material assets are missing. */
 	bool EnsureVolume();
 
@@ -115,6 +120,9 @@ private:
 
 	/** The gadgets, devices and level meshes thermal and EMF draw by their own values. */
 	FScctVisionObjects Objects;
+
+	/** Motion tracking's level ramp and the tracker's clean rectangles. */
+	FScctVisionMotion Motion;
 
 	/** The mode shown, after the forced one is applied. */
 	int32 ShownMode = 0;

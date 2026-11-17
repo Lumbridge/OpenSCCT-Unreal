@@ -135,12 +135,9 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 	}
 
 	// Nothing is spawned or loaded until the goggles are first used.
-	if (!bAnyMode && !IsValid(Volume))
+	if ((!bAnyMode && !IsValid(Volume)) || !EnsureVolume())
 	{
-		return;
-	}
-	if (!EnsureVolume())
-	{
+		Motion.Update(GetWorld(), Data, nullptr, false, DeltaSeconds);
 		return;
 	}
 
@@ -160,6 +157,9 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 		bAnyShown |= Amount > 0.0f;
 	}
 	MarkCharacters(bAnyShown);
+
+	// Motion tracking's level ramp and the tracker's clean rectangles, while its picture is in the frame at all.
+	Motion.Update(GetWorld(), Data, Materials[MotionIndex], Amounts[MotionIndex] > 0.0f, DeltaSeconds);
 
 	// The gadgets, devices and level meshes, for the mode furthest in (a mode fading out keeps its marks to the end).
 	int32 ObjectMode = 0;
@@ -189,6 +189,7 @@ void UScctVisionSubsystem::Clear()
 	LastMode = 0;
 	ShownMode = 0;
 	Data.Reset();
+	Motion.Reset();
 	MarkCharacters(false);
 	Objects.Reset();
 }
@@ -254,6 +255,7 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 	}
 	const bool bThermal = MarkMode == 36;
 	const bool bEmf = MarkMode == 38;
+	const bool bMotion = MarkMode == 37;
 	const bool bHasRows = Data.GetApi() != nullptr;
 
 	// What a pawn carries that EMF draws by its own values (the spy's drawn pistol): the strongest glow per owner.
@@ -292,13 +294,25 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 			continue;
 		}
 
-		// Plain sight, night vision and motion tracking: the body as it is, marked by side for motion tracking.
+		// Plain sight, night vision and motion tracking: the body as it is, unmarked. Motion tracking picks out nobody:
+		// a pawn that moves shows through the tracker's clean rectangle round it (FScctVisionMotion), one standing still
+		// is part of the blurred ramp.
 		bool bMainPass = true;
-		bool bCustomDepth = bMark;
-		int32 BodyStencil = bMark ? 1 + FMath::Clamp(Proxy->GetTeam(), 0, 1) : 0;
-		int32 CarriedStencil = BodyStencil;
+		bool bCustomDepth = false;
+		int32 BodyStencil = 0;
+		int32 CarriedStencil = 0;
 
-		if (bThermal || bEmf)
+		if (bMotion)
+		{
+			// A spy fully cloaked by his camo suit is not drawn in motion tracking at all (SimPawnView's rule).
+			const FScctVisionPawn* Row = Data.FindPawn(Proxy->GetActorId());
+			if (Row != nullptr && FScctVisionMotion::HidesPawn(Row->Cloak, (Row->Flags & EScctVisionPawnFlags::Merc) != 0))
+			{
+				bMainPass = false;
+				++Hidden;
+			}
+		}
+		else if (bThermal || bEmf)
 		{
 			// The simulation's rule for the body in this mode (PawnVision, EmfVision.Shows, HeatOpacity). Without the
 			// vision table the body is drawn as an ordinary hot or plain body, as before the table existed.
@@ -390,6 +404,11 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 	// What the goggles do with the pawns, in the log when it changes and every few seconds while a mode is on.
 	const int32 Summary = (MarkMode << 24) | (Marked << 16) | (Hidden << 8) | SeeThrough;
 	const double Now = FPlatformTime::Seconds();
+	if (bMotion && (Summary != LastMarkSummary || Now - LastMarkLog > 3.0))
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Vision: motion marks no pawn, hides %d fully cloaked spies"), Hidden);
+		LastMarkLog = Now;
+	}
 	if ((bThermal || bEmf) && (Summary != LastMarkSummary || Now - LastMarkLog > 3.0))
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("Vision: %s marks %d pawns (%d hidden, %d see-through)%s"),
