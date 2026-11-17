@@ -443,10 +443,42 @@ namespace
 				}
 				return;
 			}
-			UE_LOG(LogOpenSCCT, Log, TEXT("Menu: joining listed server %s"), Server.Name);
-			// The password prompt for a protected server (EScctOnlineServerFlags::Password) belongs here: JoinListed
-			// takes the password.
-			Visit->JoinListed(Index);
+			// The one password prompt of the menus, with the side asked for on arrival (as joining by address has
+			// them): a protected server's password is typed here, and the side is a button.
+			const bool bLocked = (Server.Flags & EScctOnlineServerFlags::Password) != 0;
+			const FString Name = Server.Name;
+			const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Host.Online;
+			if (!Host.Dialogs.IsValid())
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("Menu: joining listed server %s"), *Name);
+				Visit->JoinListed(Index);
+				return;
+			}
+			const auto JoinAs = [Weak, Index, Name](int32 Team)
+			{
+				return [Weak, Index, Name, Team](const FString& Password)
+				{
+					if (UScctOnlineSubsystem* V = Weak.Get(); V != nullptr && V->GetServers().IsValidIndex(Index))
+					{
+						UE_LOG(LogOpenSCCT, Log, TEXT("Menu: joining listed server %s (side %d%s)"), *Name, Team, Password.IsEmpty() ? TEXT("") : TEXT(", with a password"));
+						V->JoinListed(Index, Password, Team);
+					}
+				};
+			};
+			FScctDialog Dialog;
+			Dialog.Title = FString::Printf(TEXT("Join %s"), *Name);
+			Dialog.Body = bLocked ? TEXT("This server asks for a password. Type it, then pick the side you want on arrival; you can change it in the lobby.")
+				: TEXT("Pick the side you want on arrival; you can change it in the lobby.");
+			Dialog.bTextField = bLocked;
+			Dialog.bPassword = bLocked;
+			Dialog.TextHint = TEXT("Password");
+			Dialog.Buttons.Add({ TEXT("Cancel"), EScctButtonLook::Secondary, nullptr });
+			Dialog.Buttons.Add({ ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), 0, TEXT("Spy")), EScctButtonLook::Secondary, JoinAs(0) });
+			Dialog.Buttons.Add({ ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), 1, TEXT("Mercenary")), EScctButtonLook::Secondary, JoinAs(1) });
+			Dialog.Buttons.Add({ TEXT("Smaller side"), EScctButtonLook::Primary, JoinAs(-1) });
+			Dialog.FocusButton = 3;
+			Dialog.CancelButton = 0;
+			Host.Dialogs->Show(Dialog);
 		}
 
 		TSharedRef<SWidget> BuildAccount()
