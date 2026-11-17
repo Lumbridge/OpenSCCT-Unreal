@@ -81,8 +81,18 @@ struct OPENSCCT_API FScctTestContext
 	FString GetSessionFailure() const;
 
 	/**
-	 * Travels to a level URL ("/Game/OpenSCCT/Test/TestBox/TestBox?ScctMap=TestBox?Bots=3"). False, with the reason in
-	 * OutError, when the level's package does not exist; the travel itself happens over the next frames.
+	 * The map the run names for its tests (-ScctTestMap=AquaE, from Tools/Test/tests.psd1), or Fallback. A test that
+	 * plays "a map" uses it; one bound to a fixture ignores it.
+	 */
+	static FString GetTestMap(const FString& Fallback = FString());
+
+	/** The URL options the run adds to every level a test opens (-ScctTestOptions="?Bots=1?Side=merc"), or empty. */
+	static FString GetTestOptions();
+
+	/**
+	 * Travels to a level URL ("/Game/OpenSCCT/Test/TestBox/TestBox?ScctMap=TestBox?Bots=3"), with the run's
+	 * -ScctTestOptions after its own. False, with the reason in OutError, when the level's package does not exist;
+	 * the travel itself happens over the next frames.
 	 */
 	bool OpenLevel(const FString& URL, FString* OutError = nullptr);
 
@@ -117,6 +127,13 @@ public:
 
 	/** True for a test that reads the session's failure itself (the runner then does not fail it for one). */
 	virtual bool AllowsSessionFailure() const { return false; }
+
+	/**
+	 * Asked once the run has passed when this was its last test: true when the test has started the game's own way
+	 * out (the front end's QUIT), which the runner then waits for instead of asking the engine to quit itself. The
+	 * runner fails the run when that does not end the game within a few seconds.
+	 */
+	virtual bool QuitThroughGame(FScctTestContext& Context) { return false; }
 
 private:
 	friend class FScctTestRegistry;

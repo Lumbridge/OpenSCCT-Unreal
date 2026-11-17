@@ -7,6 +7,8 @@ Starts the game with -ScctTest=<names> (Source/OpenSCCT/Test/ScctTestRunnerSubsy
 Saved\Logs\test-<Tag>.log and prints the SCCT_TEST lines. Exit code: 0 every test passed, 1 one failed, 2 a name is
 unknown (the known names are printed), anything else: the game did not finish (a crash). The tests open the levels
 they need; testbox and boot use the TestBox fixture (Tools\Test\Make-TestBox.ps1 makes its level).
+This is one process for a quick look; Tools\Test\Run-ScctTests.ps1 is the suite driver (one process per test, crash
+and ensure checks, expected failures, repeats, JUnit report, packaged builds).
 
 .EXAMPLE
 Tools\Test\Run-Tests.ps1 -Tests selftest-pass

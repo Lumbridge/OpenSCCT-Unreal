@@ -3,7 +3,9 @@
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
+#include "Misc/Parse.h"
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
@@ -133,9 +135,28 @@ bool FScctTestContext::OpenLevel(const FString& URL, FString* OutError)
 		return false;
 	}
 
-	UE_LOG(LogScctTest, Log, TEXT("Opening %s"), *URL);
-	GEngine->SetClientTravel(World, *URL, TRAVEL_Absolute);
+	const FString Travel = URL + GetTestOptions();
+	UE_LOG(LogScctTest, Log, TEXT("Opening %s"), *Travel);
+	GEngine->SetClientTravel(World, *Travel, TRAVEL_Absolute);
 	return true;
+}
+
+FString FScctTestContext::GetTestMap(const FString& Fallback)
+{
+	FString Map;
+	return FParse::Value(FCommandLine::Get(), TEXT("ScctTestMap="), Map) && !Map.IsEmpty() ? Map : Fallback;
+}
+
+FString FScctTestContext::GetTestOptions()
+{
+	FString Options;
+	FParse::Value(FCommandLine::Get(), TEXT("ScctTestOptions="), Options, false);
+	Options.TrimStartAndEndInline();
+	if (!Options.IsEmpty() && !Options.StartsWith(TEXT("?")))
+	{
+		Options.InsertAt(0, TEXT('?'));
+	}
+	return Options;
 }
 
 bool FScctTestContext::HoldAction(const FString& Action, bool bHeld)

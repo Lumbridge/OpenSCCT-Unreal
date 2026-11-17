@@ -117,6 +117,7 @@ void UScctTestRunnerSubsystem::Deinitialize()
 		Finish(EScctTestState::Failed, TEXT("the game shut down while the test ran"));
 	}
 	Current.Reset();
+	Last.Reset();
 	Super::Deinitialize();
 }
 
@@ -160,8 +161,33 @@ bool UScctTestRunnerSubsystem::Tick(float DeltaSeconds)
 		return false;
 	}
 
+	if (bQuittingThroughGame)
+	{
+		// The last test pressed the game's own way out; the engine should be on its way down by now.
+		if (FPlatformTime::Seconds() > QuitDeadline)
+		{
+			WriteTestLine(TestLine(Last->GetName(), TEXT("FAIL"), FString::Printf(TEXT("the game's own way out did not end the game within %.0f s"), QuitThroughGameSeconds)), true);
+			++Failed;
+			--Passed;
+			bQuittingThroughGame = false;
+			Quit(ExitFailed);
+			return false;
+		}
+		return true;
+	}
+
 	if (!Current.IsValid() && !BeginNext())
 	{
+		if (Failed == 0 && Last.IsValid() && Last->QuitThroughGame(Context))
+		{
+			// The summary now: the shutdown that follows writes nothing of the runner's. A crash in it still ends the
+			// process with a non-zero code, which the suite driver (Tools/Test/Run-ScctTests.ps1) checks.
+			WriteTestLine(FString::Printf(TEXT("SCCT_TEST done: %d passed, %d failed (exit %d, through %s's own way out)"), Passed, Failed, ExitPassed, *Last->GetName()), false);
+			GLog->Flush();
+			bQuittingThroughGame = true;
+			QuitDeadline = FPlatformTime::Seconds() + QuitThroughGameSeconds;
+			return true;
+		}
 		Quit(Failed > 0 ? ExitFailed : ExitPassed);
 		return false;
 	}
@@ -208,7 +234,7 @@ void UScctTestRunnerSubsystem::Finish(EScctTestState State, const FString& Detai
 		UE_LOG(LogScctTest, Log, TEXT("%s"), *Detail);
 	}
 	++(bPassed ? Passed : Failed);
-	Current.Reset();
+	Last = MoveTemp(Current);
 }
 
 void UScctTestRunnerSubsystem::Quit(uint8 ExitCode)
