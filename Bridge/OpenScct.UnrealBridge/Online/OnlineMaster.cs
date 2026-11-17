@@ -56,6 +56,15 @@ public sealed class OnlineMaster : IDisposable
     /// <summary>The master's client, carrying the signed-in token, for the hub's list and joins (Hub/HubBridge.Master.cs); null before <see cref="Configure"/>.</summary>
     internal MasterClient? Client => _client;
 
+    /// <summary>A master is set (listed joins and the account work).</summary>
+    public bool HasMaster => _client is not null;
+
+    /// <summary>The master's last description of the signed-in account (its Rejoin offer included), or null.</summary>
+    public AccountInfo? Account { get; private set; }
+
+    /// <summary>Asks the master for one server's entry (the rejoin check: is it still playing that round?); null without a master.</summary>
+    internal Task<ServerEntry>? AskServer(string serverId) => _client?.ServerAsync(serverId);
+
     public OnlineMasterState State { get; private set; }
 
     /// <summary>Why the last request failed, as a player reads it, or null.</summary>
@@ -177,7 +186,25 @@ public sealed class OnlineMaster : IDisposable
         }
 
         _bridge.BeginListedJoin();
-        _join = new PendingJoin(client.JoinAsync(entry.Id), entry.RequireAccounts, password, preferredTeam, null, false);
+        _join = new PendingJoin(client.JoinAsync(entry.Id), entry.RequireAccounts, password, preferredTeam, null, false, entry.Id);
+    }
+
+    /// <summary>
+    /// Joins a server by its master id alone (a rejoin): the master says how to reach it and gives the ticket. With
+    /// <paramref name="direct"/> (an address kept from the earlier visit) the master is asked only for the ticket.
+    /// </summary>
+    public void JoinServer(string serverId, string? password, string? direct, int preferredTeam)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(serverId);
+        if (Need() is not { } client)
+        {
+            _bridge.FailJoin(Error ?? "No master server is set.");
+            return;
+        }
+
+        _bridge.BeginListedJoin();
+        _join = new PendingJoin(client.JoinAsync(serverId), false, password, preferredTeam,
+            string.IsNullOrEmpty(direct) ? null : JoinTarget.FromAddress(direct), false, serverId);
     }
 
     /// <summary>
@@ -195,7 +222,7 @@ public sealed class OnlineMaster : IDisposable
         }
 
         _bridge.BeginListedJoin();
-        _join = new PendingJoin(client.JoinAsync(serverId), requireAccounts, password, preferredTeam, direct, loopbackOnly);
+        _join = new PendingJoin(client.JoinAsync(serverId), requireAccounts, password, preferredTeam, direct, loopbackOnly, serverId);
     }
 
     /// <summary>Drops a listed join still waiting for the master (the player left the connecting screen).</summary>
@@ -213,6 +240,7 @@ public sealed class OnlineMaster : IDisposable
         _linkStart = null;
         _linkPoll = null;
         _account = null;
+        Account = null;
         AccountName = null;
         AccountError = null;
         AccountToken = string.IsNullOrWhiteSpace(token) ? null : token;
@@ -255,6 +283,11 @@ public sealed class OnlineMaster : IDisposable
     /// <summary>A newer description of the signed-in account (Social/AccountService: a claimed or changed name): joins use its name.</summary>
     internal void Remember(AccountInfo account)
     {
+        if (AccountToken is not null)
+        {
+            Account = account;
+        }
+
         if (AccountToken is not null && AccountName != account.Name)
         {
             AccountName = account.Name;
@@ -304,7 +337,7 @@ public sealed class OnlineMaster : IDisposable
             if (join.Direct is { } fallback && !join.RequireAccounts)
             {
                 // Only the ticket was asked for: join without it.
-                _bridge.Join(fallback, join.Password, ticket: null, join.PreferredTeam, join.LoopbackOnly);
+                _bridge.Join(fallback, join.Password, ticket: null, join.PreferredTeam, join.LoopbackOnly, masterId: join.ServerId);
                 return;
             }
 
@@ -319,7 +352,7 @@ public sealed class OnlineMaster : IDisposable
             return;
         }
 
-        _bridge.Join(join.Direct ?? JoinTarget.FromJoin(answer, Path), join.Password, answer.Ticket, join.PreferredTeam, join.LoopbackOnly);
+        _bridge.Join(join.Direct ?? JoinTarget.FromJoin(answer, Path), join.Password, answer.Ticket, join.PreferredTeam, join.LoopbackOnly, masterId: join.ServerId);
     }
 
     private void PumpAccount()
@@ -329,6 +362,7 @@ public sealed class OnlineMaster : IDisposable
             _account = null;
             if (Succeeded(account, out string? error))
             {
+                Account = account.Result;
                 AccountName = account.Result.Name;
                 AccountState = OnlineAccountState.SignedIn;
                 AccountError = null;
@@ -402,6 +436,7 @@ public sealed class OnlineMaster : IDisposable
             case LinkStatus.Done when answer.SessionToken is { Length: > 0 } token:
                 _link = null;
                 AccountToken = token;
+                Account = answer.Account;
                 AccountName = answer.Account?.Name;
                 AccountState = OnlineAccountState.SignedIn;
                 AccountError = null;
@@ -461,5 +496,5 @@ public sealed class OnlineMaster : IDisposable
     /// A join waiting for the master: <see cref="Direct"/> is the address to join with the ticket (a LAN or saved server
     /// listed on the master too), or null to go the way the answer says (a server of the list).
     /// </summary>
-    private sealed record PendingJoin(Task<JoinResponse> Answer, bool RequireAccounts, string? Password, int PreferredTeam, JoinTarget? Direct, bool LoopbackOnly);
+    private sealed record PendingJoin(Task<JoinResponse> Answer, bool RequireAccounts, string? Password, int PreferredTeam, JoinTarget? Direct, bool LoopbackOnly, string ServerId);
 }

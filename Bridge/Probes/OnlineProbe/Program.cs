@@ -17,6 +17,7 @@ using OpenScct.UnrealBridge.Online;
 // OnlineProbe setup [content root] [map]                           (Create Session's rules: see SetupProbe.cs)
 // OnlineProbe endround [content root] [map] [seconds]               (the round table's EndLocalRound: see EndRoundProbe.cs)
 // OnlineProbe maps [content root] [map folders] [map]               (the map folders Unreal names: see MapsProbe.cs)
+// OnlineProbe rejoin                                                (the rejoin record and table: see RejoinProbe.cs)
 //
 // Starts a real dedicated server (svm-server, the OpenSCCT checkout's src/OpenScct.Server.Cli) on localhost with
 // bots filling the sides, and visits it the way Unreal does: through the function table OnlineExports.GetApi fills
@@ -37,7 +38,7 @@ using OpenScct.UnrealBridge.Online;
 // machine).
 return args.Length > 0 && args[0] == "host" ? HostProbe.Run(args[1..]) : args.Length > 0 && args[0] == "setup" ? SetupProbe.Run(args[1..])
     : args.Length > 0 && args[0] == "lan" ? LanProbe.Run(args[1..]) : args.Length > 0 && args[0] == "endround" ? EndRoundProbe.Run(args[1..])
-    : args.Length > 0 && args[0] == "maps" ? MapsProbe.Run(args[1..])
+    : args.Length > 0 && args[0] == "maps" ? MapsProbe.Run(args[1..]) : args.Length > 0 && args[0] == "rejoin" ? RejoinProbe.Run(args[1..])
     : args.Length > 0 && args[0] == "download" ? DownloadProbe.Run(args[1..]) : Probe.Run(args);
 
 internal static unsafe class Probe
