@@ -76,6 +76,10 @@ void AScctGameMode::InitGame(const FString& MapName, const FString& Options, FSt
 	Match.bRifles = ParseSwitch(Options, TEXT("Rifles"));
 	Match.bOfflineRules = ParseSwitch(Options, TEXT("Practice"));
 	Match.PlayerName = UGameplayStatics::ParseOption(Options, TEXT("Name"));
+	Match.TimeLimit = UGameplayStatics::GetIntOption(Options, TEXT("TimeLimit"), -1);
+	Match.SpyLives = UGameplayStatics::GetIntOption(Options, TEXT("SpyLives"), -1);
+	Match.MercLives = UGameplayStatics::GetIntOption(Options, TEXT("MercLives"), -1);
+	Match.RespawnSeconds = UGameplayStatics::GetIntOption(Options, TEXT("Respawn"), -1);
 	bOnline = ParseSwitch(Options, UScctOnlineSubsystem::OnlineOption);
 	FParse::Value(FCommandLine::Get(), TEXT("ScctMatchMenu="), OpenMenuIn);
 

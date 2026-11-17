@@ -327,6 +327,53 @@ bool UScctOnlineSubsystem::SetMatchMap(const FString& Map)
 	return Api != nullptr && Api->SetMatch(*Map, -1) != 0;
 }
 
+bool UScctOnlineSubsystem::SetMatch(const FString& Map, int32 Mode)
+{
+	return Api != nullptr && Api->SetMatch(Map.IsEmpty() ? nullptr : *Map, Mode) != 0;
+}
+
+bool UScctOnlineSubsystem::SetSetupOptions(const FString& Options)
+{
+	return Api != nullptr && Api->SetSetupOptions(*Options) != 0;
+}
+
+int32 UScctOnlineSubsystem::GetSetupOption(const TCHAR* Name, int32 Fallback) const
+{
+	// "?MapName=AquaE?TimeLimit=20...": the value runs to the next '?'.
+	const FString Key = FString(TEXT("?")) + Name + TEXT("=");
+	const int32 At = SetupOptions.Find(Key, ESearchCase::IgnoreCase);
+	if (At == INDEX_NONE)
+	{
+		return Fallback;
+	}
+	const FString Value = SetupOptions.Mid(At + Key.Len());
+	return Value.IsEmpty() ? Fallback : FCString::Atoi(*Value);
+}
+
+void UScctOnlineSubsystem::AdminLogin(const FString& Password)
+{
+	if (Api != nullptr && !Password.IsEmpty())
+	{
+		Api->AdminLogin(*Password);
+	}
+}
+
+void UScctOnlineSubsystem::AdminCommand(const FString& Command)
+{
+	if (Api != nullptr && !Command.TrimStartAndEnd().IsEmpty())
+	{
+		Api->AdminCommand(*Command.TrimStartAndEnd());
+	}
+}
+
+void UScctOnlineSubsystem::BackToLobby()
+{
+	if (Api != nullptr)
+	{
+		Api->BackToLobby();
+	}
+}
+
 bool UScctOnlineSubsystem::GetResults(FScctOnlineResults& OutResults, TArray<FScctOnlineResultRow>& OutRows) const
 {
 	OutRows.Reset();
@@ -487,6 +534,8 @@ void UScctOnlineSubsystem::RefreshTexts()
 	SetupDescription = ReadText(EScctOnlineText::SetupDescription);
 	ConnectLog = ReadText(EScctOnlineText::ConnectLog);
 	MapToLoad = ReadText(EScctOnlineText::MapToLoad);
+	SetupOptions = ReadText(EScctOnlineText::SetupOptions);
+	Motd = ReadText(EScctOnlineText::MasterMotd);
 
 	if (Status.MasterState != LastMasterState)
 	{

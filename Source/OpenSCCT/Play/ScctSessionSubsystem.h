@@ -94,6 +94,19 @@ struct FScctLocalMatchOptions
 	/** Empty: "Player". */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	FString PlayerName;
+
+	/** The player's own rules over the map's (and over the practice rules); negative keeps what the rules give. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	int32 TimeLimit = -1; // minutes, 0 for no limit
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	int32 SpyLives = -1; // 0 for unlimited
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	int32 MercLives = -1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	int32 RespawnSeconds = -1;
 };
 
 /**

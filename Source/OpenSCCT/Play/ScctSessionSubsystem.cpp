@@ -108,10 +108,15 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 	CopyText(Start.Map, Options.Map);
 	CopyText(Start.Mode, Options.Mode);
 	CopyText(Start.PlayerName, Options.PlayerName);
+	Start.TimeLimitPlusOne = FMath::Max(Options.TimeLimit, -1) + 1;
+	Start.SpyLivesPlusOne = FMath::Max(Options.SpyLives, -1) + 1;
+	Start.MercLivesPlusOne = FMath::Max(Options.MercLives, -1) + 1;
+	Start.RespawnPlusOne = FMath::Max(Options.RespawnSeconds, -1) + 1;
 
-	UE_LOG(LogOpenSCCT, Log, TEXT("Starting %s (%s) as %s with %d bots (difficulty %d, sidearms %d, rifles %d, practice rules %d, name '%s')"),
+	UE_LOG(LogOpenSCCT, Log, TEXT("Starting %s (%s) as %s with %d bots (difficulty %d, sidearms %d, rifles %d, practice rules %d, name '%s'; own rules: time %d, spy lives %d, merc lives %d, respawn %d; -1 keeps the map's)"),
 		*Options.Map, *Options.Mode, Options.bMerc ? TEXT("merc") : TEXT("spy"), Start.Bots, Start.Difficulty,
-		Options.bSidearms ? 1 : 0, Options.bRifles ? 1 : 0, Options.bOfflineRules ? 1 : 0, *Options.PlayerName);
+		Options.bSidearms ? 1 : 0, Options.bRifles ? 1 : 0, Options.bOfflineRules ? 1 : 0, *Options.PlayerName,
+		Options.TimeLimit, Options.SpyLives, Options.MercLives, Options.RespawnSeconds);
 
 	const int32 NewId = Api->StartLocalEx(&Start);
 	if (NewId == 0)

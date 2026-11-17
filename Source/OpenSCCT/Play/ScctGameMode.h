@@ -19,6 +19,8 @@ class UScctMatchMenuWidget;
  *   ?Rifles=1           the mercs may pick OpenSCCT's additional rifles
  *   ?Practice=1         practice rules: no time limit, unlimited lives, 5 s respawn
  *   ?Name=Sam           the local player's name (Unreal's own player-name option; default "Player")
+ *   ?TimeLimit=10       the player's own rules over the map's: minutes (0 for none), ?SpyLives=3 and ?MercLives=3
+ *                       (0 for unlimited), ?Respawn=5 seconds
  *   ?ScctOnline=1       the level presents the round of the online visit (Online/ScctOnlineSubsystem.h): no local
  *                       match is started, the other options are not used. Without it a level opened directly
  *                       starts a local match, and a visit that was under way is left.
