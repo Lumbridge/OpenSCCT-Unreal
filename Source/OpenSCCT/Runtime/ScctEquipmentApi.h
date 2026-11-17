@@ -219,7 +219,9 @@ struct FScctEquipmentApi
 	/**
 	 * Writes the weapon and gadget mesh files of the content. Returns the entry count (only Capacity are written).
 	 * Works before a session starts, once the content is configured. Files the bridge cannot read are left out
-	 * (today the first-person pistols OpenScctSidearms.*_first: no view model is drawn for a merc holding one).
+	 * (none in today's content). The first-person pistols OpenScctSidearms.*_first and arms_base list more bones
+	 * than their skin has joints: the nodes their clips move outside the skin (Root, pistol, hammer, trigger...)
+	 * follow the joints, and a joint's parent can be one of them (a higher index). Match bones by name.
 	 */
 	int32 (__cdecl* GetCatalog)(FScctEquipmentMesh* Meshes, int32 Capacity);
 

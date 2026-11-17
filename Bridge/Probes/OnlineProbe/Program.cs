@@ -3,12 +3,14 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using OpenScct.UnrealBridge;
+using OpenScct.UnrealBridge.Devices;
+using OpenScct.UnrealBridge.Equipment;
+using OpenScct.UnrealBridge.Events;
+using OpenScct.UnrealBridge.Hud;
 using OpenScct.UnrealBridge.Online;
-using OpenScctGame.Play.Session;
 
 // OnlineProbe <content root> <OpenSCCT checkout> [first map] [second map] [seconds in the second match] [port] [master url] [invite key]
 //
@@ -18,23 +20,30 @@ using OpenScctGame.Play.Session;
 //   1. the struct sizes the C++ header asserts;
 //   2. a join that cannot work ends as Failed with a reason, and Leave clears it;
 //   3. lobby, chat, side, ready, travel, the load gate and a whole round on the first map (one minute, to its time
-//      limit), read through a BridgeSession around the remote round as the main table reads a local match;
+//      limit), read through the main table (Exports.GetApi: Update, GetSession, SetInput, GetPawns, GetView,
+//      GetPawnPose) exactly as a local match is, with the HUD, events, level-state and equipment tables answering
+//      on the same session;
 //   4. the results, the way back to the lobby, a setup change, and a second round on another map;
 //   5. the main table stopping the round under the visit (the visit leaves), a second visit, and the server
 //      closing under it (Failed with a reason).
 // With a master url it also asks that master for its server list.
 //
-// Two things are not the exported path, and only these: the join itself goes through OnlineBridge.Join with a
+// One thing is not the exported path, and only this: the join itself goes through OnlineBridge.Join with a
 // loopback-only socket (the exported Join binds every interface, which can raise a firewall prompt on a test
-// machine), and the BridgeSession around the round is made by reflection, standing in for the adoption hook that
-// Exports.cs gets on integration (BridgeSession's constructor is private).
+// machine).
 return Probe.Run(args);
 
 internal static unsafe class Probe
 {
     private static OnlineApi s_api;
+    private static BridgeApi s_main;
+    private static HudApi s_hud;
+    private static EventsApi s_events;
+    private static WorldApi s_world;
+    private static EquipmentApi s_equipment;
     private static BridgeSession? s_adopted;
     private static int s_adoptions, s_releases;
+    private static int s_mainTicks;
     private static readonly Stopwatch s_run = new();
 
     public static int Run(string[] args)
@@ -66,7 +75,12 @@ internal static unsafe class Probe
         string installed = Text(OnlineText.InstalledMaps);
         Console.WriteLine($"installed maps after: {installed.Split('\n').Length} ({(installed.Length > 60 ? installed[..60].Replace("\n", " ", StringComparison.Ordinal) + "..." : installed)})");
 
-        AdoptRoundsLikeExports();
+        if (!MainTables())
+        {
+            Console.WriteLine("PROBE FAILED");
+            return 1;
+        }
+
         fixed (char* name = "UnrealProbe")
         {
             s_api.SetIdentity(name, null, null);
@@ -151,41 +165,68 @@ internal static unsafe class Probe
         return ok;
     }
 
-    // ---- the main table's part, as Exports does it after integration --------------------------------------------
+    // ---- the main table and the feature tables, as Unreal gets them ---------------------------------------------
 
     /// <summary>
-    /// Sets OnlineBridge.AdoptRound and ReleaseRound as Exports.GetApi will: a BridgeSession around each round's
-    /// play session, so the pawns, poses and the view are read the way the main table reads them.
+    /// Asks for the main table the safe way (the version first, then the table with its size) and for the feature
+    /// tables, and counts the sessions that enter and leave the main slot: each online round must do both once.
     /// </summary>
-    private static void AdoptRoundsLikeExports()
+    private static bool MainTables()
     {
-        const BindingFlags Hidden = BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
-        ConstructorInfo make = typeof(BridgeSession).GetConstructor(Hidden, [typeof(PlaySession)])
-            ?? throw new InvalidOperationException("BridgeSession has no constructor taking a PlaySession.");
-        Func<PlaySession, BridgeSession> adopt = play =>
+        int version = ((delegate* unmanaged<int>)&Exports.GetApiVersion)();
+        BridgeApi main = default;
+        int filled = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApi)(&main, sizeof(BridgeApi));
+
+        // A caller with an older, shorter table: nothing past its size may be written.
+        BridgeApi* guard = stackalloc BridgeApi[2];
+        new Span<byte>(guard, 2 * sizeof(BridgeApi)).Fill(0xCD);
+        int shortSize = sizeof(int) + 4 + 12 * sizeof(void*);
+        int shortFilled = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApi)(guard, shortSize);
+        bool untouched = true;
+        foreach (byte b in new ReadOnlySpan<byte>((byte*)guard + shortSize, 2 * sizeof(BridgeApi) - shortSize))
+        {
+            untouched &= b == 0xCD;
+        }
+
+        int refused = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApi)(null, sizeof(BridgeApi));
+        Console.WriteLine($"main table: GetApiVersion {version}, GetApi {filled} (table says {main.Version}, {sizeof(BridgeApi)} bytes); a version 2 caller's {shortSize} bytes: returned {shortFilled}, bytes past its table untouched {untouched}, GetPawnPose filled {guard->GetPawnPose != null}; null table -> {refused}");
+        s_main = main;
+
+        HudApi hud = default;
+        EventsApi events = default;
+        WorldApi world = default;
+        EquipmentApi equipment = default;
+        ((delegate* unmanaged<HudApi*, int>)&HudExports.GetApi)(&hud);
+        ((delegate* unmanaged<EventsApi*, int>)&EventsExports.GetApi)(&events);
+        ((delegate* unmanaged<WorldApi*, int>)&WorldExports.GetApi)(&world);
+        ((delegate* unmanaged<EquipmentApi*, int>)&EquipmentExports.GetApi)(&equipment);
+        s_hud = hud;
+        s_events = events;
+        s_world = world;
+        s_equipment = equipment;
+
+        Exports.SessionStarted += session =>
         {
             s_adoptions++;
-            return s_adopted = (BridgeSession)make.Invoke([play]);
+            s_adopted = session;
         };
-        Action<BridgeSession> release = session =>
+        Exports.SessionEnded += session =>
         {
             s_releases++;
             if (ReferenceEquals(s_adopted, session))
             {
                 s_adopted = null;
             }
-
-            session.Dispose();
         };
-        typeof(OnlineBridge).GetProperty("AdoptRound", Hidden)!.SetValue(null, adopt);
-        typeof(OnlineBridge).GetProperty("ReleaseRound", Hidden)!.SetValue(null, release);
+        return version == BridgeSession.ApiVersion && filled == version && main.Version == version && shortFilled == version &&
+            untouched && guard->GetPawnPose != null && refused == 0;
     }
 
     /// <summary>One frame as Unreal runs it: the online table's Update, then the main table's.</summary>
     private static OnlineStatus Frame()
     {
         s_api.Update();
-        s_adopted?.Update();
+        s_mainTicks += s_main.Update();
         OnlineStatus status;
         s_api.GetStatus(&status);
         return status;
@@ -487,13 +528,17 @@ internal static unsafe class Probe
                 Console.WriteLine($"t={t:F1} travel: Unreal must load '{Text(OnlineText.MapToLoad)}' (loading picture seed {status.LoadingPictureSeed})");
             }
 
-            if (roundActive && s_adopted is { } adopted)
+            BridgeSessionInfo info;
+            int sessionId = s_main.GetSession(&info);
+            if (roundActive && sessionId != 0)
             {
                 if (round is null)
                 {
-                    round = new RoundSeen { Map = Text(OnlineText.MapToLoad), Since = t };
+                    round = new RoundSeen { Map = Text(OnlineText.MapToLoad), Since = t, SessionId = sessionId, TicksAtStart = s_mainTicks };
                     rounds.Add(round);
-                    Console.WriteLine($"t={t:F1} round entered on '{round.Map}' as {adopted.Session.Settings.Side}; remote session: {adopted.Session.IsRemote}; needs the load report: {(status.Flags & OnlineStatusFlags.NeedsLoadReport) != 0}");
+                    Console.WriteLine($"t={t:F1} round entered on '{round.Map}': main table session {info.Id} on '{new string(info.Map)}', state {(BridgeState)info.State}, remote {(info.Flags & BridgeSessionFlags.Remote) != 0}, merc {(info.Flags & BridgeSessionFlags.Merc) != 0}; needs the load report: {(status.Flags & OnlineStatusFlags.NeedsLoadReport) != 0}");
+                    round.Remote = (info.Flags & BridgeSessionFlags.Remote) != 0 && info.State == (int)BridgeState.Playing &&
+                        string.Equals(new string(info.Map), round.Map, StringComparison.OrdinalIgnoreCase);
                 }
 
                 // Unreal's level streams in for a moment, then it reports.
@@ -505,7 +550,9 @@ internal static unsafe class Probe
                 }
 
                 round.Frames++;
-                round.Ticks = adopted.Session.TicksRun;
+                round.Ticks = info.Ticks;
+                round.MainTicks = s_mainTicks - round.TicksAtStart;
+                round.SameSession &= sessionId == round.SessionId;
                 if (state == OnlineState.Match)
                 {
                     if (round.MatchSince < 0)
@@ -517,16 +564,28 @@ internal static unsafe class Probe
                     // Walk forward for a while: the local pawn moves by prediction and the server's corrections.
                     BridgeInput input = default;
                     input.Buttons[0] = (byte)(t - round.MatchSince is > 3.0 and < 9.0 ? 1 : 0);
-                    adopted.SetInput(in input);
+                    s_main.SetInput(&input);
 
-                    int count = adopted.GetPawns(pawns);
-                    round.Sample(pawns.AsSpan(0, count));
-                    BridgeView view = adopted.GetView();
-                    round.ViewValid |= view.Valid != 0;
-                    foreach (BridgePawn pawn in pawns.AsSpan(0, count))
+                    int count;
+                    fixed (BridgePawn* p = pawns)
                     {
-                        round.PoseBones = Math.Max(round.PoseBones, adopted.GetPawnPose(pawn.ActorId, bones));
+                        count = s_main.GetPawns(p, pawns.Length);
                     }
+
+                    round.Sample(pawns.AsSpan(0, count));
+                    BridgeView view;
+                    s_main.GetView(&view);
+                    round.ViewValid |= view.Valid != 0;
+                    round.HideLocalBody |= view.HideLocalBody != 0;
+                    fixed (BridgeBone* b = bones)
+                    {
+                        foreach (BridgePawn pawn in pawns.AsSpan(0, count))
+                        {
+                            round.PoseBones = Math.Max(round.PoseBones, s_main.GetPawnPose(pawn.ActorId, b, bones.Length));
+                        }
+                    }
+
+                    round.Features();
 
                     if (t >= nextReport)
                     {
@@ -578,7 +637,11 @@ internal static unsafe class Probe
         {
             (int moved, int others) = seen.Moved();
             Console.WriteLine($"round on '{seen.Map}': {seen.Pawns.Count} pawns seen, {moved} moved more than a metre ({others} of them other players, replicated from the server), view valid {seen.ViewValid}, pose bones {seen.PoseBones}");
+            Console.WriteLine($"   main table: session {seen.SessionId} remote {seen.Remote}, the same session all round {seen.SameSession}, Update reported {seen.MainTicks} of {seen.Ticks} client ticks, local body hidden at some point {seen.HideLocalBody}; teams of the pawns: {seen.Teams()}");
+            Console.WriteLine($"   features on the round: HUD valid {seen.HudValid} side {seen.HudSide}, {seen.HudMessages} HUD messages, {seen.Sounds} sound records, {seen.RawEvents} raw events, {seen.WorldActors} level actors, {seen.WorldLights} lights, {seen.Equipment} equipment rows");
             ok &= others > 0 && seen.ViewValid && seen.PoseBones > 0 && seen.MatchSince >= 0;
+            ok &= seen.Remote && seen.SameSession && seen.MainTicks > 0 && seen.TeamsRight() && seen.HudValid && seen.WorldActors > 0 &&
+                seen.Equipment > 0 && seen.RawEvents > 0;
         }
 
         ok &= rounds.Count == 2 && !string.Equals(rounds[0].Map, rounds[1].Map, StringComparison.OrdinalIgnoreCase);
@@ -587,13 +650,60 @@ internal static unsafe class Probe
             Console.WriteLine($"FAILED: rounds {rounds.Count}, results {results}, back in the lobby {backInLobby}");
         }
 
-        // The main table's Stop in the middle of the round (the player quit to the menu and Unreal only stopped its
-        // session): it disposes the adopted session. The visit must notice and leave the server, not sit there
-        // unticked until the server times the player out.
-        s_adopted?.Dispose();
+        // The main table's stop in the middle of the round (the player quit to the menu and Unreal only stopped its
+        // session). A stop addressed to another session must do nothing; the session's own stop ends it, and the
+        // visit must notice and leave the server, not sit there unticked until the server times the player out.
+        int current = s_main.GetSession(null);
+        int stale = s_main.StopSession(current + 1000);
+        int staleUpdate = s_main.UpdateSession(current + 1000);
+        bool stillThere = s_main.GetSession(null) == current && current != 0;
+        int stopped = s_main.StopSession(current);
         OnlineStatus left = Frame();
-        Console.WriteLine($"t={Now:F1} the main table stopped the round; state {(OnlineState)left.State}, round active {(left.Flags & OnlineStatusFlags.RoundActive) != 0}, players {left.PlayerCount}, chat waiting {left.ChatWaiting}");
-        return ok && left.State == (int)OnlineState.Idle && s_adopted is null;
+        Console.WriteLine($"t={Now:F1} StopSession for another id: {stale} (UpdateSession {staleUpdate}), session still there {stillThere}; StopSession({current}): {stopped}; state {(OnlineState)left.State}, round active {(left.Flags & OnlineStatusFlags.RoundActive) != 0}, players {left.PlayerCount}, chat waiting {left.ChatWaiting}, main state {(BridgeState)s_main.GetState()}");
+        return ok && stale == 0 && staleUpdate == -1 && stillThere && stopped == 1 && left.State == (int)OnlineState.Idle && s_adopted is null &&
+            s_main.GetState() == (int)BridgeState.Idle;
+    }
+
+    /// <summary>The feature tables on the session in the main slot, for <see cref="RoundSeen.Features"/>.</summary>
+    internal static void ReadFeatures(RoundSeen round)
+    {
+        HudState hud;
+        if (s_hud.GetState(&hud) != 0 || hud.Valid != 0)
+        {
+            round.HudValid |= hud.Valid != 0;
+            round.HudSide = hud.Side;
+        }
+
+        HudMessage* messages = stackalloc HudMessage[8];
+        int taken;
+        do
+        {
+            taken = s_hud.DrainMessages(messages, 8);
+            round.HudMessages += taken;
+        }
+        while (taken == 8);
+
+        BridgeSound* sounds = stackalloc BridgeSound[64];
+        do
+        {
+            taken = s_events.DrainSounds(sounds, 64);
+            round.Sounds += taken;
+        }
+        while (taken == 64);
+
+        BridgeSimEvent* events = stackalloc BridgeSimEvent[256];
+        do
+        {
+            taken = s_events.DrainEvents(events, 256);
+            round.RawEvents += taken;
+        }
+        while (taken == 256);
+
+        round.WorldActors = Math.Max(round.WorldActors, s_world.GetActors(null, 0));
+        BridgeWorldLight* lights = stackalloc BridgeWorldLight[256];
+        round.WorldLights = Math.Max(round.WorldLights, s_world.GetLights(lights, 256));
+        BridgeEquipment* equipment = stackalloc BridgeEquipment[32];
+        round.Equipment = Math.Max(round.Equipment, s_equipment.GetEquipment(equipment, 32));
     }
 
     // ---- 5. a second visit, and the server closing under it -----------------------------------------------------
@@ -694,9 +804,43 @@ internal sealed class RoundSeen
 {
     public string Map = string.Empty;
     public double Since, MatchSince = -1;
-    public bool Reported, ViewValid;
-    public int Frames, PoseBones;
+    public bool Reported, ViewValid, Remote, HideLocalBody, HudValid;
+    public bool SameSession = true;
+    public int Frames, PoseBones, SessionId, TicksAtStart, MainTicks, HudSide, HudMessages, Sounds, RawEvents, WorldActors, WorldLights, Equipment;
     public long Ticks;
+
+    /// <summary>The other tables read the same session: the HUD, the events, the level state and the equipment.</summary>
+    public void Features() => Probe.ReadFeatures(this);
+
+    /// <summary>"spy 0, merc 1, ..." for the pawns seen.</summary>
+    public string Teams()
+    {
+        var text = new System.Text.StringBuilder();
+        foreach (Track track in Pawns.Values)
+        {
+            text.Append(text.Length > 0 ? ", " : string.Empty).Append(track.Merc ? "merc " : "spy ").Append(track.Team);
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>Every merc is on team 1 and every spy on team 0, and both sides were seen (the bots fill both).</summary>
+    public bool TeamsRight()
+    {
+        bool spies = false, mercs = false;
+        foreach (Track track in Pawns.Values)
+        {
+            if (track.Team != (track.Merc ? 1 : 0))
+            {
+                return false;
+            }
+
+            spies |= !track.Merc;
+            mercs |= track.Merc;
+        }
+
+        return spies && mercs;
+    }
     public readonly Dictionary<int, Track> Pawns = new();
 
     /// <summary>Every frame: where each drawn pawn is, and how far it has gone.</summary>

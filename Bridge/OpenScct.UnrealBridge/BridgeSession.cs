@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using OpenScct.Core;
 using OpenScct.Core.Engine;
 using OpenScct.Game.SBase;
@@ -12,14 +13,55 @@ using OpenScctGame.Play.Session;
 
 namespace OpenScct.UnrealBridge;
 
+/// <summary>What <see cref="BridgeSession.StartLocal(LocalMatch)"/> hosts and joins.</summary>
+public sealed record LocalMatch
+{
+    /// <summary>The map's folder name (<c>svmap/&lt;Map&gt;</c> of the content).</summary>
+    public string Map { get; init; } = "AquaE";
+
+    /// <summary>Story, DiskHunt, Deathmatch or MercDeathMatch.</summary>
+    public string Mode { get; init; } = "Story";
+
+    public bool Merc { get; init; }
+
+    /// <summary>Server-side bots filling the other slots.</summary>
+    public int Bots { get; init; }
+
+    /// <summary>easy, normal, hard or expert.</summary>
+    public string Difficulty { get; init; } = "normal";
+
+    public string PlayerName { get; init; } = "Player";
+
+    /// <summary>The mercs carry OpenSCCT's sidearms.</summary>
+    public bool Sidearms { get; init; }
+
+    /// <summary>The mercs may pick OpenSCCT's additional rifles.</summary>
+    public bool Rifles { get; init; }
+
+    /// <summary>Practice rules instead of the map's own: no time limit, unlimited lives, 5 s respawn.</summary>
+    public bool OfflineRules { get; init; }
+}
+
 /// <summary>
-/// The one play session Unreal drives: a local match (the dedicated server's code on its own thread, with bots) that
-/// the local client joins. Unreal calls <see cref="Update"/> once a frame on its game thread and then reads the
-/// drawn state; nothing here is touched from another thread.
+/// The one play session Unreal drives, whichever kind it is: a local match (the dedicated server's code on its own
+/// thread, with bots, joined by the local client: <see cref="StartLocal(LocalMatch)"/>) or a round on a remote server
+/// (the online visit's connection: <see cref="FromRemote"/>). Both are the same <see cref="PlaySession"/> underneath,
+/// so pawns, poses, the view, input and every feature read them the same way.
+/// <para>Unreal calls <see cref="Update"/> once a frame on its game thread and then reads the drawn state; nothing
+/// here is touched from another thread.</para>
+/// <para>The order inside one client tick, which the features rely on:
+/// <list type="number">
+/// <item><see cref="BeforeTick"/>, before the tick's input is applied (the input mapper fills the input here);</item>
+/// <item>the play session applies the input and runs the queued exec commands;</item>
+/// <item>the handlers a feature added to <c>ClientSession.BeforeWorldTick</c> (what the commands raised is readable
+/// there and nowhere later);</item>
+/// <item>the world tick and the calc view;</item>
+/// <item>the pawns are snapshotted and posed, then <see cref="Ticked"/>, in the order the features were made.</item>
+/// </list></para>
 /// </summary>
 public sealed class BridgeSession : IDisposable
 {
-    public const int ApiVersion = 2;
+    public const int ApiVersion = 3;
 
     /// <summary>A view jump longer than this is drawn as a cut, not blended (as the Godot client).</summary>
     private const float ViewCutDistance = 128f;
@@ -27,19 +69,28 @@ public sealed class BridgeSession : IDisposable
     /// <summary>A pawn that moved farther than this in one tick was placed, not walked: no blend.</summary>
     private const float PawnCutDistanceSquared = 40000f;
 
+    private static int s_lastId;
+
     private readonly PlaySession _session;
     private readonly Dictionary<int, PawnSample> _previous = new();
     private readonly Dictionary<int, PawnSample> _current = new();
     private readonly List<int> _order = new();
     private readonly Dictionary<int, PawnPoser> _posers = new();
     private readonly List<int> _gone = new();
+    private readonly Dictionary<Type, object> _features = new();
+    private readonly List<object> _featureOrder = new();
+    private int _ticksUnread;
+    private bool _disposed;
 
     private BridgeSession(PlaySession session)
     {
         _session = session;
+        Id = Interlocked.Increment(ref s_lastId);
         _session.BeforeClientTick = (_, _) => BeforeTick?.Invoke();
         _session.AfterClientTick = (_, _) =>
         {
+            Ticks++;
+            _ticksUnread++;
             Snapshot();
             Ticked?.Invoke();
         };
@@ -55,50 +106,141 @@ public sealed class BridgeSession : IDisposable
     }
 
     /// <summary>Hosts <paramref name="map"/> locally and joins it. Blocks while the map loads.</summary>
-    public static BridgeSession StartLocal(string map, string mode, bool merc, int bots)
+    public static BridgeSession StartLocal(string map, string mode, bool merc, int bots) =>
+        StartLocal(new LocalMatch { Map = map, Mode = mode, Merc = merc, Bots = bots });
+
+    /// <summary>Hosts a local match and joins it. Blocks while the map loads.</summary>
+    public static BridgeSession StartLocal(LocalMatch match)
     {
+        ArgumentNullException.ThrowIfNull(match);
         var settings = new PlaySettings
         {
-            Map = map,
-            Mode = mode,
-            Side = merc ? PlaySide.Merc : PlaySide.Spy,
-            Bots = bots,
-            PlayerName = "Player",
+            Map = match.Map,
+            Mode = match.Mode,
+            Side = match.Merc ? PlaySide.Merc : PlaySide.Spy,
+            Bots = match.Bots,
+            Difficulty = match.Difficulty,
+            PlayerName = match.PlayerName,
+            Sidearms = match.Sidearms,
+            Rifles = match.Rifles,
+            OfflineRules = match.OfflineRules,
         }.ForLocalLaunch();
-        return new BridgeSession(new PlaySession(settings, new StopwatchClock()));
+        return Wrap(new PlaySession(settings, new StopwatchClock()));
     }
+
+    /// <summary>
+    /// Wraps a round on a remote server: the online visit's play session of that round (it has no host here and leaves
+    /// the connection to the visit when disposed). The visit keeps ticking the round on its own clock; this session's
+    /// <see cref="Update"/> then only finds the ticks it has not reported yet.
+    /// </summary>
+    public static BridgeSession FromRemote(PlaySession round)
+    {
+        ArgumentNullException.ThrowIfNull(round);
+        return Wrap(round);
+    }
+
+    /// <summary>
+    /// The play session is running by now (a local one has its server thread and bots): when the wrapper cannot be
+    /// made (a broken character file), the play session is stopped again instead of left ticking with no owner.
+    /// </summary>
+    private static BridgeSession Wrap(PlaySession play)
+    {
+        try
+        {
+            return new BridgeSession(play);
+        }
+        catch
+        {
+            play.BeforeClientTick = null;
+            play.AfterClientTick = null;
+            play.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// This session's number: unique in the process, never 0. Unreal keeps it to tell a new match from the one it
+    /// knows, and to address <c>StopSession</c> and <c>UpdateSession</c> to the session it started.
+    /// </summary>
+    public int Id { get; }
 
     public PlaySession Session => _session;
 
+    /// <summary>True for a round on a remote server, false for a local match.</summary>
+    public bool IsRemote => _session.IsRemote;
+
+    public bool IsDisposed => _disposed;
+
+    /// <summary>Client simulation ticks run so far.</summary>
+    public long Ticks { get; private set; }
+
+    /// <summary>The map's folder name.</summary>
+    public string Map => Path.GetFileName(_session.MapFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+
+    /// <summary>The local player's side: his pawn's once he has one, else the side the session was started for.</summary>
+    public bool LocalMerc => _session.LocalPawn is { } pawn ? pawn is SPAWNDEFENSE : _session.Settings.Side == PlaySide.Merc;
+
     /// <summary>
-    /// Raised on Unreal's game thread just before each client simulation tick (network calls that arrived since the
-    /// last tick are still readable here, e.g. <c>World.Events.Late</c>).
+    /// Raised on Unreal's game thread just before each client simulation tick, before the tick's input is applied
+    /// and before the queued exec commands run. What those commands raise is NOT readable here (it is on
+    /// <c>Session.Client.BeforeWorldTick</c>, for a handler added after the session was made).
     /// </summary>
     public event Action? BeforeTick;
 
-    /// <summary>Raised on Unreal's game thread after each client simulation tick, once the pawns are snapshotted.</summary>
+    /// <summary>
+    /// Raised on Unreal's game thread after each client simulation tick, once the pawns are snapshotted and posed.
+    /// Handlers run in the order they were added, which is the order the features were made.
+    /// </summary>
     public event Action? Ticked;
 
-    private readonly Dictionary<Type, object> _features = new();
+    /// <summary>Raised once when the session ends, after its features were disposed and before the play session stops.</summary>
+    public event Action? Ended;
 
     /// <summary>
     /// The per-session state of a bridge feature (events, HUD, devices...), made on first use. Features live in
-    /// their own files and keep their state here, so it ends with the session.
+    /// their own files and keep their state here, so it ends with the session: a feature that implements
+    /// <see cref="IDisposable"/> is disposed when the session is (the last made first), which is where it takes its
+    /// hooks off objects that outlive the session (a remote round's connection goes on to the results and the next
+    /// map).
     /// </summary>
     public T Feature<T>(Func<BridgeSession, T> create)
         where T : class
     {
         if (!_features.TryGetValue(typeof(T), out object? feature))
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             feature = create(this);
             _features[typeof(T)] = feature;
+            _featureOrder.Add(feature);
         }
 
         return (T)feature;
     }
 
-    /// <summary>Runs the simulation ticks that are due. Returns how many ran.</summary>
-    public int Update() => _session.Update();
+    /// <summary>
+    /// Runs the simulation ticks that are due, and returns how many client ticks ran since the last call. For a
+    /// remote round the online visit runs the ticks (on its own Update, earlier in the frame); they are counted
+    /// here all the same, so "a tick happened" reads the same for both kinds of session.
+    /// </summary>
+    public int Update()
+    {
+        if (_disposed || _session.IsStopped)
+        {
+            return 0;
+        }
+
+        if (!_session.IsRemote)
+        {
+            // The frame drawn since the last call, as the Godot client's PlayRoot reports it after drawing: it sets
+            // the time the player's shots are traced at (lag compensation). The online visit reports its rounds.
+            _session.Client.ReportRenderedFrame(_session.Alpha);
+        }
+
+        _session.Update();
+        int ticks = _ticksUnread;
+        _ticksUnread = 0;
+        return ticks;
+    }
 
     public float Alpha => _session.Alpha;
 
@@ -121,10 +263,20 @@ public sealed class BridgeSession : IDisposable
     /// <summary>Queues an exec command (Jump, Fire, SwitchHeadset...) for the next tick.</summary>
     public void Command(string name, int arg) => _session.Input.Commands.Add(new InputCommand(name, arg));
 
+    /// <summary>
+    /// True when the local pawn is seen from its own eyes, so its body is not drawn in the main view (only its
+    /// shadow): the Godot client's rule (game/Scripts/Play/PlayRoot.cs DrawViews, "firstPerson"): no free camera, and
+    /// either no behind view or the spy's first-person view.
+    /// </summary>
+    public bool HideLocalBody =>
+        _session.LocalController is { FreeCameraFlying: 0 } pc && (!pc.bBehindView || _session.View.SpyFirstPerson) &&
+        _session.LocalPawn is not null;
+
     /// <summary>Writes the pawns as drawn this frame. Returns the count written.</summary>
     public int GetPawns(Span<BridgePawn> pawns)
     {
         float alpha = Alpha;
+        bool hideLocal = HideLocalBody;
         int count = 0;
         foreach (int id in _order)
         {
@@ -147,14 +299,15 @@ public sealed class BridgeSession : IDisposable
                 Kind = now.Merc ? 1 : 0,
                 Team = now.Team,
                 Health = now.Health,
-                Flags = (now.Visible ? BridgePawnFlags.Visible : 0) | (now.Local ? BridgePawnFlags.Local : 0),
+                Flags = (now.Visible ? BridgePawnFlags.Visible : 0) | (now.Local ? BridgePawnFlags.Local : 0) |
+                    (now.Local && hideLocal ? BridgePawnFlags.FirstPerson : 0),
                 X = location.X,
                 Y = location.Y,
                 Z = location.Z,
                 PrePivotX = prePivot.X,
                 PrePivotY = prePivot.Y,
                 PrePivotZ = prePivot.Z,
-                Yaw = LerpAngle(from.Yaw, now.Yaw, alpha),
+                Yaw = Wrap180(LerpAngle(from.Yaw, now.Yaw, alpha)),
                 CollisionRadius = now.Radius,
                 CollisionHeight = now.Height,
                 AimYaw = from.AimYaw + ((now.AimYaw - from.AimYaw) * alpha),
@@ -220,6 +373,11 @@ public sealed class BridgeSession : IDisposable
     /// <summary>The poser of a pawn (for the probe), or null.</summary>
     public PawnPoser? PoserOf(int actorId) => _posers.TryGetValue(actorId, out PawnPoser? poser) ? poser : null;
 
+    /// <summary>
+    /// The view between the last two ticks, with no look-ahead: the mouse turn the simulation has not taken yet is
+    /// not in it. The controls' own GetView (Controls/ControlsFeature.cs) is the camera to draw; this one stays for
+    /// callers without the controls table and carries <see cref="BridgeView.HideLocalBody"/>.
+    /// </summary>
     public BridgeView GetView()
     {
         ViewSample now = _session.View;
@@ -243,16 +401,67 @@ public sealed class BridgeSession : IDisposable
             X = location.X,
             Y = location.Y,
             Z = location.Z,
-            Pitch = LerpAngle(Degrees(from.Rotation.Pitch), Degrees(now.Rotation.Pitch), alpha),
-            Yaw = LerpAngle(Degrees(from.Rotation.Yaw), Degrees(now.Rotation.Yaw), alpha),
-            Roll = LerpAngle(Degrees(from.Rotation.Roll), Degrees(now.Rotation.Roll), alpha),
+            Pitch = Wrap180(LerpAngle(Degrees(from.Rotation.Pitch), Degrees(now.Rotation.Pitch), alpha)),
+            Yaw = Wrap180(LerpAngle(Degrees(from.Rotation.Yaw), Degrees(now.Rotation.Yaw), alpha)),
+            Roll = Wrap180(LerpAngle(Degrees(from.Rotation.Roll), Degrees(now.Rotation.Roll), alpha)),
             Fov = from.Fov + (now.Fov - from.Fov) * alpha,
             Valid = 1,
             SpyFirstPerson = now.SpyFirstPerson ? 1 : 0,
+            HideLocalBody = HideLocalBody ? 1 : 0,
         };
     }
 
-    public void Dispose() => _session.Dispose();
+    /// <summary>
+    /// Ends the session: the features are disposed (the last made first), then the play session (a local match stops
+    /// its server thread and bots; a remote round only stops, its connection stays with the online visit). Safe to
+    /// call twice. A feature that throws while it is disposed does not keep the rest from ending; the first such
+    /// error is thrown once everything is stopped.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        Exception? first = null;
+        for (int i = _featureOrder.Count - 1; i >= 0; i--)
+        {
+            if (_featureOrder[i] is IDisposable feature)
+            {
+                try
+                {
+                    feature.Dispose();
+                }
+                catch (Exception e)
+                {
+                    first ??= e;
+                }
+            }
+        }
+
+        try
+        {
+            Ended?.Invoke();
+        }
+        catch (Exception e)
+        {
+            first ??= e;
+        }
+
+        BeforeTick = null;
+        Ticked = null;
+        Ended = null;
+        _session.BeforeClientTick = null;
+        _session.AfterClientTick = null;
+        _session.Dispose();
+        _posers.Clear();
+        if (first is not null)
+        {
+            throw new InvalidOperationException("A bridge feature failed while the session ended: " + first.Message, first);
+        }
+    }
 
     private void Snapshot()
     {
@@ -279,7 +488,7 @@ public sealed class BridgeSession : IDisposable
                 Yaw = Degrees(pawn.Rotation.Yaw),
                 ResetId = pawn.NetworkResetId,
                 Merc = pawn is SPAWNDEFENSE,
-                Team = SGameInfo.TeamIndexOf(pawn.Controller),
+                Team = TeamOf(pawn),
                 Health = pawn.Health,
                 Visible = !pawn.bHidden && (pawn.Role != ENetRole.ROLE_SimulatedProxy || pawn.NetworkPoseReady),
                 Local = ReferenceEquals(pawn, local),
@@ -307,6 +516,13 @@ public sealed class BridgeSession : IDisposable
 
         _gone.Clear();
     }
+
+    /// <summary>
+    /// A pawn's team on a client: the team of its replicated player info, and its kind while that has not arrived
+    /// (as the Godot client's game/Scripts/Play/Demo/DemoXRayView.cs). The controller cannot be asked: another
+    /// player's pawn has none on a client, and <c>SGameInfo.TeamIndexOf(null)</c> is 0 for everyone.
+    /// </summary>
+    private static int TeamOf(SBasePawn pawn) => pawn.PlayerReplicationInfo?.Team?.TeamIndex ?? (pawn is SPAWNDEFENSE ? 1 : 0);
 
     /// <summary>The pawn's poser, made on its first tick (a respawn is a new pawn and starts a new pose).</summary>
     private PawnPoser? PoserFor(SBasePawn pawn)
@@ -347,6 +563,13 @@ public sealed class BridgeSession : IDisposable
         }
 
         return a + delta * t;
+    }
+
+    /// <summary>An angle in degrees brought into -180 to 180 (the simulation's rotators wind up past a turn).</summary>
+    private static float Wrap180(float degrees)
+    {
+        degrees %= 360f;
+        return degrees > 180f ? degrees - 360f : degrees < -180f ? degrees + 360f : degrees;
     }
 
     private static float DistanceSquared(FVector a, FVector b)

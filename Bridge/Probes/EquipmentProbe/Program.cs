@@ -159,9 +159,9 @@ internal static unsafe class Probe
     {
         BridgeApi bridge = default;
         EquipmentApi api = default;
-        delegate* unmanaged<BridgeApi*, int> getBridge = &Exports.GetApi;
+        delegate* unmanaged<BridgeApi*, int, int> getBridge = &Exports.GetApi;
         delegate* unmanaged<EquipmentApi*, int> getApi = &EquipmentExports.GetApi;
-        getBridge(&bridge);
+        getBridge(&bridge, sizeof(BridgeApi));
         getApi(&api);
         Console.WriteLine();
         Console.WriteLine($"==== {map} as a merc through the exported tables only");

@@ -710,7 +710,7 @@ internal static unsafe class Tables
     {
         BridgeApi bridge;
         ControlsApi controls;
-        int bridgeVersion = ((delegate* unmanaged<BridgeApi*, int>)&Exports.GetApi)(&bridge);
+        int bridgeVersion = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApi)(&bridge, sizeof(BridgeApi));
         int version = ((delegate* unmanaged<ControlsApi*, int>)&ControlsExports.GetApi)(&controls);
         char* text = stackalloc char[256];
 

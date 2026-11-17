@@ -18,10 +18,12 @@ namespace OpenScct.UnrealBridge.Equipment;
 /// the First* clips. The guns others see (M160, Hk81, BM401, p190) have a small skeleton rooted at the body bone
 /// ("corps"...) with RotOrigin 0: the root is the grip, +X of the actor runs along the barrel. Every gun has the
 /// muzzle bone "FX" and most the casing bone "FX_DOUILLE".</para>
-/// <para>Not listed: a file the pose code cannot read (<see cref="EquipmentModel.FailureOf"/> says why). Today those
-/// are the first-person pistols of OpenScctSidearms (automatic_first, desert_eagle_first, magnum44_first,
-/// suppressed_first, unsuppressed_first, arms_base): their clips animate scene nodes outside the skin (Root, pistol,
-/// hammer, trigger, shell, stopper), which <see cref="GlbCharacter"/> refuses.</para>
+/// <para>Not listed: a file the pose code cannot read (<see cref="EquipmentModel.FailureOf"/> says why); none in
+/// today's content. The first-person pistols of OpenScctSidearms (automatic_first, desert_eagle_first,
+/// magnum44_first, suppressed_first, unsuppressed_first, arms_base) have clips that move scene nodes outside the
+/// skin (Root, pistol, hammer, trigger, shell, stopper): <see cref="GlbCharacter"/> lists those nodes as bones after
+/// the skin's joints, so their bone count is larger than their joint count (<see cref="GlbCharacter.JointCount"/>)
+/// and a joint can have a parent with a higher index.</para>
 /// </summary>
 public static class EquipmentCatalog
 {

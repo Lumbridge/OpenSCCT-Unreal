@@ -203,7 +203,7 @@ public sealed class GlbClip
 
 /// <summary>
 /// A character file (<c>shared/chars/&lt;Package&gt;/&lt;Mesh&gt;.glb</c>) as the pose build needs it: the skin's bones in
-/// joint order with their rest pose, the clips by sequence name and the mesh placement the converter wrote in
+/// joint order (and after them any node a clip moves, see <see cref="BoneNames"/>) with their rest pose, the clips by sequence name and the mesh placement the converter wrote in
 /// <c>extras.svmap</c>. Everything is in the file's own space (metres, Y up, right-handed). Read once per path
 /// (port of the parts of game/Scripts/Render/Characters/SkeletalModel.cs that do not draw).
 /// </summary>
@@ -261,6 +261,10 @@ public sealed class GlbCharacter
             joints.Add(joint.GetInt32());
         }
 
+        JointCount = joints.Count;
+        root.TryGetProperty("animations", out JsonElement animations);
+        AddExtraBones(nodes, parentNode, boneOfNode, joints, animations);
+
         int count = joints.Count;
         BoneNames = new string[count];
         Parents = new int[count];
@@ -272,12 +276,13 @@ public sealed class GlbCharacter
             JsonElement node = nodes[joints[b]];
             if (node.TryGetProperty("matrix", out _))
             {
-                throw new InvalidDataException($"{path}: joint {b} has a matrix; the pose build needs translation, rotation and scale.");
+                throw new InvalidDataException($"{path}: bone {b} has a matrix; the pose build needs translation, rotation and scale.");
             }
 
             BoneNames[b] = node.TryGetProperty("name", out JsonElement name) ? name.GetString() ?? "" : "";
-            _bones[BoneNames[b]] = b;
-            // A joint under a node that is not a joint is a root: the converter writes the skeleton at the scene's top.
+            // Two nodes can share a name once nodes outside the skin count as bones: the first (a skin joint) keeps it.
+            _bones.TryAdd(BoneNames[b], b);
+            // A bone under a node that is not a bone is a root: the converter writes the skeleton at the scene's top.
             Parents[b] = parentNode[joints[b]] >= 0 ? boneOfNode[parentNode[joints[b]]] : -1;
             RestPosition[b] = node.TryGetProperty("translation", out JsonElement t) ? Vector3Of(t) : Vector3.Zero;
             RestRotation[b] = node.TryGetProperty("rotation", out JsonElement r)
@@ -285,6 +290,24 @@ public sealed class GlbCharacter
                 : Quaternion.Identity;
             RestScale[b] = node.TryGetProperty("scale", out JsonElement s) ? Vector3Of(s) : Vector3.One;
         }
+
+        // The nodes above the skeleton: up from the first joint to its topmost bone, then every node over that.
+        Xform frame = Xform.Identity;
+        if (count > 0)
+        {
+            int top = joints[0];
+            while (parentNode[top] >= 0 && boneOfNode[parentNode[top]] >= 0)
+            {
+                top = parentNode[top];
+            }
+
+            for (int n = parentNode[top]; n >= 0; n = parentNode[n])
+            {
+                frame = NodeTransform(nodes[n]) * frame;
+            }
+        }
+
+        SkeletonFrame = frame;
 
         if (root.TryGetProperty("extras", out JsonElement extras) && extras.TryGetProperty("svmap", out JsonElement sv))
         {
@@ -299,16 +322,122 @@ public sealed class GlbCharacter
             }
         }
 
-        if (root.TryGetProperty("animations", out JsonElement animations))
+        if (animations.ValueKind == JsonValueKind.Array)
         {
             ReadClips(animations, boneOfNode);
         }
     }
 
+    /// <summary>
+    /// Adds the bones the skin does not list to <paramref name="joints"/>, after the skin's own: every node a clip
+    /// moves (OpenSCCT's own first-person pistols animate "Root" above the skeleton and "pistol", "hammer", "trigger"
+    /// inside it), and every node between two bones, so each bone's chain up to its topmost bone is unbroken. The
+    /// Godot client gets the same from its glTF import, which makes bones of such nodes. They are added in node
+    /// order, so the bone order of a file never changes; an added bone can have a higher index than its children.
+    /// </summary>
+    private static void AddExtraBones(List<JsonElement> nodes, int[] parentNode, int[] boneOfNode, List<int> joints, JsonElement animations)
+    {
+        var extra = new bool[nodes.Count];
+        bool any = false;
+        if (animations.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement animation in animations.EnumerateArray())
+            {
+                if (!animation.TryGetProperty("channels", out JsonElement channels))
+                {
+                    continue;
+                }
+
+                foreach (JsonElement channel in channels.EnumerateArray())
+                {
+                    if (channel.TryGetProperty("target", out JsonElement target) && target.TryGetProperty("node", out JsonElement node) &&
+                        target.TryGetProperty("path", out JsonElement path) && path.GetString() != "weights" &&
+                        node.GetInt32() is int n && n >= 0 && n < nodes.Count && boneOfNode[n] < 0)
+                    {
+                        extra[n] = true;
+                        any = true;
+                    }
+                }
+            }
+        }
+
+        if (!any)
+        {
+            return;
+        }
+
+        // The nodes between a bone and the highest bone over it.
+        var between = new bool[nodes.Count];
+        for (int n = 0; n < nodes.Count; n++)
+        {
+            if (boneOfNode[n] < 0 && !extra[n])
+            {
+                continue;
+            }
+
+            int highest = -1;
+            for (int up = parentNode[n]; up >= 0; up = parentNode[up])
+            {
+                if (boneOfNode[up] >= 0 || extra[up])
+                {
+                    highest = up;
+                }
+            }
+
+            for (int up = parentNode[n]; highest >= 0 && up >= 0 && up != highest; up = parentNode[up])
+            {
+                between[up] = true;
+            }
+        }
+
+        for (int n = 0; n < nodes.Count; n++)
+        {
+            if (boneOfNode[n] < 0 && (extra[n] || between[n]))
+            {
+                boneOfNode[n] = joints.Count;
+                joints.Add(n);
+            }
+        }
+    }
+
+    private static Xform NodeTransform(JsonElement node)
+    {
+        if (node.TryGetProperty("matrix", out JsonElement m))
+        {
+            // glTF matrices are column-major: three basis columns, then the translation.
+            return new Xform(
+                new Basis3(
+                    new Vector3(m[0].GetSingle(), m[1].GetSingle(), m[2].GetSingle()),
+                    new Vector3(m[4].GetSingle(), m[5].GetSingle(), m[6].GetSingle()),
+                    new Vector3(m[8].GetSingle(), m[9].GetSingle(), m[10].GetSingle())),
+                new Vector3(m[12].GetSingle(), m[13].GetSingle(), m[14].GetSingle()));
+        }
+
+        Vector3 position = node.TryGetProperty("translation", out JsonElement t) ? Vector3Of(t) : Vector3.Zero;
+        Quaternion rotation = node.TryGetProperty("rotation", out JsonElement r)
+            ? Quaternion.Normalize(new Quaternion(r[0].GetSingle(), r[1].GetSingle(), r[2].GetSingle(), r[3].GetSingle()))
+            : Quaternion.Identity;
+        Vector3 scale = node.TryGetProperty("scale", out JsonElement s) ? Vector3Of(s) : Vector3.One;
+        return Xform.FromTrs(position, rotation, scale);
+    }
+
     public string Path { get; }
 
-    /// <summary>The bones in the skin's joint order (the order of the package's bones, which Pawn.BoneMirrors counts).</summary>
+    /// <summary>
+    /// The bones: the skin's joints in joint order (the order of the package's bones, which Pawn.BoneMirrors counts),
+    /// then, from <see cref="JointCount"/> on, the nodes outside the skin that count as bones because a clip moves
+    /// them or they sit between two bones. The converter's own files have none of those.
+    /// </summary>
     public string[] BoneNames { get; }
+
+    /// <summary>How many of the bones are the skin's joints; the bones after them skin nothing and only carry transforms.</summary>
+    public int JointCount { get; }
+
+    /// <summary>
+    /// The transform of the nodes above the skeleton's topmost bone, at rest (identity for the converter's own files,
+    /// which put the skeleton at the scene's top; OpenSCCT's own pistols keep theirs under placed nodes).
+    /// </summary>
+    public Xform SkeletonFrame { get; }
 
     /// <summary>Each bone's parent in the same order, -1 for a root.</summary>
     public int[] Parents { get; }
@@ -334,6 +463,35 @@ public sealed class GlbCharacter
 
     /// <summary>The clip of a sequence by name (case does not matter, as UE names), or null.</summary>
     public GlbClip? Find(string name) => _clips.TryGetValue(name, out GlbClip? clip) ? clip : null;
+
+    /// <summary>The names of the file's clips.</summary>
+    public IReadOnlyCollection<string> ClipNames => _clips.Keys;
+
+    /// <summary>
+    /// Reads the keys of every clip now instead of on each clip's first use (for a file with few clips whose first
+    /// use would otherwise fall in a drawn frame: a view model's shot, reload or draw). A clip that cannot be read is
+    /// left for its first use to report. Returns how many clips are read.
+    /// </summary>
+    public int PreloadClips()
+    {
+        int read = 0;
+        lock (_clips)
+        {
+            foreach (GlbClip clip in _clips.Values)
+            {
+                try
+                {
+                    _ = clip.Tracks;
+                    read++;
+                }
+                catch (InvalidDataException)
+                {
+                }
+            }
+        }
+
+        return read;
+    }
 
     /// <summary>The character of <paramref name="path"/>, read on the first call.</summary>
     public static GlbCharacter Load(string path)
@@ -441,10 +599,11 @@ public sealed class GlbCharacter
                     "scale" => GlbTrackType.Scale,
                     _ => throw new InvalidDataException($"{Path}: {name}: unsupported animation path '{path}'."),
                 };
-                int bone = boneOfNode[node.GetInt32()];
+                int targetNode = node.GetInt32();
+                int bone = targetNode >= 0 && targetNode < boneOfNode.Length ? boneOfNode[targetNode] : -1;
                 if (bone < 0 || !seen.Add((bone, type)))
                 {
-                    throw new InvalidDataException($"{Path}: {name}: a track of a node that is not a bone, or a second {path} track of one bone.");
+                    throw new InvalidDataException($"{Path}: {name}: a track of a node that does not exist, or a second {path} track of one bone.");
                 }
 
                 (int input, int output, string interpolation) = samplers[channel.GetProperty("sampler").GetInt32()];
