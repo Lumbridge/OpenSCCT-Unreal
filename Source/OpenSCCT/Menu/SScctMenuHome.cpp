@@ -67,6 +67,9 @@ namespace
 			Entry(TEXT("Hub"), TEXT("Meet other players between matches"),
 				TEXT("The hubs the master lists, joining one by its address, or hosting a hub on this PC."),
 				[this] { Host.Open(TEXT("hub")); });
+			Entry(TEXT("Account"), TEXT("Your name, rank and career"),
+				TEXT("Sign in or out, claim or change the name the servers show, see your rank, experience and career, prestige, and choose an emblem and a title."),
+				[this] { Host.Open(TEXT("account")); });
 			Entry(ScctUi::GameText(TEXT("All_Settings"), TEXT("TitlePage"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
 				TEXT("Everything you can set: the picture, the sound, the mouse and the controller, every key of both sides, and your name."),
 				[this] { Host.Open(TEXT("settings")); });

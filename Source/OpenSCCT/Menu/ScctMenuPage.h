@@ -6,6 +6,7 @@
 
 class SScctDialogLayer;
 class UScctOnlineSubsystem;
+struct FScctSocialPasswordPrompt;
 
 /**
  * What a page may ask of whatever shows it: the front end (Menu/SScctFrontEnd.h) or the match overlay
@@ -84,6 +85,10 @@ namespace ScctMenuPages
 	/** Create Session (Menu/SScctHostPage.h) and the hub list (Menu/SScctHubPage.h): Menu/SScctMenuHostHub.cpp. */
 	TSharedRef<SScctMenuPage> MakeHostGame(const FScctMenuHost& Host);
 	TSharedRef<SScctMenuPage> MakeHub(const FScctMenuHost& Host);
+
+	/** The Account page (Menu/SScctAccountPage.h) and a friend's join's password page: Menu/SScctMenuSocial.cpp. */
+	TSharedRef<SScctMenuPage> MakeAccount(const FScctMenuHost& Host);
+	TSharedRef<SScctMenuPage> MakeJoinPassword(const FScctMenuHost& Host, const FScctSocialPasswordPrompt& Prompt);
 }
 
 namespace ScctUi
