@@ -1,4 +1,5 @@
 #include "Menu/SScctBrightnessPage.h"
+#include "Menu/ScctMenuNav.h"
 
 #include "Brushes/SlateColorBrush.h"
 #include "Engine/Engine.h"
@@ -235,7 +236,7 @@ void SScctBrightnessPage::Tick(const FGeometry& AllottedGeometry, const double I
 FReply SScctBrightnessPage::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
 	const FKey Key = InKeyEvent.GetKey();
-	if (Key == EKeys::Escape || Key == EKeys::Enter || Key == EKeys::Gamepad_FaceButton_Right)
+	if (ScctMenuNav::IsBackKey(Key) || Key == EKeys::Enter || Key == EKeys::Gamepad_FaceButton_Bottom)
 	{
 		Close();
 		return FReply::Handled();

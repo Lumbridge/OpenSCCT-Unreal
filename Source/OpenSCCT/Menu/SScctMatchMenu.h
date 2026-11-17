@@ -27,15 +27,25 @@ class UWorld;
  *             resign question is taken back once resigning is no longer allowed, and the menu takes no close key in
  *             its first half second (SSMenu_LANMainPage)
  *   SETTINGS  Menu/SScctSettingsPanel.h, as in the front end
- *   RESULTS   the winner and every player's score: online from the server's results, offline from the HUD's
- *             scoreboard once the round ended. Shown without taking the mouse while the menu is closed; offline it
- *             opens the menu (Play again, Main menu)
+ *   RESULTS   YOU WIN / YOU LOSE from the side the local player played (online the player's own results line: a Revenge game
+ *             swaps the sides), the winner and every player's score: online from the server's results with the
+ *             objectives and who left early (Runtime/ScctRoundApi.h), offline from the HUD's scoreboard once the
+ *             round ended. They open the menu when they come: offline Play again, Switch team and Main menu; online
+ *             the games left in the series and the server's countdown, who the next game waits for, the personal
+ *             demo's state, and Next (ready for the next game, or for the lobby), Back to lobby (the player who
+ *             controls the session: everyone, at once) and Leave (asked again, with a warning while the demo is
+ *             still being saved). The menu closes again when the visit moves on.
  *
  * UScctMatchMenuWidget (Menu/ScctMatchMenuWidget.cpp) holds it with the visit's banner; AScctGameMode opens and
  * closes it. Unattended runs drive it with -ScctMatchMenu=S and -ScctMenuDo (pages "pause", "settings/<tab>",
  * "results", "gear", "map", "help"), and -ScctMatchMenuAct=<entry>[,yes] presses a pause entry a second after the
  * menu first opens (Gear, SwitchTeam, Map, Options, Help, Resign, Lobby, Leave, Quit, Resume) and answers its question
- * yes; the log has the entries, each press, question and answer ("ScctMatchMenu: ...").
+ * yes; the log has the entries, each press, question and answer ("ScctMatchMenu: ..."). The results are driven with:
+ *   -ScctResultsAction=next|lobby|leave|rematch|menu   press that button S seconds after the results showed (once
+ *                                                      a run), through the same code a click runs
+ *   -ScctResultsActionAfter=S                          (default 3)
+ *   -ScctEndMatch=S                                    S seconds into a local match, run its clock out on its server
+ *                                                      (Runtime/ScctRoundApi.h EndLocalRound), so it ends by time
  */
 class SScctMatchMenu : public SCompoundWidget
 {
@@ -91,6 +101,12 @@ private:
 
 	bool ReadResults(int32& OutWinner, FString& OutReason, TArray<TArray<FString>>& OutRows, TArray<int32>& OutTeams, TArray<bool>& OutLocal) const;
 	void Restart(bool bSwapSide);
+	int32 GetResultsLocalTeam() const;
+	void LogResults() const;
+	void ResultsNext();
+	void ResultsToLobby();
+	void ResultsAskLeave();
+	void RunResultsUnattended();
 	FString GetMapId() const;
 	bool IsMercLocal() const;
 	bool CanChangeSide() const;
@@ -143,7 +159,16 @@ private:
 	EView View = EView::Pause;
 	bool bOpen = false;
 	bool bResultsReady = false;
-	bool bOfflineResultsOpened = false;
+	/** The results opened the menu (it closes with them online). */
+	bool bResultsOpenedMenu = false;
+	float ResultsShownFor = 0.0f;
+	float LevelTime = 0.0f;
+
+	// Unattended.
+	FString ResultsAction;
+	float ResultsActionAfter = 3.0f;
+	bool bResultsActionDone = false;
+	float EndMatchAt = -1.0f;
 	int32 ResultsRevision = -1;
 	float Shown = 0.0f;
 };

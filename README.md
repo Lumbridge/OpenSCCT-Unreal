@@ -92,6 +92,10 @@ out as a .NET install root: copy the contents of a .NET 10 runtime zip there and
 installed), the `DOTNET_ROOT` variable, `Program Files\dotnet`. The converted content folder is not staged:
 it is the player's own.
 
+`Tools\Package-Release.ps1` makes a release: a Shipping build of the `OpenSCCTUnreal` target, with the bridge and
+a private .NET runtime, zipped with its checksums and the launcher handshake. Nothing under `/Game/Imported` is
+cooked. `docs/RELEASING.md` has the procedure.
+
 ## Content rule
 
 Original game content (maps, textures, meshes, sounds, animations, text) is never committed here, as in

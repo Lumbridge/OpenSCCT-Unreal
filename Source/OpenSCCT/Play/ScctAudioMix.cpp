@@ -11,6 +11,7 @@
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
 #include "Menu/ScctUserSettings.h"
+#include "Play/ScctAudioSubsystem.h"
 #include "Sound/AudioSettings.h"
 #include "Sound/SoundClass.h"
 #include "Sound/SoundSubmix.h"
@@ -181,6 +182,10 @@ void UScctAudioMix::Initialize(FSubsystemCollectionBase& Collection)
 		}
 	}
 	bLogPeaks = FParse::Param(FCommandLine::Get(), TEXT("ScctAudioPeaks"));
+
+	// The volumes are the user settings'; only "Sound through walls", which nothing else holds, is a registry option
+	// (shown at the end of the settings page's Audio tab).
+	UScctAudioSubsystem::RegisterAcousticSettings();
 
 	CreateObjects();
 	SettingsHandle = UScctUserSettings::Get()->OnApplied.AddUObject(this, &UScctAudioMix::HandleSettingsApplied);

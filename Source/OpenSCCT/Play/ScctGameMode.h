@@ -84,6 +84,9 @@ private:
 	/** The level was opened for the online visit's round. */
 	bool bOnline = false;
 
+	/** The level plays a demo (Demo/ScctDemoPlayback.h): no match, no match menu; the playback bar has the input. */
+	bool bDemo = false;
+
 	UPROPERTY(Transient)
 	TObjectPtr<UScctMatchMenuWidget> MatchMenu;
 

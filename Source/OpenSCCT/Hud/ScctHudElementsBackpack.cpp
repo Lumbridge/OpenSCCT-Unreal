@@ -24,7 +24,7 @@ namespace
 	constexpr float BackpackTitleHeight = 36.0f;
 
 	/** The icons: this many units square, their centres this far from the diamond's centre. */
-	constexpr float IconSize = 34.0f;
+	constexpr float BackpackIconSize = 34.0f;
 	constexpr float BackpackRowSpread = 30.0f;
 
 	/** Ico1..Ico4 of the original: top, left, right, bottom. */
@@ -59,7 +59,7 @@ namespace
 				continue;
 			}
 			const FVector2f At = Centre + RowOffsets[Row.Row] * BackpackRowSpread;
-			const FBox2f Icon(At - FVector2f(IconSize * 0.5f), At + FVector2f(IconSize * 0.5f));
+			const FBox2f Icon(At - FVector2f(BackpackIconSize * 0.5f), At + FVector2f(BackpackIconSize * 0.5f));
 			if (const UScctHudTextures::FEntry* Texture = Row.Texture[0] != 0 ? UScctHudTextures::Find(Row.Package, Row.Texture) : nullptr)
 			{
 				// The original draws the icons at half opacity; a little more here, over the glass.

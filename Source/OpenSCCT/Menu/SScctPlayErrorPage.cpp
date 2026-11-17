@@ -1,4 +1,5 @@
 #include "Menu/SScctPlayErrorPage.h"
+#include "Menu/ScctMenuNav.h"
 
 #include "Brushes/SlateColorBrush.h"
 #include "Framework/Application/SlateApplication.h"
@@ -138,7 +139,7 @@ FReply SScctPlayErrorPage::OnLeaveClicked()
 
 FReply SScctPlayErrorPage::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
-	if (InKeyEvent.GetKey() == EKeys::Escape || InKeyEvent.GetKey() == EKeys::Gamepad_FaceButton_Right)
+	if (ScctMenuNav::IsBackKey(InKeyEvent.GetKey()))
 	{
 		Leave();
 		return FReply::Handled();

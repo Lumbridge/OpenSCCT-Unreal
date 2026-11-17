@@ -2,10 +2,15 @@
 
 #include "CoreMinimal.h"
 #include "OpenSCCT.h"
+#include "Runtime/ScctBrowserApi.h"
 #include "Runtime/ScctAccountApi.h"
+#include "Runtime/ScctAcousticApi.h"
 #include "Runtime/ScctAudioCheckApi.h"
+#include "Runtime/ScctAudioViewApi.h"
+#include "Runtime/ScctContentApi.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctDemoApi.h"
+#include "Runtime/ScctDemoPlayApi.h"
 #include "Runtime/ScctEquipmentApi.h"
 #include "Runtime/ScctEventsApi.h"
 #include "Runtime/ScctFlicFlocApi.h"
@@ -17,14 +22,19 @@
 #include "Runtime/ScctHubPadsApi.h"
 #include "Runtime/ScctHubSocialApi.h"
 #include "Runtime/ScctHudApi.h"
+#include "Runtime/ScctLobbyApi.h"
+#include "Runtime/ScctMapsApi.h"
 #include "Runtime/ScctMenuApi.h"
 #include "Runtime/ScctMarkSurfaceApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Runtime/ScctRejoinApi.h"
+#include "Runtime/ScctRoundApi.h"
 #include "Runtime/ScctPawnLookApi.h"
 #include "Runtime/ScctPoseAimApi.h"
 #include "Runtime/ScctSocialApi.h"
 #include "Runtime/ScctPlayApi.h"
 #include "Runtime/ScctProjectionsApi.h"
+#include "Runtime/ScctReverbRoomApi.h"
 #include "Runtime/ScctSmokeApi.h"
 #include "Runtime/ScctSoftBodyApi.h"
 #include "Runtime/ScctVisionApi.h"
@@ -32,7 +42,9 @@
 #include "Runtime/ScctWorldApi.h"
 #include "Runtime/ScctWorldEmitterApi.h"
 #include "Test/ScctGrabAreaApi.h"
+#include "Test/ScctInspectApi.h"
 #include "Test/ScctLessonApi.h"
+#include "Test/ScctTestApi.h"
 
 // The bridge's feature tables by their C++ type: which bridge class hands each one over and which version the
 // header here mirrors. A feature subsystem asks for its table like this, at any time and as often as it likes
@@ -53,10 +65,15 @@ struct TScctFeatureInfo;
 		static constexpr int32 Version = VersionConstant; \
 	}
 
+SCCT_FEATURE_TABLE(FScctBrowserApi, "BrowserExports", ScctBrowserApiVersion);
 SCCT_FEATURE_TABLE(FScctAccountApi, "AccountExports", ScctAccountApiVersion);
+SCCT_FEATURE_TABLE(FScctAcousticApi, "AcousticExports", ScctAcousticApiVersion);
 SCCT_FEATURE_TABLE(FScctAudioCheckApi, "AudioCheckExports", ScctAudioCheckApiVersion);
+SCCT_FEATURE_TABLE(FScctAudioViewApi, "AudioViewExports", ScctAudioViewApiVersion);
+SCCT_FEATURE_TABLE(FScctContentApi, "ContentExports", ScctContentApiVersion);
 SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
 SCCT_FEATURE_TABLE(FScctDemoApi, "DemoExports", ScctDemoApiVersion);
+SCCT_FEATURE_TABLE(FScctDemoPlayApi, "DemoPlayExports", ScctDemoPlayApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
 SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
 SCCT_FEATURE_TABLE(FScctFlicFlocApi, "FlicFlocExports", ScctFlicFlocApiVersion);
@@ -68,14 +85,19 @@ SCCT_FEATURE_TABLE(FScctHubSocialApi, "HubSocialExports", ScctHubSocialApiVersio
 SCCT_FEATURE_TABLE(FScctHubPadsApi, "HubPadsExports", ScctHubPadsApiVersion);
 SCCT_FEATURE_TABLE(FScctHubActivityApi, "HubActivityExports", ScctHubActivityApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
+SCCT_FEATURE_TABLE(FScctLobbyApi, "LobbyExports", ScctLobbyApiVersion);
+SCCT_FEATURE_TABLE(FScctMapsApi, "MapsExports", ScctMapsApiVersion);
 SCCT_FEATURE_TABLE(FScctMenuApi, "MenuExports", ScctMenuApiVersion);
 SCCT_FEATURE_TABLE(FScctMarkSurfaceApi, "MarkSurfaceExports", ScctMarkSurfaceApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
+SCCT_FEATURE_TABLE(FScctRejoinApi, "RejoinExports", ScctRejoinApiVersion);
+SCCT_FEATURE_TABLE(FScctRoundApi, "RoundExports", ScctRoundApiVersion);
 SCCT_FEATURE_TABLE(FScctPawnLookApi, "PawnLookExports", ScctPawnLookApiVersion);
 SCCT_FEATURE_TABLE(FScctPoseAimApi, "PoseAimExports", ScctPoseAimApiVersion);
 SCCT_FEATURE_TABLE(FScctSocialApi, "SocialExports", ScctSocialApiVersion);
 SCCT_FEATURE_TABLE(FScctPlayApi, "PlayExports", ScctPlayApiVersion);
 SCCT_FEATURE_TABLE(FScctProjectionsApi, "ProjectionExports", ScctProjectionsApiVersion);
+SCCT_FEATURE_TABLE(FScctReverbRoomApi, "ReverbRoomExports", ScctReverbRoomApiVersion);
 SCCT_FEATURE_TABLE(FScctSmokeApi, "SmokeExports", ScctSmokeApiVersion);
 SCCT_FEATURE_TABLE(FScctSoftBodyApi, "SoftBodyExports", ScctSoftBodyApiVersion);
 SCCT_FEATURE_TABLE(FScctVisionApi, "VisionExports", ScctVisionApiVersion);
@@ -84,6 +106,8 @@ SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldEmitterApi, "WorldEmitterExports", ScctWorldEmitterApiVersion);
 SCCT_FEATURE_TABLE(FScctGrabAreaApi, "GrabAreaExports", ScctGrabAreaApiVersion);
 SCCT_FEATURE_TABLE(FScctLessonApi, "LessonExports", ScctLessonApiVersion);
+SCCT_FEATURE_TABLE(FScctTestApi, "TestExports", ScctTestApiVersion);
+SCCT_FEATURE_TABLE(FScctInspectApi, "InspectExports", ScctInspectApiVersion);
 
 #undef SCCT_FEATURE_TABLE
 

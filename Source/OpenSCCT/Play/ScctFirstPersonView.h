@@ -66,6 +66,8 @@ public:
 
 private:
 	void TickFlash(float DeltaSeconds);
+	/** Where the flash's light goes this frame: the muzzle, or short of the level's wall the barrel reaches through. */
+	FVector FlashLightPlace() const;
 
 	/** -ScctWeaponProbe: logs where a part's bones are from the eye. */
 	void LogViewProbe(int32 Index, class UPoseableMeshComponent& Body, const FTransform& Camera);

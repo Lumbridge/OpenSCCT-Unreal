@@ -4,9 +4,11 @@
 #include "HAL/PlatformMisc.h"
 #include "Menu/ScctMenuDriver.h"
 #include "Menu/ScctMenuKit.h"
+#include "Menu/ScctMenuNav.h"
 #include "Menu/ScctMenuPage.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Online/ScctContentDownloads.h"
 #include "Engine/GameInstance.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
@@ -106,16 +108,15 @@ namespace
 		mutable double Started = 0.0;
 	};
 
+	/** Escape and the controller's B, Back and Start (Menu/ScctMenuNav.h). */
 	bool IsBackKey(const FKey& Key)
 	{
-		return Key == EKeys::Escape || Key == EKeys::Gamepad_FaceButton_Right;
+		return ScctMenuNav::IsBackKey(Key);
 	}
 
 	int32 TabDirection(const FKey& Key)
 	{
-		if (Key == EKeys::Q || Key == EKeys::PageUp || Key == EKeys::Gamepad_LeftShoulder) { return -1; }
-		if (Key == EKeys::E || Key == EKeys::PageDown || Key == EKeys::Gamepad_RightShoulder) { return 1; }
-		return 0;
+		return ScctMenuNav::TabDirection(Key);
 	}
 
 	const TCHAR* const OnlineSection = TEXT("OpenSCCT.Online");
@@ -151,6 +152,8 @@ void SScctFrontEnd::Construct(const FArguments& InArgs)
 	Online = InArgs._Online;
 	SAssignNew(Dialogs, SScctDialogLayer);
 	Dialogs->FocusAfter = SharedThis(this);
+	// The controller's notices and the question to turn it on are this menu's while it is up.
+	ScctMenuNav::RegisterLayer(Dialogs.ToSharedRef(), nullptr);
 
 	ChildSlot
 	[
@@ -418,10 +421,20 @@ FReply SScctFrontEnd::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& In
 	}
 
 	// The focus fell off the page (a click on nothing): the first arrow or stick push brings it back.
-	if (HasKeyboardFocus() && Page.IsValid() && Page->GetDefaultFocus().IsValid() && FSlateApplication::Get().GetNavigationDirectionFromKey(InKeyEvent) != EUINavigation::Invalid)
+	if (HasKeyboardFocus() && Page.IsValid() && FSlateApplication::Get().GetNavigationDirectionFromKey(InKeyEvent) != EUINavigation::Invalid)
 	{
-		FSlateApplication::Get().SetKeyboardFocus(Page->GetDefaultFocus(), EFocusCause::Navigation);
-		return FReply::Handled();
+		const TSharedPtr<SWidget> Focus = Page->GetDefaultFocus().IsValid() ? Page->GetDefaultFocus() : ScctMenuNav::FindFirstFocusable(Page);
+		if (Focus.IsValid())
+		{
+			FSlateApplication::Get().SetKeyboardFocus(Focus, EFocusCause::Navigation);
+			return FReply::Handled();
+		}
+	}
+	// The D-pad leaves a text field as it leaves a button (a typed arrow moves in the text; the pad has no text to move in).
+	const EUINavigation PadNavigation = Key.IsGamepadKey() ? FSlateApplication::Get().GetNavigationDirectionFromKey(InKeyEvent) : EUINavigation::Invalid;
+	if (PadNavigation != EUINavigation::Invalid && ScctUi::IsTyping())
+	{
+		return FReply::Handled().SetNavigation(PadNavigation, ENavigationGenesis::Controller, ENavigationSource::FocusedWidget);
 	}
 	return FReply::Unhandled();
 }
@@ -447,6 +460,15 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 		if (!Focus.IsValid() || !Focus->GetVisibility().IsVisible() || !Focus->IsEnabled())
 		{
 			Focus = Page.IsValid() ? Page->GetDefaultFocus() : nullptr;
+		}
+		if (!Focus.IsValid() && Page.IsValid())
+		{
+			// A page that names no control to start on: its first one, so a controller has somewhere to be.
+			Focus = ScctMenuNav::FindFirstFocusable(Page);
+		}
+		else if (!Focus.IsValid() && VisitView != EVisitView::None)
+		{
+			Focus = ScctMenuNav::FindFirstFocusable(PageBox);
 		}
 		if (Focus.IsValid())
 		{
@@ -589,6 +611,7 @@ TSharedRef<SWidget> SScctFrontEnd::BuildVisit()
 	FString PrimaryLabel;
 	FString SecondaryLabel = TEXT("Cancel");
 	TFunction<void()> OnPrimary;
+	TAttribute<EVisibility> PrimaryVisibility = EVisibility::Visible;
 	TAttribute<FText> Body = FText::GetEmpty();
 	bool bBusy = true;
 	bool bFailed = false;
@@ -609,7 +632,22 @@ TSharedRef<SWidget> SScctFrontEnd::BuildVisit()
 		if (Visit->HasFlag(EScctOnlineStatusFlags::RoundRefused))
 		{
 			Heading = TEXT("Round in progress");
-			Body = FText::FromString(TEXT("The server is playing a map that is not installed here. You are back in the lobby when the round is over."));
+			// The map from OpenSCCT-Content, as the lobby offers it: ready for the next round once it is in.
+			Body = TAttribute<FText>::CreateLambda([]
+			{
+				FScctLobbyMapFetch Fetch;
+				ScctContentDownloads::GetLobbyFetch(Fetch);
+				const FString Base = TEXT("The server is playing a map that is not installed here. You are back in the lobby when the round is over.");
+				return FText::FromString(Fetch.IsShown() ? Base + TEXT("\n\n") + Fetch.Line : Base);
+			});
+			PrimaryLabel = TEXT("Download map");
+			OnPrimary = [] { ScctContentDownloads::StartLobbyFetch(); };
+			PrimaryVisibility = TAttribute<EVisibility>::CreateLambda([]
+			{
+				FScctLobbyMapFetch Fetch;
+				ScctContentDownloads::GetLobbyFetch(Fetch);
+				return Fetch.CanDownload() ? EVisibility::Visible : EVisibility::Collapsed;
+			});
 			bBusy = false;
 		}
 		else
@@ -651,10 +689,13 @@ TSharedRef<SWidget> SScctFrontEnd::BuildVisit()
 		TSharedPtr<SScctButton> Made;
 		Buttons->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 10.0f, 0.0f)
 		[
-			SAssignNew(Made, SScctButton).Look(EScctButtonLook::Primary).MinWidth(150.0f).Text(FText::FromString(PrimaryLabel.ToUpper()))
+			SAssignNew(Made, SScctButton).Look(EScctButtonLook::Primary).MinWidth(150.0f).Text(FText::FromString(PrimaryLabel.ToUpper())).Visibility(PrimaryVisibility)
 			.OnPressed(FSimpleDelegate::CreateLambda([OnPrimary] { OnPrimary(); }))
 		];
-		Focus = Made;
+		if (PrimaryVisibility.Get() == EVisibility::Visible)
+		{
+			Focus = Made;
+		}
 	}
 	{
 		TSharedPtr<SScctButton> Made;

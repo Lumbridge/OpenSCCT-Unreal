@@ -127,6 +127,7 @@ public static unsafe class MenuExports
     private static readonly object s_gate = new();
     private static MapCatalog? s_catalog;
     private static string? s_catalogRoot;
+    private static int s_catalogFolders = -1;
     private static HudStrings? s_strings;
     private static string? s_stringsRoot;
 
@@ -153,7 +154,10 @@ public static unsafe class MenuExports
         return ApiVersion;
     }
 
-    /// <summary>The install's map catalog, read once per content folder.</summary>
+    /// <summary>
+    /// The install's map catalog, read once per content folder and per change of the map folders Unreal names
+    /// (Online/MapFolders.cs: -ScctMaps, maps next to the game), so a converted map with no imported level is offered too.
+    /// </summary>
     private static MapCatalog Catalog
     {
         get
@@ -161,9 +165,10 @@ public static unsafe class MenuExports
             lock (s_gate)
             {
                 string? root = ContentPaths.Root;
-                if (s_catalog is null || !string.Equals(root, s_catalogRoot, StringComparison.OrdinalIgnoreCase))
+                if (s_catalog is null || !string.Equals(root, s_catalogRoot, StringComparison.OrdinalIgnoreCase) || s_catalogFolders != Online.MapFolders.Revision)
                 {
-                    s_catalog = MapCatalog.CreateDefault();
+                    s_catalogFolders = Online.MapFolders.Revision;
+                    s_catalog = new MapCatalog(Online.MapFolders.AllRoots());
                     s_catalogRoot = root;
                 }
 
