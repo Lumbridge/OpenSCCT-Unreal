@@ -12,9 +12,11 @@ A release is a zip that the OpenSCCT launcher installs, plus a checksum and a la
 - This project's own content, cooked: the front end, materials, the merc rifle and the CC0 texture sets.
   `Config/DefaultGame.ini` lists the front end in `MapsToCook` and always cooks `/Game/OpenSCCT`.
 - **The enhanced maps, bundled.** Every level imported on the release machine into
-  `Content/Imported/Maps/<Map>/<Map>.umap` is cooked into the release, with the characters and effects under
-  `Content/Imported/Chars` and `Content/Imported/Fx` that it refers to: `Config/DefaultGame.ini` always cooks
-  `/Game/Imported/Maps`. `UScctOnlineSubsystem::IsPlayable` and `LevelOf` prefer such a level, so a bundled map plays
+  `Content/Imported/Maps/<Map>/<Map>.umap` is cooked into the release, with the characters, weapons and effects
+  under `Content/Imported/Chars` and `Content/Imported/Fx`: `Config/DefaultGame.ini` always cooks
+  `/Game/Imported/Maps`, `/Game/Imported/Chars` and `/Game/Imported/Fx` (the game loads characters and effects by
+  path), and since the cooker finds no `.umap` in those folders the script names the levels with `-MapsToCook`
+  (with the front end, which that list replaces). `UScctOnlineSubsystem::IsPlayable` and `LevelOf` prefer such a level, so a bundled map plays
   as its enhanced version; a map that is not bundled is built at run time from the player's own content. The rule
   is: bundled in releases, never committed. `Content/Imported` is local import output, ignored by Git, and the
   release machine must have run the import: the script fails when `Content/Imported/Maps` holds no map, and when

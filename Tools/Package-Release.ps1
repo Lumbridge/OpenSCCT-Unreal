@@ -372,10 +372,14 @@ try {
     # --- Cook, stage, archive --------------------------------------------------------------------------------------
     Write-Host "Cooking and staging... this takes a while; the log is $Out\uat.log"
     $uatArgs = @(
-        'BuildCookRun', "-project=$project", '-noP4', '-utf8output', '-unattended',
+        # -WaitForUATMutex: one AutomationTool runs at a time per engine; wait for another checkout's instead of failing.
+        '-WaitForUATMutex', 'BuildCookRun', "-project=$project", '-noP4', '-utf8output', '-unattended',
         '-platform=Win64', "-clientconfig=$Configuration", "-target=$target", '-nocompileeditor',
         '-cook', '-stage', '-pak', '-iostore', '-compressed', '-nodebuginfo',
-        '-archive', "-archivedirectory=$archive"
+        '-archive', "-archivedirectory=$archive",
+        # DirectoriesToAlwaysCook finds no .umap, so the levels are named here; a map list on the command line replaces
+        # MapsToCook in Config/DefaultGame.ini, hence the front end too.
+        ('-MapsToCook=' + ((@('/Game/OpenSCCT/Maps/L_FrontEnd') + @($bundledMaps | ForEach-Object { "/Game/Imported/Maps/$_/$_" })) -join '+'))
     )
     if ($Configuration -eq 'Shipping') { $uatArgs += '-distribution' }
     & $uat @uatArgs *> (Join-Path $Out 'uat.log')
