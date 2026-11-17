@@ -42,7 +42,8 @@ DEFAULT_SPOT_PICTURE = "echelon_spot_bw"
 # How much of a beam light's light the air scatters, per square root of the original's beam alpha.
 BEAM_SCATTER = 4.0
 BEAM_SCATTER_MOST = 16.0
-CORONA_BRIGHTNESS = 0.8
+# A halo is a soft veil of the lamp's colour around it, not a white disc over it.
+CORONA_BRIGHTNESS = 0.38
 # A caustics light: its strength in import_map's light units, and how far its (mostly dark) picture is lifted.
 CAUSTIC_INTENSITY = 4.0
 CAUSTIC_GAIN = 2.5
@@ -59,6 +60,8 @@ DRAW_MESH = 2      # Actor.DrawType DT_Mesh: a skeletal mesh
 
 # Light given off by additive sprites (sparks, flames, bubbles), in the units of import_map's emissive surfaces.
 GLOW_BRIGHTNESS = 1.5
+# How much of the original's alpha an alpha-blended, lit sprite keeps.
+LIT_OPACITY = 0.7
 FOREVER = 1.0e9
 
 
@@ -98,12 +101,31 @@ def four_keys(points, start):
     """A curve of the original (key frames over the share of a particle's life, straight lines between them,
     `start` before the first) as exactly four keys: ([times], [values]). Longer curves keep their first and last
     keys and the two in between that matter most."""
+    def between(low, high, share):
+        if isinstance(low, (int, float)):
+            return low + (high - low) * share
+        return tuple(a + (b - a) * share for a, b in zip(low, high))
+
+    # The original reads a curve at x (0..1 over the life) as "the first point, in the order written, whose time
+    # is at least x, in a straight line from the point before" (spec/native/emitters.md rule 11). So a point
+    # written after a later one is never reached, and a point past the end of the life (maps write times like
+    # 220: OrphE's mist grows toward 350 times its size at a time it never reaches) only sets the slope: the
+    # curve is cut where the life ends. Past its last point a curve no longer applies (the start value again).
     keys = [(0.0, start)]
-    for time, value in sorted(points, key=lambda point: point[0]):
+    for time, value in points:
         if time <= 0.0:
-            keys[0] = (0.0, value)    # a key at the very start gives its own value
-        else:
-            keys.append((min(time, 1.0), value))
+            if len(keys) == 1:
+                keys[0] = (0.0, value)    # a key at the very start gives its own value
+            continue
+        last_time, last_value = keys[-1]
+        if time <= last_time:
+            continue
+        if time >= 1.0:
+            keys.append((1.0, between(last_value, value, (1.0 - last_time) / (time - last_time))))
+            break
+        keys.append((time, value))
+    if keys[-1][0] < 0.999 and len(keys) > 1:
+        keys.append((min(keys[-1][0] + 0.001, 1.0), start))
     while len(keys) > 4:
         # Drop the inner key whose removal changes the curve least (smallest jump to the line through its neighbours).
         def cost(index):
@@ -136,7 +158,10 @@ def sprite_parameters(props, turn_back):
         rate = pick(props, "SpawnOnTriggerPPS", 0.0) if triggered[1] > 0.0 else 0.0
         if rate <= 0.0:
             rate = steady if pick(props, "AutomaticInitialSpawning", True) else float(pick(props, "InitialParticlesPerSecond", 0.0)) or steady
-        window = max(count / rate, 0.02)
+        # Exactly `count` particles, however fast the map asks for them: its "all at once" is a rate of ten
+        # million a second, which a spawn rate held for even one frame turns into a solid slab of sprites.
+        window = max(count / rate, 0.05)
+        rate = count / window
         if pick(props, "AutoReset", False):
             pause = span(props, "AutoResetTimeRange", (0.0, 0.0))
             loop = window + max(life) + (pause[0] + pause[1]) * 0.5
@@ -222,8 +247,11 @@ class MapEffects:
     `texture_of(path)` finds or imports a texture of the map by its file under render/; `import_files(files,
     destination)` imports source files."""
 
-    def __init__(self, map_name, render, dest, spawn, texture_of, import_files, log):
+    def __init__(self, map_name, render, dest, spawn, texture_of, import_files, log, rain_cover=""):
         self.map, self.render, self.dest = map_name, render, dest
+        # What stands in the rain's way, per rain volume (prepare_rain_cover.py): {volume: {origin, size, file}}.
+        self.rain_cover_dir = rain_cover
+        self.rain_cover = load(os.path.join(rain_cover, "rain_cover.json")) if rain_cover else {}
         self.spawn, self.texture_of, self.import_files, self.log = spawn, texture_of, import_files, log
         self.instances = {}
         beams = load(os.path.join(render, "lightbeams.json")).get("beams", [])
@@ -271,6 +299,9 @@ class MapEffects:
         scalars = {"Columns": columns, "Rows": rows}
         if glow:
             scalars["Brightness"] = GLOW_BRIGHTNESS
+        else:
+            # Smoke and dust are thin: a puff of twenty sprites laid over each other is a cloud, not a wall.
+            scalars["Opacity"] = LIT_OPACITY
         return self.instance(name, scct_effects.PARTICLE_GLOW if glow else scct_effects.PARTICLE_LIT, scalars, {"Texture": texture})
 
     def place_emitters(self, document):
@@ -540,6 +571,9 @@ class MapEffects:
             decal = actor.decal
             decal.set_decal_material(material)
             decal.set_editor_property("decal_size", unreal.Vector(trace * 0.5, half_y, half_z))
+            # A sign or a graffiti is read from across the yard: the engine's default fades a decal out as it gets
+            # small on screen, long before a painted wall would stop showing its paint.
+            decal.set_editor_property("fade_screen_size", 0.0005)
             decals += 1
         self.log("projectors: %d decals, %d caustic lights" % (decals, lights))
 
@@ -556,8 +590,10 @@ class MapEffects:
         if not volumes:
             return
         system = unreal.load_asset(scct_niagara.SPRITES)
-        material = self.instance("MI_Fx_Rain", scct_effects.PARTICLE_LIT, {"Opacity": 0.32, "Emissive": 0.15, "SoftEdge": 4.0},
-                                 {"Texture": unreal.load_asset(scct_effects.RAIN_STREAK)})
+        look = {"Opacity": 0.32, "Emissive": 0.15, "SoftEdge": 4.0}
+        streak = unreal.load_asset(scct_effects.RAIN_STREAK)
+        open_sky = self.instance("MI_Fx_Rain", scct_effects.PARTICLE_LIT, look, {"Texture": streak})
+        covered = 0
         for volume in volumes:
             scale = volume.get("scale", [1.0, 1.0, 1.0])
             half_x, half_y, height = (volume["size"][axis] * abs(scale[axis]) for axis in range(3))
@@ -581,6 +617,13 @@ class MapEffects:
                 "SizeMin": RAIN_HALF_SIZE, "SizeMax": (RAIN_HALF_SIZE[0] * 1.5, RAIN_HALF_SIZE[1] * 1.6), "SizeUniform": 0.0,
                 "Kind": 1.0,
             })
+            # What the rain meets on its way down (a roof, an awning, a tree): no drop is drawn below it, and the
+            # ground under it stays dry. The heights were worked out before the import, from the level's geometry.
+            cover, cover_values = self.cover_of(volume["name"])
+            material = self.instance("MI_Fx_Rain_" + re.sub(r"[^A-Za-z0-9_]", "_", volume["name"]), scct_effects.PARTICLE_LIT,
+                                     dict(look, **cover_values), {"Texture": streak, "Cover": cover},
+                                     self.cover_vectors(volume["name"])) if cover else open_sky
+            covered += 1 if cover else 0
             component.set_variable_material("Material", material)
 
             # Wet ground under the rain: a decal looking straight down through the volume, a little past its
@@ -593,11 +636,42 @@ class MapEffects:
             wet.set_actor_label("Wet_" + volume["name"])
             wet.set_folder_path("Effects/Rain")
             wet.tags = [unreal.Name("ScctWetOf:" + volume["name"])]
-            wet.decal.set_decal_material(unreal.load_asset(scct_effects.WET))
+            wet.decal.set_decal_material(self.instance(
+                "MI_Wet_" + re.sub(r"[^A-Za-z0-9_]", "_", volume["name"]), scct_effects.WET, cover_values, {"Cover": cover},
+                self.cover_vectors(volume["name"])) if cover else unreal.load_asset(scct_effects.WET))
             wet.decal.set_editor_property("decal_size", unreal.Vector((height + below) * 0.5, half_y, half_x))
             # Under the projected rain splashes, which are decals too.
             wet.decal.set_editor_property("sort_order", -1)
-        self.log("rain volumes: %d" % len(volumes))
+        self.log("rain volumes: %d, %d of them with the heights of what stands in the rain's way" % (len(volumes), covered))
+
+    def cover_of(self, volume_name):
+        """The cover picture of a rain volume as a texture, and the material scalars that go with it; (None, {})
+        when prepare_rain_cover.py wrote none."""
+        place = self.rain_cover.get(volume_name)
+        source = os.path.join(self.rain_cover_dir, place["file"]) if place else ""
+        if not place or not os.path.exists(source):
+            return None, {}
+        self.import_files([source], self.dest + "/Extra")
+        texture = unreal.load_asset(self.dest + "/Extra/" + os.path.splitext(place["file"])[0])
+        if not texture:
+            self.log("rain cover not imported: " + source)
+            return None, {}
+        # Heights, not a picture: no colour curve, no block compression, and nothing past its edges.
+        changed = False
+        for name, value in (("srgb", False), ("compression_settings", unreal.TextureCompressionSettings.TC_GRAYSCALE),
+                            ("address_x", unreal.TextureAddress.TA_CLAMP), ("address_y", unreal.TextureAddress.TA_CLAMP),
+                            ("mip_gen_settings", unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS),
+                            ("never_stream", True)):
+            if texture.get_editor_property(name) != value:
+                texture.set_editor_property(name, value)
+                changed = True
+        if changed:
+            editor_assets.save_loaded_asset(texture, only_if_is_dirty=False)
+        return texture, {"CoverOn": 1.0, "CoverLow": place["origin"][2], "CoverHeight": place["size"][2]}
+
+    def cover_vectors(self, volume_name):
+        place = self.rain_cover[volume_name]
+        return {"CoverBox": (place["origin"][0], place["origin"][1], place["size"][0], place["size"][1])}
 
     # -----------------------------------------------------------------------------------------------------------
     # Zone fog

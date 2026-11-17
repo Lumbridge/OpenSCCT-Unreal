@@ -22,7 +22,7 @@ namespace OpenScct.UnrealBridge.Online;
 /// <para>Single-threaded: everything is called from Unreal's game thread. The master's HTTP answers arrive on
 /// worker threads and are only picked up inside <see cref="Update"/>.</para>
 /// </summary>
-public sealed class OnlineBridge : IDisposable
+public sealed partial class OnlineBridge : IDisposable
 {
     public const int ApiVersion = 2;
 
@@ -186,7 +186,7 @@ public sealed class OnlineBridge : IDisposable
     /// for that server when the player is signed in; <paramref name="preferredTeam"/> 0 spies, 1 mercs, 255 watch,
     /// -1 the smaller side.
     /// </summary>
-    public void Join(JoinTarget target, string? password, string? ticket, int preferredTeam = -1, bool loopbackOnly = false)
+    public void Join(JoinTarget target, string? password, string? ticket, int preferredTeam = -1, bool loopbackOnly = false, string? hostKey = null)
     {
         ArgumentNullException.ThrowIfNull(target);
         EndVisit();
@@ -201,6 +201,8 @@ public sealed class OnlineBridge : IDisposable
             Key = _key,
             Password = string.IsNullOrEmpty(password) ? null : password,
             Ticket = ticket,
+            // The listen host's own player proves with it that it is the lobby's host.
+            HostKey = hostKey,
             PreferredTeam = preferredTeam,
             Maps = catalog.Maps,
             Classes = Classes,
@@ -238,11 +240,12 @@ public sealed class OnlineBridge : IDisposable
         Touch();
     }
 
-    /// <summary>Leaves the server (it tells the others) and clears the visit: the state is Idle afterwards.</summary>
+    /// <summary>Leaves the server (it tells the others) and clears the visit: the state is Idle afterwards. A host stops hosting.</summary>
     public void Leave()
     {
         Master.CancelJoin();
         EndVisit();
+        StopHosting();
         _error = null;
         _stateOverride = OnlineState.Idle;
         Touch();
@@ -250,12 +253,16 @@ public sealed class OnlineBridge : IDisposable
 
     private void EndVisit()
     {
+        // The player's own server goes with the visit to it (OnlineService.EndVisit): a join elsewhere, a failure
+        // and a leave all close it. Host() joins its server before it keeps it.
+        StopHosting();
         if (Client is not { } client)
         {
             return;
         }
 
         StopRound();
+        Voice.VoiceBridge.Existing?.EndVisit();
         client.Changed -= Touch;
         client.SessionEnding -= OnSessionEnding;
         client.MessageReceived -= OnMessage;
@@ -401,6 +408,7 @@ public sealed class OnlineBridge : IDisposable
     public int Update()
     {
         Master.Pump();
+        PumpHost();
         if (Client is not { } client)
         {
             return 0;
@@ -448,6 +456,8 @@ public sealed class OnlineBridge : IDisposable
             round.Update();
         }
 
+        // Voice chat follows the visit to its current map (Voice/VoiceBridge.cs).
+        Voice.VoiceBridge.Instance.AfterVisitTick(client);
         return ran;
     }
 
@@ -549,6 +559,7 @@ public sealed class OnlineBridge : IDisposable
     public void Dispose()
     {
         EndVisit();
+        StopHosting();
         Master.Dispose();
         if (ReferenceEquals(s_instance, this))
         {

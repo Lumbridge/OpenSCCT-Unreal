@@ -291,16 +291,33 @@ private:
 	TArray<TObjectPtr<UPointLightComponent>> LightComponents;
 
 	/**
-	 * A soft light from the camera on the bodies of the local player's own side, and on nothing else (its own
-	 * lighting channel). A spy's suit is nearly black: seen from behind with the room's light in front of him he
-	 * was a flat black cut-out in his own picture, and so was the team mate beside him. The light follows the
-	 * picture's exposure, so it is the same faint sheen in a cellar and in a lit hall. It never falls on the other
-	 * side (a spy in the dark stays in the dark for the merc who looks his way) and it lights no wall.
+	 * Two soft lights on the bodies of the local player's own side, and on nothing else (their own lighting
+	 * channel). A spy's suit is nearly black: seen from behind with the room's light in front of him he was a flat
+	 * black cut-out in his own picture, and so was the team mate beside him. BodyFill comes from above the camera's
+	 * shoulder, so it falls across the body and shades its form; BodyRim stands behind the local body, opposite
+	 * the camera, and draws the bright edge that sets a dark figure off against a dark wall. Both follow the
+	 * picture's exposure, so the figure reads the same in a cellar and in a lit hall. They never fall on the
+	 * other side (a spy in the dark stays in the dark for the merc who looks his way) and they light no wall.
 	 */
 	UPROPERTY(Transient)
 	TObjectPtr<UPointLightComponent> BodyFill;
 
-	void UpdateBodyFill();
+	UPROPERTY(Transient)
+	TObjectPtr<UPointLightComponent> BodyRim;
+
+	UPointLightComponent* MakeBodyLight(float Radius, float Specular);
+	void UpdateBodyFill(float DeltaSeconds);
+
+	/** The exposure factor of the body lights, eased so a jump of the exposure is not a jump of the figure. */
+	float BodyLightScale = 0.0f;
+
+	/**
+	 * The local player's body thins out of the picture close to the camera: a wall behind the spy holds the
+	 * camera within reach of his head, and with the gun drawn it looks over his shoulder from a hand's width.
+	 * What is nearer the camera than scct.BodyFade centimetres fades, and is gone at half of that; his arm and gun
+	 * further out stay. Its shadow stays whole. Every other body is drawn whole at any distance.
+	 */
+	void UpdateBodyFade();
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UStaticMeshComponent>> MeshPool;
@@ -406,6 +423,11 @@ private:
 	TArray<FScctImpactMark> MarkBuffer;
 
 	uint32 Frame = 0;
+
+	/** What the log last said about the effects flagged bHideInNormalVision: listed, and shown by the goggles. */
+	int32 LoggedVisionOnly = 0;
+	int32 LoggedVisionOnlyShown = 0;
+
 	float TimeScale = 1.0f;
 	float MatchSeconds = 0.0f;
 	bool bSceneReady = false;

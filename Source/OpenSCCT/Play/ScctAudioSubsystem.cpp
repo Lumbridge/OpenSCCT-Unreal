@@ -7,11 +7,14 @@
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
 #include "GameFramework/WorldSettings.h"
+#include "Menu/ScctUserSettings.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "Engine/GameInstance.h"
 #include "OpenSCCT.h"
+#include "Play/ScctAudioMix.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Play/ScctSoundWave.h"
@@ -20,6 +23,17 @@
 #include "Serialization/JsonSerializer.h"
 #include "Sound/ReverbEffect.h"
 #include "Sound/SoundAttenuation.h"
+#include "Sound/SoundClass.h"
+
+namespace
+{
+	/** The settings' volume of a voice's kind (Menu/ScctUserSettings.h); the master volume is the engine's own. */
+	float AudioSettingsGain(bool bMusic, bool bAmbient, bool bObjective)
+	{
+		const UScctUserSettings* Settings = UScctUserSettings::Get();
+		return Settings == nullptr ? 1.0f : Settings->GetGain(bMusic ? EScctSoundKind::Music : bObjective ? EScctSoundKind::Objective : bAmbient ? EScctSoundKind::Ambient : EScctSoundKind::Effects);
+	}
+}
 
 namespace
 {
@@ -31,8 +45,19 @@ namespace
 	constexpr int64 CacheBudgetBytes = 160ll * 1024 * 1024;
 	constexpr double CacheIdleSeconds = 180.0;
 
-	// The original hears nothing beyond 100 x the sound's radius.
+	// The original's reach of a sound is 100 x its radius: the bridge has already tested a call against it (with
+	// the call's radius, as APlayerController::HearSound does) before handing it over, and the ambient sources
+	// are listed by it. A voice that plays is not cut off there: its gain only keeps falling with distance, as
+	// in the Godot client (SoundRules.DistanceGain).
 	constexpr float ReachPerRadius = 100.0f;
+
+	// How far past that reach a 3D voice's attenuation goes on (FindOrCreateAttenuation), as a multiple of it.
+	constexpr float HeardPastReach = 10.0f;
+
+	// How much of the local player's own sounds (his shots, steps, breath: the AtListener voices) goes to the
+	// room's reverb. They play without 3D, so no distance model sends them there; a gun that rings in the room for
+	// everyone else rang dry for the one who fired it.
+	constexpr float OwnSoundReverbSend = 0.3f;
 	constexpr float ZeroRadiusMinDistance = 10.0f;
 
 	// A flat ambient source falls silent below this volume (the original's rule 22).
@@ -108,10 +133,6 @@ void UScctAudioSubsystem::Deinitialize()
 
 float UScctAudioSubsystem::DistanceGain(float Distance, float MinDistance, float Radius)
 {
-	if (Distance >= ReachPerRadius * Radius && Radius > 0.0f)
-	{
-		return 0.0f;
-	}
 	return Distance <= MinDistance ? 1.0f : MinDistance / (MinDistance + 0.5f * (Distance - MinDistance));
 }
 
@@ -131,7 +152,7 @@ void UScctAudioSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	ZoneEffects.Reset();
 	ListenerZone = INDEX_NONE;
 	ActiveZone = -2;
-	NumStarted = NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = PeakVoices = 0;
+	NumStarted = NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
 }
 
 void UScctAudioSubsystem::HandleMatchStarted()
@@ -141,6 +162,13 @@ void UScctAudioSubsystem::HandleMatchStarted()
 	ContentRoot = FOpenSCCTModule::FindContentRoot();
 	bHasDevice = GetWorld()->GetAudioDeviceRaw() != nullptr;
 	SummaryTimer = SummaryEvery;
+	const UGameInstance* GameInstance = GetWorld()->GetGameInstance();
+	Mix = GameInstance != nullptr ? GameInstance->GetSubsystem<UScctAudioMix>() : nullptr;
+	if (Mix != nullptr)
+	{
+		// The world's audio device may be newer than the game: it gets the categories and the gains now.
+		Mix->EnsureApplied();
+	}
 	if (Events == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Error, TEXT("Audio: no sound this match, the bridge's events are missing: %s"), *Error);
@@ -149,6 +177,18 @@ void UScctAudioSubsystem::HandleMatchStarted()
 
 	// Harmless when the bridge already started the feature with the session.
 	Events->Begin();
+
+	FString Song;
+	if (FParse::Value(FCommandLine::Get(), TEXT("ScctAudioMusic="), Song, false))
+	{
+		FString At;
+		CheckSongIn = 3.0f;
+		if (Song.Split(TEXT("@"), &Song, &At))
+		{
+			CheckSongIn = FMath::Max(FCString::Atof(*At), 0.0f);
+		}
+		CheckSong = Song;
+	}
 	LoadZones(Session->GetSessionInfo().Map);
 	const FAudioDevice* Device = GetWorld()->GetAudioDeviceRaw();
 	UE_LOG(LogOpenSCCT, Log, TEXT("Audio: ready for %s (%s, %d zones with reverb, content %s)"), Session->GetSessionInfo().Map,
@@ -175,6 +215,18 @@ void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
 	const FScctBridgeView& View = Session->GetView();
 	bListenerValid = View.Valid != 0;
 	Listener = FVector(View.X, View.Y, View.Z);
+
+	if (CheckSongIn >= 0.0f)
+	{
+		CheckSongIn -= DeltaSeconds;
+		if (CheckSongIn < 0.0f)
+		{
+			const FScctAudioCheckApi* Check = ScctFeature<FScctAudioCheckApi>();
+			const bool bPlays = Check != nullptr && Check->PlayMusic(*CheckSong, 0.0f) != 0;
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctAudio: -ScctAudioMusic: '%s' %s"), *CheckSong,
+				bPlays ? TEXT("started as the music") : Check == nullptr ? TEXT("not started: the bridge has no audio check table") : TEXT("not started: unknown sound or no file"));
+		}
+	}
 
 	DrainSounds();
 	UpdateAmbient();
@@ -275,6 +327,16 @@ void UScctAudioSubsystem::Play(const FScctSound& Record)
 		return;
 	}
 
+	const bool bObjective = (Record.Flags & EScctSoundFlags::Objective) != 0;
+	if (bObjective && Mix != nullptr && !Mix->AreObjectiveSoundsOn())
+	{
+		// The original's profile switch bObjectiveSounds, which Godot turns off at objective volume 0: the jingle is
+		// dropped, not played silently.
+		++NumObjectiveSkipped;
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctAudio: objective jingle '%s' skipped (objective volume 0)"), *GetName(Record.SoundId));
+		return;
+	}
+
 	const bool bAtListener = (Record.Flags & EScctSoundFlags::AtListener) != 0;
 	const bool bPositional = !bAtListener && (Record.Flags & EScctSoundFlags::Positional) != 0;
 	const float MinDistance = Record.MinDistance > 0.0f ? Record.MinDistance : ZeroRadiusMinDistance;
@@ -282,13 +344,13 @@ void UScctAudioSubsystem::Play(const FScctSound& Record)
 	if (bPositional && bListenerValid && (Record.Flags & EScctSoundFlags::Loop) == 0 && Record.Radius > 0.0f
 		&& FVector::Dist(Location, Listener) >= ReachPerRadius * Record.Radius)
 	{
-		// The bridge passes on what the original would start: its reach test uses the radius of the call, and
-		// the server's own calls are not tested again. The file's own radius can be much smaller, and a one-shot
-		// beyond 100 x that is silent for its whole life, so it takes no voice. A loop may still come nearer.
+		// The bridge passes on what the original would start (its reach test uses the radius of the call, and the
+		// server's own calls are not tested again), and the Godot client plays every such call however small the
+		// file's own radius is: so does this, quietly. It is only counted. The voice limit (MakeRoom) is what
+		// keeps far, faint one-shots from crowding out near ones: the quietest voice goes first.
 		++NumOutOfReach;
-		UE_CLOG(bLogVoices, LogOpenSCCT, Log, TEXT("Audio out of reach: '%s' actor %d, %.0f cm from the listener, reach %.0f"), *GetName(Record.FileId),
+		UE_CLOG(bLogVoices, LogOpenSCCT, Log, TEXT("Audio beyond 100 x its radius, played all the same: '%s' actor %d, %.0f cm from the listener, 100 x radius is %.0f"), *GetName(Record.FileId),
 			Record.ActorId, FVector::Dist(Location, Listener), ReachPerRadius * Record.Radius);
-		return;
 	}
 	if (!MakeRoom(Record))
 	{
@@ -318,6 +380,7 @@ void UScctAudioSubsystem::Play(const FScctSound& Record)
 	Voice.bAtListener = bAtListener;
 	Voice.bLoop = (Record.Flags & EScctSoundFlags::Loop) != 0;
 	Voice.bNoOverride = (Record.Flags & EScctSoundFlags::NoOverride) != 0;
+	Voice.Category = static_cast<uint8>(bObjective ? EScctAudioCategory::Objective : EScctAudioCategory::World);
 	// A timed loop of a sequence ends by the clock; any other loop runs until it is stopped.
 	Voice.LifeLeft = Record.PlaySeconds > 0.0f ? Record.PlaySeconds : -1.0f;
 	Voices.Add(Voice);
@@ -439,6 +502,7 @@ void UScctAudioSubsystem::PlayMusic(const FScctSound& Record)
 	Voice.FadeIn = Record.FadeSeconds;
 	Voice.bLoop = (Record.Flags & EScctSoundFlags::Loop) != 0;
 	Voice.bMusic = true;
+	Voice.Category = static_cast<uint8>(EScctAudioCategory::Music);
 	Voice.LifeLeft = -1.0f;
 	Voices.Add(Voice);
 
@@ -643,10 +707,12 @@ void UScctAudioSubsystem::UpdateVoices(float DeltaSeconds)
 					Voice.Location = FindVoiceLocation(Voice);
 					Component->SetWorldLocation(Voice.Location);
 				}
-				if (Voice.AmbientId != 0 && !FMath::IsNearlyEqual(Voice.AppliedVolume, Voice.Volume, 0.005f))
+				// The ambience follows the map's volumes; every voice follows the settings' volume of its kind.
+				const float Wanted = Voice.Volume * AudioSettingsGain(Voice.bMusic, Voice.AmbientId != 0, Voice.Category == static_cast<uint8>(EScctAudioCategory::Objective));
+				if (!FMath::IsNearlyEqual(Voice.AppliedVolume, Wanted, 0.005f))
 				{
-					Voice.AppliedVolume = Voice.Volume;
-					Component->SetVolumeMultiplier(Voice.Volume);
+					Voice.AppliedVolume = Wanted;
+					Component->SetVolumeMultiplier(Wanted);
 				}
 			}
 			else if (Voice.bPositional)
@@ -700,7 +766,7 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 		Voice.LifeLeft = Pcm->Seconds() / Voice.Pitch + 0.1f;
 	}
 	Voice.State = EVoiceState::Playing;
-	Voice.AppliedVolume = Voice.Volume;
+	Voice.AppliedVolume = Voice.Volume * AudioSettingsGain(Voice.bMusic, Voice.AmbientId != 0, Voice.Category == static_cast<uint8>(EScctAudioCategory::Objective));
 	++NumStarted;
 
 	if (bHasDevice)
@@ -712,9 +778,15 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 		{
 			Component->SetSound(Wave);
 			Component->bAllowSpatialization = Voice.bPositional;
-			Component->AttenuationSettings = Voice.bPositional ? FindOrCreateAttenuation(Voice.MinDistance, Voice.Radius) : nullptr;
+			// A 3D voice has its distance model, which also sends it to the reverb. The local player's own sounds
+			// play flat but are in the room all the same; music and the interface's flat sounds are not.
+			Component->AttenuationSettings = Voice.bPositional ? FindOrCreateAttenuation(Voice.MinDistance, Voice.Radius)
+				: (Voice.bAtListener && !Voice.bMusic ? FindOrCreateOwnSoundSettings() : nullptr);
 			Component->bIsMusic = Voice.bMusic;
-			Component->SetVolumeMultiplier(Voice.Volume);
+			// The category's class routes the voice to its submix (the reverb, the peaks); the player's volume of its
+			// kind is in AppliedVolume (Menu/ScctUserSettings.h), so the submix itself is not turned down again.
+			Component->SoundClassOverride = Mix != nullptr ? Mix->GetClass(static_cast<EScctAudioCategory>(Voice.Category)) : nullptr;
+			Component->SetVolumeMultiplier(Voice.AppliedVolume);
 			Component->SetPitchMultiplier(Voice.Pitch);
 			Component->SetWorldLocation(Voice.Location);
 			if (Voice.FadeIn > 0.0f)
@@ -732,6 +804,15 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 	if (bLogVoices)
 	{
 		LogVoice(TEXT("play"), Voice, *FString::Printf(TEXT(" %d Hz %d ch %.2f s"), Pcm->SampleRate, Pcm->Channels, Pcm->Seconds()));
+	}
+	if (Voice.bMusic || Voice.Category == static_cast<uint8>(EScctAudioCategory::Objective))
+	{
+		// Rare and the ones a player turns down most: said in the log with the class and the gain they play at.
+		const EScctAudioCategory Category = static_cast<EScctAudioCategory>(Voice.Category);
+		const UAudioComponent* Component = Voice.Component.Get();
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctAudio: %s '%s' starts in class %s at category gain %.2f x master %.2f"), Voice.bMusic ? TEXT("music") : TEXT("objective jingle"),
+			*GetName(Voice.FileId), Component != nullptr && Component->SoundClassOverride != nullptr ? *Component->SoundClassOverride->GetName() : UScctAudioMix::CategoryName(Category),
+			Mix != nullptr ? Mix->GetGain(Category) : 1.0f, Mix != nullptr ? Mix->GetMasterGain() : 1.0f);
 	}
 	return true;
 }
@@ -843,7 +924,10 @@ USoundAttenuation* UScctAudioSubsystem::FindOrCreateAttenuation(float MinDistanc
 	const float Min = static_cast<float>(MinKey);
 	// A sound without a radius has no reach limit in the original; it is inaudible long before this.
 	const float Reach = RadiusKey > 0 ? ReachPerRadius * RadiusKey : 200.0f * Min;
-	const float Falloff = FMath::Max(Reach - Min, 1.0f);
+	// The settings reach well past the original's reach: Unreal does not start a sound of a second or less whose
+	// place lies beyond the attenuation's outer distance (au.SoundDistanceOptimizationLength), so with the outer
+	// distance at the reach the one-shots handed over from beyond it (Play) were counted as played and never heard.
+	const float Falloff = FMath::Max(Reach * HeardPastReach - Min, 1.0f);
 
 	Found = NewObject<USoundAttenuation>(this);
 	FSoundAttenuationSettings& Settings = Found->Attenuation;
@@ -854,7 +938,9 @@ USoundAttenuation* UScctAudioSubsystem::FindOrCreateAttenuation(float MinDistanc
 	Settings.FalloffDistance = Falloff;
 
 	// The original's curve, MinDistance / (MinDistance + 0.5 x (d - MinDistance)), sampled where it bends most
-	// (close to the source) and cut to nothing at the reach.
+	// (close to the source). It is not cut to nothing at the reach: it goes on to the outer distance, and the last
+	// key is the curve's own value there, which Unreal holds for anything further away (about 2% of full volume at
+	// 100 x a radius equal to the minimum distance, 0.2% at 1000 x).
 	Settings.DistanceAlgorithm = EAttenuationDistanceModel::Custom;
 	FRichCurve* Curve = Settings.CustomAttenuationCurve.GetRichCurve();
 	Curve->Reset();
@@ -865,7 +951,7 @@ USoundAttenuation* UScctAudioSubsystem::FindOrCreateAttenuation(float MinDistanc
 		const float Beyond = Falloff * FMath::Pow(1.0e-4f, 1.0f - static_cast<float>(Key) / Keys) * 0.98f;
 		Curve->AddKey(Beyond / Falloff, Min / (Min + 0.5f * Beyond));
 	}
-	Curve->AddKey(1.0f, 0.0f);
+	Curve->AddKey(1.0f, Min / (Min + 0.5f * Falloff));
 
 	// Far sounds lose their top end, as through air.
 	Settings.bAttenuateWithLPF = true;
@@ -882,6 +968,27 @@ USoundAttenuation* UScctAudioSubsystem::FindOrCreateAttenuation(float MinDistanc
 	Settings.ReverbDistanceMin = Min;
 	Settings.ReverbDistanceMax = FMath::Max(Min * 4.0f, 3000.0f);
 	return Found;
+}
+
+USoundAttenuation* UScctAudioSubsystem::FindOrCreateOwnSoundSettings()
+{
+	if (OwnSoundSettings != nullptr)
+	{
+		return OwnSoundSettings;
+	}
+
+	// No distance, no direction: only the send to the reverb of the room the listener stands in.
+	OwnSoundSettings = NewObject<USoundAttenuation>(this);
+	FSoundAttenuationSettings& Settings = OwnSoundSettings->Attenuation;
+	Settings.bAttenuate = false;
+	Settings.bSpatialize = false;
+	Settings.bAttenuateWithLPF = false;
+	Settings.bEnableListenerFocus = false;
+	Settings.bEnableOcclusion = false;
+	Settings.bEnableReverbSend = true;
+	Settings.ReverbSendMethod = EReverbSendMethod::Manual;
+	Settings.ManualReverbSendLevel = OwnSoundReverbSend;
+	return OwnSoundSettings;
 }
 
 UAudioComponent* UScctAudioSubsystem::AcquireComponent()
@@ -1086,8 +1193,8 @@ void UScctAudioSubsystem::LogSummary() const
 		Ambient += Voice.AmbientId != 0 ? 1 : 0;
 		Sounding += Voice.Component.IsValid() ? 1 : 0;
 	}
-	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: %d voices now (%d playing, %d waiting, %d ambient, peak %d), %d Unreal components in use of %d made; since the match began %d started, %d stopped, %d out of reach, %d refused by the slot rule, %d replaced; files: %d decoded (%.1f MB held), %d failed to decode, %d plays lost to them; listener at (%.0f, %.0f, %.0f)"),
-		Voices.Num(), Playing, Waiting, Ambient, PeakVoices, Sounding, Components.Num(), NumStarted, NumStopped, NumOutOfReach, NumRefused, NumStolen,
+	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: %d voices now (%d playing, %d waiting, %d ambient, peak %d), %d Unreal components in use of %d made; since the match began %d started, %d stopped, %d played beyond 100 x their radius, %d refused by the slot rule, %d replaced, %d objective jingles skipped; files: %d decoded (%.1f MB held), %d failed to decode, %d plays lost to them; listener at (%.0f, %.0f, %.0f)"),
+		Voices.Num(), Playing, Waiting, Ambient, PeakVoices, Sounding, Components.Num(), NumStarted, NumStopped, NumOutOfReach, NumRefused, NumStolen, NumObjectiveSkipped,
 		Cache.GetNumDecoded(), Cache.GetBytes() / (1024.0 * 1024.0), Cache.GetNumFailed(), NumFailedFiles, Listener.X, Listener.Y, Listener.Z);
 
 	// The engine's own listener must be where this subsystem takes it to be (the camera), or every 3D voice is

@@ -13,7 +13,10 @@
 #include "Misc/CommandLine.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/Parse.h"
+#include "Hud/ScctVisionSubsystem.h"
+#include "Misc/ScopeExit.h"
 #include "OpenSCCT.h"
+#include "Play/ScctLevelStateSubsystem.h"
 #include "Play/ScctEquipmentSubsystem.h"
 #include "Play/ScctExposure.h"
 #include "Play/ScctPawnProxy.h"
@@ -23,15 +26,34 @@
 
 namespace
 {
-	// The light on the bodies of the local player's side (UpdateBodyFill): its strength in a moderately lit room, in the
-	// map lights' units, how far it reaches from the camera and how far above the camera it sits.
-	// scct.BodyFill changes the strength while the game runs (0 switches the light off).
-	constexpr float BodyFillIntensity = 2.4f;
+	// The lights on the bodies of the local player's side (UpdateBodyFill): their strengths in a moderately lit
+	// room, in the map lights' units, and how far they reach. The fill stands above the camera's right shoulder,
+	// the rim behind the local body and above it. scct.BodyFill and scct.BodyRim change the strengths while the
+	// game runs (0 switches a light off).
+	constexpr float BodyFillIntensity = 1.6f;
+	constexpr float BodyRimIntensity = 3.0f;
 	constexpr float BodyFillRadius = 700.0f;
-	constexpr float BodyFillRaise = 25.0f;
+	constexpr float BodyRimRadius = 520.0f;
+	constexpr float BodyFillRaise = 55.0f;
+	constexpr float BodyFillAside = 70.0f;
+	constexpr float BodyRimBehind = 150.0f;
+	constexpr float BodyRimRaise = 115.0f;
+	constexpr float BodyRimAside = 60.0f;
+	// How fast the lights follow the exposure, per second.
+	constexpr float BodyLightFollow = 6.0f;
 
 	TAutoConsoleVariable<float> CVarBodyFill(TEXT("scct.BodyFill"), BodyFillIntensity,
-		TEXT("Strength of the soft light from the camera on the bodies of the local player's own side (0: off)."), ECVF_Default);
+		TEXT("Strength of the soft light from over the camera's shoulder on the bodies of the local player's own side (0: off)."), ECVF_Default);
+	TAutoConsoleVariable<float> CVarBodyRim(TEXT("scct.BodyRim"), BodyRimIntensity,
+		TEXT("Strength of the edge light from behind the local player's body on the bodies of his own side (0: off)."), ECVF_Default);
+
+	// The local body's near fade (UpdateBodyFade): what of it is nearer the camera than this, in cm, thins out of
+	// the picture and is gone at half the distance. The camera of a spy who walks stands about 90 cm behind him;
+	// with the gun drawn it stands 30 to 40 cm behind his back, and the arm and gun reach from there to 70 cm
+	// (at 70 they were a see-through ghost in front of the picture). The head goes whole a little further out
+	// (AScctPawnProxy::SetNearFade).
+	TAutoConsoleVariable<float> CVarBodyFade(TEXT("scct.BodyFade"), 40.0f,
+		TEXT("Distance from the camera, cm, under which the local player's own body fades out of the picture (gone at half of it; 0: never)."), ECVF_Default);
 
 	constexpr int32 MaxLights = 16;
 	constexpr int32 MaxMeshes = 96;
@@ -250,20 +272,9 @@ bool UScctEffectsSubsystem::EnsureScene()
 		LightComponents.Add(Light);
 	}
 
-	BodyFill = NewObject<UPointLightComponent>(Host);
-	BodyFill->SetMobility(EComponentMobility::Movable);
-	BodyFill->bUseInverseSquaredFalloff = false; // the same units as the map's lights (Tools/Import/import_map.py)
-	BodyFill->SetLightFalloffExponent(1.0f);
-	BodyFill->SetAttenuationRadius(BodyFillRadius);
-	BodyFill->SetCastShadows(false);
-	BodyFill->SetSpecularScale(0.6f);
-	BodyFill->SetLightingChannels(false, true, false);
-	// Lighting channels do not hold for the air: without this the light, which sits at the camera, lights the haze
-	// right in front of the lens and a foggy yard turns into a flat grey wash.
-	BodyFill->SetVolumetricScatteringIntensity(0.0f);
-	BodyFill->SetVisibility(false);
-	BodyFill->SetupAttachment(Root);
-	BodyFill->RegisterComponent();
+	BodyFill = MakeBodyLight(BodyFillRadius, 0.35f);
+	// The edge is mostly sheen: light that grazes the cloth towards the camera.
+	BodyRim = MakeBodyLight(BodyRimRadius, 1.0f);
 
 	SmokeVolumes.Init(Host);
 	MeshUsed.Init(false, MaxMeshes);
@@ -337,30 +348,51 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 	UpdateEffectActors(FxSeconds);
 	UpdateDevices(FxSeconds);
 	UpdateLights(FxSeconds);
-	UpdateBodyFill();
+	UpdateBodyFill(DeltaSeconds);
+	UpdateBodyFade();
 
 	const FScctBridgeView& View = Session->GetView();
 	Sprites.Tick(FxSeconds, FVector(View.X, View.Y, View.Z), FRotator(View.Pitch, View.Yaw, View.Roll).Quaternion());
 	PeakSprites = FMath::Max(PeakSprites, Sprites.GetNumLive());
 }
 
-void UScctEffectsSubsystem::UpdateBodyFill()
+UPointLightComponent* UScctEffectsSubsystem::MakeBodyLight(float Radius, float Specular)
 {
-	if (BodyFill == nullptr)
+	UPointLightComponent* Light = NewObject<UPointLightComponent>(Host);
+	Light->SetMobility(EComponentMobility::Movable);
+	Light->bUseInverseSquaredFalloff = false; // the same units as the map's lights (Tools/Import/import_map.py)
+	Light->SetLightFalloffExponent(1.0f);
+	Light->SetAttenuationRadius(Radius);
+	Light->SetCastShadows(false);
+	Light->SetSpecularScale(Specular);
+	Light->SetLightingChannels(false, true, false);
+	// Lighting channels do not hold for the air: without this a light near the camera lights the haze right in
+	// front of the lens and a foggy yard turns into a flat grey wash.
+	Light->SetVolumetricScatteringIntensity(0.0f);
+	// Nor for Lumen's bounce: the light is for the bodies alone.
+	Light->SetIndirectLightingIntensity(0.0f);
+	Light->SetVisibility(false);
+	Light->SetupAttachment(Host->GetRootComponent());
+	Light->RegisterComponent();
+	return Light;
+}
+
+void UScctEffectsSubsystem::UpdateBodyFill(float DeltaSeconds)
+{
+	if (BodyFill == nullptr || BodyRim == nullptr)
 	{
 		return;
 	}
 	const AScctPawnProxy* Local = Session->FindLocalProxy();
 	if (Local == nullptr)
 	{
-		if (BodyFill->IsVisible())
-		{
-			BodyFill->SetVisibility(false);
-		}
+		BodyFill->SetVisibility(false);
+		BodyRim->SetVisibility(false);
+		BodyLightScale = 0.0f;
 		return;
 	}
 
-	// The fill's channel on the bodies of the local player's side, off every other body (sides can change
+	// The lights' channel on the bodies of the local player's side, off every other body (sides can change
 	// between rounds while the proxies stay).
 	for (const FScctBridgePawn& Pawn : Session->GetPawns())
 	{
@@ -377,14 +409,54 @@ void UScctEffectsSubsystem::UpdateBodyFill()
 		}
 	}
 
+	// Over the whole exposure range, not a flash's narrower one: the lights fall on nothing but these bodies, and
+	// with the flash's upper bound a spy in a brightly lit room was a flat black cut-out again. Eased, because the
+	// exposure read is the last frame's and moves fast in a match's first second: followed frame by frame the
+	// figure flashed pale while the eye was still opening.
+	const float Wanted = FScctExposure::PictureScale(0.03f, 16.0f);
+	BodyLightScale = BodyLightScale > 0.0f
+		? FMath::Exp(FMath::FInterpTo(FMath::Loge(BodyLightScale), FMath::Loge(Wanted), DeltaSeconds, BodyLightFollow))
+		: Wanted;
+
 	const FScctBridgeView& View = Session->GetView();
-	BodyFill->SetWorldLocation(FVector(View.X, View.Y, View.Z + BodyFillRaise));
-	// Over the whole exposure range, not a flash's narrower one: it lights nothing but these bodies, and with the
-	// flash's upper bound a spy in a brightly lit room was a flat black cut-out again.
-	BodyFill->SetIntensity(FMath::Max(CVarBodyFill.GetValueOnGameThread(), 0.0f) * FScctExposure::PictureScale(0.03f, 16.0f));
-	if (!BodyFill->IsVisible())
+	const FVector Eye(View.X, View.Y, View.Z);
+	const FRotationMatrix Axes(FRotator(0.0, View.Yaw, 0.0));
+	const FVector Forward = Axes.GetUnitAxis(EAxis::X);
+	const FVector Right = Axes.GetUnitAxis(EAxis::Y);
+
+	BodyFill->SetWorldLocation(Eye + Right * BodyFillAside + FVector(0.0, 0.0, BodyFillRaise));
+	BodyFill->SetIntensity(FMath::Max(CVarBodyFill.GetValueOnGameThread(), 0.0f) * BodyLightScale);
+	BodyFill->SetVisibility(true);
+
+	// Behind the body as the camera sees it, on the side the fill does not come from. From his own eyes the
+	// player sees no body of his own: the edge light then stands ahead of the camera, behind whoever he looks at.
+	const FScctBridgePawn& Pawn = Local->GetPawn();
+	const FVector Centre(Pawn.X, Pawn.Y, Pawn.Z);
+	FVector Away = Local->IsFirstPerson() ? Forward : (Centre - Eye).GetSafeNormal2D();
+	if (Away.IsNearlyZero())
 	{
-		BodyFill->SetVisibility(true);
+		Away = Forward;
+	}
+	const FVector From = Local->IsFirstPerson() ? Eye + Away * 250.0f : Centre;
+	BodyRim->SetWorldLocation(From + Away * BodyRimBehind - Right * BodyRimAside + FVector(0.0, 0.0, BodyRimRaise));
+	BodyRim->SetIntensity(FMath::Max(CVarBodyRim.GetValueOnGameThread(), 0.0f) * BodyLightScale);
+	BodyRim->SetVisibility(true);
+}
+
+void UScctEffectsSubsystem::UpdateBodyFade()
+{
+	// The proxies stay while the local player changes (a new round, another side): only his body has the fade.
+	// A tour camera is not the player's and shows him whole.
+	const AScctPawnProxy* Local = Session->FindLocalProxy();
+	const float Distance = Session->IsTourView() ? 0.0f : FMath::Max(CVarBodyFade.GetValueOnGameThread(), 0.0f);
+	const FScctBridgeView& View = Session->GetView();
+	const FVector Eye(View.X, View.Y, View.Z);
+	for (const TPair<int32, TObjectPtr<AScctPawnProxy>>& Pair : Session->GetProxies())
+	{
+		if (AScctPawnProxy* Proxy = Pair.Value)
+		{
+			Proxy->SetNearFade(Proxy == Local ? Distance : 0.0f, Eye);
+		}
 	}
 }
 
@@ -583,6 +655,9 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 				Facing.Roll = Random.FRandRange(0.0f, 360.0f);
 				// Shallow, so a mark on a thin wall or a door edge is not projected onto what stands behind it.
 				Decal->DecalSize = FVector(4.0, Size, Size);
+
+				// A mark on a door, a lift or any other map actor that moves goes with it, and is drawn only while
+				// that actor is (Play/ScctEffectsMarks.cpp). A mark on the level's own geometry stays put.
 				Decal->SetWorldLocationAndRotation(At, Facing);
 				AttachMark(Mark.Slot, Mark, *Decal);
 			}
@@ -621,6 +696,19 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 {
 	const int32 Count = Events->GetEffectActors(ActorBuffer.GetData(), ActorBuffer.Num());
+	const UScctVisionSubsystem* Vision = UScctVisionSubsystem::Find(GetWorld());
+	const bool bShowVisionOnly = Vision != nullptr && Vision->ShowsVisionOnlyEffects();
+	int32 NumVisionOnly = 0;
+	ON_SCOPE_EXIT
+	{
+		const int32 Shown = bShowVisionOnly ? NumVisionOnly : 0;
+		if (NumVisionOnly != LoggedVisionOnly || Shown != LoggedVisionOnlyShown)
+		{
+			LoggedVisionOnly = NumVisionOnly;
+			LoggedVisionOnlyShown = Shown;
+			UE_LOG(LogOpenSCCT, Log, TEXT("Effects: %d vision-only effects listed, %d shown (mode %d)"), NumVisionOnly, Shown, Vision != nullptr ? Vision->GetVisionMode() : 0);
+		}
+	};
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
 		const FScctEffectActor& Record = ActorBuffer[Index];
@@ -645,7 +733,10 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 		// Where it is: on a drawn pawn's bone, or where the simulation has it.
 		const FVector Scale(Record.ScaleX != 0.0f ? Record.ScaleX : 1.0f, Record.ScaleY != 0.0f ? Record.ScaleY : 1.0f, Record.ScaleZ != 0.0f ? Record.ScaleZ : 1.0f);
 		FTransform Place(FRotator(Record.Pitch, Record.Yaw, Record.Roll), FVector(Record.X, Record.Y, Record.Z));
-		bool bHidden = (Record.Flags & (EScctEffectFlags::Hidden | EScctEffectFlags::VisionOnly)) != 0;
+		// bHideInNormalVision: shown only while the goggles show night or thermal vision.
+		const bool bVisionOnly = (Record.Flags & EScctEffectFlags::VisionOnly) != 0;
+		NumVisionOnly += bVisionOnly ? 1 : 0;
+		bool bHidden = (Record.Flags & EScctEffectFlags::Hidden) != 0 || (bVisionOnly && !bShowVisionOnly);
 		if ((Record.Flags & EScctEffectFlags::OnBone) != 0)
 		{
 			const AScctPawnProxy* Proxy = Session->FindProxy(Record.BaseActorId);
@@ -1027,7 +1118,10 @@ void UScctEffectsSubsystem::SpawnMuzzleFlash(const FVector& At, const FVector& D
 
 	const FLinearColor LightTint = bSticky ? FLinearColor(0.3f, 0.55f, 1.0f) : FLinearColor(1.0f, 0.68f, 0.36f);
 	// The light sits a little way down the line of fire, so it lights the room and not just the shooter's hands.
-	AcquireLight(At + Direction * 35.0, LightTint, 45.0f * Level, 900.0f, 0.09f, true);
+	// As strong and as short as the view model's own flash (at 45 cd times an exposure scale of 0.04 in a lamp-lit
+	// room a spy's or a bot's shot left the room as it was). It lives as long as the view model's flash light: a
+	// rifle fires about ten rounds a second and the pool holds 16 lights.
+	AcquireLight(At + Direction * 35.0, LightTint, FScctExposure::MuzzleFlashCandelas() * Level, 900.0f, 0.085f, true);
 }
 
 void UScctEffectsSubsystem::SpawnSparks(const FVector& At, const FVector& Normal, int32 Count, const FLinearColor& Color, float Speed)

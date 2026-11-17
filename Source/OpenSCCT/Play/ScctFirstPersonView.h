@@ -41,10 +41,11 @@ public:
 
 	/**
 	 * Draws the frame's view model as the bridge describes it, in front of Camera (the frame's final camera in
-	 * the world). Cloak is the camo suit's amount on the arms and gun.
+	 * the world). Cloak is the camo suit's amount on the arms and gun; Motion is what the weapon is doing, for
+	 * the moving parts of a model drawn in the original gun's place.
 	 */
 	void Present(const FScctEquipmentApi& Api, FScctEquipmentModels& Models, const UScctWeaponSet* Weapons,
-		const FScctFirstPerson& View, const FTransform& Camera, float Cloak, float DeltaSeconds);
+		const FScctFirstPerson& View, const FTransform& Camera, float Cloak, const FScctWeaponMotion& Motion, float DeltaSeconds);
 
 	/** Nothing is drawn this frame (third person, the scope, a pistol put away, a tour camera). */
 	void Hide(float DeltaSeconds);
@@ -65,6 +66,11 @@ public:
 
 private:
 	void TickFlash(float DeltaSeconds);
+
+	/** -ScctWeaponProbe: logs where a part's bones are from the eye. */
+	void LogViewProbe(int32 Index, class UPoseableMeshComponent& Body, const FTransform& Camera);
+
+	double NextViewProbe[2] = { 0.0, 0.0 };
 
 	FScctEquipmentView Parts[2];
 	int32 PartMeshes[2] = { 0, 0 };

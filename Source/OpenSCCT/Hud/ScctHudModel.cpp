@@ -34,6 +34,13 @@ namespace
 		{ TEXT("Magma"), TEXT("A_Spectator"), TEXT("textWatching") },
 		{ TEXT("Magma"), TEXT("A_Spectator"), TEXT("textRespawnInTime") },
 		{ TEXT("Magma"), TEXT("A_Spectator"), TEXT("textNoRespawnLeft") },
+		{ TEXT("Magma"), TEXT("StickyCamFond"), TEXT("PCtextStickyCam1") },
+		{ TEXT("Magma"), TEXT("StickyCamFond"), TEXT("PCtextStickyCam2") },
+		{ TEXT("Magma"), TEXT("StickyCamFond"), TEXT("PCtextStickyCam3") },
+		{ TEXT("Magma"), TEXT("A_CamNetwork"), TEXT("PCtextCamNetwork1") },
+		{ TEXT("Magma"), TEXT("A_CamNetwork"), TEXT("PCtextCamNetwork2") },
+		{ TEXT("Magma"), TEXT("A_CamNetwork"), TEXT("PCtextCamNetwork3") },
+		{ TEXT("Magma"), TEXT("A_MessageAlert02"), TEXT("messageAlert") },
 	};
 	static_assert(UE_ARRAY_COUNT(LabelSources) == static_cast<int32>(EScctHudLabel::Count), "One source per label");
 
@@ -152,6 +159,13 @@ void FScctHudModel::AddMessage(const FScctHudMessage& Message)
 		return;
 	}
 
+	// A chat line comes with who said it; the log draws the name in his side's colour.
+	if (Message.Category == EScctHudMessageCategory::Chat || Message.Category == EScctHudMessageCategory::TeamChat)
+	{
+		Line.Actor = Text(Message.ActorNameId);
+		Line.ActorTeam = Message.ActorTeam;
+	}
+
 	// A line about a place that has no name starts with the original's bare separator (" : Objectives locked").
 	while (Line.Text.RemoveFromStart(TEXT(":")))
 	{
@@ -173,6 +187,10 @@ void FScctHudModel::AddMessage(const FScctHudMessage& Message)
 		break;
 	case EScctHudMessageCategory::Reticle:
 		// Shown under the crosshair from the snapshot (ReticleMessageId) for as long as the original shows it.
+		break;
+	case EScctHudMessageCategory::Chat:
+	case EScctHudMessageCategory::TeamChat:
+		// The chat panel (Hud/ScctChatSubsystem) shows players' lines, with their history; the log would repeat them.
 		break;
 	default:
 		Line.Life = FMath::Clamp(Message.Duration, 3.5f, 7.0f);
@@ -260,6 +278,7 @@ void FScctHudModel::Advance(float DeltaSeconds)
 	VisionShown = Ease(VisionShown, bVision ? 1.0f : 0.0f, DeltaSeconds, 10.0f);
 
 	ScoreboardShown = Ease(ScoreboardShown, bScoreboardHeld ? 1.0f : 0.0f, DeltaSeconds, 16.0f);
+	StatusShown = Ease(StatusShown, bStatusPage ? 1.0f : 0.0f, DeltaSeconds, 16.0f);
 
 	if (PreviewWinner >= 0)
 	{

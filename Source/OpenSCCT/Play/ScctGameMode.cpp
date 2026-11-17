@@ -6,6 +6,7 @@
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Menu/ScctMatchMenuWidget.h"
+#include "Hub/ScctHubSubsystem.h"
 #include "Misc/App.h"
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
@@ -27,6 +28,28 @@ namespace
 		const FString Value = UGameplayStatics::ParseOption(Options, Key);
 		return !(Value == TEXT("0") || Value.Equals(TEXT("false"), ESearchCase::IgnoreCase)
 			|| Value.Equals(TEXT("no"), ESearchCase::IgnoreCase) || Value.Equals(TEXT("off"), ESearchCase::IgnoreCase));
+	}
+
+	/** ?Sidearm=: the simulation's number of a sidearm by its name (EScctSidearm), or a number; -1 for none. */
+	int32 ParseSidearm(const FString& Value, int32 Default)
+	{
+		static const TCHAR* const Names[] = { TEXT("suppressed"), TEXT("automatic"), TEXT("magnum44"), TEXT("desert_eagle"), TEXT("unsuppressed") };
+		if (Value.IsEmpty())
+		{
+			return Default;
+		}
+		if (Value.Equals(TEXT("none"), ESearchCase::IgnoreCase))
+		{
+			return -1;
+		}
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Names); ++Index)
+		{
+			if (Value.Equals(Names[Index], ESearchCase::IgnoreCase))
+			{
+				return Index;
+			}
+		}
+		return Value.IsNumeric() ? FMath::Clamp(FCString::Atoi(*Value), -1, static_cast<int32>(UE_ARRAY_COUNT(Names)) - 1) : Default;
 	}
 
 	/** The bots' skill as the bridge counts it: 0 default, 1 easy, 2 normal, 3 hard, 4 expert. */
@@ -73,10 +96,15 @@ void AScctGameMode::InitGame(const FString& MapName, const FString& Options, FSt
 	Match.Bots = UGameplayStatics::GetIntOption(Options, TEXT("Bots"), Match.Bots);
 	Match.Difficulty = ParseDifficulty(UGameplayStatics::ParseOption(Options, TEXT("Difficulty")));
 	Match.bSidearms = ParseSwitch(Options, TEXT("Sidearms"));
+	Match.Sidearm = ParseSidearm(UGameplayStatics::ParseOption(Options, TEXT("Sidearm")), Match.Sidearm);
 	Match.bRifles = ParseSwitch(Options, TEXT("Rifles"));
 	Match.bOfflineRules = ParseSwitch(Options, TEXT("Practice"));
 	Match.bResponsiveSmoke = ParseSwitch(Options, TEXT("ResponsiveSmoke"));
 	Match.PlayerName = UGameplayStatics::ParseOption(Options, TEXT("Name"));
+	Match.TimeLimit = UGameplayStatics::GetIntOption(Options, TEXT("TimeLimit"), -1);
+	Match.SpyLives = UGameplayStatics::GetIntOption(Options, TEXT("SpyLives"), -1);
+	Match.MercLives = UGameplayStatics::GetIntOption(Options, TEXT("MercLives"), -1);
+	Match.RespawnSeconds = UGameplayStatics::GetIntOption(Options, TEXT("Respawn"), -1);
 	bOnline = ParseSwitch(Options, UScctOnlineSubsystem::OnlineOption);
 	FParse::Value(FCommandLine::Get(), TEXT("ScctMatchMenu="), OpenMenuIn);
 
@@ -99,6 +127,15 @@ void AScctGameMode::StartPlay()
 	UScctOnlineSubsystem* Online = UScctOnlineSubsystem::Get(this);
 	if (Session == nullptr)
 	{
+		return;
+	}
+
+	UScctHubSubsystem* Hub = UScctHubSubsystem::Get(this);
+	if (Hub != nullptr && Hub->ShouldPresent(GetWorld()))
+	{
+		// The hub is the hub server's: this level only presents the session the hub visit puts in the bridge's slot.
+		UE_LOG(LogOpenSCCT, Log, TEXT("Level %s presents the hub visit (no local match)"), *Match.Map);
+		Hub->PresentIn(Session);
 		return;
 	}
 
@@ -136,6 +173,7 @@ void AScctGameMode::Tick(float DeltaSeconds)
 			return;
 		}
 		MatchMenu->OnResumed.BindUObject(this, &AScctGameMode::SetMenuOpen, false);
+		MatchMenu->OnWantsOpen.BindUObject(this, &AScctGameMode::SetMenuOpen, true);
 		MatchMenu->AddToViewport(30);
 		GiveInputToGame(Player);
 	}
@@ -192,9 +230,9 @@ void AScctGameMode::Tick(float DeltaSeconds)
 
 void AScctGameMode::HandleLocalCommand(FName Name, int32 Arg, bool bPressed)
 {
-	// Quit is the original's "leave the game" key: here it brings up the menu that has the way out, so a slip of
-	// the finger does not end a match.
-	if (bPressed && IsValid(MatchMenu) && !MatchMenu->IsMenuOpen() && (Name == TEXT("ShowMenu") || Name == TEXT("Quit")))
+	// Quit (F11 in the stock layout) does nothing, as in OpenSCCT's Godot client, which lists it as a legacy
+	// shortcut with no handler ("use the game menu to quit"): the way out of a match is the menu's last button.
+	if (bPressed && IsValid(MatchMenu) && !MatchMenu->IsMenuOpen() && Name == TEXT("ShowMenu"))
 	{
 		SetMenuOpen(true);
 	}
