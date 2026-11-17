@@ -59,7 +59,9 @@ void AScctFrontEndGameMode::StartPlay()
 
 	for (const FBackdrop& Backdrop : Backdrops)
 	{
-		const FString Level = UScctOnlineSubsystem::LevelOf(Backdrop.Map);
+		// A backdrop is streamed in as a level instance, which takes no URL options, so only an imported level can be one
+		// (the runtime level reads its map from the world's ?ScctMap=).
+		const FString Level = UScctOnlineSubsystem::ImportedLevelOf(Backdrop.Map);
 		if (!FPackageName::DoesPackageExist(Level))
 		{
 			continue;

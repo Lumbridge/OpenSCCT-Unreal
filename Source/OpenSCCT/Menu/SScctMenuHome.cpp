@@ -9,6 +9,7 @@
 #include "Online/ScctOnlineSubsystem.h"
 #include "Online/ScctRejoinSubsystem.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -50,6 +51,7 @@ namespace
 				[
 					SAssignNew(Made, SScctButton)
 					.Look(EScctButtonLook::Menu)
+					.Compact(true)
 					.Text(FText::FromString(Caption.ToUpper()))
 					.SubText(FText::FromString(Sub))
 					.Description(FText::FromString(Description))
@@ -79,6 +81,7 @@ namespace
 					[
 						SNew(SScctButton)
 						.Look(EScctButtonLook::Menu)
+						.Compact(true)
 						.Text(TAttribute<FText>::CreateLambda([WeakRejoin]
 						{
 							FScctRejoinChoice Choice;
@@ -165,9 +168,17 @@ namespace
 						[
 							SNew(SBox).WidthOverride(64.0f).HAlign(HAlign_Left)[ SNew(SBox).WidthOverride(64.0f)[ ScctUi::Rule(0.5f) ] ]
 						]
-						+ SVerticalBox::Slot().AutoHeight().Padding(-24.0f, 0.0f, 0.0f, 0.0f)
+						// The entries take the height left above the key hints and scroll (following the focus) when they
+						// need more, as with REJOIN shown or on a short window.
+						+ SVerticalBox::Slot().FillHeight(1.0f).Padding(-24.0f, 0.0f, 0.0f, 0.0f)
 						[
-							SNew(SBox).WidthOverride(480.0f)[ Entries ]
+							SNew(SBox).WidthOverride(480.0f)
+							[
+								SNew(SScrollBox)
+								.ScrollBarVisibility(EVisibility::Collapsed)
+								.ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll)
+								+ SScrollBox::Slot()[ Entries ]
+							]
 						]
 					]
 				]
