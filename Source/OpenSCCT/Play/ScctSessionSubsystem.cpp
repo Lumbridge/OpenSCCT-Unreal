@@ -1,6 +1,11 @@
 #include "Play/ScctSessionSubsystem.h"
 
 #include "Engine/World.h"
+#include "HAL/PlatformMisc.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "Misc/Paths.h"
+#include "UnrealClient.h"
 #include "OpenSCCT.h"
 #include "Play/ScctPawnProxy.h"
 
@@ -88,6 +93,7 @@ void UScctSessionSubsystem::SendCommand(const TCHAR* Name, int32 Arg)
 void UScctSessionSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+	TickAutoShots(DeltaTime);
 	if (!bPlaying)
 	{
 		return;
@@ -150,4 +156,52 @@ void UScctSessionSubsystem::Fail(const FString& Reason)
 	Failure = Reason;
 	UE_LOG(LogOpenSCCT, Error, TEXT("OpenSCCT match stopped: %s"), *Reason);
 	StopMatch();
+}
+
+void UScctSessionSubsystem::TickAutoShots(float DeltaTime)
+{
+	if (ShotsLeft < 0)
+	{
+		// First tick: read the request once.
+		ShotsLeft = 0;
+		FParse::Value(FCommandLine::Get(), TEXT("ScctShots="), ShotsLeft);
+		float Every = 5.0f;
+		FParse::Value(FCommandLine::Get(), TEXT("ScctShotEvery="), Every);
+		ShotTimer = Every;
+	}
+
+	if (QuitTimer >= 0.0f)
+	{
+		QuitTimer -= DeltaTime;
+		if (QuitTimer < 0.0f)
+		{
+			FPlatformMisc::RequestExit(false);
+		}
+		return;
+	}
+	if (ShotsLeft <= 0)
+	{
+		return;
+	}
+
+	ShotTimer -= DeltaTime;
+	if (ShotTimer > 0.0f)
+	{
+		return;
+	}
+
+	FString Directory = FPaths::ProjectSavedDir() / TEXT("ScctShots");
+	FParse::Value(FCommandLine::Get(), TEXT("ScctShotDir="), Directory);
+	const FString File = Directory / FString::Printf(TEXT("%s_%02d.png"), *GetWorld()->GetMapName(), ShotIndex++);
+	FScreenshotRequest::RequestScreenshot(File, false, false);
+	UE_LOG(LogOpenSCCT, Log, TEXT("Screenshot %s (view valid %d at %.0f %.0f %.0f, playing %d)"), *File, View.Valid, View.X, View.Y, View.Z, bPlaying ? 1 : 0);
+
+	float Every = 5.0f;
+	FParse::Value(FCommandLine::Get(), TEXT("ScctShotEvery="), Every);
+	ShotTimer = Every;
+	if (--ShotsLeft == 0)
+	{
+		// Leave the last request time to be written.
+		QuitTimer = 2.0f;
+	}
 }

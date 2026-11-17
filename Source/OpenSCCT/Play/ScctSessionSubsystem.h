@@ -50,6 +50,17 @@ protected:
 
 private:
 	void Fail(const FString& Reason);
+
+	/**
+	 * Unattended look check: -ScctShots=N saves N screenshots, -ScctShotEvery=S seconds apart (default 5), into
+	 * -ScctShotDir= (default Saved/ScctShots), then quits. Used with -RenderOffscreen so no window appears.
+	 */
+	void TickAutoShots(float DeltaTime);
+
+	int32 ShotsLeft = -1;
+	int32 ShotIndex = 0;
+	float ShotTimer = 0.0f;
+	float QuitTimer = -1.0f;
 	void UpdatePawns();
 
 	const FScctBridgeApi* Api = nullptr;

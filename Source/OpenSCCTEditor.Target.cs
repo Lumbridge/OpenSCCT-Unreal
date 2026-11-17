@@ -7,6 +7,6 @@ public class OpenSCCTEditorTarget : TargetRules
 		Type = TargetType.Editor;
 		DefaultBuildSettings = BuildSettingsVersion.V7;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
-		ExtraModuleNames.Add("OpenSCCT");
+		ExtraModuleNames.AddRange(new[] { "OpenSCCT", "OpenSCCTEditor" });
 	}
 }
