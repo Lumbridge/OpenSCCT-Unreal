@@ -72,7 +72,10 @@ protected:
 
 namespace ScctMenuPages
 {
-	/** The front end's pages by name: home, play, online, address, host, hub, settings, credits. Null for an unknown name. */
+	/**
+	 * The front end's pages by name: home, play, online, address, host, hub, settings, credits, gear and map
+	 * (Menu/ScctOverlayPages.h). Null for an unknown name.
+	 */
 	TSharedPtr<SScctMenuPage> Make(const FString& Name, const FScctMenuHost& Host);
 
 	TSharedRef<SScctMenuPage> MakeHome(const FScctMenuHost& Host);
