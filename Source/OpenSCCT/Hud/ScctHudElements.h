@@ -24,6 +24,13 @@ namespace ScctHudElements
 	/** Binoculars and the rifle scope. */
 	void PaintScope(FScctHudPainter& Painter, const FScctHudModel& Model);
 
+	/**
+	 * The page that replaces the player's view while looking through a gadget's camera: the spy's sticky cam (sweep,
+	 * reticle, zoom, gas, key help) or the merc's camera network (camera name, Alert box, zoom, key help, the blank
+	 * feed of a shot camera). ScctHudElementsGadgets.cpp.
+	 */
+	void PaintCameraPages(FScctHudPainter& Painter, const FScctHudModel& Model);
+
 	// --- Safe-area layer -----------------------------------------------------------------------------------
 	/** Bottom left: health, lives, stance, the gauges and the vision mode. */
 	void PaintStatus(FScctHudPainter& Painter, const FScctHudModel& Model);
@@ -33,6 +40,12 @@ namespace ScctHudElements
 
 	/** Bottom centre: what Use does now, or the list to choose from. */
 	void PaintPrompt(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/**
+	 * Right side: the sticky cam menu (a spy) or the mine menu (a merc) while it is open, its lines in the original's
+	 * colours, the arrow beside the selected one and the unusable ones grey. ScctHudElementsGadgets.cpp.
+	 */
+	void PaintGadgetMenu(FScctHudPainter& Painter, const FScctHudModel& Model);
 
 	/** Top centre: the clock, both teams, objectives done and the countdowns. */
 	void PaintRound(FScctHudPainter& Painter, const FScctHudModel& Model);
@@ -71,6 +84,9 @@ namespace ScctHudElements
 	/** Seconds as m:ss. */
 	FString ClockText(int32 Seconds);
 
-	/** True when the player's own HUD blocks are to be drawn (a live pawn, not hidden by the game). */
+	/**
+	 * True when the player's own HUD blocks are to be drawn (a live pawn, not hidden by the game, not looking through
+	 * a gadget's camera: that page replaces them, as in the original).
+	 */
 	bool ShowsPlayerHud(const FScctHudModel& Model);
 }

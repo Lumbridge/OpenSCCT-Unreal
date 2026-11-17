@@ -34,6 +34,13 @@ namespace
 		{ TEXT("Magma"), TEXT("A_Spectator"), TEXT("textWatching") },
 		{ TEXT("Magma"), TEXT("A_Spectator"), TEXT("textRespawnInTime") },
 		{ TEXT("Magma"), TEXT("A_Spectator"), TEXT("textNoRespawnLeft") },
+		{ TEXT("Magma"), TEXT("StickyCamFond"), TEXT("PCtextStickyCam1") },
+		{ TEXT("Magma"), TEXT("StickyCamFond"), TEXT("PCtextStickyCam2") },
+		{ TEXT("Magma"), TEXT("StickyCamFond"), TEXT("PCtextStickyCam3") },
+		{ TEXT("Magma"), TEXT("A_CamNetwork"), TEXT("PCtextCamNetwork1") },
+		{ TEXT("Magma"), TEXT("A_CamNetwork"), TEXT("PCtextCamNetwork2") },
+		{ TEXT("Magma"), TEXT("A_CamNetwork"), TEXT("PCtextCamNetwork3") },
+		{ TEXT("Magma"), TEXT("A_MessageAlert02"), TEXT("messageAlert") },
 	};
 	static_assert(UE_ARRAY_COUNT(LabelSources) == static_cast<int32>(EScctHudLabel::Count), "One source per label");
 
