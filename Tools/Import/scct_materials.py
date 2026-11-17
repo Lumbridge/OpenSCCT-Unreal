@@ -303,7 +303,19 @@ def build_surface():
     # it into an even transparency. Shadows and traced rays (reflections, bounce light) meet the whole shape.
     near = g.node(unreal.MaterialExpressionScalarParameter, parameter_name="NearFade", default_value=0.0,
                   use_custom_primitive_data=True, primitive_data_index=NEAR_FADE_SLOT)
-    whole = g.custom("return lerp(1.0, A, saturate(UseAlpha));", FLOAT1, A=alpha, UseAlpha=g.scalar("AlphaMask", 1.0))
+    # HorizonCut (0 = off): a skyline panorama that has the original's painted sky above its city keeps only what
+    # lies below this share of its texture's height, so the real sky shows above the city (import_map.py, the
+    # skyline; map_skies.json names the panoramas). The edge is a screen door over 5% of the height, which the
+    # anti-aliasing turns into a soft fade, so the city's glow melts into the sky instead of ending on a ruled line.
+    whole = g.custom("float keep = 1.0;"
+                     " if (Cut > 0.0) {"
+                     " float2 p = P + 5.588238 * float(View.StateFrameIndexMod8);"
+                     " float n = frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));"
+                     " keep = n < saturate((frac(UV.y) - Cut) / 0.05 + 0.5) ? 1.0 : 0.0; }"
+                     " return lerp(1.0, A, saturate(UseAlpha)) * keep;", FLOAT1,
+                     A=alpha, UseAlpha=g.scalar("AlphaMask", 1.0), Cut=g.scalar("HorizonCut", 0.0),
+                     UV=g.node(unreal.MaterialExpressionTextureCoordinate),
+                     P=(g.node(unreal.MaterialExpressionScreenPosition), "PixelPosition"))
     mask = g.custom("float gone = 1.0 - smoothstep(Start * %f, Start, Depth);"
                     " float2 p = P + 5.588238 * float(View.StateFrameIndexMod8);"
                     " float n = frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));"

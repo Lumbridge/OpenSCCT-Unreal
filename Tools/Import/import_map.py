@@ -74,6 +74,7 @@ EMISSIVE_CAUSTICS = 0.08
 # original's view; elsewhere it shifts a little, as a real skyline would.
 BACKDROP_MESHES = re.compile(r"skyline|warp|imm", re.IGNORECASE)          # by the mesh's own name
 BACKDROP_NOT = re.compile(r"sky(?!line)|hemis|cloud|moon|lune|star", re.IGNORECASE)   # the sky itself
+BACKDROP_SKY_CUT = 2.0   # a HorizonCut (M_ScctSurface) above the whole texture: the part is not drawn
 BACKDROP_LEVEL_RADII = 4.0
 BACKDROP_DISTANCE = (60000.0, 150000.0)
 # A skyline is neither a lamp in the room nor part of the sky dome: its glow goes half the way with the exposure.
@@ -541,6 +542,9 @@ def main():
     sky_eye = (lighting.get("sky") or {}).get("location")
     backdrop_rules = json.load(open(os.path.join(HERE, "map_skies.json"))).get("backdrop", {})
     skip_backdrop = set(key(name) for name in backdrop_rules.get("skip", []))
+    horizon_cut = {key(name): float(cut) for name, cut in backdrop_rules.get("horizon_cut", {}).items() if not name.startswith("about")}
+    backdrop_source = {"MI_" + sanitize(name): record.get("source") or name for name, record in material_doc["materials"].items()}
+    cut_sky = []
     backdrop = []
     for instance in gltf["extras"]["svmap"]["instances"]:
         own_name = instance["mesh"].split("#")[0].split(".")[-1]
@@ -585,12 +589,25 @@ def main():
                 material = slot.material_interface
                 if isinstance(material, unreal.MaterialInstanceConstant) and material.get_path_name() not in glowing:
                     glowing.add(material.get_path_name())
+                    # Parts of a skyline that are the sky itself (a painted star sphere, a cloud band) are not drawn,
+                    # and a panorama with a city under its painted sky keeps only the city: the real sky shows.
+                    source = backdrop_source.get(material.get_name(), "")
+                    cut = BACKDROP_SKY_CUT if BACKDROP_NOT.search(source.split(".")[-1]) else horizon_cut.get(key(source), 0.0)
+                    if cut > 0.0:
+                        materials_lib.set_material_instance_scalar_parameter_value(material, "HorizonCut", cut)
+                        overrides = material.get_editor_property("base_property_overrides")
+                        overrides.set_editor_property("override_blend_mode", True)
+                        overrides.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+                        material.set_editor_property("base_property_overrides", overrides)
+                        materials_lib.update_material_instance(material)
+                        cut_sky.append("%s %.2f" % (source.split(".")[-1], cut))
                     if materials_lib.get_material_instance_scalar_parameter_value(material, "Emissive") > 0.0:
                         materials_lib.set_material_instance_scalar_parameter_value(material, "Emissive", BACKDROP_GLOW)
                         materials_lib.set_material_instance_scalar_parameter_value(material, "GlowInPicture", BACKDROP_GLOW_IN_PICTURE)
                         materials_lib.update_material_instance(material)
         log("skyline: %d meshes of the sky zone stand %.0f m out, %.0f times their size (%s)" % (
             len(backdrop), distance / 100.0, grow, ", ".join(sorted(set(i["mesh"].split("#")[0].split(".")[-1] for i, _ in backdrop)))))
+        log("skyline sky left out: " + (", ".join(sorted(set(cut_sky))) or "none"))
     else:
         log("skyline: none")
 

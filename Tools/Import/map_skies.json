@@ -2,8 +2,14 @@
   "about": "Which sky each map gets, chosen by looking at the original's sky zone (its textures and fog): star boxes and dark blue skylines are clear nights, grey cloud and fogged-black skies are overcast nights, ClubE's orange skyline is dusk. 'kinds' holds each sky's settings: panorama (an HDRI of pbr_sets.json), rotation (degrees about the vertical), brightness (of the visible dome), stars (drawn star brightness, 0 = none), sky_light (strength of the light the sky throws), tint, moon (the directional light: lux, colour, yaw and pitch in degrees; omitted = none) and fog (density and the colour the haze glows with; omitted = a thin dark haze). Reviewed against captures of the original game: OrphE is a dark, rainy, hazy night with no stars to see, and MissE's outdoors stands in pale grey fog (its zones fog to grey 199 within 50 m), far brighter than a night. Maps not listed get 'default'.",
   "default": "night_overcast",
   "backdrop": {
-    "about": "The original's skyline meshes (sky zone meshes named skyline, warp or imm) are brought back as far geometry (import_map.py, the skyline). 'skip' names meshes, by their own name, that are left out because they are the sky itself rather than a skyline: a full panorama sphere would hide the real sky.",
-    "skip": []
+    "about": "The original's skyline meshes (sky zone meshes named skyline, warp or imm) are brought back as far geometry (import_map.py, the skyline). 'skip' names meshes, by their own name, that are left out whole because they are the sky itself rather than a skyline: a full panorama sphere would hide the real sky.",
+    "skip": [],
+    "horizon_cut": {
+      "about": "Skyline panoramas whose texture is a painted sky over a city carpet, by the material's source name: only what lies below this share of the texture's height is drawn, fading out over 5% of the height around it (the painted horizon glow melts into the real sky). Parts of a skyline whose material is the sky itself (named sky, cloud, star, moon...) are always left out.",
+      "CLU04_TXT.SkyBox.WArp_clu_ext": 0.505,
+      "TX_SKY09.sfx.warp_skyline": 0.505,
+      "Prison_TEX.sfx.warp_skyline1": 0.505
+    }
   },
   "maps": {
     "AquaE": "night_overcast",
