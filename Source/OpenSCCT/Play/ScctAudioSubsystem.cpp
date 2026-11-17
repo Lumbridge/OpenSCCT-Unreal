@@ -39,7 +39,7 @@ namespace
 	constexpr float AmbientSilence = 0.05f;
 	constexpr float AmbientFadeSeconds = 0.4f;
 
-	// Ambient voices are matched by actor key (3D) or by sound (flat: zones naming one sound share a voice).
+	// Ambient voices are matched by actor key (3D) or by file (flat: zones playing one sound share a voice).
 	constexpr int64 FlatAmbientBit = 1ll << 40;
 
 	const FName ZoneReverbTag(TEXT("ScctZone"));
@@ -143,15 +143,24 @@ void UScctAudioSubsystem::HandleMatchStarted()
 	SummaryTimer = SummaryEvery;
 	if (Events == nullptr)
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Audio: no sound this match, the bridge's events are missing: %s"), *Error);
+		UE_LOG(LogOpenSCCT, Error, TEXT("Audio: no sound this match, the bridge's events are missing: %s"), *Error);
 		return;
 	}
 
 	// Harmless when the bridge already started the feature with the session.
 	Events->Begin();
 	LoadZones(Session->GetSessionInfo().Map);
+	const FAudioDevice* Device = GetWorld()->GetAudioDeviceRaw();
 	UE_LOG(LogOpenSCCT, Log, TEXT("Audio: ready for %s (%s, %d zones with reverb, content %s)"), Session->GetSessionInfo().Map,
-		bHasDevice ? TEXT("audio device present") : TEXT("no audio device: voices are tracked but not heard"), Zones.Num(), *ContentRoot);
+		Device != nullptr ? *FString::Printf(TEXT("audio device present, %d engine voices"), Device->GetMaxChannels())
+			: TEXT("no audio device: voices are tracked but not heard"), Zones.Num(), *ContentRoot);
+	if (Device != nullptr && Device->GetMaxChannels() < MaxEventVoices + 16)
+	{
+		// Config/DefaultEngine.ini sets the engine's limit above ours; with less, the engine drops voices by its
+		// own rule before the original's slot rule here is ever asked.
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Audio: the engine mixes only %d voices at once (AudioSettings QualityLevels MaxChannels); this game keeps up to %d event voices plus ambient loops"),
+			Device->GetMaxChannels(), MaxEventVoices);
+	}
 }
 
 void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
@@ -277,6 +286,8 @@ void UScctAudioSubsystem::Play(const FScctSound& Record)
 		// the server's own calls are not tested again. The file's own radius can be much smaller, and a one-shot
 		// beyond 100 x that is silent for its whole life, so it takes no voice. A loop may still come nearer.
 		++NumOutOfReach;
+		UE_CLOG(bLogVoices, LogOpenSCCT, Log, TEXT("Audio out of reach: '%s' actor %d, %.0f cm from the listener, reach %.0f"), *GetName(Record.FileId),
+			Record.ActorId, FVector::Dist(Location, Listener), ReachPerRadius * Record.Radius);
 		return;
 	}
 	if (!MakeRoom(Record))
@@ -502,7 +513,9 @@ void UScctAudioSubsystem::UpdateAmbient()
 			}
 		}
 
-		const int64 Id = bPositional ? static_cast<int64>(Source.Key) : (FlatAmbientBit | Source.SoundId);
+		// A flat voice is shared by the sources that play one file. (Not by the sound they name: a random list is
+		// picked per source, and two sources with different picks would take the voice from each other every frame.)
+		const int64 Id = bPositional ? static_cast<int64>(Source.Key) : (FlatAmbientBit | Source.FileId);
 		if (const int32* Found = AmbientVoices.Find(Id))
 		{
 			FVoice& Voice = Voices[*Found];
@@ -549,7 +562,7 @@ void UScctAudioSubsystem::UpdateAmbient()
 		FVoice& Voice = Voices[It.Value()];
 		if (!Voice.bSeen)
 		{
-			FadeOutVoice(Voice, AmbientFadeSeconds, TEXT("ambient source out of reach"));
+			FadeOutVoice(Voice, AmbientFadeSeconds, TEXT("ambient source gone or out of reach"));
 			Voice.AmbientId = 0;
 			It.RemoveCurrent();
 		}
@@ -576,7 +589,17 @@ void UScctAudioSubsystem::UpdateVoices(float DeltaSeconds)
 			if (FileState == FScctSoundCache::EState::Failed)
 			{
 				++NumFailedFiles;
-				bRemove = true;
+				if (Voice.AmbientId != 0)
+				{
+					// The source is listed again next frame: its voice stays, silent, so it is not made, counted
+					// and dropped every frame for as long as the source is audible.
+					Voice.State = EVoiceState::Dormant;
+					Voice.RepeatInterval = 0.0f;
+				}
+				else
+				{
+					bRemove = true;
+				}
 			}
 			else if (FileState == FScctSoundCache::EState::Ready && Voice.StartIn <= 0.0f)
 			{
@@ -772,7 +795,7 @@ FVector UScctAudioSubsystem::FindVoiceLocation(const FVoice& Voice) const
 		// A pawn: the drawn body, and the drawn bone when the call names one (a voice from the head, steps from a foot).
 		if (Voice.FollowBoneId != 0 && Proxy->HasModel())
 		{
-			const FName Bone = Proxy->FindMeshBoneName(const_cast<UScctAudioSubsystem*>(this)->GetName(Voice.FollowBoneId));
+			const FName Bone = FindDrawnBone(*Proxy, Voice.FollowBoneId);
 			if (!Bone.IsNone())
 			{
 				return Proxy->GetBodyMesh()->GetSocketLocation(Bone);
@@ -1014,6 +1037,17 @@ const FString& UScctAudioSubsystem::GetName(int32 Id)
 	return Names.Add(Id, Length > 0 ? FString(Buffer) : FString());
 }
 
+FName UScctAudioSubsystem::FindDrawnBone(const AScctPawnProxy& Proxy, int32 BoneId) const
+{
+	// The spy's and the merc's models are different meshes, so the answer is kept per kind.
+	const int64 Key = (static_cast<int64>(Proxy.GetPawn().Kind) << 32) | static_cast<uint32>(BoneId);
+	if (const FName* Known = DrawnBones.Find(Key))
+	{
+		return *Known;
+	}
+	return DrawnBones.Add(Key, Proxy.FindMeshBoneName(const_cast<UScctAudioSubsystem*>(this)->GetName(BoneId)));
+}
+
 FString UScctAudioSubsystem::GetFilePath(int32 FileId)
 {
 	return ContentRoot / GetName(FileId);
@@ -1055,4 +1089,17 @@ void UScctAudioSubsystem::LogSummary() const
 	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: %d voices now (%d playing, %d waiting, %d ambient, peak %d), %d Unreal components in use of %d made; since the match began %d started, %d stopped, %d out of reach, %d refused by the slot rule, %d replaced; files: %d decoded (%.1f MB held), %d failed to decode, %d plays lost to them; listener at (%.0f, %.0f, %.0f)"),
 		Voices.Num(), Playing, Waiting, Ambient, PeakVoices, Sounding, Components.Num(), NumStarted, NumStopped, NumOutOfReach, NumRefused, NumStolen,
 		Cache.GetNumDecoded(), Cache.GetBytes() / (1024.0 * 1024.0), Cache.GetNumFailed(), NumFailedFiles, Listener.X, Listener.Y, Listener.Z);
+
+	// The engine's own listener must be where this subsystem takes it to be (the camera), or every 3D voice is
+	// panned and attenuated from somewhere else: said in the log when the two are apart.
+	FVector EngineListener;
+	const UWorld* World = GetWorld();
+	const FAudioDevice* Device = World != nullptr ? World->GetAudioDeviceRaw() : nullptr;
+	if (bListenerValid && Device != nullptr && Device->GetListenerPosition(0, EngineListener, false))
+	{
+		const double Apart = FVector::Dist(EngineListener, Listener);
+		UE_CLOG(Apart > 50.0, LogOpenSCCT, Warning, TEXT("Audio: the engine's listener is at (%.0f, %.0f, %.0f), %.0f cm from the camera"),
+			EngineListener.X, EngineListener.Y, EngineListener.Z, Apart);
+		UE_CLOG(Apart <= 50.0 && bLogVoices, LogOpenSCCT, Log, TEXT("Audio: the engine's listener is at the camera (%.0f cm apart)"), Apart);
+	}
 }

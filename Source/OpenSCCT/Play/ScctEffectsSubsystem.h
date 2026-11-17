@@ -121,6 +121,8 @@ private:
 	// The looks.
 	void SpawnMuzzleFlash(const FVector& At, const FVector& Direction, float Scale, bool bSticky, bool bSuppressed, bool bShotgun);
 	void SpawnImpact(const FVector& At, const FVector& Normal, const FString& SparkClass, const FString& TypeClass);
+	/** Colours an impact slot's decal for the surface that was hit (the impact's class names say which). */
+	void TintDecal(UMaterialInstanceDynamic* Tint, const FString& TypeClass, const FString& SparkClass);
 	void SpawnExplosion(const FVector& At);
 	void SpawnFlashBang(const FVector& At);
 	void SpawnSparks(const FVector& At, const FVector& Normal, int32 Count, const FLinearColor& Color, float Speed);
@@ -134,6 +136,12 @@ private:
 	FVector FindMuzzle(const FScctShot& Shot) const;
 
 	const FString& GetName(int32 Id);
+
+	/**
+	 * The drawn body's own name for the bone the bridge names BoneId, NAME_None when the body has none. Looked up
+	 * once per bone and pawn kind: effects on a bone ask every frame.
+	 */
+	FName FindDrawnBone(const AScctPawnProxy& Proxy, int32 BoneId);
 	EStyle FindStyle(int32 ClassId);
 	UStaticMesh* FindMesh(int32 MeshId);
 	FVector RandomCone(const FVector& Axis, float HalfAngleDegrees);
@@ -153,6 +161,10 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UDecalComponent>> Decals;
+
+	/** The material instance of each impact slot's decal (same index as Decals). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> DecalTints;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInterface> DecalMaterial;
@@ -179,6 +191,7 @@ private:
 	TArray<uint32> ImpactSeenFrame;
 	TMap<int32, FString> Names;
 	TMap<int32, EStyle> Styles;
+	TMap<int64, FName> DrawnBones;
 	TMap<FString, FSoftObjectPath> MeshAssets;
 
 	TArray<FScctShot> ShotBuffer;

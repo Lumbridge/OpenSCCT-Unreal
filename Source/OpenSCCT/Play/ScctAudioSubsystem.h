@@ -6,6 +6,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctAudioSubsystem.generated.h"
 
+class AScctPawnProxy;
 class UAudioComponent;
 class UReverbEffect;
 class UScctSessionSubsystem;
@@ -144,6 +145,9 @@ private:
 
 	const FString& GetName(int32 Id);
 	FString GetFilePath(int32 FileId);
+
+	/** The drawn body's own name for the bone the bridge names BoneId; looked up once per bone and pawn kind. */
+	FName FindDrawnBone(const AScctPawnProxy& Proxy, int32 BoneId) const;
 	UScctSoundWave* FindOrCreateWave(const FVoice& Voice, const FScctPcmPtr& Pcm);
 	USoundAttenuation* FindOrCreateAttenuation(float MinDistance, float Radius);
 	UAudioComponent* AcquireComponent();
@@ -177,6 +181,7 @@ private:
 	TSparseArray<FVoice> Voices;
 	TMap<int64, int32> AmbientVoices;
 	TMap<int32, FString> Names;
+	mutable TMap<int64, FName> DrawnBones;
 	TArray<FScctSound> SoundBuffer;
 	TArray<FScctAmbientSound> AmbientBuffer;
 	TArray<FZone> Zones;

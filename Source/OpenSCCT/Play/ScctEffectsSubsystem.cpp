@@ -161,7 +161,7 @@ void UScctEffectsSubsystem::HandleMatchStarted()
 	Events = ScctFeature<FScctEventsApi>(&Error);
 	if (Events == nullptr)
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Effects: none this match, the bridge's events are missing: %s"), *Error);
+		UE_LOG(LogOpenSCCT, Error, TEXT("Effects: none this match, the bridge's events are missing: %s"), *Error);
 		return;
 	}
 	Events->Begin();
@@ -220,6 +220,7 @@ bool UScctEffectsSubsystem::EnsureScene()
 	MeshPool.SetNum(MaxMeshes);
 
 	Decals.SetNum(MaxImpactSlots);
+	DecalTints.SetNum(MaxImpactSlots);
 
 	// The effect meshes are original content imported on the player's machine, so they are found by looking, not
 	// by fixed references.
@@ -269,7 +270,7 @@ void UScctEffectsSubsystem::HandleBeforeTicks(float DeltaSeconds)
 void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 {
 	MatchSeconds += DeltaSeconds;
-	if (Events == nullptr || !bSceneReady)
+	if (Events == nullptr || !bSceneReady || !IsValid(Host))
 	{
 		return;
 	}
@@ -441,9 +442,12 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 				Decal->SetupAttachment(Host->GetRootComponent());
 				Decal->RegisterComponent();
 				Decal->SetFadeScreenSize(0.0005f);
+				// Each slot's decal has its own colours, set for the surface that was hit.
+				DecalTints[Mark.Slot] = Decal->CreateDynamicMaterialInstance();
 			}
 			if (bNew || !Decal->IsVisible())
 			{
+				TintDecal(DecalTints[Mark.Slot], GetName(Mark.TypeId), GetName(Mark.SparkClassId));
 				// A decal projects along its own X axis, into the surface; its turn about that axis is random so
 				// a burst does not stamp one shape.
 				const float Size = DecalHalfSize * (Mark.DrawScale > 0.0f ? FMath::Clamp(Mark.DrawScale, 0.5f, 3.0f) : 1.0f);
@@ -505,7 +509,7 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 		if ((Record.Flags & EScctEffectFlags::OnBone) != 0)
 		{
 			const AScctPawnProxy* Proxy = Session->FindProxy(Record.BaseActorId);
-			const FName Bone = Proxy != nullptr && Proxy->HasModel() ? Proxy->FindMeshBoneName(GetName(Record.BoneId)) : NAME_None;
+			const FName Bone = Proxy != nullptr && Proxy->HasModel() ? FindDrawnBone(*Proxy, Record.BoneId) : NAME_None;
 			if (Bone.IsNone())
 			{
 				// Its wearer is not drawn (yet): nothing may show at the actor's own place in mid-air.
@@ -973,15 +977,58 @@ void UScctEffectsSubsystem::SpawnImpact(const FVector& At, const FVector& Normal
 	}
 }
 
+void UScctEffectsSubsystem::TintDecal(UMaterialInstanceDynamic* Tint, const FString& TypeClass, const FString& SparkClass)
+{
+	if (Tint == nullptr)
+	{
+		return;
+	}
+	const auto Is = [&SparkClass, &TypeClass](const TCHAR* Word)
+	{
+		return SparkClass.Contains(Word) || TypeClass.Contains(Word);
+	};
+
+	// The hole itself and the ring of broken surface around it: fresh splinters on wood, bare bright metal,
+	// crushed white on glass, chipped grey on concrete. Strength is how much of the surface the mark covers.
+	FLinearColor Hole(0.012f, 0.011f, 0.01f);
+	FLinearColor Rim(0.3f, 0.29f, 0.27f);
+	float Strength = 0.9f;
+	if (Is(TEXT("Wood")))
+	{
+		Hole = FLinearColor(0.02f, 0.012f, 0.006f);
+		Rim = FLinearColor(0.2f, 0.135f, 0.07f);
+	}
+	else if (Is(TEXT("Metal")) || Is(TEXT("Fence")) || Is(TEXT("Armor")))
+	{
+		Hole = FLinearColor(0.006f, 0.006f, 0.007f);
+		Rim = FLinearColor(0.42f, 0.42f, 0.45f);
+	}
+	else if (Is(TEXT("Glass")))
+	{
+		Hole = FLinearColor(0.05f, 0.055f, 0.06f);
+		Rim = FLinearColor(0.7f, 0.74f, 0.78f);
+		Strength = 0.6f;
+	}
+	else if (Is(TEXT("Sand")) || Is(TEXT("Soft")) || Is(TEXT("Blood")))
+	{
+		Hole = FLinearColor(0.02f, 0.016f, 0.012f);
+		Rim = FLinearColor(0.1f, 0.085f, 0.065f);
+		Strength = 0.75f;
+	}
+	Tint->SetVectorParameterValue(TEXT("Color"), Hole);
+	Tint->SetVectorParameterValue(TEXT("RimColor"), Rim);
+	Tint->SetScalarParameterValue(TEXT("Strength"), Strength);
+}
+
 void UScctEffectsSubsystem::SpawnExplosion(const FVector& At)
 {
 	// The instant of the blast: one white-hot ball.
 	FScctFxParticle& Flash = Sprites.Spawn(EScctFxLayer::Glow);
 	Flash.Position = At + FVector(0.0, 0.0, 20.0);
-	Flash.Color = FLinearColor(15.0f, 11.0f, 6.5f, 1.0f);
-	Flash.Life = 0.16f;
-	Flash.SizeStart = 160.0f;
-	Flash.SizeEnd = 340.0f;
+	Flash.Color = FLinearColor(7.0f, 5.0f, 2.8f, 1.0f);
+	Flash.Life = 0.14f;
+	Flash.SizeStart = 140.0f;
+	Flash.SizeEnd = 260.0f;
 	Flash.FadeIn = 0.02f;
 
 	// The fireball rolling outwards and burning out.
@@ -1052,7 +1099,9 @@ void UScctEffectsSubsystem::SpawnExplosion(const FVector& At)
 		Dust.FadeIn = 0.1f;
 	}
 
-	AcquireLight(At + FVector(0.0, 0.0, 40.0), FLinearColor(1.0f, 0.6f, 0.28f), 500.0f, 1600.0f, 0.45f, true);
+	// The simulation lights the blast too (SFlashLight_FragGrenade, an effect actor of its own); this one is the
+	// fireball's glow on the room, kept low so the two together do not white out the picture at a few metres.
+	AcquireLight(At + FVector(0.0, 0.0, 40.0), FLinearColor(1.0f, 0.6f, 0.28f), 220.0f, 1600.0f, 0.45f, true);
 }
 
 void UScctEffectsSubsystem::SpawnFlashBang(const FVector& At)
@@ -1136,6 +1185,17 @@ const FString& UScctEffectsSubsystem::GetName(int32 Id)
 	TCHAR Buffer[256];
 	const int32 Length = Id != 0 && Events != nullptr ? Events->GetName(Id, Buffer, UE_ARRAY_COUNT(Buffer)) : 0;
 	return Names.Add(Id, Length > 0 ? FString(Buffer) : FString());
+}
+
+FName UScctEffectsSubsystem::FindDrawnBone(const AScctPawnProxy& Proxy, int32 BoneId)
+{
+	// The spy's and the merc's models are different meshes, so the answer is kept per kind.
+	const int64 Key = (static_cast<int64>(Proxy.GetPawn().Kind) << 32) | static_cast<uint32>(BoneId);
+	if (const FName* Known = DrawnBones.Find(Key))
+	{
+		return *Known;
+	}
+	return DrawnBones.Add(Key, Proxy.FindMeshBoneName(GetName(BoneId)));
 }
 
 UScctEffectsSubsystem::EStyle UScctEffectsSubsystem::FindStyle(int32 ClassId)

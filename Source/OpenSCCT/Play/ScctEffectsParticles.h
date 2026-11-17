@@ -60,11 +60,11 @@ public:
 	/** Moves the particles on and writes what the camera at ViewLocation sees. */
 	void Tick(float DeltaSeconds, const FVector& ViewLocation, const FQuat& ViewRotation);
 
-	/** Removes every particle at once (a new match). */
+	/** Removes every particle at once and stops drawing them, without waiting for a Tick (a match ended). */
 	void Clear();
 
 	int32 GetNumLive() const { return NumLive; }
-	bool IsDrawable() const { return Layers[0].Component != nullptr || Layers[1].Component != nullptr; }
+	bool IsDrawable() const { return Layers[0].Component.IsValid() || Layers[1].Component.IsValid(); }
 
 private:
 	struct FStreak
@@ -80,7 +80,7 @@ private:
 		TArray<FScctFxParticle> Particles;
 		TArray<FTransform> Transforms;
 		TArray<float> CustomData;
-		UInstancedStaticMeshComponent* Component = nullptr; // owned by the host actor
+		TWeakObjectPtr<UInstancedStaticMeshComponent> Component; // owned by the host actor, which may go first
 		int32 Next = 0;
 		int32 Live = 0;
 		bool bDrawnEmpty = false; // the instance buffers already show nothing

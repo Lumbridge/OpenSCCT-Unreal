@@ -10,8 +10,15 @@ namespace
 	// Sprites per layer. An explosion with its smoke uses about 150; a fire fight a few hundred.
 	constexpr int32 LayerCapacity[] = { 1536, 768 };
 
-	// The four floats each instance hands its material: colour and opacity.
-	constexpr int32 CustomFloats = 4;
+	// The five floats each instance hands its material: colour, opacity, and the distance (cm) over which a glow
+	// sprite dims into a surface behind it (M_ScctFxGlow; the smoke material has a fixed one).
+	constexpr int32 CustomFloats = 5;
+
+	/** A big fireball meets the floor softly; a spark next to a wall keeps its brightness. */
+	float SoftEdge(float Size)
+	{
+		return FMath::Clamp(Size * 0.3f, 1.0f, 60.0f);
+	}
 
 	// The engine's plane is 100 units across.
 	constexpr double QuadSize = 100.0;
@@ -115,6 +122,23 @@ void FScctFxSprites::Clear()
 		}
 	}
 	Streaks.Reset();
+
+	// No frame may follow (the match is over and the session raises none), so what was drawn is taken away now.
+	NumLive = 0;
+	for (FLayer& Layer : Layers)
+	{
+		Layer.Live = 0;
+		UInstancedStaticMeshComponent* Component = Layer.Component.Get();
+		if (Component != nullptr && !Layer.bDrawnEmpty)
+		{
+			for (FTransform& Transform : Layer.Transforms)
+			{
+				Transform = HiddenInstance;
+			}
+			Component->BatchUpdateInstancesTransforms(0, TArrayView<const FTransform>(Layer.Transforms), true, true, true);
+			Layer.bDrawnEmpty = true;
+		}
+	}
 }
 
 void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const FQuat& ViewRotation)
@@ -178,6 +202,7 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 			Custom[1] = Particle.Color.G;
 			Custom[2] = Particle.Color.B;
 			Custom[3] = Particle.Color.A * FMath::Clamp(Fade, 0.0f, 1.0f);
+			Custom[4] = SoftEdge(Size);
 		}
 
 		int32 Drawn = Layer.Live;
@@ -194,6 +219,7 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 					Custom[1] = Streaks[Index].Color.G;
 					Custom[2] = Streaks[Index].Color.B;
 					Custom[3] = Streaks[Index].Color.A;
+					Custom[4] = SoftEdge(Streaks[Index].Width);
 					++Drawn;
 				}
 			}
@@ -202,10 +228,11 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 		NumLive += Layer.Live;
 
 		// Nothing to show and the buffers already show nothing: the render thread is left alone.
-		if (Layer.Component != nullptr && !(Drawn == 0 && Layer.bDrawnEmpty))
+		UInstancedStaticMeshComponent* Component = Layer.Component.Get();
+		if (Component != nullptr && !(Drawn == 0 && Layer.bDrawnEmpty))
 		{
-			Layer.Component->SetCustomData(0, Layer.Transforms.Num() - 1, Layer.CustomData, false);
-			Layer.Component->BatchUpdateInstancesTransforms(0, TArrayView<const FTransform>(Layer.Transforms), true, true, true);
+			Component->SetCustomData(0, Layer.Transforms.Num() - 1, Layer.CustomData, false);
+			Component->BatchUpdateInstancesTransforms(0, TArrayView<const FTransform>(Layer.Transforms), true, true, true);
 			Layer.bDrawnEmpty = Drawn == 0;
 		}
 	}

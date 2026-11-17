@@ -1,10 +1,12 @@
 """Builds the materials of the effects (Source/OpenSCCT/Play/ScctEffects*) and imports the game's effect meshes.
 Runs inside the editor's Python:
 
-    UnrealEditor-Cmd <project> -run=pythonscript -script="build_effect_assets.py [<content root>]"
+    UnrealEditor-Cmd <project> -run=pythonscript -script="<full path>/build_effect_assets.py [<content root>] [--force]"
+(forward slashes in every path: the script switch reads a backslash as an escape)
 
 The materials go to /Game/OpenSCCT/Effects/ and are committed: they are ours, made from nothing but maths.
-  M_ScctFxGlow    additive unlit sprite; colour and opacity per instance (the first four custom data floats)
+  M_ScctFxGlow    additive unlit sprite; colour and opacity per instance (the first four custom data floats) and
+                  the distance in cm over which it dims into a surface behind it (the fifth)
   M_ScctFxSmoke   soft translucent sprite lit by the scene; colour and opacity per instance
   M_ScctFxDecal   deferred decal: a dark hole in a paler chipped ring; parameters Color, RimColor and Strength
   M_ScctFxSolid   opaque surface with a glow, for stand-in shapes; parameters Color and Glow
@@ -119,7 +121,19 @@ def build_glow():
     light = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -150, 0)
     connect(colour, "", light, "A")
     connect(level, "", light, "B")
-    connect_output(light, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    # A fireball dims where it meets a floor or a wall instead of ending in a hard line. The distance over which
+    # it does so comes with each sprite (its fifth value), because a spark a centimetre off a wall must stay
+    # bright where a metre-wide fireball needs a wide, soft edge.
+    reach = lib.create_material_expression(material, unreal.MaterialExpressionPerInstanceCustomData, -350, 420)
+    reach.set_editor_property("data_index", 4)
+    reach.set_editor_property("const_default_value", 10.0)
+    fade = lib.create_material_expression(material, unreal.MaterialExpressionDepthFade, -150, 320)
+    fade.set_editor_property("fade_distance_default", 10.0)
+    connect(reach, "", fade, "FadeDistance")
+    soft = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, 30, 100)
+    connect(light, "", soft, "A")
+    connect(fade, "", soft, "B")
+    connect_output(soft, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     finish(material)
 
 
