@@ -7,6 +7,7 @@
 #include "OpenSCCT.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -69,6 +70,9 @@ namespace
 			Entry(TEXT("Hub"), TEXT("Meet other players between matches"),
 				TEXT("The hubs the master lists, joining one by its address, or hosting a hub on this PC."),
 				[this] { Host.Open(TEXT("hub")); });
+			Entry(ScctUi::GameText(TEXT("Tutorials_Page"), TEXT("TitlePage"), TEXT("Tutorials")), TEXT("The HUD, tips, gadgets and the tutorial maps"),
+				TEXT("The HUD and keyboard pictures, every tip and gadget of both sides, the spy and mercenary tutorial maps with your progress, and visiting a map alone with its help paths."),
+				[this] { Host.Open(TEXT("tutorials")); });
 			Entry(TEXT("Account"), TEXT("Your name, rank and career"),
 				TEXT("Sign in or out, claim or change the name the servers show, see your rank, experience and career, prestige, and choose an emblem and a title."),
 				[this] { Host.Open(TEXT("account")); });
@@ -126,9 +130,17 @@ namespace
 						[
 							SNew(SBox).WidthOverride(64.0f).HAlign(HAlign_Left)[ SNew(SBox).WidthOverride(64.0f)[ ScctUi::Rule(0.5f) ] ]
 						]
-						+ SVerticalBox::Slot().AutoHeight().Padding(-24.0f, 0.0f, 0.0f, 0.0f)
+						// Ten entries are taller than the page at 1080p: the list scrolls to the focused entry instead of
+						// running under the key hints.
+						+ SVerticalBox::Slot().FillHeight(1.0f).Padding(-24.0f, 0.0f, 0.0f, 0.0f)
 						[
-							SNew(SBox).WidthOverride(480.0f)[ Entries ]
+							SNew(SBox).WidthOverride(480.0f)
+							[
+								SNew(SScrollBox)
+								.ScrollBarVisibility(EVisibility::Collapsed)
+								.ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll)
+								+ SScrollBox::Slot()[ Entries ]
+							]
 						]
 					]
 				]

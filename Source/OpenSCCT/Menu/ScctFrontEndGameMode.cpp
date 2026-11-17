@@ -9,6 +9,7 @@
 #include "Menu/SScctGearPage.h"
 #include "Menu/SScctStrategicMapPage.h"
 #include "Menu/ScctFrontEndWidget.h"
+#include "Menu/ScctTutorialPlay.h"
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
@@ -175,6 +176,13 @@ void AScctFrontEndGameMode::ShowMenu()
 		Menu->ShowPageNamed(TEXT("demos"));
 	}
 
+	// Back from a tutorial or a visit: the Tutorials page again, where it was started.
+	UScctTutorialSubsystem* Tutorials = UScctTutorialSubsystem::Get(this);
+	if (Tutorials != nullptr && Tutorials->TakeReturnToTutorials())
+	{
+		Menu->ShowPageNamed(TEXT("tutorials"));
+	}
+
 	FString Page;
 	if (FParse::Value(FCommandLine::Get(), TEXT("ScctMenuPage="), Page) || FParse::Value(FCommandLine::Get(), TEXT("ScctOpenPage="), Page))
 	{
@@ -215,6 +223,11 @@ void AScctFrontEndGameMode::ShowMenu()
 		{
 			MapPage->FloorUp();
 		}
+	}
+	// -ScctTutorial / -ScctVisit: a tutorial or a visit started from its page, once a run (Menu/ScctTutorialPlay.h).
+	if (Tutorials != nullptr)
+	{
+		Tutorials->RunCommandLine(Menu);
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: front end shown"));
 }

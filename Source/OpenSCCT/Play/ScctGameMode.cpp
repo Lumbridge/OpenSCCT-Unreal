@@ -101,6 +101,7 @@ void AScctGameMode::InitGame(const FString& MapName, const FString& Options, FSt
 	Match.Sidearm = ParseSidearm(UGameplayStatics::ParseOption(Options, TEXT("Sidearm")), Match.Sidearm);
 	Match.bRifles = ParseSwitch(Options, TEXT("Rifles"));
 	Match.bOfflineRules = ParseSwitch(Options, TEXT("Practice"));
+	Match.bUnlimitedGear = ParseSwitch(Options, TEXT("UnlimitedGear"));
 	Match.PlayerName = UGameplayStatics::ParseOption(Options, TEXT("Name"));
 	Match.TimeLimit = UGameplayStatics::GetIntOption(Options, TEXT("TimeLimit"), -1);
 	Match.SpyLives = UGameplayStatics::GetIntOption(Options, TEXT("SpyLives"), -1);
