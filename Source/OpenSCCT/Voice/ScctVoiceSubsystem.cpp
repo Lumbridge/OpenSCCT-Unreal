@@ -11,6 +11,7 @@
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
 #include "Play/ScctAudioMix.h"
+#include "Play/ScctControlSettings.h"
 #include "Play/ScctPlayerController.h"
 #include "Runtime/ScctFeatures.h"
 #include "Settings/ScctSettings.h"
@@ -223,6 +224,10 @@ void UScctVoiceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	FParse::Value(CommandLine, TEXT("ScctVoiceTone="), ToneHz);
 	ToneHz = FMath::Clamp(ToneHz, 0.0f, 20000.0f);
 	bForceTalk = FParse::Param(CommandLine, TEXT("ScctVoiceTalk"));
+	if (FParse::Value(CommandLine, TEXT("ScctVoiceAutoHack="), ForceAutoHack))
+	{
+		ForceAutoHack = ForceAutoHack != 0 ? 1 : 0;
+	}
 	if (FParse::Value(CommandLine, TEXT("ScctVoiceEcho="), EchoSeconds))
 	{
 		EchoSeconds = FMath::Clamp(EchoSeconds, 0, 10);
@@ -362,7 +367,29 @@ bool UScctVoiceSubsystem::Tick(float DeltaTime)
 	EnsureTaps();
 	UpdateCapture(DeltaTime);
 	PumpPlayback(DeltaTime);
+	const FScctVoiceContext Before = Context;
 	Api->GetContext(&Context);
+	if (ForceAutoHack >= 0 && !bAutoHackForced && Context.InRound != 0)
+	{
+		// Once the round is up (the controls were loaded by then): the option as the controls menu would set it,
+		// applied to the bridge but not written to controls.json.
+		UScctControlSettings* Controls = UScctControlSettings::Get();
+		if (Controls != nullptr && Controls->EnsureLoaded())
+		{
+			Controls->bAutoHackComms = ForceAutoHack != 0;
+			bAutoHackForced = Controls->Apply();
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: auto-hack enemy communications %s (-ScctVoiceAutoHack)%s"),
+				ForceAutoHack != 0 ? TEXT("on") : TEXT("off"), bAutoHackForced ? TEXT("") : TEXT(": the controls refused it"));
+		}
+	}
+	if (Context.HackComm != Before.HackComm || Context.TalkLink != Before.TalkLink || Context.TraceTalker != Before.TraceTalker)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: Hack Comm %s, talking to %s, scope voice trace on talker %d"),
+			Context.HackComm != 0 ? TEXT("listening") : TEXT("off"),
+			Context.TalkLink == static_cast<int32>(EScctVoiceLink::Downed) ? TEXT("the downed enemy")
+				: Context.TalkLink == static_cast<int32>(EScctVoiceLink::Grab) ? TEXT("the held enemy") : TEXT("whoever the talk keys reach"),
+			Context.TraceTalker);
+	}
 	UpdateOverlay();
 	PumpEchoReference();
 	ReportError();
@@ -1082,10 +1109,11 @@ void UScctVoiceSubsystem::LogSecond()
 		if (Output.SecondFrames > 0)
 		{
 			const FScctVoiceTalker* Row = Talkers.FindByPredicate([&Pair](const FScctVoiceTalker& R) { return R.Talker == Pair.Key; });
-			UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: heard talker=%d name=%s rms=%.3f frames=%d total=%lld queued=%d team=%d channel=%s volume=%.2f muted=%d decode errors=%lld empty callbacks=%d%s"),
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: heard talker=%d name=%s rms=%.3f frames=%d total=%lld queued=%d team=%d channel=%s packets=%s volume=%.2f muted=%d decode errors=%lld empty callbacks=%d%s"),
 				Pair.Key, *Output.Name, FMath::Sqrt(Output.SecondSquares / (Output.SecondFrames * static_cast<double>(ScctVoiceFrameSamples))),
 				Output.SecondFrames, Output.Frames, Row != nullptr ? Row->QueuedFrames : 0, Row != nullptr ? Row->Team : -1,
-				Row != nullptr && Row->Channel != 0 ? TEXT("team") : TEXT("all"), Row != nullptr ? Row->Volume : 0.0f, Row != nullptr ? Row->Muted : 0,
+				Row != nullptr ? ScctVoiceLinkName(Row->Link) : TEXT("?"), Row != nullptr && Row->Channel != 0 ? TEXT("team") : TEXT("all"),
+				Row != nullptr ? Row->Volume : 0.0f, Row != nullptr ? Row->Muted : 0,
 				Row != nullptr ? Row->DecodeErrors : 0, Underruns, Output.Wave == nullptr ? TEXT(" (by the clock)") : TEXT(""));
 		}
 		Output.SecondFrames = 0;

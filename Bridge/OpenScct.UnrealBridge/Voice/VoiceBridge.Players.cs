@@ -161,6 +161,9 @@ public sealed partial class VoiceBridge
             context.LocalTeam = own.Team?.TeamIndex ?? -1;
         }
 
+        context.TalkLink = (int)_own.TalkLink;
+        context.HackComm = _own.HackComm ? 1 : 0;
+        context.TraceTalker = _own.TraceTalker;
         return context;
     }
 

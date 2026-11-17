@@ -13,7 +13,7 @@
 // The visit's voice is ticked by the online table's Update (after the visit's own ticks); Update here only runs the
 // microphone test.
 
-constexpr int32 ScctVoiceApiVersion = 3;
+constexpr int32 ScctVoiceApiVersion = 4;
 
 /** Samples in one voice frame: 20 ms at 48 kHz, what ReadFrame writes. */
 constexpr int32 ScctVoiceFrameSamples = 960;
@@ -112,7 +112,44 @@ struct FScctVoiceTalker
 	int64 DecodeErrors;
 	/** The player's name, or "Player n" while unknown. UTF-16, zero terminated. */
 	TCHAR Name[NameCapacity];
+	// Version 4.
+	/** How he reaches the local player: EScctVoiceLink (all or team for a mate; hacked, trace, downed or grab for an enemy). */
+	int32 Link;
 };
+
+/**
+ * How a talker reaches the local player (FScctVoiceTalker::Link), or how the local player reaches an enemy
+ * (FScctVoiceContext::TalkLink): the special cases of the server's voice routing (OpenSCCT VoiceRouting rules 8 to 14),
+ * named by the bridge from the client's copy of the round, since the packets carry only the all or team channel.
+ */
+enum class EScctVoiceLink : int32
+{
+	All = 0,
+	Team = 1,
+	/** An enemy tagged by the local player's team, heard through Hack Comm (the key, or auto-hack). */
+	Hacked = 2,
+	/** The enemy the scope's or the binoculars' voice trace found. */
+	Trace = 3,
+	/** Downed chat: an enemy talking to the local player while he lies on the ground; for TalkLink, talking to a downed enemy. */
+	Downed = 4,
+	/** Grab talk: the spy and the merc he holds, while the spy holds the Hack Comm key. */
+	Grab = 5,
+};
+
+/** The link's name as the log writes it: All, Team, Hacked, Trace, Downed, Grab. */
+inline const TCHAR* ScctVoiceLinkName(int32 Link)
+{
+	switch (static_cast<EScctVoiceLink>(Link))
+	{
+	case EScctVoiceLink::All: return TEXT("All");
+	case EScctVoiceLink::Team: return TEXT("Team");
+	case EScctVoiceLink::Hacked: return TEXT("Hacked");
+	case EScctVoiceLink::Trace: return TEXT("Trace");
+	case EScctVoiceLink::Downed: return TEXT("Downed");
+	case EScctVoiceLink::Grab: return TEXT("Grab");
+	default: return TEXT("?");
+	}
+}
 
 /** One player as the lobby shows him (GetPlayerVoice, by name): Godot's speaking mark, "Voice volume" and "Mute". */
 struct FScctVoicePlayer
@@ -142,6 +179,14 @@ struct FScctVoiceContext
 	/** 0 spies, 1 mercs, 255 spectators (lobby), -1 not known. */
 	int32 LocalTeam;
 	int32 LocalTalker;
+	// Version 4: the special cases of a round.
+	/** EScctVoiceLink::Downed or Grab while the local player answers the HUD's Speak prompt with the Hack Comm key (the
+	 *  microphone then talks on the all channel), else 0. */
+	int32 TalkLink;
+	/** Hack Comm is listening: the key is held or auto-hack is on. */
+	int32 HackComm;
+	/** The talker id of the enemy the scope's or the binoculars' voice trace holds, 0 for none. */
+	int32 TraceTalker;
 };
 
 struct FScctVoiceApi
@@ -205,7 +250,7 @@ struct FScctVoiceApi
 
 static_assert(sizeof(FScctVoiceSettings) == 48, "FScctVoiceSettings does not match VoiceSettingsBlock");
 static_assert(sizeof(FScctVoiceStatus) == 64, "FScctVoiceStatus does not match VoiceStatus");
-static_assert(sizeof(FScctVoiceTalker) == 176, "FScctVoiceTalker does not match VoiceTalkerInfo");
+static_assert(sizeof(FScctVoiceTalker) == 184, "FScctVoiceTalker does not match VoiceTalkerInfo");
 static_assert(sizeof(FScctVoicePlayer) == 28, "FScctVoicePlayer does not match VoicePlayerInfo");
-static_assert(sizeof(FScctVoiceContext) == 16, "FScctVoiceContext does not match VoiceContext");
+static_assert(sizeof(FScctVoiceContext) == 28, "FScctVoiceContext does not match VoiceContext");
 static_assert(sizeof(FScctVoiceApi) == 8 + 24 * sizeof(void*), "FScctVoiceApi does not match VoiceApi");

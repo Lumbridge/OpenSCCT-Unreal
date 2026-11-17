@@ -86,10 +86,20 @@ struct FScctVoiceTalkerOutput
  *   -ScctVoiceOverlayInput="S:Line:click|up|down;.."  a real mouse event through Slate on the overlay's line
  *                              (0 the top) S seconds after the voice table came up (with -ScctMatchMenu to free the
  *                              cursor), logged with what Slate made of it
+ *   -ScctVoiceAutoHack=0|1     the controls' "auto-hack enemy communications" on or off for the run (applied, not
+ *                              saved), so hacked comms are heard without the key
  *   -ScctVoiceMute=Name[;Name] those players at volume 0 by name (still received, played as silence), saved
  *   -ScctVoiceVolume=Name=V[;..] those players at volume V (0 to 2) by name, saved
  *
- * OVERLAY. In a round of an online visit, SScctVoiceOverlay on the game viewport (Voice/ScctVoicePlayers.cpp).
+ * OVERLAY. In a round of an online visit, SScctVoiceOverlay on the game viewport (Voice/ScctVoicePlayers.cpp). Each
+ * heard enemy is marked by the link the server let him through (the talker row's Link): hacked comms, the scope's
+ * voice trace, downed chat or grab talk; the own line says when the microphone talks to a downed or held enemy.
+ *
+ * SPECIAL CASES. The server routes them from its copy of the controllers (OpenSCCT SessionVoiceLinks): the Hack Comm
+ * binding is the simulation's bSpecialsChat button and auto-hack the controls' AutoHackComms option, both sent to the
+ * server by the round's own controller (ReplicateSpecialsChatOnServer, ServerSetAutoHackComms); the voice trace of the
+ * scope and binoculars runs in the simulation too. The bridge adds one thing: answering the HUD's Speak prompt with the
+ * Hack Comm key talks on the all channel even with push to talk on (downed chat and grab talk only carry that channel).
  * Console: scct.Voice.Set <Key> <Value|default>, scct.Voice.Options [Page].
  * Log lines start with "ScctVoice:": the capture (device, rate), once a second while the voice client is connected
  * the frames captured and sent and the talkers, and for every talker heard that second "ScctVoice: heard talker=..
@@ -232,6 +242,9 @@ private:
 	double TonePhase = 0.0;
 	double ToneOwed = 0.0;
 	bool bForceTalk = false;
+	/** -ScctVoiceAutoHack=0|1: the controls' auto-hack option forced for the run (-1: left alone); not saved. */
+	int32 ForceAutoHack = -1;
+	bool bAutoHackForced = false;
 	int32 EchoSeconds = -1;
 	bool bEchoStarted = false;
 	int32 ForcedPushToTalk = -1;
@@ -279,7 +292,8 @@ private:
 	{
 		FString Name;
 		int32 Team = 0;
-		bool bTeamChannel = false;
+		/** EScctVoiceLink. */
+		int32 Link = 0;
 		float Volume = 1.0f;
 		bool bMuted = false;
 	};
@@ -294,7 +308,7 @@ private:
 	};
 	TArray<FOverlayInput> OverlayInputs;
 	FString LastOverlayText;
-	FScctVoiceContext Context = { 0, 0, -1, 0 };
+	FScctVoiceContext Context = { 0, 0, -1, 0, 0, 0, 0 };
 	/** Where the per-player volumes are kept, and -ScctVoiceMute / -ScctVoiceVolume's names and volumes. */
 	FString VolumeFile;
 	TArray<TPair<FString, float>> SwitchVolumes;

@@ -106,10 +106,13 @@ void UScctVoiceSubsystem::InitPlayers()
 	if (bForceOverlay)
 	{
 		// Made-up talkers for a look at the overlay: a team mate on team talk, an enemy heard through hacked comms at
-		// 60% and a muted enemy. Clicks and the wheel act on them as on real ones.
-		FakeTalkers.Add({ TEXT("Archer"), 0, true, 1.0f, false });
-		FakeTalkers.Add({ TEXT("Kestrel"), 1, false, 0.6f, false });
-		FakeTalkers.Add({ TEXT("Rook"), 1, false, 1.0f, true });
+		// 60%, one through the scope's voice trace, one questioning the downed local player and a muted enemy. Clicks
+		// and the wheel act on them as on real ones.
+		FakeTalkers.Add({ TEXT("Archer"), 0, static_cast<int32>(EScctVoiceLink::Team), 1.0f, false });
+		FakeTalkers.Add({ TEXT("Kestrel"), 1, static_cast<int32>(EScctVoiceLink::Hacked), 0.6f, false });
+		FakeTalkers.Add({ TEXT("Sable"), 1, static_cast<int32>(EScctVoiceLink::Trace), 1.0f, false });
+		FakeTalkers.Add({ TEXT("Vance"), 1, static_cast<int32>(EScctVoiceLink::Downed), 1.0f, false });
+		FakeTalkers.Add({ TEXT("Rook"), 1, static_cast<int32>(EScctVoiceLink::Hacked), 1.0f, true });
 		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: the speaker overlay is shown everywhere with made-up talkers (-ScctVoiceOverlay)"));
 	}
 }
@@ -206,14 +209,30 @@ TArray<FScctVoiceOverlayLine> UScctVoiceSubsystem::BuildOverlayLines() const
 	}
 	else if (Status.Transmitting != 0)
 	{
-		Lines.Add({ Status.Channel != 0 ? TEXT("You - Speaking (team)") : TEXT("You - Speaking"), FString(), Own });
+		// Answering the Speak prompt with the Hack Comm key: the bridge talks on the all channel to that enemy.
+		const TCHAR* Line = Context.TalkLink == static_cast<int32>(EScctVoiceLink::Downed) ? TEXT("You - Speaking (to the downed enemy)")
+			: Context.TalkLink == static_cast<int32>(EScctVoiceLink::Grab) ? TEXT("You - Speaking (to the held enemy)")
+			: Status.Channel != 0 ? TEXT("You - Speaking (team)") : TEXT("You - Speaking");
+		Lines.Add({ Line, FString(), Own });
 	}
 
-	auto AddTalker = [&Lines, LocalTeam, this](const FString& Name, int32 Team, bool bTeamChannel, float Volume, bool bMuted)
+	auto AddTalker = [&Lines](const FString& Name, int32 Team, int32 Link, float Volume, bool bMuted)
 	{
-		// An enemy is heard in a round only through hacked comms (or talking to him downed, which is the same link).
-		const bool bHacked = (Context.InRound != 0 || bForceOverlay) && IsSide(Team) && IsSide(LocalTeam) && Team != LocalTeam;
-		const TCHAR* Mark = bMuted ? TEXT(" (muted)") : bHacked ? TEXT(" (hacked)") : bTeamChannel ? TEXT(" (team)") : TEXT("");
+		// The link the server let him through, as the bridge names it from the round (a mate: his packet's channel).
+		const TCHAR* Mark = TEXT("");
+		switch (static_cast<EScctVoiceLink>(Link))
+		{
+		case EScctVoiceLink::Team: Mark = TEXT(" (team)"); break;
+		case EScctVoiceLink::Hacked: Mark = TEXT(" (hacked)"); break;
+		case EScctVoiceLink::Trace: Mark = TEXT(" (scope)"); break;
+		case EScctVoiceLink::Downed: Mark = TEXT(" (interrogating you)"); break;
+		case EScctVoiceLink::Grab: Mark = TEXT(" (grab)"); break;
+		default: break;
+		}
+		if (bMuted)
+		{
+			Mark = TEXT(" (muted)");
+		}
 		FLinearColor Colour = ScctHudStyle::Accent(Team);
 		if (bMuted)
 		{
@@ -226,12 +245,12 @@ TArray<FScctVoiceOverlayLine> UScctVoiceSubsystem::BuildOverlayLines() const
 	{
 		if (Row.Speaking != 0 || Row.Muted != 0)
 		{
-			AddTalker(RowName(Row), Row.Team, Row.Channel != 0, Row.Volume, Row.Muted != 0);
+			AddTalker(RowName(Row), Row.Team, Row.Link, Row.Volume, Row.Muted != 0);
 		}
 	}
 	for (const FFakeTalker& Fake : FakeTalkers)
 	{
-		AddTalker(Fake.Name, Fake.Team, Fake.bTeamChannel, Fake.Volume, Fake.bMuted);
+		AddTalker(Fake.Name, Fake.Team, Fake.Link, Fake.Volume, Fake.bMuted);
 	}
 	return Lines;
 }

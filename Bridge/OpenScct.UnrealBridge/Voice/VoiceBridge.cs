@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using OpenScct.Core.Engine;
+using OpenScct.Game.SBase;
 using OpenScct.Net;
 using OpenScct.Net.Voice;
 using OpenScct.Server;
@@ -27,7 +28,7 @@ namespace OpenScct.UnrealBridge.Voice;
 /// </summary>
 public sealed partial class VoiceBridge : IDisposable
 {
-    public const int ApiVersion = 3;
+    public const int ApiVersion = 4;
 
     /// <summary>The talker id the echo test comes back on (<see cref="ReadFrame"/>).</summary>
     public const int EchoTalker = VoiceEchoTest.Talker;
@@ -45,6 +46,7 @@ public sealed partial class VoiceBridge : IDisposable
     private int _captureRate = VoiceK.SampleRate;
     private bool _talkKey;
     private bool _teamKey;
+    private VoiceLinks.Own _own;
 
     private static VoiceBridge? s_instance;
 
@@ -89,9 +91,9 @@ public sealed partial class VoiceBridge : IDisposable
                 StartVisit(client);
             }
 
-            _online!.Voice.TalkKey = _talkKey;
-            _online.Voice.TeamKey = _teamKey;
-            _online.Update();
+            _own = VoiceLinks.ReadOwn(VoiceLinks.LocalController(client));
+            ApplyKeys();
+            _online!.Update();
         }
         catch (Exception e)
         {
@@ -105,6 +107,7 @@ public sealed partial class VoiceBridge : IDisposable
         _online?.Dispose();
         _online = null;
         _visit = null;
+        _own = default;
         _teams.Clear();
     }
 
@@ -146,11 +149,24 @@ public sealed partial class VoiceBridge : IDisposable
     {
         _talkKey = talk;
         _teamKey = team;
-        if (_online is not null)
+        ApplyKeys();
+    }
+
+    /// <summary>
+    /// The keys onto the visit's client. Answering the HUD's Speak prompt (the Hack Comm key next to a downed enemy, or
+    /// on the merc a spy holds) talks on the all channel, as a held all-channel key would: downed chat and grab talk go
+    /// only on that channel, so push to talk or a held team key would otherwise leave the prompt saying nothing.
+    /// </summary>
+    private void ApplyKeys()
+    {
+        if (_online is null)
         {
-            _online.Voice.TalkKey = talk;
-            _online.Voice.TeamKey = team;
+            return;
         }
+
+        bool speak = _own.TalkLink != VoiceLink.All;
+        _online.Voice.TalkKey = _talkKey || speak;
+        _online.Voice.TeamKey = _teamKey && !speak;
     }
 
     public void ApplySettings(in VoiceSettingsBlock s)
@@ -257,12 +273,15 @@ public sealed partial class VoiceBridge : IDisposable
         }
 
         FillTeams();
+        SPlayerController? local = VoiceLinks.LocalController(_visit);
         IReadOnlyList<VoiceTalker> talkers = online.Voice.Talkers;
         for (int i = 0; i < talkers.Count && i < into.Length; i++)
         {
             VoiceTalker t = talkers[i];
             string name = online.NameOf(t.Id) ?? "Player " + t.Id.ToString(CultureInfo.InvariantCulture);
-            Write(ref into[i], t, name, _teams.GetValueOrDefault(t.Id, -1));
+            int team = _teams.GetValueOrDefault(t.Id, -1);
+            Write(ref into[i], t, name, team);
+            into[i].Link = (int)VoiceLinks.Of(local, t.Id, t.Channel, team);
         }
 
         return talkers.Count;
@@ -280,6 +299,7 @@ public sealed partial class VoiceBridge : IDisposable
         row.QueuedFrames = t.Buffer.Count;
         row.FramesDecoded = t.FramesDecoded;
         row.DecodeErrors = t.DecodeErrors;
+        row.Link = (int)(t.Channel == EVoiceChannel.Team ? VoiceLink.Team : VoiceLink.All);
         fixed (char* text = row.Name)
         {
             OnlineTextCopy.Fixed(text, VoiceTalkerInfo.NameCapacity, name);

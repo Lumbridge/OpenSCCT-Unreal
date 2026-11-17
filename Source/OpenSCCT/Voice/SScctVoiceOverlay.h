@@ -24,8 +24,10 @@ DECLARE_DELEGATE_TwoParams(FScctVoiceOverlayVolume, const FString& /*Player*/, i
 /**
  * The voice overlay of a round (Godot's VoiceIndicator and OnlineVoiceChat's overlay, Reloaded's speaking list): in
  * the top right, one line per speaking or muted player, "name - volume n%" in his team's colour, marked "(team)" for
- * team talk, "(hacked)" for an enemy heard through hacked comms and "(muted)"; above them "Your microphone is muted"
- * or "You - Speaking". UScctVoiceSubsystem puts it on the game viewport and hands it the lines every frame.
+ * team talk, an enemy by the link he is heard through ("(hacked)", "(scope)", "(interrogating you)", "(grab)") and
+ * "(muted)"; above them "Your microphone is muted" or "You - Speaking", with "(to the downed enemy)" or "(to the held
+ * enemy)" while the Hack Comm key answers the Speak prompt. UScctVoiceSubsystem puts it on the game viewport and hands
+ * it the lines every frame.
  *
  * While the cursor is free (the match menu is open) a player's line takes the mouse: a click mutes or unmutes him, the
  * wheel turns his volume up or down by 10%. Otherwise the overlay lets every click through to the game.

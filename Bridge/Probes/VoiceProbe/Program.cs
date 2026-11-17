@@ -32,7 +32,12 @@ using OpenScct.UnrealBridge.Voice;
 // visit with its own voice joins, says ready, follows the server from lobby to round, talks a tone the whole time
 // (voice activation) and listens. Every two seconds it prints what it heard from each talker; at the end the talker
 // named <talker name> (default UnrealCheck) must have been heard at rms > 0.1 and the tone's pitch.
-return args.Length > 0 && args[0] == "listen" ? Listener.Run(args) : Probe.Run(args);
+//
+// VoiceProbe hack [content root] [port] [map]
+//
+// Hacked comms in a real round with a server in this process (HackProbe.cs): a merc talking on the team channel is
+// heard by the bridge's spy with auto-hack on or the Hack Comm key held while the spies have him tagged, and not otherwise.
+return args.Length > 0 && args[0] == "listen" ? Listener.Run(args) : args.Length > 0 && args[0] == "hack" ? HackProbe.Run(args) : args.Length > 0 && args[0] == "hackhost" ? HackProbe.Host(args) : Probe.Run(args);
 
 internal static unsafe class Probe
 {
@@ -144,9 +149,9 @@ internal static unsafe class Probe
         [
             ("VoiceSettingsBlock", sizeof(VoiceSettingsBlock), 48),
             ("VoiceStatus", sizeof(VoiceStatus), 64),
-            ("VoiceTalkerInfo", sizeof(VoiceTalkerInfo), 176),
+            ("VoiceTalkerInfo", sizeof(VoiceTalkerInfo), 184),
             ("VoicePlayerInfo", sizeof(VoicePlayerInfo), 28),
-            ("VoiceContext", sizeof(VoiceContext), 16),
+            ("VoiceContext", sizeof(VoiceContext), 28),
             ("VoiceApi", sizeof(VoiceApi), 8 + 24 * sizeof(void*)),
         ];
         bool ok = true;

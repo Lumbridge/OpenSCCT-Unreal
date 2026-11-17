@@ -144,6 +144,14 @@ public unsafe struct VoiceTalkerInfo
 
     /// <summary>The player's name (lobby player or PlayerReplicationInfo), or "Player n" while unknown.</summary>
     public fixed char Name[NameCapacity];
+
+    // Version 4.
+
+    /// <summary>
+    /// How he reaches the local player, a <see cref="Voice.VoiceLink"/>: all or team for a mate, else hacked comms, the
+    /// voice trace, downed chat (the local player interrogated) or grab talk.
+    /// </summary>
+    public int Link;
 }
 
 /// <summary>
@@ -190,4 +198,18 @@ public struct VoiceContext
 
     /// <summary>The local player's talker id on the current map (0 until known).</summary>
     public int LocalTalker;
+
+    // Version 4: the special cases of a round.
+
+    /// <summary>
+    /// <see cref="Voice.VoiceLink.Downed"/> or <see cref="Voice.VoiceLink.Grab"/> while the local player answers the
+    /// HUD's Speak prompt with the Hack Comm key (the microphone then talks on the all channel), else 0.
+    /// </summary>
+    public int TalkLink;
+
+    /// <summary>Hack Comm is listening: the key is held or auto-hack is on (tagged enemies can be heard).</summary>
+    public int HackComm;
+
+    /// <summary>The talker id of the enemy the scope's or the binoculars' voice trace holds, 0 for none.</summary>
+    public int TraceTalker;
 }
