@@ -2,6 +2,7 @@
 
 #include "Algo/StableSort.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Settings/ScctSettingsForced.h"
 
 namespace
 {
@@ -113,6 +114,10 @@ FString FScctSettings::GetString(FName Key)
 	{
 		return FString();
 	}
+	if (const FString* Forced = FScctSettingsForced::Find(Key))
+	{
+		return Clamp(*Desc, *Forced);
+	}
 	FString Value;
 	if (GConfig && GConfig->GetString(Section, *Key.ToString(), Value, GGameUserSettingsIni))
 	{
@@ -133,12 +138,18 @@ void FScctSettings::SetString(FName Key, const FString& Value)
 		return;
 	}
 	const FString Clamped = Clamp(*Desc, Value);
-	if (Clamped == GetString(Key))
+	const FString Before = GetString(Key);
+	// Set by the player or the game: a value forced for the run gives way from now on.
+	const bool bWasForced = FScctSettingsForced::Drop(Key);
+	if (Clamped == Before && !bWasForced)
 	{
 		return;
 	}
 	GConfig->SetString(Section, *Key.ToString(), *Clamped, GGameUserSettingsIni);
-	Registry().Changed.Broadcast(Key);
+	if (Clamped != Before)
+	{
+		Registry().Changed.Broadcast(Key);
+	}
 }
 
 void FScctSettings::SetBool(FName Key, bool bValue) { SetString(Key, bValue ? TEXT("true") : TEXT("false")); }
@@ -153,6 +164,7 @@ void FScctSettings::Reset(FName Key)
 		return;
 	}
 	const bool bChanged = GetString(Key) != Desc->Default;
+	FScctSettingsForced::Drop(Key);
 	GConfig->RemoveKey(Section, *Key.ToString(), GGameUserSettingsIni);
 	if (bChanged)
 	{
