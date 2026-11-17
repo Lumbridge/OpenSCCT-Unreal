@@ -197,6 +197,12 @@ public:
 	/** The camera of this frame as it was applied in step 4; Valid is 0 before the player has a view. */
 	const FScctBridgeView& GetView() const { return View; }
 
+	/**
+	 * The camera is on a screenshot tour (-ScctCams), not at the player's view: GetView is the tour point, and
+	 * what belongs to the player's own eyes (a first-person view model) is not drawn.
+	 */
+	bool IsTourView() const { return bTourView; }
+
 	// UTickableWorldSubsystem
 	virtual void Tick(float DeltaTime) override;
 	virtual TStatId GetStatId() const override;
