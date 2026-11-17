@@ -229,6 +229,8 @@ namespace
 void SScctDemoHud::Construct(const FArguments& InArgs)
 {
 	OnLeave = InArgs._OnLeave;
+	XRayOn = InArgs._XRayOn;
+	OnToggleXRay = InArgs._OnToggleXRay;
 	Preview = DemoHudDefaultPreview;
 	// Nobody moves the mouse in an unattended run: the bar stays up for its screenshots.
 	bAlwaysShown = FApp::IsUnattended();
@@ -394,6 +396,9 @@ TSharedRef<SWidget> SScctDemoHud::BuildBar()
 	{
 		Row(View, Chip(Cameras[Camera], [this, Camera] { Command(EScctDemoCommand::SetCamera, Camera); }, [this, Camera] { return Info.Camera == Camera; }));
 	}
+	// Godot's "X-ray" check box beside the cameras: player outlines through walls.
+	View->AddSlot().AutoWidth().Padding(8.0f, 0.0f, 0.0f, 0.0f)[ SNullWidget::NullWidget ];
+	Row(View, Chip(TEXT("X-RAY"), [this] { OnToggleXRay.ExecuteIfBound(); }, [this] { return XRayOn.Get(false); }));
 
 	// The legend of the markers.
 	const TSharedRef<SHorizontalBox> Legend = SNew(SHorizontalBox)
@@ -407,7 +412,7 @@ TSharedRef<SWidget> SScctDemoHud::BuildBar()
 
 	const FString Help =
 		TEXT("Space  Play / pause     Left / Right  Seek 5 s (Shift: 30 s)     Up / Down  Speed     Home  Restart     End  The end\n")
-		TEXT("C  Camera     [ / ] or wheel  Change player     1-9  Select player     H  Hide / show controls\n")
+		TEXT("C  Camera     X  X-ray outlines through walls     [ / ] or wheel  Change player     1-9  Select player     H  Hide / show controls\n")
 		TEXT("Third person follows the player. Hold right mouse to orbit; release to return behind the player.\n")
 		TEXT("As played follows the recorded camera, including aiming and gadget views.\n")
 		TEXT("Free camera: hold right mouse to look, W A S D move, Q / E down / up, Shift move faster.\n")
@@ -632,6 +637,7 @@ FReply SScctDemoHud::OnPreviewKeyDown(const FGeometry& MyGeometry, const FKeyEve
 	if (Key == EKeys::Home) { Command(EScctDemoCommand::Restart); return FReply::Handled(); }
 	if (Key == EKeys::End) { Command(EScctDemoCommand::SeekEnd); return FReply::Handled(); }
 	if (Key == EKeys::C) { Command(EScctDemoCommand::CycleCamera); return FReply::Handled(); }
+	if (Key == EKeys::X) { OnToggleXRay.ExecuteIfBound(); return FReply::Handled(); }
 	if (Key == EKeys::LeftBracket) { Command(EScctDemoCommand::CycleTarget, -1); return FReply::Handled(); }
 	if (Key == EKeys::RightBracket) { Command(EScctDemoCommand::CycleTarget, 1); return FReply::Handled(); }
 	if (Key == EKeys::H) { bHidden = !bHidden; return FReply::Handled(); }

@@ -21,8 +21,11 @@ namespace OpenScct.UnrealBridge.Equipment;
 /// never writes it.
 /// <para>A port of the placing and posing of OpenSCCT's game/Scripts/Views/FirstPersonView.cs. Not ported (they
 /// belong to Unreal's drawing): lighting at the eye, the stencil mask, cosmetics and map outfits on the sleeves, the
-/// aim-down-sights blend of OpenSCCT's own rifles (OpenScctRifles, which this content does not hold) and the view
-/// model of an observed merc in a demo.</para>
+/// aim-down-sights blend of OpenSCCT's own rifles (OpenScctRifles, which this content does not hold).</para>
+/// <para>A merc watched in a demo's first-person camera gets the same view model, built from his recorded
+/// third-person weapon by OpenSCCT's ObservedWeaponViewModel (linked from game/Scripts/Views) and sampled after
+/// every tick as FirstPersonView.OnObservedTick and DrawObserved do: <see cref="OnObservedTick"/> and
+/// <see cref="DrawObserved"/>.</para>
 /// <para>Not run yet: OpenSCCT's own pistols (OpenScctSidearms.*_first). Their sight offset, revolver kick and
 /// reload handling are ported below and the files load (their clips move scene nodes outside the skin, the gun's
 /// parts and a "Root" node above the skeleton, which <see cref="GlbCharacter"/> lists as extra bones), but no
@@ -33,6 +36,7 @@ internal sealed class MercFirstPerson
     private static readonly Name s_firstWaitStFd2 = ViewModelClips.FirstWaitStFd2;
 
     private readonly ViewModelPose _pose = new();
+    private readonly OpenScctGame.Views.ObservedWeaponViewModel _observed = new();
     private readonly ViewModelClipRates _rates = new();
     private readonly Dictionary<string, Loaded?> _loaded = new(StringComparer.OrdinalIgnoreCase);
     private readonly string? _sharedRoot;
@@ -55,6 +59,29 @@ internal sealed class MercFirstPerson
     public void OnTick(SPlayerController? pc) => _pose.OnTick(((pc?.Pawn as SBasePawn)?.MyWeapon as SWeaponDefense)?.ViewAnim);
 
     /// <summary>
+    /// After each client tick of a demo: moves the weapon rebuilt for the watched <paramref name="pawn"/> on by a
+    /// tick (its shots and the body's reloads) and samples its channels (FirstPersonView.OnObservedTick).
+    /// </summary>
+    public void OnObservedTick(SBasePawn? pawn) => _pose.OnTick(_observed.Update(pawn, Sim.DeltaTime)?.ViewAnim);
+
+    /// <summary>
+    /// The view model of a merc watched from his eyes in a demo, from the weapon rebuilt out of his recorded
+    /// third-person one (FirstPersonView.DrawObserved). False when he is not a living merc with a gun in his hands.
+    /// </summary>
+    public bool DrawObserved(SBasePawn? pawn, float dt, float alpha, ref BridgeFirstPerson view)
+    {
+        Model = null;
+        Applier = null;
+        SWeaponDefense? weapon = _observed.Update(pawn, 0f);
+        if (!ReferenceEquals(_lastWeapon, weapon))
+        {
+            _pose.OnTick(weapon?.ViewAnim);
+        }
+
+        return weapon is not null && !weapon.Mesh.IsNone && DrawWeapon(weapon, _observed.ShotCount, dt, alpha, ref view);
+    }
+
+    /// <summary>
     /// Poses the view model of <paramref name="pc"/>'s weapon for a frame <paramref name="dt"/> seconds after the
     /// last and <paramref name="alpha"/> of the way into the next tick, and fills <paramref name="view"/>. False when
     /// no view model is drawn (third person, no weapon, weapon put away, the file missing).
@@ -68,12 +95,16 @@ internal sealed class MercFirstPerson
         var weapon = (pc?.Pawn as SBasePawn)?.MyWeapon as SWeaponDefense;
         bool show = pc is { bBehindView: false } && weapon is { bDrawWeapon: true, bDeleteMe: false } && !weapon.Mesh.IsNone &&
             ReferenceEquals(pc.ViewTarget ?? pc.Pawn, pc.Pawn);
-        if (!show || Load(weapon!.Mesh.Path!) is not { } loaded)
+        return show && DrawWeapon(weapon!, weapon!.ShotCounter, dt, alpha, ref view);
+    }
+
+    private bool DrawWeapon(SWeaponDefense weapon, int shotCount, float dt, float alpha, ref BridgeFirstPerson view)
+    {
+        if (Load(weapon.Mesh.Path!) is not { } loaded)
         {
             return false;
         }
 
-        int shotCount = weapon!.ShotCounter;
         if (!ReferenceEquals(_lastWeapon, weapon))
         {
             _lastWeapon = weapon;

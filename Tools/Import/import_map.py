@@ -186,14 +186,52 @@ def load_surface_classes():
 
 
 def pan_speed(animation):
-    """The original's texture scrolling as UV units per second, or (0, 0). Only straight panners are carried over;
-    its oscillators and rotators are rare (a dozen materials) and stay still."""
-    if not animation or animation.get("type") != "panner":
-        return 0.0, 0.0
-    # PanDirection is a rotator; its yaw turns the scroll direction in the texture plane [estimate: the sign of
-    # the scroll is not decoded, which only matters for text that scrolls].
-    yaw = animation["direction"][1] / 65536.0 * 2.0 * math.pi
-    return animation["rate"] * math.cos(yaw), animation["rate"] * math.sin(yaw)
+    """The original's texture scrolling as UV units per second, or (0, 0): a TexPanner (PanDirection is a rotator,
+    the scroll is its unit vector's X and Y times PanRate) or a TexFriendlyPanner (PanU, PanV over its scale, times
+    the rate), as the Godot client's UvAnim.From reads them. Oscillators and rotators are uv_anim_vectors'."""
+    kind = (animation or {}).get("type")
+    if kind == "panner":
+        pitch = animation["direction"][0] / 65536.0 * 2.0 * math.pi
+        yaw = animation["direction"][1] / 65536.0 * 2.0 * math.pi
+        return animation["rate"] * math.cos(pitch) * math.cos(yaw), animation["rate"] * math.cos(pitch) * math.sin(yaw)
+    if kind == "friendly_panner":
+        rate = animation.get("rate", 0.0)
+        return (rate * animation.get("pan_u", 0.0) / max(1e-6, animation.get("scale_u", 1.0)),
+                rate * animation.get("pan_v", 0.0) / max(1e-6, animation.get("scale_v", 1.0)))
+    return 0.0, 0.0
+
+
+def texture_size(texture, cells=(1, 1)):
+    """A texture's (width, height) in texels, of one flipbook cell when it is a sheet of cells; (128, 128), the
+    size the stock offsets assume, when the texture is not known."""
+    if texture is None:
+        return 128.0, 128.0
+    return (max(1.0, texture.blueprint_get_size_x() / max(1, cells[0])),
+            max(1.0, texture.blueprint_get_size_y() / max(1, cells[1])))
+
+
+def uv_anim_vectors(animation, size, with_panner=False):
+    """The material's AnimA, AnimB, AnimC (scct_materials.uv_anim_code) for the original's TexOscillator or
+    TexRotator, or None. `size` is the texture's size in texels: the original's stretch and rotation pivots are in
+    texels. A panner is only packed here when `with_panner` (a sequence item); the material's own panner is
+    PanU, PanV."""
+    kind = (animation or {}).get("type")
+    zero = [0.0, 0.0, 0.0, 0.0]
+    if kind == "oscillator":
+        number = lambda name: float(animation.get(name) or 0.0)
+        return ([number("UOscillationAmplitude"), number("UOscillationRate"), number("UOscillationType"), number("UOscillationPhase")],
+                [number("VOscillationAmplitude"), number("VOscillationRate"), number("VOscillationType"), float(scct_materials.UV_ANIM_OSCILLATOR)],
+                [number("VOscillationPhase"), 0.0, number("UOffset") / size[0], number("VOffset") / size[1]])
+    if kind == "rotator":
+        # TR_ConstantlyRotating (1) is the only rotation type the converted maps carry; a fixed rotation is baked
+        # into the UVs, and an oscillating one (2) turns at its rate as the Godot client turns it.
+        rate = animation["rotation"][1] / 65536.0 * 2.0 * math.pi
+        return ([rate, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, float(scct_materials.UV_ANIM_ROTATOR)],
+                [0.0, 0.0, float(animation.get("u_offset", 0.0)) / size[0], float(animation.get("v_offset", 0.0)) / size[1]])
+    if with_panner and kind in ("panner", "friendly_panner"):
+        pan_u, pan_v = pan_speed(animation)
+        return [pan_u, pan_v, 0.0, 0.0], [0.0, 0.0, 0.0, float(scct_materials.UV_ANIM_PANNER)], zero
+    return None
 
 
 def build_materials(material_doc):
@@ -225,6 +263,11 @@ def build_materials(material_doc):
         sheet = (record["flags"].get("flipbook") or {}).get("texture")
         if sheet and os.path.exists(os.path.join(RENDER, sheet)):
             extra_files.add(os.path.join(RENDER, sheet))
+        # A MaterialSequence's items each have their own texture (or AnimNext sheet).
+        for item in ((record["flags"].get("sequences") or {}).get("diffuse") or {}).get("items", []):
+            for path in (item.get("texture"), (item.get("flipbook") or {}).get("texture")):
+                if path and os.path.exists(os.path.join(RENDER, path)):
+                    extra_files.add(os.path.join(RENDER, path))
     textures = by_key(DEST + "/world/Textures")
     missing_extra = sorted(path for path in extra_files if key(os.path.splitext(os.path.basename(path))[0]) not in textures)
     if missing_extra:
@@ -237,6 +280,51 @@ def build_materials(material_doc):
         stem = key(os.path.splitext(os.path.basename(path))[0])
         asset = textures.get(stem) or extra.get(stem)
         return unreal.load_asset(asset) if asset else None
+
+    def vector(instance, parameter, values):
+        materials_lib.set_material_instance_vector_parameter_value(instance, parameter, unreal.LinearColor(*[float(v) for v in values]))
+
+    # How many of the original's moving textures were carried over, and how many stayed still (on a master that
+    # has no such animation: glow cards, glass, water).
+    animated = {"rotators": 0, "oscillators": 0, "sequences": 0, "left still": 0}
+
+    def animate(instance, flags, base):
+        """The material's oscillator or rotator, and its diffuse MaterialSequence. Surface master only."""
+        moving = uv_anim_vectors(flags.get("uv_anim"), texture_size(base))
+        if moving:
+            for parameter, values in zip(("AnimA", "AnimB", "AnimC"), moving):
+                vector(instance, parameter, values)
+            animated["rotators" if flags["uv_anim"]["type"] == "rotator" else "oscillators"] += 1
+        sequence = (flags.get("sequences") or {}).get("diffuse")
+        items = (sequence or {}).get("items") or []
+        if not items:
+            return
+        if len(items) > scct_materials.SEQUENCE_SLOTS:
+            log("sequence %s has %d items, the first %d are shown" % (sequence.get("source"), len(items), scct_materials.SEQUENCE_SLOTS))
+            items = items[:scct_materials.SEQUENCE_SLOTS]
+        materials_lib.set_material_instance_static_switch_parameter_value(instance, "Sequence", True)
+        times = [max(0.0, float(item.get("time") or 0.0)) for item in items]
+        vector(instance, "SeqInfo", [len(items), sum(times), 0.0 if sequence.get("loop") is False else 1.0,
+                                     1.0 if sequence.get("paused") else 0.0])
+        padded_times = times + [0.0] * (12 - len(times))
+        fades = [1.0 if item.get("action") == 1 else 0.0 for item in items] + [0.0] * (12 - len(items))
+        for row in range(3):
+            vector(instance, "SeqTimes%d" % row, padded_times[row * 4:row * 4 + 4])
+            vector(instance, "SeqFades%d" % row, fades[row * 4:row * 4 + 4])
+        for slot, item in enumerate(items):
+            flipbook = item.get("flipbook")
+            sheet = texture_of(flipbook["texture"]) if flipbook and flipbook.get("texture") else None
+            picture = sheet or texture_of(item["texture"])
+            if picture:
+                materials_lib.set_material_instance_texture_parameter_value(instance, "SeqTex%d" % slot, picture)
+            else:
+                log("sequence %s: no texture for item %d (%s)" % (sequence.get("source"), slot, item["texture"]))
+            cells = (flipbook["cols"], flipbook["rows"]) if sheet else (1, 1)
+            vector(instance, "Seq%dFlip" % slot, [cells[0], cells[1], flipbook["frames"] if sheet else 1, flipbook["fps"] if sheet else 0.0])
+            moving = uv_anim_vectors(item.get("anim"), texture_size(picture, cells), with_panner=True)
+            for parameter, values in zip(("AnimA", "AnimB", "AnimC"), moving or ([0] * 4, [0] * 4, [0] * 4)):
+                vector(instance, "Seq%d%s" % (slot, parameter), values)
+        animated["sequences"] += 1
 
     instances = {}
     counts = {}
@@ -370,6 +458,7 @@ def build_materials(material_doc):
             pan_u, pan_v = pan_speed(flags.get("uv_anim"))
             scalar("PanU", pan_u)
             scalar("PanV", pan_v)
+            animate(instance, flags, base)
             flipbook = flags.get("flipbook")
             sheet = texture_of(flipbook["texture"]) if flipbook and flipbook.get("texture") else None
             if sheet:
@@ -385,6 +474,11 @@ def build_materials(material_doc):
                 blend = unreal.BlendMode.BLEND_TRANSLUCENT
             elif flags.get("masked"):
                 blend = unreal.BlendMode.BLEND_MASKED
+
+        if kind in ("card", "glass", "water", "haze") and (
+                (flags.get("uv_anim") or {}).get("type") in ("oscillator", "rotator") or (flags.get("sequences") or {}).get("diffuse")):
+            animated["left still"] += 1
+            log("%s: its %s stays still on the %s master" % (material_name, "sequence" if flags.get("sequences") else flags["uv_anim"]["type"], kind))
 
         overrides = instance.get_editor_property("base_property_overrides")
         overrides.set_editor_property("override_blend_mode", blend is not None)
@@ -403,6 +497,7 @@ def build_materials(material_doc):
         materials_lib.update_material_instance(instance)
         instances[key(imported)] = instance
     log("surface classes: " + ", ".join("%s %d" % item for item in sorted(counts.items(), key=lambda item: -item[1])))
+    log("texture animation: " + ", ".join("%s %d" % item for item in animated.items()))
     return instances
 
 

@@ -102,12 +102,19 @@ void UScctDemoPlayback::Initialize(FSubsystemCollectionBase& Collection)
 	FParse::Value(CommandLine, TEXT("ScctDemoPlayer="), StartPlayer);
 	FParse::Value(CommandLine, TEXT("ScctDemoPause="), PauseAfter);
 	FParse::Value(CommandLine, TEXT("ScctDemoLeaveAfter="), LeaveAfter);
+	int32 XRayValue = 1;
+	if (FParse::Value(CommandLine, TEXT("ScctDemoXRay="), XRayValue) || FParse::Param(CommandLine, TEXT("ScctDemoXRay")))
+	{
+		bXRay = XRayValue != 0;
+		UE_LOG(LogOpenSCCT, Log, TEXT("Demo: -ScctDemoXRay, X-ray %s"), bXRay ? TEXT("on") : TEXT("off"));
+	}
 	CleanupHandle = FWorldDelegates::OnWorldCleanup.AddUObject(this, &UScctDemoPlayback::HandleWorldCleanup);
 }
 
 void UScctDemoPlayback::Deinitialize()
 {
 	FWorldDelegates::OnWorldCleanup.Remove(CleanupHandle);
+	XRay.Release();
 	HideHud();
 	if (PresentingWorld.IsValid())
 	{
@@ -265,6 +272,9 @@ void UScctDemoPlayback::HandleBeforeTicks(float DeltaSeconds)
 		Hud->DriveFrame(DeltaSeconds);
 	}
 
+	// Paused or seeking too: the outlines follow the bodies as drawn.
+	XRay.Update(PresentingSession.Get(), bXRay);
+
 	Table->Frame(DeltaSeconds);
 
 	FScctDemoPlayInfo Info = {};
@@ -342,7 +352,10 @@ void UScctDemoPlayback::ShowHud(UWorld* World)
 	}
 
 	TWeakObjectPtr<UScctDemoPlayback> Weak(this);
-	SAssignNew(Hud, SScctDemoHud).OnLeave(FSimpleDelegate::CreateLambda([Weak] { if (Weak.IsValid()) { Weak->Leave(); } }));
+	SAssignNew(Hud, SScctDemoHud)
+		.OnLeave(FSimpleDelegate::CreateLambda([Weak] { if (Weak.IsValid()) { Weak->Leave(); } }))
+		.XRayOn_Lambda([Weak] { return Weak.IsValid() && Weak->IsXRay(); })
+		.OnToggleXRay(FSimpleDelegate::CreateLambda([Weak] { if (Weak.IsValid()) { Weak->SetXRay(!Weak->IsXRay()); } }));
 	HudRoot = SNew(SWeakWidget).PossiblyNullContent(Hud);
 	Viewport->AddViewportWidgetContent(HudRoot.ToSharedRef(), 40);
 
@@ -391,6 +404,15 @@ void UScctDemoPlayback::Leave()
 	}
 }
 
+void UScctDemoPlayback::SetXRay(bool bOn)
+{
+	if (bXRay != bOn)
+	{
+		bXRay = bOn;
+		UE_LOG(LogOpenSCCT, Log, TEXT("Demo: X-ray turned %s"), bOn ? TEXT("on") : TEXT("off"));
+	}
+}
+
 bool UScctDemoPlayback::TakeReturnToDemos()
 {
 	const bool bReturn = bReturnToDemos;
@@ -410,6 +432,7 @@ void UScctDemoPlayback::HandleWorldCleanup(UWorld* World, bool bSessionEnded, bo
 	{
 		Session->OnBeforeTicks.Remove(BeforeTicksHandle);
 	}
+	XRay.Release();
 	if (!bLeaving)
 	{
 		if (const FScctDemoPlayApi* Table = Api())
