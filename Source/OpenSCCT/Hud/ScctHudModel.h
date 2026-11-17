@@ -103,6 +103,12 @@ public:
 	float EndAge = -1.0f;         // seconds since the round ended, negative before
 	bool bScoreboardHeld = false;
 
+	/** Unattended look check only (-ScctHudCommands "PreviewEnd"): shows the end banner as if this team had won; -1 when off. */
+	int32 PreviewWinner = -1;
+
+	/** Unattended look check only (-ScctHudCommands "PreviewDamage"): plays the feedback of a hit on the player. */
+	void PreviewDamage() { DamagePulse = 1.0f; HealthLoss = 1.0f; }
+
 	/** Starts again for a new session: nothing of the last match stays on screen. */
 	void Reset(const FScctHudApi* InApi);
 

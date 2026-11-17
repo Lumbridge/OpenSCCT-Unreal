@@ -45,7 +45,7 @@ public:
 	void Gradient(const FBox2f& Box, const FLinearColor& From, const FLinearColor& To, bool bVertical, float Corner = 0.0f);
 
 	/** The HUD's panel: blurred background, dark tint, a hairline edge. */
-	void Glass(const FBox2f& Box, float Corner, float Tint = 0.42f);
+	void Glass(const FBox2f& Box, float Corner, float Tint = 0.62f);
 
 	/** One line of text; returns its size. The position is the top of the line at its left, centre or right. */
 	FVector2f Text(const FVector2f& Position, const FString& String, const FSlateFontInfo& Font, const FLinearColor& Colour, EAlign Align = EAlign::Left, bool bShadow = true);

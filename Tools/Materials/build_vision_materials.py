@@ -78,7 +78,7 @@ return lerp(C, Out, Amount);
 """
 
 THERMAL = PRELUDE + """
-float Radius = 7.0;
+float Radius = 10.0;
 """ + BODY + """
 // The room as temperature rather than detail: a softened brightness, kept cold. Lamps read warmer.
 float Lb = L;
@@ -92,7 +92,7 @@ float Heat = 0.13 + pow(Lb, 0.7) * 0.50 + smoothstep(0.80, 1.0, Lb) * 0.20;
 
 // Characters are hot: hottest in the middle of the body and cooler towards its outline, so the figure keeps its
 // form, with warm air around it.
-float Core = 0.58 + 0.30 * Ring * Ring + 0.12 * saturate(L * 3.0);
+float Core = 0.56 + 0.26 * Ring * Ring + 0.18 * saturate(L * 6.0);
 Heat = lerp(max(Heat, Ring * 0.50), Core, Body);
 Heat = saturate(Heat + Grain * 0.035);
 

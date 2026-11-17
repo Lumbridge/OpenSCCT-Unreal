@@ -282,6 +282,14 @@ void UScctHudSubsystem::RunTimedCommands()
 				Session->SendCommand(TEXT("Fire"), 0);
 			}
 		}
+		else if (Command.Name.Equals(TEXT("PreviewDamage"), ESearchCase::IgnoreCase))
+		{
+			Model->PreviewDamage();
+		}
+		else if (Command.Name.Equals(TEXT("PreviewEnd"), ESearchCase::IgnoreCase))
+		{
+			Model->PreviewWinner = FMath::Clamp(Command.Argument, -1, 1);
+		}
 		else if (Command.Name.Equals(TEXT("EnhancedReality"), ESearchCase::IgnoreCase))
 		{
 			Api->SetOption(EScctHudOption::SwitchEnhancedReality, 0);

@@ -35,7 +35,7 @@ void ScctHudElements::PaintFeed(FScctHudPainter& Painter, const FScctHudModel& M
 	const float Right = Size.X - Margin;
 	const FSlateFontInfo NameFont = Font(EWeight::Regular, 10.5f);
 	const FSlateFontInfo TextFont = Font(EWeight::Regular, 10.0f);
-	constexpr float RowHeight = 26.0f, RowGap = 4.0f, Pad = 12.0f, Mark = 30.0f;
+	constexpr float RowHeight = 26.0f, RowGap = 4.0f, Pad = 12.0f, Mark = 40.0f;
 
 	float Y = Margin;
 	for (const FScctHudLine& Line : Model.Feed)
@@ -64,11 +64,16 @@ void ScctHudElements::PaintFeed(FScctHudPainter& Painter, const FScctHudModel& M
 			const FVector2f MarkCentre(X + Pad + ActorWidth + Mark * 0.5f, Y + RowHeight * 0.5f);
 			const bool bLethal = static_cast<EScctHudActivity>(Line.Kind) == EScctHudActivity::Kill;
 			const FLinearColor MarkColour = bLethal ? Fade(Text(), 0.85f) : TextDim();
-			Painter.Line(MarkCentre + FVector2f(-7.0f, 0.0f), MarkCentre + FVector2f(6.0f, 0.0f), MarkColour, 1.5f);
-			Painter.Polyline({ MarkCentre + FVector2f(2.0f, -4.0f), MarkCentre + FVector2f(6.5f, 0.0f), MarkCentre + FVector2f(2.0f, 4.0f) }, MarkColour, 1.5f);
-			if ((Line.Flags & EScctHudMessageFlags::Headshot) != 0)
+			const bool bHeadshot = (Line.Flags & EScctHudMessageFlags::Headshot) != 0;
+			const float Tail = bHeadshot ? -1.0f : -8.0f;
+			Painter.Line(MarkCentre + FVector2f(Tail, 0.0f), MarkCentre + FVector2f(8.0f, 0.0f), MarkColour, 1.5f);
+			Painter.Polyline({ MarkCentre + FVector2f(4.0f, -4.0f), MarkCentre + FVector2f(8.5f, 0.0f), MarkCentre + FVector2f(4.0f, 4.0f) }, MarkColour, 1.5f);
+			if (bHeadshot)
 			{
-				Painter.Arc(MarkCentre + FVector2f(-3.0f, 0.0f), 5.0f, 0.0f, 360.0f, Danger(), 1.5f);
+				// A sight ring at the tail of the arrow.
+				const FVector2f Ring = MarkCentre + FVector2f(-6.0f, 0.0f);
+				Painter.Arc(Ring, 4.5f, 0.0f, 360.0f, Danger(), 1.5f);
+				Painter.Fill(FBox2f(Ring - FVector2f(1.0f), Ring + FVector2f(1.0f)), Danger(), 1.0f);
 			}
 
 			Painter.Text(FVector2f(X + Pad + ActorWidth + Mark, Y + 5.0f), Line.Victim, NameFont, Accent(Line.VictimTeam));

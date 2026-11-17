@@ -21,7 +21,8 @@ class UScctHudWidget;
  *        simulation's exec commands (SwitchHeadset 1 or 2: the side's two vision modes, 3 cycles; NextGadget;
  *        SwitchROF ...), or one of the HUD's own: Scoreboard 1/0 (hold, release), EnhancedReality (the
  *        original's F9: objective markers on or off), Fire 1/0 (hold the trigger, let go; while held it
- *        replaces the player's own input).
+ *        replaces the player's own input), PreviewDamage (plays the HUD's feedback of a hit without one),
+ *        PreviewEnd 0/1 (shows the end banner as if the spies or the mercs had won; -1 takes it away).
  *   -ScctHudLog=S
  *        seconds between the snapshot lines in the log (default 1; 0 turns them off)
  */

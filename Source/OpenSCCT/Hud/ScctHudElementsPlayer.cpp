@@ -117,7 +117,11 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 
 	// A hit, and the slow pulse of being nearly dead.
 	const bool bAlive = (State.Flags & EScctHudFlags::HasPawn) != 0;
-	float Wash = Model.DamagePulse * 0.42f;
+	float Wash = Model.DamagePulse * 0.34f;
+	if (Model.HealthLoss > 0.0f)
+	{
+		Wash = FMath::Max(Wash, Model.HealthLoss * 0.25f);
+	}
 	if (bAlive && State.Health > 0 && State.Health <= 25)
 	{
 		Wash = FMath::Max(Wash, 0.10f + 0.06f * FMath::Sin(Model.Clock * 3.2f));
@@ -128,7 +132,7 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 	const FLinearColor Accent = ScctHudStyle::Accent(State.Side);
 	if (Model.VisionShown > 0.01f)
 	{
-		Brackets(Painter, 22.0f, 26.0f, Fade(Accent, 0.55f * Model.VisionShown));
+		Brackets(Painter, 16.0f, 22.0f, Fade(Accent, 0.55f * Model.VisionShown));
 	}
 	if (State.GadgetView != 0)
 	{
@@ -165,15 +169,17 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 	{
 		// Four ticks that open with the weapon's spread; they turn red for a moment when a shot lands.
 		const float Gap = 5.0f + Model.Spread * 24.0f;
-		constexpr float Length = 7.0f;
+		constexpr float Length = 8.0f;
 		const FLinearColor Colour = FMath::Lerp(Text(), Danger(), Model.HitConfirm);
 		const FVector2f Directions[] = { FVector2f(1.0f, 0.0f), FVector2f(-1.0f, 0.0f), FVector2f(0.0f, 1.0f), FVector2f(0.0f, -1.0f) };
 		for (const FVector2f& Direction : Directions)
 		{
-			Painter.Line(Centre + Direction * (Gap - 0.5f), Centre + Direction * (Gap + Length + 0.5f), FLinearColor(0.0f, 0.0f, 0.0f, 0.45f), 3.0f);
-			Painter.Line(Centre + Direction * Gap, Centre + Direction * (Gap + Length), Colour, 1.5f);
+			// A dark edge under each tick keeps it readable over a bright floor.
+			Painter.Line(Centre + Direction * (Gap - 1.0f), Centre + Direction * (Gap + Length + 1.0f), FLinearColor(0.0f, 0.0f, 0.0f, 0.6f), 4.0f);
+			Painter.Line(Centre + Direction * Gap, Centre + Direction * (Gap + Length), Colour, 2.0f);
 		}
-		Painter.Fill(FBox2f(Centre - FVector2f(1.0f), Centre + FVector2f(1.0f)), Fade(Colour, 0.9f), 1.0f);
+		Painter.Fill(FBox2f(Centre - FVector2f(2.0f), Centre + FVector2f(2.0f)), FLinearColor(0.0f, 0.0f, 0.0f, 0.5f), 2.0f);
+		Painter.Fill(FBox2f(Centre - FVector2f(1.0f), Centre + FVector2f(1.0f)), Colour, 1.0f);
 
 		if (Model.HitConfirm > 0.01f)
 		{
@@ -449,7 +455,7 @@ void ScctHudElements::PaintEquipment(FScctHudPainter& Painter, const FScctHudMod
 	// The gadgets as a strip of rows in one panel, in the order the player cycles them, the selected one lit.
 	constexpr float RowHeight = 24.0f, RowWidth = 208.0f, Inset = 6.0f;
 	const float StripHeight = Model.Gadgets.Num() * RowHeight + Inset * 2.0f;
-	Painter.Glass(HudBox(Right - RowWidth, Bottom - StripHeight, RowWidth, StripHeight), Corner);
+	Painter.Glass(HudBox(Right - RowWidth, Bottom - StripHeight, RowWidth, StripHeight), Corner, 0.68f);
 	float RowY = Bottom - StripHeight + Inset;
 	for (int32 Index = 0; Index < Model.Gadgets.Num(); ++Index, RowY += RowHeight)
 	{
@@ -480,7 +486,7 @@ void ScctHudElements::PaintEquipment(FScctHudPainter& Painter, const FScctHudMod
 			Count = FString::FromInt(Gadget.Charge);
 		}
 
-		const FLinearColor NameColour = bUnavailable || bEmpty ? TextFaint() : (bSelected ? Text() : TextDim());
+		const FLinearColor NameColour = bUnavailable || bEmpty ? TextFaint() : (bSelected ? Text() : Fade(Text(), 0.74f));
 		const FLinearColor CountColour = bUnavailable || bEmpty ? TextFaint() : (bSelected ? Accent : TextDim());
 		Painter.Text(FVector2f(Right - 16.0f, RowY + 4.0f), Count, Font(EWeight::Bold, 10.5f), CountColour, EAlign::Right);
 		Painter.Text(FVector2f(Right - RowWidth + 16.0f, RowY + 7.0f), Model.Text(Gadget.NameId).ToUpper(), Label(8.0f), NameColour);

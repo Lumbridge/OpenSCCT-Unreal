@@ -147,6 +147,12 @@ void FScctHudModel::AddMessage(const FScctHudMessage& Message)
 		return;
 	}
 
+	// A line about a place that has no name starts with the original's bare separator (" : Objectives locked").
+	while (Line.Text.RemoveFromStart(TEXT(":")))
+	{
+		Line.Text.TrimStartInline();
+	}
+
 	// The original's blank spacer lines carry no text.
 	if (Line.Text.IsEmpty())
 	{
@@ -157,7 +163,7 @@ void FScctHudModel::AddMessage(const FScctHudMessage& Message)
 	{
 	case EScctHudMessageCategory::Game:
 	case EScctHudMessageCategory::System:
-		Line.Life = FMath::Clamp(Message.Duration, 4.0f, 9.0f);
+		Line.Life = FMath::Clamp(Message.Duration, 4.0f, 7.0f);
 		AddLine(Headlines, MoveTemp(Line), 3);
 		break;
 	case EScctHudMessageCategory::Reticle:
@@ -247,6 +253,11 @@ void FScctHudModel::Advance(float DeltaSeconds)
 
 	ScoreboardShown = Ease(ScoreboardShown, bScoreboardHeld ? 1.0f : 0.0f, DeltaSeconds, 16.0f);
 
+	if (PreviewWinner >= 0)
+	{
+		Round.Ended = 1;
+		Round.WinningTeam = PreviewWinner;
+	}
 	const bool bEnded = bHasRound && Round.Ended != 0;
 	EndAge = bEnded ? FMath::Max(EndAge, 0.0f) + DeltaSeconds : -1.0f;
 }

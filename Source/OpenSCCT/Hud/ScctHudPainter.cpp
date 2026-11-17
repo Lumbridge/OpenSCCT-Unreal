@@ -90,7 +90,7 @@ void FScctHudPainter::Gradient(const FBox2f& Box, const FLinearColor& From, cons
 
 void FScctHudPainter::Glass(const FBox2f& Box, float Corner, float Tint)
 {
-	Blur(Box, 14.0f, Corner);
+	Blur(Box, 16.0f, Corner);
 	Fill(Box, FLinearColor(0.004f, 0.007f, 0.011f, Tint), Corner, FLinearColor(1.0f, 1.0f, 1.0f, 0.09f), 1.0f);
 }
 
