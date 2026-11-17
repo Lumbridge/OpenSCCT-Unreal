@@ -622,6 +622,8 @@ public static unsafe class Exports
                 {
                     // The visit first: it releases its round, tells the server and closes the connection.
                     OnlineBridge.Existing?.Dispose();
+                    // The hub visit and the hub this PC hosts likewise.
+                    Hub.HubBridge.Existing?.Dispose();
                 }
                 finally
                 {

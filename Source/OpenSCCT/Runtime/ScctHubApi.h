@@ -1,0 +1,103 @@
+#pragma once
+
+#include "CoreMinimal.h"
+
+// The hub half of the C# bridge: visiting an OpenSCCT hub (docs/HUB.md in OpenSCCT), and hosting one on this PC.
+// These mirror Bridge/OpenScct.UnrealBridge/Hub/HubTypes.cs and HubExports.cs field for field; change both
+// together and bump the version.
+//
+// The table is fetched like the other feature tables: ScctFeature<FScctHubApi>() (Runtime/ScctFeatures.h).
+//
+// Every frame, on the game thread: Hub.Update() first, then the main table's Update(). Once the visit's session is
+// in the main slot (RoundActive), Hub.Update() runs its simulation ticks itself (the visit owns the connection), so
+// the main Update() usually returns 0 ticks and only brings the frame's blend factor up to date; keep calling both.
+// Calling the main table's Stop or StartLocal during a visit ends it (the player leaves the hub).
+// A visit goes Connecting -> Loading -> InHub and ends Failed (GetText(Error)) or, after Leave, Idle. Open the level
+// of GetText(MapToLoad) once it is not empty; call ReportLoaded once that level is up and presents the session, and
+// the hub spawns the player's pawn.
+// Text is UTF-16, zero terminated.
+
+constexpr int32 ScctHubApiVersion = 1;
+
+/** Where the hub visit is. */
+enum class EScctHubState : int32
+{
+	Idle = 0,       // not in a hub: nothing was joined, or Leave cleared the last visit
+	Connecting = 1, // waiting for the hub to answer and welcome the player
+	Loading = 2,    // welcomed: the hub map loads and the player's controller arrives
+	InHub = 3,      // the visit's session is in the main slot: pawns, poses, view and input work as in a match
+	Failed = 4,     // the visit ended with an error: GetText(EScctHubText::Error). Leave() clears it.
+};
+
+/** FScctHubStatus::Flags. */
+namespace EScctHubStatusFlags
+{
+	constexpr int32 Welcomed = 1;        // the hub welcomed this player
+	constexpr int32 RoundActive = 2;     // the visit's session runs in the main slot
+	constexpr int32 NeedsLoadReport = 4; // the hub waits for ReportLoaded()
+	constexpr int32 ReportedWaiting = 8; // the hub knows this player is in the map
+	constexpr int32 Hosting = 16;        // this PC hosts the hub
+	constexpr int32 LocalPawn = 32;      // the local player has a pawn
+}
+
+/** The visit in one read (GetStatus); cheap enough for every frame. */
+struct FScctHubStatus
+{
+	int32 State;          // EScctHubState
+	int32 Flags;          // EScctHubStatusFlags
+	int32 Revision;       // goes up when anything the hub page shows changed
+	int32 PlayerId;       // this player's id in the hub, 0 before the welcome
+	int32 Team;           // 0 spies, 1 mercs, -1 not known yet
+	int32 PlayerCount;    // players on the hub's roster (sent every few seconds)
+	int32 MaxPlayers;
+	int32 HostPort;       // the UDP port of the hub this PC hosts, 0 when it hosts none
+	float ConnectSeconds; // seconds since the visit started connecting
+	int32 LogWaiting;     // log lines waiting for TakeLog
+};
+
+/** The texts GetText reads. */
+enum class EScctHubText : int32
+{
+	Error = 0,      // why the visit failed, as a player reads it
+	HubName = 1,
+	MapToLoad = 2,  // the level to have open while in the hub ("Hub"); empty while connecting and when not in a hub
+	Address = 3,    // the "host:port" the visit connects to
+	Status = 4,     // what is happening, as the hub page says it
+	PlayerName = 5, // the name the player joined under
+};
+
+struct FScctHubApi
+{
+	int32 Version;
+
+	/** A folder that holds SVMap folders, searched first for the hub map (the project's Saved/ScctImport/HubContent/svmap). Seen by the next visit. */
+	void (__cdecl* AddMapRoot)(const TCHAR* Folder);
+
+	/** Joins "host", "host:port" or "[v6]:port" (port 28886 when none) as Name on Team (0 spies, 1 mercs). Returns 1 when the visit started. */
+	int32 (__cdecl* Connect)(const TCHAR* Address, const TCHAR* Name, int32 Team);
+
+	/** Opens a hub on this PC on UDP Port (0: 28886; every interface unless bLoopbackOnly) and joins it. Returns 1 when it is up and the join started, 0 with the reason in GetText(Error). */
+	int32 (__cdecl* HostAndJoin)(int32 Port, const TCHAR* Name, int32 Team, int32 bLoopbackOnly);
+
+	/** Leaves the hub, closes the hub this PC hosts, and clears a failure: the state is Idle afterwards. */
+	void (__cdecl* Leave)();
+
+	/** Once a frame, before the main table's Update: runs the visit's 60 Hz ticks that are due. Returns the ticks run. The tick that receives the hub map loads its simulation and blocks for as long. */
+	int32 (__cdecl* Update)();
+
+	/** Writes the status. Returns its State. */
+	int32 (__cdecl* GetStatus)(FScctHubStatus* Status);
+
+	/** Copies a text (EScctHubText) into Buffer. Returns its full length in characters. */
+	int32 (__cdecl* GetText)(int32 Kind, TCHAR* Buffer, int32 Capacity);
+
+	/** The hub level is up and presents the visit's session: the hub may place the player. Once per visit, while NeedsLoadReport is set. */
+	void (__cdecl* ReportLoaded)();
+
+	/** Copies the next waiting log line (the visit's steps, a hosted hub's own lines) into Buffer and drops it. Returns its full length, -1 when none waits. */
+	int32 (__cdecl* TakeLog)(TCHAR* Buffer, int32 Capacity);
+};
+
+static_assert(sizeof(TCHAR) == 2, "The bridge's text is UTF-16");
+static_assert(sizeof(FScctHubStatus) == 40, "FScctHubStatus does not match HubStatus");
+static_assert(sizeof(FScctHubApi) == 8 + 9 * sizeof(void*), "FScctHubApi does not match HubApi");
