@@ -16,6 +16,8 @@ The materials go to /Game/OpenSCCT/Effects/ and are committed: they are ours, ma
   M_ScctFxSmokeVolume  a responsive smoke cloud, ray-marched through the density grid the bridge samples from the
                   shared smoke field (Play/ScctEffectsSmokeVolume.cpp); drawn on the back faces of a box over the
                   field's bounds, with no depth test of its own (it stops at the scene's depth itself)
+  M_ScctGoggleGlowHue  the goggle lenses with their colour turned by HueTurn radians (a player's light cosmetic);
+                  parameters Lens, Intensity, Fade and HueTurn as M_ScctGoggleGlow has them
 
 With a content root the original effect meshes (grenades, mines, gadgets, beams: shared/fx/meshes/*.glb) are
 imported to /Game/Imported/Fx/<Package>/ and the projections' textures to /Game/Imported/Fx/Textures/ (never
@@ -681,12 +683,63 @@ def import_meshes():
     log("effect meshes imported: %d (%s ...)" % (len(meshes), ", ".join(m.rsplit("/", 1)[1].split(".")[0] for m in meshes[:5])))
 
 
+def build_goggle_glow_hue():
+    """The goggle lenses (M_ScctGoggleGlow of Tools/Import/build_equipment_assets.py) with their colour turned
+    round the grey axis by HueTurn radians: a player's light cosmetic (Play/ScctPawnLookSubsystem.cpp). The same
+    rule as the Godot client's GoggleGlowView, so the lens keeps its brightness and only its hue moves."""
+    material = new_material("M_ScctGoggleGlowHue")
+    if not material:
+        return
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_ADDITIVE)
+    material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property("two_sided", True)
+    try_set(material, "used_with_skeletal_mesh", True)
+
+    lens = lib.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameter2D, -1100, -200)
+    lens.set_editor_property("parameter_name", "Lens")
+    intensity = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -1100, 100)
+    intensity.set_editor_property("parameter_name", "Intensity")
+    intensity.set_editor_property("default_value", 1.6)
+    fade = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -1100, 200)
+    fade.set_editor_property("parameter_name", "Fade")
+    fade.set_editor_property("default_value", 1.0)
+    turn = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -1100, 300)
+    turn.set_editor_property("parameter_name", "HueTurn")
+    turn.set_editor_property("default_value", 0.0)
+
+    masked = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -850, -150)
+    connect(lens, "RGB", masked, "A")
+    connect(lens, "A", masked, "B")
+    rotate = lib.create_material_expression(material, unreal.MaterialExpressionCustom, -650, -100)
+    rotate.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    pins = []
+    for name in ("C", "H"):
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    rotate.set_editor_property("inputs", pins)
+    # Rodrigues' rotation of the colour about (1,1,1): the hue turns, the grey level stays.
+    rotate.set_editor_property("code", "float3 k = float3(0.57735, 0.57735, 0.57735); float c = cos(H); float s = sin(H);"
+                               " return max(C * c + cross(k, C) * s + k * dot(k, C) * (1.0 - c), 0.0);")
+    connect(masked, "", rotate, "C")
+    connect(turn, "", rotate, "H")
+    lit = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -400, -50)
+    connect(rotate, "", lit, "A")
+    connect(intensity, "", lit, "B")
+    out = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -200, 0)
+    connect(lit, "", out, "A")
+    connect(fade, "", out, "B")
+    connect_output(out, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    finish(material)
+
+
 build_glow()
 build_smoke()
 build_decal()
 build_solid()
 build_projection()
 build_smoke_volume()
+build_goggle_glow_hue()
 if CONTENT_ROOT:
     import_projection_textures()
     import_meshes()

@@ -577,8 +577,11 @@ public sealed class EquipmentFeature
 
             if (pawn.GoggleBeam is { bDeleteMe: false, bHidden: false } beam && !beam.Mesh.IsNone)
             {
-                Add(attachments, ref count, pawn, BridgeAttachmentSlot.GoggleGlow, beam, beam.Mesh.Path!, beam.AttachmentBone,
-                    beam.RelativeLocation, beam.RelativeRotation, EquipmentNames.Id(beam.Skin.Path), false);
+                // A map outfit's model puts the goggle lights on its own bone, offset (Pose/PawnOutfits.Goggles).
+                var goggles = _session.Outfits.Goggles(pawn is SPAWNDEFENSE ? 1 : 0);
+                Add(attachments, ref count, pawn, BridgeAttachmentSlot.GoggleGlow, beam, beam.Mesh.Path!,
+                    goggles is { } g ? new Name(g.Bone) : beam.AttachmentBone, goggles is { } o ? beam.RelativeLocation + o.Offset : beam.RelativeLocation,
+                    beam.RelativeRotation, EquipmentNames.Id(beam.Skin.Path), false);
             }
         }
 

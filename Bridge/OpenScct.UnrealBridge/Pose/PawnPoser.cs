@@ -16,9 +16,9 @@ namespace OpenScct.UnrealBridge.Pose;
 /// lock of a root-motion move), interpolated between the last two ticks, then the upper-body aim and the bone
 /// direction controllers. It reads the simulation and never writes it.
 /// <para>A port of the posing half of OpenSCCT's game/Scripts/Views/SimPawnView.cs (OnTick, SetAim, SetDirections,
-/// Pose, RootLockOf, Interpolated). Not ported: the hub's emote overlay (IPawnPoseOverlay), the local player's
-/// look-ahead aim (DrawnView, which needs the camera of the frame), map outfits (the stock mesh is always posed) and
-/// replacement clips of an animation project.</para>
+/// Pose, RootLockOf, Interpolated). A map outfit's model is posed with its team's stock clips (see the constructor).
+/// Not ported: the hub's emote overlay (IPawnPoseOverlay), the local player's look-ahead aim (DrawnView, which needs
+/// the camera of the frame) and replacement clips of an animation project.</para>
 /// </summary>
 public sealed class PawnPoser
 {
@@ -27,6 +27,7 @@ public sealed class PawnPoser
     private readonly TickChannel[] _cur = new TickChannel[PawnAnimation.ChannelCount];
     private readonly Dictionary<Name, int> _boneOf = new();
     private readonly GlbCharacter _character;
+    private readonly GlbCharacter _clips;
     private readonly ChannelPoseApplier _applier;
     private readonly int _aimBone;
     private FVector _location;
@@ -42,12 +43,18 @@ public sealed class PawnPoser
     private long _posedTick = -1;
     private float _posedAlpha;
 
-    public PawnPoser(SBasePawn pawn, GlbCharacter character)
+    /// <summary>
+    /// Poses <paramref name="character"/>'s skeleton: the team's stock file, or a map outfit's model
+    /// (render/outfits.json) with the team's stock file as <paramref name="clips"/>, whose clips then move the outfit's
+    /// bones of the same names (the Godot client's SimPawnView.Bind with PawnOutfits.Load).
+    /// </summary>
+    public PawnPoser(SBasePawn pawn, GlbCharacter character, GlbCharacter? clips = null)
     {
         Pawn = pawn ?? throw new ArgumentNullException(nameof(pawn));
         _character = character ?? throw new ArgumentNullException(nameof(character));
-        // BoneMirrors counts the team's stock skeleton, which is the one posed here.
-        _applier = new ChannelPoseApplier(character, pawn.BoneMirrors);
+        _clips = clips ?? character;
+        // BoneMirrors counts the team's stock skeleton; an outfit's bones are found from it by name.
+        _applier = new ChannelPoseApplier(character, pawn.BoneMirrors, _clips);
         _aimBone = _applier.FindBone(MeshAimIK.FullAimBoneName);
     }
 
@@ -55,6 +62,9 @@ public sealed class PawnPoser
     public SBasePawn Pawn { get; }
 
     public GlbCharacter Character => _character;
+
+    /// <summary>The file the clips come from: <see cref="Character"/> itself, or the team's stock file under an outfit.</summary>
+    public GlbCharacter Clips => _clips;
 
     /// <summary>False until the first tick has been taken: there is no pose to read yet.</summary>
     public bool Placed => _placed;
@@ -242,7 +252,7 @@ public sealed class PawnPoser
         for (int c = 0; c < PawnAnimation.ChannelCount; c++)
         {
             PawnAnimChannel ch = anim[c];
-            if (ch.Sequence.IsNone || ch.Clip is null || _character.Find(ch.Sequence.ToString()) is not { } clip)
+            if (ch.Sequence.IsNone || ch.Clip is null || _clips.Find(ch.Sequence.ToString()) is not { } clip)
             {
                 continue;
             }

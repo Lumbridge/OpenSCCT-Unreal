@@ -5,6 +5,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
 #include "OpenSCCT.h"
+#include "Play/ScctPawnLookSubsystem.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -70,7 +71,12 @@ void AScctPawnProxy::SetKind(int32 NewKind, TConstArrayView<FScctBridgeBoneInfo>
 	BonesByBridgeName.Reset();
 	MeshBonesByKey.Reset();
 
-	USkeletalMesh* Model = Kind >= 0 && Kind < UE_ARRAY_COUNT(ModelPaths) ? LoadObject<USkeletalMesh>(nullptr, ModelPaths[Kind]) : nullptr;
+	// A map outfit's model, when the map dresses the team in one (the bridge poses its skeleton).
+	const FString OutfitPath = UScctPawnLookSubsystem::OutfitModelPath(Kind);
+	USkeletalMesh* Model = OutfitPath.IsEmpty() ? nullptr : LoadObject<USkeletalMesh>(nullptr, *OutfitPath, nullptr, LOAD_NoWarn);
+	UE_CLOG(!OutfitPath.IsEmpty(), LogOpenSCCT, Log, TEXT("Pawn kind %d wears the map's outfit model %s%s"), Kind, *OutfitPath,
+		Model != nullptr ? TEXT("") : TEXT(": NOT IMPORTED (Tools/Import/Import-Outfits.ps1), the stock mesh is drawn"));
+	Model = Model != nullptr ? Model : Kind >= 0 && Kind < UE_ARRAY_COUNT(ModelPaths) ? LoadObject<USkeletalMesh>(nullptr, ModelPaths[Kind]) : nullptr;
 	if (Model == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Warning, TEXT("No character model for pawn kind %d; run Tools/Import/import_characters.py"), Kind);

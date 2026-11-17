@@ -27,6 +27,8 @@ public class OpenSCCT : ModuleRules
 			"AssetRegistry",
 			// A sound wave class of our own (Play/ScctSoundWave) links against the audio proxy interfaces.
 			"AudioExtensions",
+			// Cosmetic camo textures are loose PNGs read at run time (Play/ScctPawnLookSubsystem).
+			"ImageCore",
 			"Json",
 			// The map's soft bodies are meshes whose vertices are rewritten each frame (Play/ScctLevelStateSoftBodies).
 			"ProceduralMeshComponent",

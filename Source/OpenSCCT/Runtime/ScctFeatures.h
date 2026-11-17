@@ -8,6 +8,7 @@
 #include "Runtime/ScctHudApi.h"
 #include "Runtime/ScctMarkSurfaceApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Runtime/ScctPawnLookApi.h"
 #include "Runtime/ScctProjectionsApi.h"
 #include "Runtime/ScctSmokeApi.h"
 #include "Runtime/ScctSoftBodyApi.h"
@@ -38,6 +39,7 @@ SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
 SCCT_FEATURE_TABLE(FScctMarkSurfaceApi, "MarkSurfaceExports", ScctMarkSurfaceApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
+SCCT_FEATURE_TABLE(FScctPawnLookApi, "PawnLookExports", ScctPawnLookApiVersion);
 SCCT_FEATURE_TABLE(FScctProjectionsApi, "ProjectionExports", ScctProjectionsApiVersion);
 SCCT_FEATURE_TABLE(FScctSmokeApi, "SmokeExports", ScctSmokeApiVersion);
 SCCT_FEATURE_TABLE(FScctSoftBodyApi, "SoftBodyExports", ScctSoftBodyApiVersion);
