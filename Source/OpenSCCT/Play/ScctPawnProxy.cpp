@@ -166,14 +166,37 @@ void AScctPawnProxy::Present(const FScctBridgePawn& NewPawn, TConstArrayView<FSc
 	}
 }
 
-void AScctPawnProxy::SetNearFade(float Distance)
+void AScctPawnProxy::SetNearFade(float Distance, const FVector& Eye)
 {
 	Distance = FMath::Max(Distance, 0.0f);
-	if (Distance <= 0.0f && NearFade <= 0.0f)
+	if (Distance <= 0.0f && NearFade <= 0.0f && !bHeadHidden)
 	{
 		return;
 	}
 	NearFade = Distance;
+
+	const FName Head = FindMeshBoneName(TEXT("B Head"));
+	bool bHideHead = false;
+	if (Distance > 0.0f && !Head.IsNone())
+	{
+		const float Reach = Distance * HeadGoneFactor + (bHeadHidden ? HeadBackMargin : 0.0f);
+		bHideHead = FVector::DistSquared(Body->GetBoneLocation(Head), Eye) < FMath::Square(Reach);
+	}
+	if (bHideHead != bHeadHidden)
+	{
+		bHeadHidden = bHideHead;
+		if (bHideHead)
+		{
+			Body->HideBoneByName(Head, PBO_None);
+		}
+		else
+		{
+			Body->UnHideBoneByName(Head);
+		}
+	}
+
+	// A distance far beyond any view: whatever carries it is gone from the picture.
+	constexpr float GoneEverywhere = 1.0e6f;
 
 	// Setting a value that is already there costs nothing, so attachments made since the last call get theirs.
 	Body->SetCustomPrimitiveDataFloat(NearFadeSlot, Distance);
@@ -183,7 +206,18 @@ void AScctPawnProxy::SetNearFade(float Distance)
 	{
 		if (UPrimitiveComponent* Primitive = Cast<UPrimitiveComponent>(Child))
 		{
-			Primitive->SetCustomPrimitiveDataFloat(NearFadeSlot, Distance);
+			// Hanging on the head: the part of its chain that sits on the body sits on the head bone.
+			bool bOnHead = false;
+			if (bHeadHidden)
+			{
+				const USceneComponent* Link = Child;
+				while (Link->GetAttachParent() != nullptr && Link->GetAttachParent() != Body)
+				{
+					Link = Link->GetAttachParent();
+				}
+				bOnHead = Link->GetAttachParent() == Body && Link->GetAttachSocketName() == Head;
+			}
+			Primitive->SetCustomPrimitiveDataFloat(NearFadeSlot, bOnHead ? GoneEverywhere : Distance);
 		}
 	}
 }

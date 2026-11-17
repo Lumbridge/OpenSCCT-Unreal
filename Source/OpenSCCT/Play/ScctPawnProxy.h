@@ -92,9 +92,18 @@ public:
 	 * even transparency (the surface material's NearFade, custom primitive data slot NearFadeSlot;
 	 * Tools/Import/scct_materials.py). 0 switches it off. The shadow stays whole. Call it every frame it is on,
 	 * because attachments come and go.
+	 *
+	 * The head (bone "B Head" and what hangs on it, the goggle lenses) goes whole, at once, while its bone is
+	 * nearer Eye than HeadGoneFactor times Distance: thinned by depth alone it hung beside the gun as a ghost of
+	 * loose shards when the camera was held against a wall. Its shadow goes with it.
 	 */
-	void SetNearFade(float Distance);
+	void SetNearFade(float Distance, const FVector& Eye);
 	float GetNearFade() const { return NearFade; }
+	bool IsHeadHidden() const { return bHeadHidden; }
+
+	static constexpr float HeadGoneFactor = 1.25f;
+	/** How much further than that the head bone must be before the head comes back, cm (no flicker at the edge). */
+	static constexpr float HeadBackMargin = 6.0f;
 
 	/** The custom primitive data slot of the near fade (NEAR_FADE_SLOT in Tools/Import/scct_materials.py). */
 	static constexpr int32 NearFadeSlot = 2;
@@ -120,4 +129,5 @@ private:
 	int32 Kind = INDEX_NONE;
 	bool bHasModel = false;
 	float NearFade = 0.0f;
+	bool bHeadHidden = false;
 };
