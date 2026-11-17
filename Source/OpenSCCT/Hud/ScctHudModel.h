@@ -9,6 +9,7 @@
 #include "Runtime/ScctHudRadarApi.h"
 #include "Runtime/ScctHudTextureApi.h"
 #include "Hud/ScctTeamPingView.h"
+#include "Hud/ScctTelemetryView.h"
 
 /**
  * The HUD's own labels. Their text is the original game's, read from the player's content with the bridge's
@@ -173,6 +174,12 @@ public:
 	 * wheel while the TeamPing key is held. Filled by UScctTeamPingSubsystem; empty when there are none.
 	 */
 	FScctTeamPingView TeamPing;
+
+	/**
+	 * The frame-rate and network readouts (Hud.FpsMode, Hud.NetMode), ready to draw. Filled by UScctTelemetrySubsystem;
+	 * both panels hidden while the options are off.
+	 */
+	FScctTelemetryView Telemetry;
 
 	/** The team of the player at this machine (0 spies, 1 mercs), from the scoreboard, else the side played. */
 	int32 LocalTeam = 0;
