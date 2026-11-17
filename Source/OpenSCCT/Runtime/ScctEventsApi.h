@@ -28,7 +28,7 @@ constexpr int32 ScctEventsApiVersion = 1;
 namespace EScctSimEventKind
 {
 	constexpr int32 PlaySound = 1;    // also delivered resolved as FScctSound
-	constexpr int32 SpawnEmitter = 2; // start the emitter class WhatId at X,Y,Z / Pitch,Yaw,Roll (device sparks)
+	constexpr int32 SpawnEmitter = 2; // for information only: do not draw from it (see FScctSimEvent)
 	constexpr int32 Notify = 3;       // WhatId names it: Vibration_*, ClientDamageHudEffect, HudShutDown, SpawnSFX...
 	constexpr int32 StopSound = 4;    // also delivered as FScctSound Stop
 	constexpr int32 PlayMusic = 5;    // also delivered as FScctSound PlayMusic
@@ -48,10 +48,11 @@ namespace EScctSimEventFlags
 }
 
 /**
- * One presentation event as the simulation raised it. Use it for notifies and SpawnEmitter; sounds come resolved
- * in FScctSound. Note: an impact raises SpawnEmitter for its spark AND fills an impact mark with the same spark
- * class; the Godot client draws the mark's spark and ignores that SpawnEmitter (only use SpawnEmitter events whose
- * ActorId is not 0, which are device sparks, or dedupe against the marks).
+ * One presentation event as the simulation raised it. Use it for notifies; sounds come resolved in FScctSound.
+ * Do NOT start an effect from a SpawnEmitter event, or it is drawn twice (the Godot client ignores them in play):
+ * an impact raises one for its spark and also fills an impact mark with the same spark class (draw the mark's), and
+ * a device's Shocker burst is turned into an SBase.SSparkShocker actor on the client, which arrives as an
+ * FScctEffectActor.
  */
 struct FScctSimEvent
 {
@@ -134,7 +135,7 @@ struct FScctSound
 	float MinDistance;   // cm, see the gain formula above
 	float Pitch;         // 0.5 .. 2
 	float Delay;         // seconds from the event before this record starts
-	float PlaySeconds;   // > 0: stop after this many seconds (a timed loop of a sequence); 0: play to the end
+	float PlaySeconds;   // > 0: stop after this many seconds of real time (a timed loop of a sequence); 0: play to the end
 	float Duration;      // file length in seconds at pitch 1 (0 unknown)
 	float FadeSeconds;   // PlayMusic: fade in; StopMusic: fade out
 	int32 LoopStart;     // loop points of a looping wave in sample frames, -1: the whole file
@@ -200,14 +201,15 @@ namespace EScctEffectKind
 
 namespace EScctEffectFlags
 {
-	constexpr int32 Hidden = 1;       // bHidden (light actors are hidden and still light)
+	constexpr int32 Hidden = 1;       // do not draw it now: bHidden (light actors are hidden and still light), or a gas mask / backpack not yet on its wearer
 	constexpr int32 Deleted = 2;      // the actor went: this is its last record, end the effect
 	constexpr int32 Killed = 4;       // with Deleted: stop spawning and let the live particles die out in place
 	constexpr int32 DynamicLight = 8; // also lights its surroundings with the Light fields
-	constexpr int32 OnBone = 16;      // attached: place it at bone BoneId of the drawn skeleton of BaseActorId, offset Rel in the bone's frame
+	constexpr int32 OnBone = 16;      // attached to a pawn: place it at bone BoneId of the drawn skeleton of pawn BaseActorId, moved by Rel and turned by RelPitch/Yaw/Roll in the bone's frame
 	constexpr int32 Unlit = 32;
 	constexpr int32 OwnView = 64;     // a laser beam whose simulated start is in mid-air: draw it from the drawn hand / device instead
 	constexpr int32 Snapped = 128;    // X,Y,Z was not blended from the tick before
+	constexpr int32 VisionOnly = 256; // bHideInNormalVision: draw it only in the night and heat vision modes
 }
 
 /**
@@ -223,20 +225,22 @@ struct FScctEffectActor
 	int32 MeshId;        // name id of the StaticMesh object path, 0 when it draws none
 	int32 TrailClassId;  // name id of the launch trail emitter to run following this actor, 0 none
 	int32 BaseActorId;   // its Base, else its Owner; an attachment only with OnBone (else just who it belongs to)
-	int32 BoneId;        // name id of the bone it is attached to
+	int32 BoneId;        // name id of the bone it is attached to (without OnBone: a gun's bone, already in X,Y,Z)
 	int32 InstigatorId;  // the pawn that caused it
+	int32 ParticleId;    // only for SBase.SSpawnableEmitter: name id of the object path of the map's particle emitter it runs, else 0
 	float X, Y, Z;       // blended between the last two ticks
 	float Pitch, Yaw, Roll;
 	float ScaleX, ScaleY, ScaleZ; // DrawScale3D * DrawScale
 	float PrePivotX, PrePivotY, PrePivotZ;
 	float VelX, VelY, VelZ; // cm/s
-	float RelX, RelY, RelZ; // RelativeLocation
+	float RelX, RelY, RelZ; // RelativeLocation, cm in the bone's frame (with OnBone)
+	float RelPitch, RelYaw, RelRoll; // RelativeRotation, degrees in the bone's frame (with OnBone)
 	float Age;           // seconds since first seen
 	float LifeSpan;      // the actor's LifeSpan in seconds, 0 none
-	float LightBrightness; // 0..255
-	float LightHue;        // 0..255
-	float LightSaturation; // 0..255, the UE2 light property as stored
-	float LightRadius;     // UE2 units: x 50 = cm
+	float LightBrightness; // 0..255; already 0 when the actor's light is off and already faded for the frag grenade's flash
+	float LightHue;        // 0..255 (the UE2 byte)
+	float LightSaturation; // 0..255, the UE2 byte as stored (in UE2's light model 255 is white, 0 the full colour)
+	float LightRadius;     // reach in cm: 25 x (the UE2 LightRadius + 1), as the Godot client lights it
 };
 
 // ---- impact marks -------------------------------------------------------------------------------------------
@@ -319,7 +323,7 @@ struct FScctEventsApi
 	/** Takes waiting muzzle flashes and tracers, oldest first. */
 	int32 (__cdecl* DrainShots)(FScctShot* Shots, int32 Capacity);
 
-	/** Writes the effect actors as drawn this frame. Returns the count written (use a buffer of 256 or more). */
+	/** Writes the effect actors as drawn this frame, the Deleted ones first. Returns the count written (use a buffer of 256 or more). */
 	int32 (__cdecl* GetEffectActors)(FScctEffectActor* Actors, int32 Capacity);
 
 	/** Writes the live impact marks (at most 50). */
@@ -338,6 +342,6 @@ struct FScctEventsApi
 static_assert(sizeof(FScctSimEvent) == 64, "FScctSimEvent must match BridgeSimEvent");
 static_assert(sizeof(FScctSound) == 100, "FScctSound must match BridgeSound");
 static_assert(sizeof(FScctShot) == 72, "FScctShot must match BridgeShot");
-static_assert(sizeof(FScctEffectActor) == 132, "FScctEffectActor must match BridgeEffectActor");
+static_assert(sizeof(FScctEffectActor) == 148, "FScctEffectActor must match BridgeEffectActor");
 static_assert(sizeof(FScctImpactMark) == 76, "FScctImpactMark must match BridgeImpactMark");
 static_assert(sizeof(FScctAmbientSound) == 44, "FScctAmbientSound must match BridgeAmbientSound");

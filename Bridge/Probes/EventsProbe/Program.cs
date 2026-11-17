@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using OpenScct.Core;
+using OpenScct.Server;
 using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Events;
 
@@ -18,7 +20,16 @@ const int Up = 0, Fire = 6, AltFire = 7;
 
 BridgeSession.Configure(content);
 var load = Stopwatch.StartNew();
-using BridgeSession session = BridgeSession.StartLocal(map, "Story", merc, bots: 3);
+BridgeSession session = BridgeSession.StartLocal(map, "Story", merc, bots: 3);
+
+// An independent count of what the client world raises, taken before the feature starts: the sink that "was there"
+// (the feature must pass every tick's events on to it) and the late events before each step. What the feature hands
+// out must add up to exactly these, or it delivered something twice or lost it.
+var witness = new Witness();
+ClientSession client = session.Session.Client;
+witness.Next = client.World.EventSink;
+client.World.EventSink = witness;
+client.BeforeWorldTick += witness.CountLate;
 EventsFeature events = EventsFeature.Of(session);
 Console.WriteLine($"{map} loaded in {load.Elapsed.TotalSeconds:F1} s as {(merc ? "merc" : "spy")}; library {events.SoundCount} sounds, map audio table {events.HasMapAudio}, {events.EffectClassCount} effect classes");
 
@@ -28,7 +39,7 @@ unsafe
     (string Name, int Size, int Expected)[] sizes =
     [
         (nameof(BridgeSimEvent), sizeof(BridgeSimEvent), 64), (nameof(BridgeSound), sizeof(BridgeSound), 100),
-        (nameof(BridgeShot), sizeof(BridgeShot), 72), (nameof(BridgeEffectActor), sizeof(BridgeEffectActor), 132),
+        (nameof(BridgeShot), sizeof(BridgeShot), 72), (nameof(BridgeEffectActor), sizeof(BridgeEffectActor), 148),
         (nameof(BridgeImpactMark), sizeof(BridgeImpactMark), 76), (nameof(BridgeAmbientSound), sizeof(BridgeAmbientSound), 44),
     ];
     Console.WriteLine("record sizes: " + string.Join(", ", sizes.Select(s => $"{s.Name} {s.Size}")));
@@ -54,6 +65,8 @@ var shotKinds = new SortedDictionary<int, int>();
 var effectsSeen = new Dictionary<int, BridgeEffectActor>();
 var markSerials = new Dictionary<int, int>();
 var samples = new List<string>();
+var endedEffects = new HashSet<int>();
+int lightFades = 0, deletedTwice = 0, aliveAfterEnd = 0, drainedTick = 0, drainedLate = 0;
 int raw = 0, late = 0, dropped = 0, sounds = 0, positional = 0, atListener = 0, loops = 0, sequences = 0, heard = 0;
 int marksSeen = 0, effectDeleted = 0, missingFiles = 0, frames = 0, ticks = 0, ambientPeak = 0, lastTick = 0, outOfOrder = 0;
 double drainMs = 0;
@@ -109,6 +122,15 @@ while (run.Elapsed.TotalSeconds < seconds)
             raw++;
             rawByKind[e.Kind] = rawByKind.GetValueOrDefault(e.Kind) + 1;
             late += (e.Flags & BridgeSimEventFlags.Late) != 0 ? 1 : 0;
+            if ((e.Flags & BridgeSimEventFlags.Late) != 0)
+            {
+                drainedLate++;
+            }
+            else
+            {
+                drainedTick++;
+            }
+
             dropped += (e.Flags & BridgeSimEventFlags.Dropped) != 0 ? 1 : 0;
             outOfOrder += e.Tick < lastTick ? 1 : 0;
             lastTick = Math.Max(lastTick, e.Tick);
@@ -183,11 +205,28 @@ while (run.Elapsed.TotalSeconds < seconds)
         BridgeEffectActor a = effectBuffer[i];
         if (!effectsSeen.ContainsKey(a.ActorId))
         {
-            Console.WriteLine($"   effect actor #{a.ActorId} '{EventNames.Text(a.ClassId)}' kind {a.Kind} flags {a.Flags} mesh '{EventNames.Text(a.MeshId)}' trail '{EventNames.Text(a.TrailClassId)}' base #{a.BaseActorId} bone '{EventNames.Text(a.BoneId)}' at ({a.X:F0},{a.Y:F0},{a.Z:F0}) scale ({a.ScaleX:F1},{a.ScaleY:F1},{a.ScaleZ:F1}) life {a.LifeSpan:F1} light {a.LightBrightness:F0}/{a.LightRadius:F0}");
+            Console.WriteLine($"   effect actor #{a.ActorId} '{EventNames.Text(a.ClassId)}' kind {a.Kind} flags {a.Flags} mesh '{EventNames.Text(a.MeshId)}' trail '{EventNames.Text(a.TrailClassId)}' particle '{EventNames.Text(a.ParticleId)}' base #{a.BaseActorId} bone '{EventNames.Text(a.BoneId)}' at ({a.X:F0},{a.Y:F0},{a.Z:F0}) rel ({a.RelX:F0},{a.RelY:F0},{a.RelZ:F0}) rel rot ({a.RelPitch:F0},{a.RelYaw:F0},{a.RelRoll:F0}) scale ({a.ScaleX:F1},{a.ScaleY:F1},{a.ScaleZ:F1}) life {a.LifeSpan:F1} light {a.LightBrightness:F0} reach {a.LightRadius:F0} cm");
+        }
+
+        // A frag's flash light must fade (EffectViews.PlaceLight), not stay at its first brightness.
+        if (a.Kind == BridgeEffectKind.Light && effectsSeen.TryGetValue(a.ActorId, out BridgeEffectActor before) &&
+            a.LightBrightness < before.LightBrightness && lightFades++ < 3)
+        {
+            Console.WriteLine($"   light #{a.ActorId} '{EventNames.Text(a.ClassId)}' fades: {before.LightBrightness:F0} -> {a.LightBrightness:F0} at age {a.Age:F2} s");
+        }
+
+        // An ending must come exactly once, and never for an actor that was not told alive first.
+        if ((a.Flags & BridgeEffectFlags.Deleted) != 0)
+        {
+            effectDeleted++;
+            deletedTwice += endedEffects.Add(a.ActorId) ? 0 : 1;
+        }
+        else if (endedEffects.Contains(a.ActorId))
+        {
+            aliveAfterEnd++;
         }
 
         effectsSeen[a.ActorId] = a;
-        effectDeleted += (a.Flags & BridgeEffectFlags.Deleted) != 0 ? 1 : 0;
     }
 
     n = events.GetImpactMarks(markBuffer);
@@ -249,7 +288,143 @@ for (int i = 0; i < ambientCount; i++)
 }
 
 Console.WriteLine($"name table: {EventNames.Count} names");
-return missingFiles == 0 && outOfOrder == 0 ? 0 : 1;
+
+// Exactly once: the feature's records against the independent count.
+bool exact = drainedTick == witness.TickEvents && drainedLate == witness.LateEvents && events.EventsDropped == 0;
+Console.WriteLine($"exactly once: tick events drained {drainedTick} / raised {witness.TickEvents}, late events drained {drainedLate} / raised {witness.LateEvents}, " +
+    $"{witness.Replaying} sink calls while replaying, effect endings told twice {deletedTwice}, alive after their ending {aliveAfterEnd} -> {(exact && deletedTwice == 0 && aliveAfterEnd == 0 ? "OK" : "FAILED")}");
+
+// The managed session ends here; the native tables start a session of their own.
+session.Dispose();
+int native = NativeTable(content, map, merc);
+return missingFiles == 0 && outOfOrder == 0 && exact && deletedTwice == 0 && aliveAfterEnd == 0 && native == 0 ? 0 : 1;
+
+// The same feature through the function tables Unreal gets, called the way native code calls them (unmanaged
+// function pointers), in a second session of the same process: Configure, StartLocal, Begin, a few seconds of
+// Update with every drain and list, the name table, bad arguments, then Stop.
+static unsafe int NativeTable(string content, string map, bool merc)
+{
+    BridgeApi bridge = default;
+    EventsApi api = default;
+    delegate* unmanaged<BridgeApi*, int> getBridge = &Exports.GetApi;
+    delegate* unmanaged<EventsApi*, int> getEvents = &EventsExports.GetApi;
+    int bridgeVersion = getBridge(&bridge);
+    int version = getEvents(&api);
+    int nullTable = getEvents(null);
+    Console.WriteLine();
+    Console.WriteLine($"native tables: bridge version {bridgeVersion}, events version {version} (table says {api.Version}), GetApi(null) -> {nullTable}");
+    if (version != EventsExports.ApiVersion || api.Version != version || nullTable != 0)
+    {
+        Console.WriteLine("FAILED: the events table did not come back as version " + EventsExports.ApiVersion);
+        return 1;
+    }
+
+    // Without a session every entry answers 0 and writes nothing.
+    BridgeSimEvent* rawBuffer = stackalloc BridgeSimEvent[256];
+    BridgeSound* soundBuffer = stackalloc BridgeSound[256];
+    BridgeShot* shotBuffer = stackalloc BridgeShot[64];
+    BridgeEffectActor* effectBuffer = stackalloc BridgeEffectActor[256];
+    BridgeImpactMark* markBuffer = stackalloc BridgeImpactMark[64];
+    BridgeAmbientSound* ambientBuffer = stackalloc BridgeAmbientSound[512];
+    float* location = stackalloc float[3];
+    int idle = api.Begin() + api.DrainEvents(rawBuffer, 256) + api.DrainSounds(soundBuffer, 256) + api.DrainShots(shotBuffer, 64) +
+        api.GetEffectActors(effectBuffer, 256) + api.GetImpactMarks(markBuffer, 64) + api.GetAmbientSounds(ambientBuffer, 512) +
+        api.GetActorLocation(1, location);
+    Console.WriteLine($"   no session: all entries together returned {idle}");
+
+    int started;
+    fixed (char* c = content, m = map, mode = "Story")
+    {
+        bridge.Configure(c);
+        started = bridge.StartLocal(m, mode, merc ? 1 : 0, 3);
+    }
+
+    if (started == 0)
+    {
+        char* error = stackalloc char[2048];
+        bridge.LastError(error, 2048);
+        Console.WriteLine("FAILED: StartLocal through the table: " + new string(error));
+        return 1;
+    }
+
+    int begun = api.Begin();
+    int raw = 0, sounds = 0, shots = 0, effects = 0, marks = 0, ambient = 0, ticks = 0, located = 0, followed = 0, firstFile = 0;
+    var run = Stopwatch.StartNew();
+    bool fired = false;
+    while (run.Elapsed.TotalSeconds < 5)
+    {
+        if (!fired && run.Elapsed.TotalSeconds > 2.5)
+        {
+            fired = true;
+            fixed (char* fire = "Fire")
+            {
+                bridge.Command(fire, 0);
+            }
+        }
+
+        ticks += bridge.Update();
+        int n;
+        do
+        {
+            n = api.DrainEvents(rawBuffer, 256);
+            raw += n;
+        }
+        while (n == 256);
+
+        do
+        {
+            n = api.DrainSounds(soundBuffer, 256);
+            sounds += n;
+            for (int i = 0; i < n; i++)
+            {
+                if (soundBuffer[i].Op == BridgeSoundOp.Play && firstFile == 0)
+                {
+                    firstFile = soundBuffer[i].FileId;
+                }
+
+                if (soundBuffer[i].FollowActorId != 0)
+                {
+                    followed++;
+                    located += api.GetActorLocation(soundBuffer[i].FollowActorId, location);
+                }
+            }
+        }
+        while (n == 256);
+
+        shots += api.DrainShots(shotBuffer, 64);
+        effects = Math.Max(effects, api.GetEffectActors(effectBuffer, 256));
+        marks = Math.Max(marks, api.GetImpactMarks(markBuffer, 64));
+        ambient = Math.Max(ambient, api.GetAmbientSounds(ambientBuffer, 512));
+        Thread.Sleep(4);
+    }
+
+    // The name table: a full read, a buffer that is too small (cut, still terminated, full length returned), no
+    // buffer at all, and an id that was never given out.
+    char* name = stackalloc char[512];
+    int length = api.GetName(firstFile, name, 512);
+    string full = new(name);
+    char* small = stackalloc char[8];
+    int cutLength = api.GetName(firstFile, small, 8);
+    string cut = new(small);
+    int noBuffer = api.GetName(firstFile, null, 0);
+    int unknown = api.GetName(int.MaxValue, name, 512);
+    bool fileThere = full.Length > 0 && File.Exists(Path.Combine(content, full));
+    int badArgs = api.DrainEvents(null, 256) + api.DrainSounds(soundBuffer, 0) + api.GetEffectActors(null, 4) + api.GetActorLocation(1, null);
+    int state = bridge.GetState();
+    Console.WriteLine($"   session through the table: StartLocal {started}, Begin {begun}, {ticks} ticks in 5 s, state {state}: {raw} raw events, {sounds} sound records, {shots} shots, " +
+        $"up to {effects} effect actors, {marks} marks, {ambient} ambient sources; GetActorLocation found {located} of {followed} followed actors");
+    Console.WriteLine($"   GetName({firstFile}) -> {length} chars '{full}' (file there: {fileThere}); into 8 chars -> {cutLength} '{cut}'; no buffer -> {noBuffer}; unknown id -> {unknown}; bad arguments -> {badArgs}");
+    bridge.Stop();
+    int after = api.DrainEvents(rawBuffer, 256) + api.DrainSounds(soundBuffer, 256) + api.GetEffectActors(effectBuffer, 256) + api.Begin();
+    int nameAfter = api.GetName(firstFile, name, 512);
+    Console.WriteLine($"   after Stop: entries returned {after}, state {bridge.GetState()}, GetName still {nameAfter} chars");
+
+    bool ok = idle == 0 && begun == 1 && state == 1 && ticks > 200 && raw > 0 && sounds > 0 && ambient > 0 && length == full.Length && length > 0 && fileThere &&
+        cutLength == length && cut.Length == 7 && full.StartsWith(cut, StringComparison.Ordinal) && noBuffer == length && unknown == 0 && badArgs == 0 &&
+        after == 0 && nameAfter == length;
+    Console.WriteLine(ok ? "   native table: OK" : "   native table: FAILED");
+    return ok ? 0 : 1;
+}
 
 static string Describe(BridgeSound s) => s.Op switch
 {
@@ -259,3 +434,37 @@ static string Describe(BridgeSound s) => s.Op switch
     BridgeSoundOp.StopCall => $"stop call {s.CallId} (actor #{s.ActorId} gone) '{EventNames.Text(s.SoundId)}'",
     _ => $"op {s.Op} tick {s.Tick} fade {s.FadeSeconds:F1}",
 };
+
+/// <summary>Counts what the client world raises, apart from the feature: each tick's events and the late ones.</summary>
+internal sealed class Witness : ISimEventSink
+{
+    private long _lateTick = -1;
+    private int _lateTaken;
+
+    public ISimEventSink? Next;
+    public long TickEvents, LateEvents, Replaying;
+
+    public void OnSimEvents(long tick, ReadOnlySpan<SimEvent> events)
+    {
+        Next?.OnSimEvents(tick, events);
+        TickEvents += events.Length;
+    }
+
+    public void CountLate(ClientSession client)
+    {
+        World world = client.World;
+        Replaying += world.IsReplaying ? 1 : 0;
+        if (world.TickCount != _lateTick)
+        {
+            _lateTick = world.TickCount;
+            _lateTaken = 0;
+        }
+
+        int count = world.Events.Late.Length;
+        if (count > _lateTaken)
+        {
+            LateEvents += count - _lateTaken;
+            _lateTaken = count;
+        }
+    }
+}

@@ -176,6 +176,10 @@ internal sealed class SoundResolver
 
             _out.Add(new BridgeSound { Op = BridgeSoundOp.StopCall, Tick = (int)tick, CallId = loop.CallId, ActorId = loop.ActorId, SoundId = loop.SoundId });
             _loops.RemoveAt(i);
+
+            // Its entries of the stop filter would otherwise stay for the whole session (a loop never ends by itself).
+            _mayPlay.Remove((loop.ActorId, loop.SoundId));
+            _mayPlay.Remove((loop.ActorId, loop.LeafId));
         }
 
         if (tick - _prunedAt < Sim.Hz)
@@ -342,8 +346,10 @@ internal sealed class SoundResolver
                     break;
                 }
 
+                // A plain entry ends when its file does, which the call's pitch shortens or stretches. A timed loop
+                // runs for a multiple of the file's own length whatever the pitch (NextInSequence sets LoopUntil so).
                 float length = leaf.Duration / call.Pitch;
-                float seconds = timed ? length * (entry.Value & (SequenceTimedLoop - 1)) : 0f;
+                float seconds = timed ? leaf.Duration * (entry.Value & (SequenceTimedLoop - 1)) : 0f;
                 call.Segment = written;
                 if (Emit(ref call, leaf, baseVolume * chain, timed, delay, seconds))
                 {
@@ -562,7 +568,9 @@ internal sealed class SoundResolver
             SoundId = def.PathId,
             LeafId = leaf.PathId,
             FileId = leaf.FileId,
-            Flags = BridgeSoundFlags.Music | (def.Loop ? BridgeSoundFlags.Loop : 0) | (leaf.IsStream ? BridgeSoundFlags.Stream : 0),
+            // SoundSystem.Start: the call loops when the song does, the leaf's flags say so, or the leaf loops.
+            Flags = BridgeSoundFlags.Music | (def.Loop || leaf.Loop || (leaf.Flags & FlagLoop) != 0 ? BridgeSoundFlags.Loop : 0) |
+                (leaf.IsStream ? BridgeSoundFlags.Stream : 0),
             Volume = 1f,
             Radius = MusicRadius,
             MinDistance = MusicRadius,

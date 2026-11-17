@@ -59,6 +59,12 @@ public static unsafe class EventsExports
     [UnmanagedCallersOnly]
     public static int GetApi(EventsApi* api)
     {
+        // A null table would throw here, and nothing may be thrown into native code: 0 is "no API".
+        if (api == null)
+        {
+            return 0;
+        }
+
         api->Version = ApiVersion;
         api->Begin = &Begin;
         api->DrainEvents = &DrainEvents;

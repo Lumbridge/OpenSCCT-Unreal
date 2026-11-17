@@ -33,6 +33,9 @@ internal sealed class EffectTracker
     /// <summary>A step longer than this in one tick was a placement, not a move: no blend (as the pawns).</summary>
     private const float CutDistanceSquared = 40000f;
 
+    /// <summary>A light reaches 25 x (LightRadius + 1) units (RenderK.LightRadiusUnits in the Godot client).</summary>
+    private const float LightRadiusUnits = 25f;
+
     // Effect classes the fx step lists only since a later converter version (FxLibrary.AddLateClasses).
     private static readonly (string Class, int Kind)[] s_lateClasses =
     [
@@ -56,6 +59,7 @@ internal sealed class EffectTracker
     private readonly ConditionalWeakTable<SWeaponDefense, MuzzleCursor> _muzzleCursors = new();
     private Level? _level;
     private long _tick;
+    private long _ticksSeen;
 
     public EffectTracker(PlaySession session, string? sharedRoot, DrainQueue<BridgeShot> shots)
     {
@@ -112,6 +116,7 @@ internal sealed class EffectTracker
         }
 
         TrackRifleFlashes(_session.LocalPawn?.MyWeapon as SWeaponDefense);
+        _ticksSeen++;
         foreach ((Name kind, Actor? source) in _pendingFlashes)
         {
             AddFlash(kind, source);
@@ -171,7 +176,15 @@ internal sealed class EffectTracker
                 continue;
             }
 
-            var t = new Tracked(a, cls) { FirstTick = _tick, Current = PlaceOf(a), TrailClassId = TrailFor(a) };
+            var t = new Tracked(a, cls)
+            {
+                FirstTick = _tick,
+                Current = PlaceOf(a),
+                TrailClassId = TrailFor(a),
+
+                // EffectViews.StartSpawnable: a spawnable emitter runs the particle emitter of the map its Emitters[0] names.
+                ParticleId = a is SSpawnableEmitter { Emitters.Count: > 0 } spawnable ? EventNames.Id(spawnable.Emitters[0].Path) : 0,
+            };
             _tracked[a] = t;
             _order.Add(t);
             Seen[a.GetUcClass().Name] = Seen.GetValueOrDefault(a.GetUcClass().Name) + 1;
@@ -180,7 +193,8 @@ internal sealed class EffectTracker
 
     /// <summary>
     /// Writes the effect actors as drawn this frame. Returns the count written. An actor that went is written once
-    /// more with the Deleted flag and then forgotten; when the buffer is too small the rest come with the next call.
+    /// more with the Deleted flag and then forgotten. The ones that went are written first, so a buffer that is too
+    /// small for everything never loses an ending (a live actor it has no room for is simply not drawn this frame).
     /// </summary>
     public int Write(Span<BridgeEffectActor> into, float alpha)
     {
@@ -188,52 +202,20 @@ internal sealed class EffectTracker
         for (int i = 0; i < _order.Count && count < into.Length; i++)
         {
             Tracked t = _order[i];
-            Actor a = t.Actor;
-            bool blend = t.HasPrevious && !t.Deleted && FVector.DistSquared(t.Previous, t.Current) <= CutDistanceSquared;
-            FVector at = blend ? t.Previous + ((t.Current - t.Previous) * alpha) : t.Current;
-            FVector scale = a.DrawScale3D * a.DrawScale;
-            Actor? attachedTo = a.Base ?? a.Owner;
-            bool onBone = !a.AttachmentBone.IsNone && attachedTo is not null;
-            into[count++] = new BridgeEffectActor
+            if (t.Deleted)
             {
-                ActorId = a.ActorId,
-                ClassId = t.Class.ClassId,
-                Kind = t.Class.Kind,
-                Flags = (a.bHidden ? BridgeEffectFlags.Hidden : 0) | (t.Deleted ? BridgeEffectFlags.Deleted : 0) |
-                    (t.Killed ? BridgeEffectFlags.Killed : 0) | (a.bDynamicLight ? BridgeEffectFlags.DynamicLight : 0) |
-                    (onBone ? BridgeEffectFlags.OnBone : 0) | (a.bUnlit ? BridgeEffectFlags.Unlit : 0) |
-                    (DrawnByOwnView(a) ? BridgeEffectFlags.OwnView : 0) | (blend ? 0 : BridgeEffectFlags.Snapped),
-                MeshId = a.DrawType == EDrawType.DT_StaticMesh ? MeshId(t, a) : 0,
-                TrailClassId = t.TrailClassId,
-                BaseActorId = attachedTo?.ActorId ?? 0,
-                BoneId = EventNames.Id(a.AttachmentBone),
-                InstigatorId = a.Instigator?.ActorId ?? 0,
-                X = at.X,
-                Y = at.Y,
-                Z = at.Z,
-                Pitch = a.Rotation.Pitch * RotatorToDegrees,
-                Yaw = a.Rotation.Yaw * RotatorToDegrees,
-                Roll = a.Rotation.Roll * RotatorToDegrees,
-                ScaleX = scale.X,
-                ScaleY = scale.Y,
-                ScaleZ = scale.Z,
-                PrePivotX = a.PrePivot.X,
-                PrePivotY = a.PrePivot.Y,
-                PrePivotZ = a.PrePivot.Z,
-                VelX = a.Velocity.X,
-                VelY = a.Velocity.Y,
-                VelZ = a.Velocity.Z,
-                RelX = a.RelativeLocation.X,
-                RelY = a.RelativeLocation.Y,
-                RelZ = a.RelativeLocation.Z,
-                Age = (_tick - t.FirstTick + alpha) * Sim.DeltaTime,
-                LifeSpan = a.LifeSpan,
-                LightBrightness = a.LightBrightness,
-                LightHue = a.LightHue,
-                LightSaturation = a.LightSaturation,
-                LightRadius = a.LightRadius,
-            };
-            t.Reported = t.Deleted;
+                into[count++] = RecordOf(t, alpha);
+                t.Reported = true;
+            }
+        }
+
+        for (int i = 0; i < _order.Count && count < into.Length; i++)
+        {
+            Tracked t = _order[i];
+            if (!t.Deleted)
+            {
+                into[count++] = RecordOf(t, alpha);
+            }
         }
 
         // The ones that went and have now been told are forgotten.
@@ -248,6 +230,96 @@ internal sealed class EffectTracker
 
         return count;
     }
+
+    private BridgeEffectActor RecordOf(Tracked t, float alpha)
+    {
+        Actor a = t.Actor;
+        bool blend = t.HasPrevious && !t.Deleted && FVector.DistSquared(t.Previous, t.Current) <= CutDistanceSquared;
+        FVector at = blend ? t.Previous + ((t.Current - t.Previous) * alpha) : t.Current;
+        FVector scale = a.DrawScale3D * a.DrawScale;
+        Actor? attachedTo = a.Base ?? a.Owner;
+
+        // EffectViews.PlaceOf and BoneMeshFrame: only a pawn has a drawn skeleton to follow. An effect on a gun's bone
+        // was already placed at the simulation's estimate of that bone (PlaceOf below).
+        bool onBone = !a.AttachmentBone.IsNone && attachedTo is SBasePawn;
+        return new BridgeEffectActor
+        {
+            ActorId = a.ActorId,
+            ClassId = t.Class.ClassId,
+            Kind = t.Class.Kind,
+            Flags = (a.bHidden || WaitsForWearer(a) ? BridgeEffectFlags.Hidden : 0) | (t.Deleted ? BridgeEffectFlags.Deleted : 0) |
+                (t.Killed ? BridgeEffectFlags.Killed : 0) | (a.bDynamicLight ? BridgeEffectFlags.DynamicLight : 0) |
+                (onBone ? BridgeEffectFlags.OnBone : 0) | (a.bUnlit || a is STazerEmitter ? BridgeEffectFlags.Unlit : 0) |
+                (DrawnByOwnView(a) ? BridgeEffectFlags.OwnView : 0) | (blend ? 0 : BridgeEffectFlags.Snapped) |
+                (a.bHideInNormalVision ? BridgeEffectFlags.VisionOnly : 0),
+            MeshId = a.DrawType == EDrawType.DT_StaticMesh ? MeshId(t, a) : 0,
+            TrailClassId = t.TrailClassId,
+            BaseActorId = attachedTo?.ActorId ?? 0,
+            BoneId = EventNames.Id(a.AttachmentBone),
+            InstigatorId = a.Instigator?.ActorId ?? 0,
+            ParticleId = t.ParticleId,
+            X = at.X,
+            Y = at.Y,
+            Z = at.Z,
+            Pitch = a.Rotation.Pitch * RotatorToDegrees,
+            Yaw = a.Rotation.Yaw * RotatorToDegrees,
+            Roll = a.Rotation.Roll * RotatorToDegrees,
+            ScaleX = scale.X,
+            ScaleY = scale.Y,
+            ScaleZ = scale.Z,
+            PrePivotX = a.PrePivot.X,
+            PrePivotY = a.PrePivot.Y,
+            PrePivotZ = a.PrePivot.Z,
+            VelX = a.Velocity.X,
+            VelY = a.Velocity.Y,
+            VelZ = a.Velocity.Z,
+            RelX = a.RelativeLocation.X,
+            RelY = a.RelativeLocation.Y,
+            RelZ = a.RelativeLocation.Z,
+            RelPitch = a.RelativeRotation.Pitch * RotatorToDegrees,
+            RelYaw = a.RelativeRotation.Yaw * RotatorToDegrees,
+            RelRoll = a.RelativeRotation.Roll * RotatorToDegrees,
+            Age = (_tick - t.FirstTick + alpha) * Sim.DeltaTime,
+            LifeSpan = a.LifeSpan,
+            LightBrightness = LightBrightnessOf(a),
+            LightHue = a.LightHue,
+            LightSaturation = a.LightSaturation,
+            LightRadius = LightRadiusUnits * (a.LightRadius + 1f),
+        };
+    }
+
+    /// <summary>
+    /// EffectViews.PlaceLight: no light for LT_None; the flash of a frag fades from 255 to 0 over fTempsDisparition
+    /// (the port leaves LightBrightness alone and the views work the fade out).
+    /// </summary>
+    private static float LightBrightnessOf(Actor a)
+    {
+        if (a.LightType == ELightType.LT_None)
+        {
+            return 0f;
+        }
+
+        float brightness = a.LightBrightness;
+        if (a is SFlashLight_FragGrenade { fTempsDisparition: > 0f } frag)
+        {
+            brightness = 255f - ((a.Level.TimeSeconds - frag.fDateDepart) / frag.fTempsDisparition * 255f);
+        }
+
+        return Math.Clamp(brightness, 0f, 255f);
+    }
+
+    /// <summary>
+    /// EffectViews.Draw: the gas mask and the backpack are shown only once they sit on the bone of the pawn that
+    /// wears them (the attachment of a remote wearer arrives after the actor), and the mask only while that pawn lives.
+    /// </summary>
+    private static bool WaitsForWearer(Actor a) => a switch
+    {
+        SGasMask => !(a.AttachmentBone == K.GasMaskBone && a.Instigator is SBasePawn { Health: > 0, bDeleteMe: false } wearer &&
+            ReferenceEquals(a.Base, wearer)),
+        SBackPack => !(a.AttachmentBone == K.BackPackBone && a.Instigator is SBasePawn { bDeleteMe: false } carrier &&
+            ReferenceEquals(a.Base, carrier)),
+        _ => false,
+    };
 
     /// <summary>The mesh the actor draws now (script swaps some at run time), interned once per path.</summary>
     private static int MeshId(Tracked t, Actor a)
@@ -346,7 +418,14 @@ internal sealed class EffectTracker
             return;
         }
 
-        MuzzleCursor cursor = _muzzleCursors.GetValue(rifle, static r => new MuzzleCursor { Count = r.MuzzleFlashCount });
+        // A gun the player already held when the feature started does not replay the shots fired before that. A gun
+        // first seen later starts from 0 as in the Godot client, so a shot of its first tick is not lost.
+        if (!_muzzleCursors.TryGetValue(rifle, out MuzzleCursor? cursor))
+        {
+            cursor = new MuzzleCursor { Count = _ticksSeen == 0 ? rifle.MuzzleFlashCount : 0 };
+            _muzzleCursors.Add(rifle, cursor);
+        }
+
         while (cursor.Count < rifle.MuzzleFlashCount)
         {
             AddFlash(SpawnSFX, rifle);
@@ -360,6 +439,13 @@ internal sealed class EffectTracker
         bool sticky = kind == CombatFx.MuzzleSticky;
         bool firstPerson = kind == SpawnSFX;
         SPlayerController? viewer = _session.LocalController;
+
+        // CombatFxView.AddFlash: the flash of the own gun is not drawn while the player looks through the binoculars.
+        if (firstPerson && viewer is { bBinocularVision: true })
+        {
+            return;
+        }
+
         Pawn? pawn = source?.Instigator ?? source as Pawn;
         FVector at;
         FVector forward;
@@ -543,7 +629,7 @@ internal sealed class EffectTracker
         public FVector Previous, Current;
         public bool HasPrevious, Deleted, Killed, Reported;
         public long FirstTick;
-        public int TrailClassId, MeshId;
+        public int TrailClassId, MeshId, ParticleId;
         public string? MeshPath;
     }
 }

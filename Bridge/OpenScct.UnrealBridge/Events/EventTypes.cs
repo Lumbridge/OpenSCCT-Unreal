@@ -333,7 +333,10 @@ public static class BridgeEffectKind
 
 public static class BridgeEffectFlags
 {
-    /// <summary>The actor is hidden (bHidden): light actors still light.</summary>
+    /// <summary>
+    /// Not drawn now: bHidden (light actors still light), or a gas mask or backpack that is not on its wearer's bone
+    /// yet (EffectViews.Draw hides those until the attachment has arrived, and the mask while its wearer is dead).
+    /// </summary>
     public const int Hidden = 1;
 
     /// <summary>
@@ -347,7 +350,10 @@ public static class BridgeEffectFlags
     /// <summary>bDynamicLight: the actor also lights its surroundings with the light fields.</summary>
     public const int DynamicLight = 8;
 
-    /// <summary>Attached to a bone (BaseActorId, BoneId, Rel): place it at that bone of the drawn skeleton.</summary>
+    /// <summary>
+    /// Attached to a bone of a pawn (BaseActorId is the pawn, BoneId, Rel, RelRot): place it at that bone of the drawn
+    /// skeleton. Not set for an effect on a gun's bone (the barrel smoke): its location is already the bone's place.
+    /// </summary>
     public const int OnBone = 16;
 
     /// <summary>bUnlit.</summary>
@@ -361,6 +367,9 @@ public static class BridgeEffectFlags
 
     /// <summary>The location was not blended from the tick before (first tick, or the actor was placed).</summary>
     public const int Snapped = 128;
+
+    /// <summary>bHideInNormalVision: drawn only in the night and heat vision modes (EffectViews.Draw, rendMap 36 or 38).</summary>
+    public const int VisionOnly = 256;
 }
 
 /// <summary>
@@ -400,6 +409,13 @@ public struct BridgeEffectActor
     /// <summary>The pawn that caused it (Instigator), 0 for none.</summary>
     public int InstigatorId;
 
+    /// <summary>
+    /// Only for an SBase.SSpawnableEmitter (the damage effects of the map's breakable objects): name id of the object
+    /// path of the map's particle emitter it runs (its Emitters[0]; EffectViews.StartSpawnable), which the class
+    /// alone does not say. 0 for every other actor.
+    /// </summary>
+    public int ParticleId;
+
     /// <summary>The simulation's location, blended between the last two ticks.</summary>
     public float X, Y, Z;
 
@@ -418,13 +434,21 @@ public struct BridgeEffectActor
     /// <summary>RelativeLocation: with OnBone, the offset in the bone's frame.</summary>
     public float RelX, RelY, RelZ;
 
+    /// <summary>RelativeRotation in degrees: with OnBone, the turn in the bone's frame (EffectViews.BoneMeshFrame).</summary>
+    public float RelPitch, RelYaw, RelRoll;
+
     /// <summary>Seconds since the actor was first seen.</summary>
     public float Age;
 
     /// <summary>The actor's remaining LifeSpan in seconds, 0 for none.</summary>
     public float LifeSpan;
 
-    /// <summary>UE2 light values: brightness 0 to 255, hue and saturation 0 to 255, radius in the engine's units (x 50 = world units).</summary>
+    /// <summary>
+    /// The light of a Light actor or a DynamicLight emitter, as EffectViews.PlaceLight reads it. Brightness 0 to 255,
+    /// already 0 for LightType LT_None and already faded for the frag's flash (SFlashLight_FragGrenade: 255 down to 0
+    /// over its fTempsDisparition). Hue and saturation are the UE2 bytes, 0 to 255 (saturation 0 is full colour in
+    /// UE2's light model, 255 is white). Radius is the reach in world units: 25 x (LightRadius + 1).
+    /// </summary>
     public float LightBrightness, LightHue, LightSaturation, LightRadius;
 }
 
