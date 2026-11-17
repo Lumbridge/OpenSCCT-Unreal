@@ -1,6 +1,7 @@
 #include "Play/ScctGameMode.h"
 
 #include "Blueprint/UserWidget.h"
+#include "Demo/ScctDemoPlayback.h"
 #include "Engine/GameViewportClient.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
@@ -130,6 +131,15 @@ void AScctGameMode::StartPlay()
 		return;
 	}
 
+	UScctDemoPlayback* Demo = UScctDemoPlayback::Get(this);
+	if (Demo != nullptr && Demo->ClaimLevel(GetWorld(), Match.Map, OptionsString))
+	{
+		// A demo plays the recording in this level: no match starts.
+		bDemo = true;
+		Demo->PresentIn(Session, Match.Map);
+		return;
+	}
+
 	UScctHubSubsystem* Hub = UScctHubSubsystem::Get(this);
 	if (Hub != nullptr && Hub->ShouldPresent(GetWorld()))
 	{
@@ -158,6 +168,10 @@ void AScctGameMode::StartPlay()
 void AScctGameMode::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (bDemo)
+	{
+		return;
+	}
 
 	APlayerController* Player = GetWorld()->GetFirstPlayerController();
 	if (Player == nullptr || !Player->IsLocalController())

@@ -72,6 +72,9 @@ namespace
 			Entry(TEXT("Account"), TEXT("Your name, rank and career"),
 				TEXT("Sign in or out, claim or change the name the servers show, see your rank, experience and career, prestige, and choose an emblem and a title."),
 				[this] { Host.Open(TEXT("account")); });
+			Entry(TEXT("Demos"), TEXT("Watch recorded matches"),
+				TEXT("The demos recorded on this PC and the master's recent online demos: watch one with the playback bar, keep a download, delete one, or see a match's final scoreboard."),
+				[this] { Host.Open(TEXT("demos")); });
 			Entry(ScctUi::GameText(TEXT("All_Settings"), TEXT("TitlePage"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
 				TEXT("Everything you can set: the picture, the sound, the mouse and the controller, every key of both sides, and your name."),
 				[this] { Host.Open(TEXT("settings")); });

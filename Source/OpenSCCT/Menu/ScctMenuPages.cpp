@@ -15,6 +15,7 @@ TSharedPtr<SScctMenuPage> ScctMenuPages::Make(const FString& Name, const FScctMe
 	if (Name.Equals(TEXT("host"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("create"), ESearchCase::IgnoreCase)) { return MakeHostGame(Host); }
 	if (Name.Equals(TEXT("hub"), ESearchCase::IgnoreCase)) { return MakeHub(Host); }
 	if (Name.Equals(TEXT("account"), ESearchCase::IgnoreCase)) { return MakeAccount(Host); }
+	if (Name.Equals(TEXT("demos"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("replays"), ESearchCase::IgnoreCase)) { return MakeDemos(Host); }
 	if (Name.Equals(TEXT("settings"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("options"), ESearchCase::IgnoreCase)) { return MakeSettings(Host); }
 	if (Name.Equals(TEXT("credits"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("about"), ESearchCase::IgnoreCase)) { return MakeCredits(Host); }
 	// The Equipment page and a map's strategic map (Menu/ScctOverlayPages.h).
