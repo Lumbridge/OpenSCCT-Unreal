@@ -264,8 +264,45 @@ void ScctHudElements::PaintMarkers(FScctHudPainter& Painter, const FScctHudModel
 	const FVector2f Size = Painter.Size();
 	const FVector2f Centre = Size * 0.5f;
 	const FLinearColor Accent = ScctHudStyle::Accent(State.Side);
-	for (const FScctHudMarker& Marker : Model.Markers)
+
+	// The spy's markers fade while the spy moves (Godot's HudMarkers): dimmer (0.7), brackets closing in from 20 to 11
+	// units and the labels fading with the Enhanced Reality fade. The merc's markers do not.
+	const bool bSpy = State.Side == 0;
+	const bool bMoving = bSpy && Model.bMarkerFadeWhileMoving && State.Speed > 0.0f;
+	const float SpyFade = bSpy ? Model.MarkerFade : 1.0f;
+	const float MoveAlpha = bMoving ? 0.7f : 1.0f;
+
+	// The original's state colours of the labels: hacked red, locked yellow.
+	const FLinearColor HackedColour = FLinearColor(FColor(192, 40, 40));
+	const FLinearColor LockedColour = FLinearColor(FColor(220, 220, 40));
+
+	// "Access denied" goes only on the two nearest labelled markers, as the original's distance labels do; bomb spots
+	// never have a label.
+	TArray<int32, TInlineAllocator<2>> Nearest;
+	for (int32 Index = 0; Index < Model.Markers.Num(); ++Index)
 	{
+		const FScctHudMarker& Marker = Model.Markers[Index];
+		if (!Marker.bInFront || Marker.Objective.Kind == 3 || (Marker.Objective.Flags & EScctHudObjectiveFlags::Taken) != 0)
+		{
+			continue;
+		}
+		if (Nearest.Num() < 2)
+		{
+			Nearest.Add(Index);
+		}
+		else if (Marker.Distance < Model.Markers[Nearest[1]].Distance)
+		{
+			Nearest[1] = Index;
+		}
+		if (Nearest.Num() == 2 && Model.Markers[Nearest[1]].Distance < Model.Markers[Nearest[0]].Distance)
+		{
+			Nearest.Swap(0, 1);
+		}
+	}
+
+	for (int32 Index = 0; Index < Model.Markers.Num(); ++Index)
+	{
+		const FScctHudMarker& Marker = Model.Markers[Index];
 		const FVector2f At = Marker.Screen;
 		if (!Marker.bInFront || At.X < 0.0f || At.Y < 0.0f || At.X > Size.X || At.Y > Size.Y)
 		{
@@ -276,16 +313,18 @@ void ScctHudElements::PaintMarkers(FScctHudPainter& Painter, const FScctHudModel
 		const bool bTaken = (Objective.Flags & EScctHudObjectiveFlags::Taken) != 0;
 		const bool bActive = (Objective.Flags & EScctHudObjectiveFlags::Triggering) != 0;
 		const bool bAlert = (Objective.Flags & EScctHudObjectiveFlags::Alert) != 0;
+		const bool bLocked = (Objective.Flags & EScctHudObjectiveFlags::Locked) != 0;
 
 		// Quiet by default, louder when something is happening there or the player looks at it.
 		const float Focus = 1.0f - FMath::Clamp(FVector2f::Distance(At, Centre) / 220.0f, 0.0f, 1.0f);
 		FLinearColor Colour = bActive || bAlert ? Danger() : Accent;
 		float Alpha = bTaken ? 0.25f : (bActive ? 0.75f + 0.25f * FMath::Sin(Model.Clock * 7.0f) : 0.45f + 0.45f * Focus);
+		Alpha *= MoveAlpha;
 		Colour = Fade(Colour, Alpha);
 
 		constexpr float Half = 6.0f;
 		Painter.Polyline({ At + FVector2f(0.0f, -Half), At + FVector2f(Half, 0.0f), At + FVector2f(0.0f, Half), At + FVector2f(-Half, 0.0f), At + FVector2f(0.0f, -Half) }, Colour, 1.5f);
-		if ((Objective.Flags & EScctHudObjectiveFlags::Locked) != 0)
+		if (bLocked)
 		{
 			Painter.Fill(FBox2f(At - FVector2f(1.5f), At + FVector2f(1.5f)), Colour, 1.5f);
 		}
@@ -293,14 +332,80 @@ void ScctHudElements::PaintMarkers(FScctHudPainter& Painter, const FScctHudModel
 		{
 			Painter.Arc(At, 12.0f, 0.0f, 360.0f * Objective.Percent / 100.0f, Colour, 2.0f, 1.0f);
 		}
+		if (bTaken)
+		{
+			continue;
+		}
 
-		// Name and distance only near where the player looks, so a room full of markers stays calm.
+		// Brackets: a marker being worked on, a Disk Hunt disk and a free drop zone stay fully open and pulse; the others
+		// open with the fade. An objective's own marker (role 1) has only the top-right and bottom-left corners.
+		const bool bFullSpread = bActive || Objective.Role == 2 || Objective.Role == 3;
+		const float Spread = bFullSpread ? 1.0f : SpyFade;
+		const float Reach = bActive ? (FMath::Frac(State.TimeSeconds) <= 0.5f ? 17.0f : 12.0f) : 10.0f + 7.0f * Spread;
+		const FLinearColor BracketColour = Fade(FLinearColor::White, (bActive ? 0.85f : 0.55f + 0.25f * Focus) * MoveAlpha);
+		constexpr float Arm = 4.0f;
+		const auto BracketCorner = [&](float SignX, float SignY)
+		{
+			const FVector2f Tip = At + FVector2f(SignX * Reach, SignY * Reach);
+			Painter.Polyline({ Tip - FVector2f(SignX * Arm, 0.0f), Tip, Tip - FVector2f(0.0f, SignY * Arm) }, BracketColour, 1.25f);
+		};
+		BracketCorner(1.0f, -1.0f);
+		BracketCorner(-1.0f, 1.0f);
+		if (Objective.Role != 1)
+		{
+			BracketCorner(-1.0f, -1.0f);
+			BracketCorner(1.0f, 1.0f);
+		}
+
+		// Height arrow: the objective is a floor above or below (more than 2 m).
+		const float Rise = Objective.Z - State.Z;
+		const bool bAbove = Rise > 200.0f, bBelow = Rise < -200.0f;
+		if (bAbove || bBelow)
+		{
+			const float Dir = bAbove ? -1.0f : 1.0f;
+			const FVector2f Tip = At + FVector2f(0.0f, Dir * (Reach + 10.0f));
+			Painter.Polyline({ Tip + FVector2f(-4.0f, -Dir * 4.0f), Tip, Tip + FVector2f(4.0f, -Dir * 4.0f) }, BracketColour, 1.5f);
+			Painter.Line(Tip, Tip - FVector2f(0.0f, Dir * 6.0f), BracketColour, 1.5f);
+		}
+
+		// Bomb spots get no labels (the original's ERDrawObjectives).
+		if (Objective.Kind == 3)
+		{
+			continue;
+		}
+
+		// The spy's state above the bracket (the texts are the spy's: ObjectiveHackingSpy, ObjectiveSecuredSpy): "Under
+		// hacking" while a terminal or objective is being worked (not a disk being taken), "Access denied" on a locked one
+		// among the two nearest.
+		const FString* StateText = nullptr;
+		FLinearColor StateColour = HackedColour;
+		if (!bSpy)
+		{
+		}
+		else if (bActive && Objective.Kind != 1 && (Objective.Role == 0 || Objective.Role == 1))
+		{
+			StateText = &Model.Text(State.HackingTextId);
+		}
+		else if (!bActive && bLocked && Nearest.Contains(Index))
+		{
+			StateText = &Model.Text(State.SecuredTextId);
+			StateColour = LockedColour;
+		}
+		if (StateText != nullptr && !StateText->IsEmpty())
+		{
+			const float StateY = At.Y - Reach - (bAbove ? 30.0f : 18.0f);
+			Painter.Text(FVector2f(At.X, StateY), StateText->ToUpper(), Label(7.5f), Fade(StateColour, MoveAlpha * FMath::Max(SpyFade, bActive ? 0.6f : 0.0f)), EAlign::Centre);
+		}
+
+		// Name and distance only near where the player looks, so a room full of markers stays calm; they fade while the
+		// spy moves, as the original's labels do.
 		if (Focus > 0.05f || bActive)
 		{
-			const float TextAlpha = bActive ? 1.0f : Focus;
-			Painter.Text(At + FVector2f(0.0f, 14.0f), Model.Text(Objective.NameId).ToUpper(), Label(7.5f), Fade(Text(), TextAlpha), EAlign::Centre);
+			const float TextAlpha = (bActive ? 1.0f : Focus) * MoveAlpha * (bActive ? FMath::Max(SpyFade, 0.6f) : SpyFade);
+			const float NameY = At.Y + Reach + (bBelow ? 18.0f : 5.0f);
+			Painter.Text(FVector2f(At.X, NameY), Model.Text(Objective.NameId).ToUpper(), Label(7.5f), Fade(Text(), TextAlpha), EAlign::Centre);
 			const FString Distance = FString::Printf(TEXT("%.0f %s"), Marker.Distance * State.DistanceScale, *Model.Text(State.DistanceUnitId));
-			Painter.Text(At + FVector2f(0.0f, 27.0f), Distance, Font(EWeight::Regular, 8.0f), Fade(TextDim(), TextAlpha), EAlign::Centre);
+			Painter.Text(FVector2f(At.X, NameY + 13.0f), Distance, Font(EWeight::Regular, 8.0f), Fade(TextDim(), TextAlpha), EAlign::Centre);
 		}
 	}
 }
@@ -385,8 +490,9 @@ void ScctHudElements::PaintBanner(FScctHudPainter& Painter, const FScctHudModel&
 	const float CentreX = Size.X * 0.5f;
 
 	// The round is over: who won, in the game's own words, until the next match. A tutorial has no winner and
-	// ends on the original's plain "finished" line.
-	const bool bTutorial = Model.bHasState && Model.State.TutorialId != 0;
+	// ends on the original's plain "finished" line. A tutorial message alone does not make one: an offline session's
+	// zone tips use the same message on any map.
+	const bool bTutorial = Model.bTutorialTable ? Model.bTutorialMap : (Model.bHasState && Model.State.TutorialId != 0);
 	if (Model.EndAge >= 0.0f && Model.bHasRound && (bTutorial || (Model.Round.WinningTeam >= 0 && Model.Round.WinningTeam <= 1)))
 	{
 		const bool bWon = bTutorial || Model.Round.WinningTeam == Model.LocalTeam;
@@ -596,29 +702,4 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 		}
 	}
 	Painter.SetOpacity(1.0f);
-}
-
-void ScctHudElements::PaintTeammateNames(FScctHudPainter& Painter, const FScctHudModel& Model)
-{
-	if (Model.NameLabels.Num() == 0)
-	{
-		return;
-	}
-
-	// Quiet labels: they stay behind the crosshair and the objective markers, smaller and fainter with distance
-	// (full at 3 m, least from 60 m on, as the Godot client's are).
-	const FLinearColor Colour = Accent(Model.LocalTeam);
-	for (const FScctHudNameLabel& NameLabel : Model.NameLabels)
-	{
-		float Far = FMath::Clamp((NameLabel.Metres - 3.0f) / 57.0f, 0.0f, 1.0f);
-		Far = Far * Far * (3.0f - 2.0f * Far);
-		const FSlateFontInfo NameFont = Font(EWeight::Regular, 11.5f - 4.0f * Far, 40);
-		const float Alpha = 0.85f - 0.55f * Far;
-		const FVector2f TextSize = Painter.Measure(NameLabel.Name, NameFont);
-		const FVector2f At(NameLabel.Screen.X, NameLabel.Screen.Y - TextSize.Y - 5.0f);
-		Painter.Fill(HudBox(At.X - TextSize.X * 0.5f - 6.0f, At.Y - 2.0f, TextSize.X + 12.0f, TextSize.Y + 4.0f), FLinearColor(0.0f, 0.0f, 0.0f, 0.28f * Alpha), 3.0f);
-		Painter.Text(At, NameLabel.Name, NameFont, Fade(FMath::Lerp(Text(), Colour, 0.55f), Alpha), EAlign::Centre);
-		// A small tick down to the head, so two names close together still say whose they are.
-		Painter.Line(FVector2f(NameLabel.Screen.X, NameLabel.Screen.Y - 4.0f), FVector2f(NameLabel.Screen.X, NameLabel.Screen.Y), Fade(Colour, 0.6f * Alpha), 1.0f);
-	}
 }

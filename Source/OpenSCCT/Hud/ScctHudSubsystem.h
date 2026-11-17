@@ -21,10 +21,11 @@ class UScctHudWidget;
  *   DisplaySessionStatus    the mission status page: the scoreboard with the mission's objectives under it. It
  *                           stays open and holds the player's keys back until the same key, Escape or Enter (F8)
  *   ToggleTeammateNames     names over the heads of the player's own side, seen through walls, kept per side in
- *                           the user's settings (N)
+ *                           the Hud page's options (N), with health and a nametag opacity there too
+ * PushToTalk, TeamPushToTalk and ToggleVoiceMute are the voice chat's, not the HUD's.
  * Talk and TeamTalk are the chat's (Hud/ScctChatSubsystem.h), which draws its composer and transcript over the HUD.
  * Not served, as in the Godot client, which lists both as legacy shortcuts with no handler: DisplayHud and Quit.
- * DisplayStrategicMap is not served either: the bridge has no table for the map's plan (see the log line).
+ * DisplayStrategicMap is the strategic map page's (Menu/ScctMatchCommands.h).
  *
  * Unattended switches (off by default; for runs with nobody at the keyboard):
  *   -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1;14 Scoreboard 0"
@@ -56,6 +57,12 @@ class UScctHudWidget;
  *        PingKey 1/0 holds or lets go of the key bound to TeamPing (UScctTeamPingSubsystem: a tap marks the aimed spot,
  *        a hold opens the wheel); PingWheel D points the wheel's choice as the mouse would (1 up, 2 right, 3 down,
  *        4 left, 0 the middle).
+ *        Tutorial 1/0 raises the -ScctHudTutorial text as the tutorial message again, or clears it, through the
+ *        game's own SHud.AddTutoMapMessage (offline only, as the zone tips).
+ *   -ScctHudTutorial=<text>[|At]
+ *        at At seconds into the match (default 4) raises that text as the tutorial message, through the game's own
+ *        SHud.AddTutoMapMessage (the zone tips' path), so the tutorial box and the briefing queue's wait can be checked
+ *        on any map ("ScctHud: tutorial ..." lines in the log).
  *   -ScctHudTexture=Package.Name[,Package.Name...]
  *        loads those textures of the content as the session starts and logs their size ("ScctHudTextures: ...").
  *   -ScctHudLog=S
@@ -118,8 +125,13 @@ private:
 	/** Places the objective markers on the screen for this frame's camera. */
 	void ProjectMarkers();
 
-	/** Places the names over the local player's teammates for this frame's camera, while he has them on. */
+	// The teammate names (ScctHudNames.cpp): the Hud page's options (Hud.ShowTeammateNamesSpy/Merc, Hud.TeammateHealth,
+	// Hud.TeammateNamesOpacity), the N key flipping the played side's option, and the labels placed for this frame's
+	// camera from the bridge's teammate table (Runtime/ScctTeammateNamesApi.h).
+	void InitNames();
+	void ToggleTeammateNames();
 	void ProjectNames();
+	bool AreTeammateNamesOn(int32 Side) const;
 
 	/** Opens or closes the mission status page and holds the player's keys back while it is open. */
 	void SetStatusPage(bool bOpen);
@@ -177,6 +189,20 @@ private:
 	void LogRadar();
 	int32 LastHeartCone = 0;
 	bool bRadarTextureMissingLogged = false;
+
+	// The marker and message details (ScctHudDetails.cpp): the Hud.MarkerFadeWhileMoving option, the tutorial message's
+	// table (a tutorial map; the -ScctHudTutorial message raised through the game's own SHud.AddTutoMapMessage), a log
+	// line when the tutorial message or the markers' fade changes, and the timed command Tutorial 1/0.
+	void InitDetails();
+	void ReadDetails();
+	bool RunDetailsCommand(const FString& Name, int32 Argument);
+	void LogDetails();
+	FString TutorialSwitchText;      // -ScctHudTutorial=<text>
+	float TutorialSwitchAt = 4.0f;   // -ScctHudTutorial's seconds into the match (4 by default)
+	bool bTutorialSwitchDone = false;
+	int32 LastLoggedTutorialId = 0;
+	int32 LastLoggedFadeStep = -1;
+	bool bLastLoggedHeldBriefings = false;
 
 	// The merc backpack panels (ScctHudBackpack.cpp): the bridge's backpack table into the model, a log line when the
 	// panels change and with each snapshot line, and the timed commands GiveBackpack, Backpack and Refill.
@@ -258,9 +284,10 @@ private:
 	TArray<FKey> StatusCloseKeys;
 	bool bStatusKeysArmed = false;
 
-	/** ToggleTeammateNames, per side (0 spies, 1 mercs), as the user's settings keep it. */
-	bool bTeammateNames[2] = { false, false };
-	bool bStrategicMapNoted = false;
+	/** The timed command TeammateNames 1/0 per side (0 spies, 1 mercs) for this run, -1 where the user's option holds. */
+	int32 TeammateNamesForced[2] = { -1, -1 };
+	int32 LastNameCount = -1;    // the labels' count and marks as last logged
+	bool bNamesTableMissingLogged = false;
 
 	/** HoldScoreboard is down; ShowConnectedPlayers has switched the scoreboard on. */
 	bool bScoreboardKeyHeld = false;

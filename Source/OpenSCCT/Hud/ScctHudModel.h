@@ -54,7 +54,9 @@ struct FScctHudLine
 	int32 Kind = -1;         // EScctHudActivity for the kill feed
 	int32 Cause = 0;         // EScctHudCause
 	int32 Flags = 0;         // EScctHudMessageFlags
+	int32 Trigger = 0;       // the kill feed's trigger: 0 none, 1 set off by a shot, 2 by a chain reaction
 	FString Actor, Victim;   // the two names of a kill, empty when the line has none
+	FString TriggeredBy;     // who set off what killed the victim, when someone else; empty when none
 	int32 ActorTeam = -1, VictimTeam = -1;
 	float Age = 0.0f;        // seconds on screen
 	float Life = 5.0f;       // seconds it stays
@@ -72,9 +74,11 @@ struct FScctHudMarker
 /** A teammate's name placed over his head for this frame (ToggleTeammateNames). */
 struct FScctHudNameLabel
 {
-	FString Name;
+	FString Name;                             // with "(63 HP)" after it when the player shows teammates' health
 	FVector2f Screen = FVector2f::ZeroVector; // in the full-screen layer's units: where the bottom of the name goes
 	float Metres = 0.0f;                      // from the local player
+	float Opacity = 0.5f;                     // the player's nametag opacity, 0.1 to 1
+	int32 Flags = 0;                          // EScctTeammateNameFlags (Runtime/ScctTeammateNamesApi.h): asleep, backpack
 };
 
 /**
@@ -172,6 +176,26 @@ public:
 
 	/** The team of the player at this machine (0 spies, 1 mercs), from the scoreboard, else the side played. */
 	int32 LocalTeam = 0;
+
+	/**
+	 * The spy's Enhanced Reality fade (Godot's HudMarkers): 0.99 while the spy stands, ramping to 0 in half a second while
+	 * moving (State.Speed above 0), and back. The markers' brackets close in and their labels fade with it. Held at 0.99
+	 * while the player has Hud.MarkerFadeWhileMoving off (ScctHudDetails.cpp reads it).
+	 */
+	float MarkerFade = 0.99f;
+	bool bMarkerFadeWhileMoving = true;
+
+	/** A tutorial map (TME, TSP): the end banner says "Finished". From the tutorial table (ScctHudDetails.cpp). */
+	bool bTutorialMap = false;
+	/** The bridge has the tutorial table; without it a tutorial message at the end is taken for a tutorial map, as before. */
+	bool bTutorialTable = false;
+
+	/** The tutorial message box: 0..1 shown, and its text, kept while it fades out. */
+	float TutorialShown = 0.0f;
+	FString TutorialText;
+
+	/** A tutorial message is up (State.TutorialId): the briefings of the game message queue wait, as the original's queue does. */
+	bool IsTutorialUp() const { return bHasState && State.TutorialId != 0; }
 
 	// --- Text ---------------------------------------------------------------------------------------------
 	/** The text behind one of the snapshot's ...Id fields. Ids belong to one session. */
