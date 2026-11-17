@@ -9,8 +9,8 @@
 // action was handed to the server and 0 when there is no local server (an online round) or no match.
 
 // Version 2: FireEmitters added. 3: ShootNear added. 4: ThrowFlare and DirtyFeet added. 5: CamnetOff, PlaceModem and
-// ShootModems added.
-constexpr int32 ScctWorldDebugApiVersion = 5;
+// ShootModems added. 6: PopSmoke and ShootSmoke added.
+constexpr int32 ScctWorldDebugApiVersion = 6;
 
 struct FScctWorldDebugApi
 {
@@ -54,4 +54,11 @@ struct FScctWorldDebugApi
 	int32 (__cdecl* PlaceModem)(float X, float Y, float Z, float DirX, float DirY, float DirZ);
 	/** Shoots every PS2 modem once: each leaves its destruction smoke and flash and goes. */
 	int32 (__cdecl* ShootModems)();
+	/**
+	 * Pops a spy smoke grenade on the floor ahead of the point along the direction (short of a wall in the way), as a
+	 * thrown one pops where it lands. With responsive smoke on its cloud is the shared simulated field.
+	 */
+	int32 (__cdecl* PopSmoke)(float X, float Y, float Z, float DirX, float DirY, float DirZ);
+	/** Fires Shots shots from the point through every responsive smoke cloud, fanned across its middle: each leaves a hole that refills. */
+	int32 (__cdecl* ShootSmoke)(float X, float Y, float Z, int32 Shots);
 };

@@ -18,6 +18,7 @@ class UScctMatchMenuWidget;
  *   ?Sidearms=1         the mercs carry OpenSCCT's sidearms
  *   ?Rifles=1           the mercs may pick OpenSCCT's additional rifles
  *   ?Practice=1         practice rules: no time limit, unlimited lives, 5 s respawn
+ *   ?ResponsiveSmoke=1  smoke grenades fill the shared simulated cloud (Play/ScctEffectsSmokeVolume.cpp draws it)
  *   ?Name=Sam           the local player's name (Unreal's own player-name option; default "Player")
  *   ?ScctOnline=1       the level presents the round of the online visit (Online/ScctOnlineSubsystem.h): no local
  *                       match is started, the other options are not used. Without it a level opened directly

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Play/ScctEffectsParticles.h"
+#include "Play/ScctEffectsSmokeVolume.h"
 #include "Runtime/ScctEventsApi.h"
 #include "Runtime/ScctProjectionsApi.h"
 #include "Runtime/ScctWorldApi.h"
@@ -36,6 +37,8 @@ class UTexture2D;
  *     Tools/Effects/build_effect_assets.py; a small glowing stand-in shape where a mesh is missing), explosions,
  *     smoke, sparks, flares and trails as particles, and the lights the simulation gives them. The PS2 modem's
  *     destruction preset (Ps2ModemEffect) is drawn as its own three emitters (Play/ScctEffectsDevices.cpp);
+ *   - responsive smoke: on a match that runs it, every cloud of the shared smoke field is a ray-marched volume over
+ *     the field's bounds, and a smoke grenade's own sprite cloud is not drawn (Play/ScctEffectsSmokeVolume.h);
  *   - device faults: a network camera a spy's shocker has put out shows an orange cross on its lens with sparks and
  *     smoke for as long as it is out, read from the level state's markers (Play/ScctEffectsDevices.cpp).
  *
@@ -291,6 +294,7 @@ private:
 
 	const FScctEventsApi* Events = nullptr;
 	FScctFxSprites Sprites;
+	FScctSmokeVolumes SmokeVolumes;
 	FRandomStream Random;
 
 	TMap<int32, FActorFx> Actors;

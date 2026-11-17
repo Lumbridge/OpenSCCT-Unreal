@@ -164,7 +164,7 @@ void UScctLevelStateSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	bLog = FParse::Param(FCommandLine::Get(), TEXT("ScctLevelLog"));
 
 	// -ScctLevelDo="movers@8;breaklights@14" (also flare: a merc flare thrown from the camera; dirtyfeet: every pawn's
-	// next steps leave footprints; camnetoff, modem and modemhit: the header says). -ScctMarkTest shoots the nearest doors and panes, then opens the
+	// next steps leave footprints; camnetoff, modem and modemhit: the header says; smoke: a smoke grenade popped ahead; shootsmoke: shots through its cloud). -ScctMarkTest shoots the nearest doors and panes, then opens the
 	// doors and breaks the panes, so the marks can be seen to go with them.
 	FString Actions;
 	FParse::Value(FCommandLine::Get(), TEXT("ScctLevelDo="), Actions, false);
@@ -719,6 +719,17 @@ void UScctLevelStateSubsystem::RunDebugActions()
 		else if (Action.What == TEXT("modemhit"))
 		{
 			Queued = Debug->ShootModems();
+		}
+		else if (Action.What == TEXT("smoke"))
+		{
+			// On the floor straight ahead of the camera, short of a wall.
+			const FVector Direction = FRotator(0.0f, View.Yaw, 0.0f).Vector();
+			Queued = Debug->PopSmoke(View.X, View.Y, View.Z, Direction.X, Direction.Y, Direction.Z);
+		}
+		else if (Action.What == TEXT("shootsmoke"))
+		{
+			// From the camera, as the player's own shots go: each hole runs along the line of sight, a tunnel to see through.
+			Queued = Debug->ShootSmoke(View.X, View.Y, View.Z, 5);
 		}
 		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: -ScctLevelDo '%s' at %.1f s (camera at %.0f, %.0f, %.0f): %s"), *Action.What, MatchSeconds, View.X, View.Y, View.Z,
 			Queued == 1 ? TEXT("handed to the server") : Queued == 0 ? TEXT("no local server to do it") : TEXT("not a known action"));

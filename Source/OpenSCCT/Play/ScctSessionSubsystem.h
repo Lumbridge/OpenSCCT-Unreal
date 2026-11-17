@@ -91,6 +91,10 @@ struct FScctLocalMatchOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	bool bOfflineRules = false;
 
+	/** Responsive smoke: smoke grenades fill the shared simulated cloud that shots and blasts push through. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	bool bResponsiveSmoke = false;
+
 	/** Empty: "Player". */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	FString PlayerName;

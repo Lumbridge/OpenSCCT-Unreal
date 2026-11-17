@@ -34,12 +34,14 @@ public unsafe struct WorldDebugApi
     public delegate* unmanaged[Cdecl]<int> CamnetOff;
     public delegate* unmanaged[Cdecl]<float, float, float, float, float, float, int> PlaceModem;
     public delegate* unmanaged[Cdecl]<int> ShootModems;
+    public delegate* unmanaged[Cdecl]<float, float, float, float, float, float, int> PopSmoke;
+    public delegate* unmanaged[Cdecl]<float, float, float, int, int> ShootSmoke;
 }
 
 public static unsafe class WorldDebugExports
 {
-    /// <summary>2: FireEmitters added. 3: ShootNear added. 4: ThrowFlare and DirtyFeet added. 5: CamnetOff, PlaceModem and ShootModems added.</summary>
-    public const int ApiVersion = 5;
+    /// <summary>2: FireEmitters added. 3: ShootNear added. 4: ThrowFlare and DirtyFeet added. 5: CamnetOff, PlaceModem and ShootModems added. 6: PopSmoke and ShootSmoke added.</summary>
+    public const int ApiVersion = 6;
 
     /// <summary>
     /// What PlaceModem gives a modem on a map without a PS2 sabotage target (no installed map has one): the PC
@@ -80,6 +82,8 @@ public static unsafe class WorldDebugExports
         api->CamnetOff = &CamnetOff;
         api->PlaceModem = &PlaceModem;
         api->ShootModems = &ShootModems;
+        api->PopSmoke = &PopSmoke;
+        api->ShootSmoke = &ShootSmoke;
         return ApiVersion;
     }
 
@@ -209,6 +213,104 @@ public static unsafe class WorldDebugExports
         }
     });
 
+    /// <summary>How far ahead of the point PopSmoke lets the cloud out (less when a wall is nearer), and how far it looks down for the floor.</summary>
+    private const float SmokeReach = 700f;
+    private const float SmokeFloorReach = 600f;
+
+    /// <summary>
+    /// Pops a spy smoke grenade (SProjSmoke) on the floor ahead of the point along the direction (short of a wall in the
+    /// way), as a thrown one pops where it lands: its SSmokeEmitter cloud is let out, which with responsive smoke on is
+    /// the shared simulated field every machine draws and gas and AI read. Returns 1 when queued.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int PopSmoke(float x, float y, float z, float dx, float dy, float dz) =>
+        Exports.Current is { } session ? PopSmoke(session, new FVector(x, y, z), new FVector(dx, dy, dz)) : 0;
+
+    /// <summary>The managed side of <see cref="PopSmoke(float, float, float, float, float, float)"/> (the probes call it).</summary>
+    public static int PopSmoke(BridgeSession session, FVector from, FVector direction) => OnServer(session, host =>
+    {
+        Level level = host.World.Level;
+        FVector forward = direction.SafeNormal();
+        float reach = SmokeReach;
+        if (GadgetWorld.Line(level.Info, from + (forward * SmokeReach), from, GadgetWorld.SightFlags, out FCheckResult wall))
+        {
+            reach = MathF.Max(0f, FVector.Dist(from, wall.Location) - 60f);
+        }
+
+        FVector above = from + (forward * reach);
+        FVector at = above;
+        FVector normal = new(0f, 0f, 1f);
+        if (GadgetWorld.Line(level.Info, above - new FVector(0f, 0f, SmokeFloorReach), above, GadgetWorld.SightFlags, out FCheckResult floor))
+        {
+            at = floor.Location;
+            normal = floor.Normal;
+        }
+
+        SBasePawn? thrower = null;
+        foreach (SBasePawn pawn in level.AllActors<SBasePawn>())
+        {
+            if (!pawn.bDeleteMe && pawn.SPawnType == PawnType.SPAWNOFFENSE)
+            {
+                thrower = pawn;
+                break;
+            }
+        }
+
+        if (level.SpawnActor(new SProjSmoke(), at + (normal * 4f), default, thrower, thrower) is { } grenade)
+        {
+            grenade.Explode(at, normal);
+        }
+    });
+    /// <summary>
+    /// Fires a burst of shots from the point through every responsive smoke cloud of the server's world, as a gun's
+    /// trace through it does (ResponsiveSmokeWorld.Bullet: each pushes a short-lived hole along its line that refills),
+    /// fanned across the cloud's middle at eye height. Returns 1 when queued.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ShootSmoke(float x, float y, float z, int shots) =>
+        Exports.Current is { } session ? ShootSmoke(session, new FVector(x, y, z), shots) : 0;
+
+    /// <summary>The managed side of <see cref="ShootSmoke(float, float, float, int)"/> (the probes call it).</summary>
+    public static int ShootSmoke(BridgeSession session, FVector from, int shots) => OnServer(session, host =>
+    {
+        Level level = host.World.Level;
+        Actor? shooter = null;
+        foreach (SBasePawn pawn in level.AllActors<SBasePawn>())
+        {
+            if (!pawn.bDeleteMe)
+            {
+                shooter = pawn;
+                break;
+            }
+        }
+
+        if (shooter is null || level.GetService<ResponsiveSmokeWorld>() is not { } world)
+        {
+            return;
+        }
+
+        foreach (ResponsiveSmokeField field in world.Fields.Values)
+        {
+            FVector toward = field.Center - from;
+            float length = toward.Size();
+            if (length < 1f)
+            {
+                continue;
+            }
+
+            FVector forward = toward / length;
+            FVector side = new FVector(-forward.Y, forward.X, 0f).SafeNormal();
+            int count = Math.Clamp(shots, 1, 16);
+            for (int i = 0; i < count; i++)
+            {
+                // Fanned across the cloud and a little up and down, through and out the far side.
+                float across = (i - ((count - 1) * 0.5f)) * 45f;
+                FVector target = field.Center + (side * across) + new FVector(0f, 0f, ((i % 3) - 1) * 30f);
+                FVector line = (target - from).SafeNormal();
+                ResponsiveSmokeWorld.Bullet(shooter, from, from + (line * (length + 700f)));
+            }
+        }
+    });
     /// <summary>
     /// Throws a merc flare (SProjFlare) from the point along the direction, as the flare launcher does: it flies, catches
     /// on the first wall or floor it hits and burns there, and every machine that sees its copy hit leaves the burn

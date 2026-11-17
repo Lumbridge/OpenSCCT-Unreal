@@ -75,6 +75,7 @@ void AScctGameMode::InitGame(const FString& MapName, const FString& Options, FSt
 	Match.bSidearms = ParseSwitch(Options, TEXT("Sidearms"));
 	Match.bRifles = ParseSwitch(Options, TEXT("Rifles"));
 	Match.bOfflineRules = ParseSwitch(Options, TEXT("Practice"));
+	Match.bResponsiveSmoke = ParseSwitch(Options, TEXT("ResponsiveSmoke"));
 	Match.PlayerName = UGameplayStatics::ParseOption(Options, TEXT("Name"));
 	bOnline = ParseSwitch(Options, UScctOnlineSubsystem::OnlineOption);
 	FParse::Value(FCommandLine::Get(), TEXT("ScctMatchMenu="), OpenMenuIn);

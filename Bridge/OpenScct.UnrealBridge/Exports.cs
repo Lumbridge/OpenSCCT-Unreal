@@ -329,6 +329,7 @@ public static unsafe class Exports
             Sidearms = (o.Flags & BridgeStartFlags.Sidearms) != 0,
             Rifles = (o.Flags & BridgeStartFlags.Rifles) != 0,
             OfflineRules = (o.Flags & BridgeStartFlags.OfflineRules) != 0,
+            ResponsiveSmoke = (o.Flags & BridgeStartFlags.ResponsiveSmoke) != 0,
         });
     }
 

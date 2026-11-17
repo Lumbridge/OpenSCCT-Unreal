@@ -40,6 +40,9 @@ public sealed record LocalMatch
 
     /// <summary>Practice rules instead of the map's own: no time limit, unlimited lives, 5 s respawn.</summary>
     public bool OfflineRules { get; init; }
+
+    /// <summary>Responsive smoke: smoke grenades fill the shared simulated cloud (the match option SvmResponsiveSmoke).</summary>
+    public bool ResponsiveSmoke { get; init; }
 }
 
 /// <summary>
@@ -124,6 +127,7 @@ public sealed class BridgeSession : IDisposable
             Sidearms = match.Sidearms,
             Rifles = match.Rifles,
             OfflineRules = match.OfflineRules,
+            ResponsiveSmoke = match.ResponsiveSmoke,
         }.ForLocalLaunch();
         return Wrap(new PlaySession(settings, new StopwatchClock()));
     }

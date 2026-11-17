@@ -9,6 +9,7 @@
 #include "Runtime/ScctMarkSurfaceApi.h"
 #include "Runtime/ScctOnlineApi.h"
 #include "Runtime/ScctProjectionsApi.h"
+#include "Runtime/ScctSmokeApi.h"
 #include "Runtime/ScctWorldApi.h"
 
 // The bridge's feature tables by their C++ type: which bridge class hands each one over and which version the
@@ -37,6 +38,7 @@ SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
 SCCT_FEATURE_TABLE(FScctMarkSurfaceApi, "MarkSurfaceExports", ScctMarkSurfaceApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
 SCCT_FEATURE_TABLE(FScctProjectionsApi, "ProjectionExports", ScctProjectionsApiVersion);
+SCCT_FEATURE_TABLE(FScctSmokeApi, "SmokeExports", ScctSmokeApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);
 
 #undef SCCT_FEATURE_TABLE

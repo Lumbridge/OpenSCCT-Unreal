@@ -103,15 +103,16 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 	Start.Bots = FMath::Max(Options.Bots, 0);
 	Start.Flags = (Options.bSidearms ? EScctStartFlags::Sidearms : 0)
 		| (Options.bRifles ? EScctStartFlags::Rifles : 0)
-		| (Options.bOfflineRules ? EScctStartFlags::OfflineRules : 0);
+		| (Options.bOfflineRules ? EScctStartFlags::OfflineRules : 0)
+		| (Options.bResponsiveSmoke ? EScctStartFlags::ResponsiveSmoke : 0);
 	Start.Difficulty = FMath::Clamp(Options.Difficulty, 0, 4);
 	CopyText(Start.Map, Options.Map);
 	CopyText(Start.Mode, Options.Mode);
 	CopyText(Start.PlayerName, Options.PlayerName);
 
-	UE_LOG(LogOpenSCCT, Log, TEXT("Starting %s (%s) as %s with %d bots (difficulty %d, sidearms %d, rifles %d, practice rules %d, name '%s')"),
+	UE_LOG(LogOpenSCCT, Log, TEXT("Starting %s (%s) as %s with %d bots (difficulty %d, sidearms %d, rifles %d, practice rules %d, responsive smoke %d, name '%s')"),
 		*Options.Map, *Options.Mode, Options.bMerc ? TEXT("merc") : TEXT("spy"), Start.Bots, Start.Difficulty,
-		Options.bSidearms ? 1 : 0, Options.bRifles ? 1 : 0, Options.bOfflineRules ? 1 : 0, *Options.PlayerName);
+		Options.bSidearms ? 1 : 0, Options.bRifles ? 1 : 0, Options.bOfflineRules ? 1 : 0, Options.bResponsiveSmoke ? 1 : 0, *Options.PlayerName);
 
 	const int32 NewId = Api->StartLocalEx(&Start);
 	if (NewId == 0)
@@ -423,6 +424,7 @@ void UScctSessionSubsystem::LogFeatureTables() const
 	LogFeatureTable<FScctEquipmentApi>(TEXT("equipment"));
 	LogFeatureTable<FScctOnlineApi>(TEXT("online"));
 	LogFeatureTable<FScctProjectionsApi>(TEXT("projections"));
+	LogFeatureTable<FScctSmokeApi>(TEXT("responsive smoke"));
 }
 
 void UScctSessionSubsystem::TickAutoShots(float DeltaTime)

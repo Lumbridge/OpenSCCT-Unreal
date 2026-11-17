@@ -104,6 +104,7 @@ void UScctEffectsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	// Flashes are scaled by the picture's exposure (Play/ScctExposure.h).
 	FScctExposure::Start();
+	FScctSmokeVolumes::RegisterSettings();
 
 	bLog = FParse::Param(FCommandLine::Get(), TEXT("ScctFxLog"));
 	bAutoFire = FParse::Param(FCommandLine::Get(), TEXT("ScctAutoFire"));
@@ -180,6 +181,7 @@ void UScctEffectsSubsystem::ResetMatch()
 	}
 	ResetProjections();
 	ResetDevices();
+	SmokeVolumes.Reset();
 	Sprites.Clear();
 	MatchSeconds = 0.0f;
 	bFireHeld = bAltFireHeld = false;
@@ -262,6 +264,7 @@ bool UScctEffectsSubsystem::EnsureScene()
 	BodyFill->SetupAttachment(Root);
 	BodyFill->RegisterComponent();
 
+	SmokeVolumes.Init(Host);
 	MeshUsed.Init(false, MaxMeshes);
 	MeshPool.SetNum(MaxMeshes);
 
@@ -328,6 +331,7 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 	UpdateTracers(FxSeconds);
 	UpdateImpactMarks();
 	UpdateProjections();
+	SmokeVolumes.Update(DeltaSeconds);
 	UpdateEffectActors(FxSeconds);
 	UpdateDevices(FxSeconds);
 	UpdateLights(FxSeconds);
@@ -676,7 +680,10 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 			}
 		}
 
-		if (!bHidden && Fx->Style != EStyle::None && Record.Kind == EScctEffectKind::Emitter)
+		// A smoke grenade's cloud is the responsive smoke volume when the match runs it, not sprites.
+		const bool bVolumeSmoke = (Fx->Style == EStyle::Smoke || Fx->Style == EStyle::Gas)
+			&& SmokeVolumes.CoversEmitter(Record.ActorId, GetName(Fx->ClassId).Contains(TEXT("SmokeEmitter")), Fx->Age);
+		if (!bHidden && !bVolumeSmoke && Fx->Style != EStyle::None && Record.Kind == EScctEffectKind::Emitter)
 		{
 			Emit(Fx->Style, Fx->Location, FVector(Record.VelX, Record.VelY, Record.VelZ), DeltaSeconds, Fx->EmitDebt);
 		}
