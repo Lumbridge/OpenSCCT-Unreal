@@ -2,6 +2,7 @@
 
 #include "Menu/ScctMenuPage.h"
 
+#include "Menu/ScctDashboardCards.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctRejoinPrompt.h"
 #include "Menu/ScctSplashTrivia.h"
@@ -102,7 +103,14 @@ namespace
 				TEXT("Pick a map, a mode and a side, set the bots and the rules, and play at once. Nothing is sent over the network."),
 				[this] { Host.Open(TEXT("play")); });
 			DefaultFocus = First;
-			Entry(TEXT("Play online"), TEXT("Find a server or join one by its address"),
+			// Quick practice with three bots, as the Godot dashboard's PRACTICE AS A SPY / A MERCENARY (Menu/ScctDashboardCards.h).
+			Entry(TEXT("Practice as a spy"), ScctDashboard::PracticeLine(false),
+				TEXT("Straight into an offline match as a spy against three bots, on the map you last played offline, with the practice rules."),
+				[this] { ScctDashboard::StartPractice(Host, false); });
+			Entry(TEXT("Practice as a mercenary"), ScctDashboard::PracticeLine(true),
+				TEXT("Straight into an offline match as a mercenary against three bots, on the map you last played offline, with the practice rules."),
+				[this] { ScctDashboard::StartPractice(Host, true); });
+			Entry(TEXT("Play online"), TEXT("Find a session the master lists, or join by address"),
 				TEXT("The servers the master lists, with their maps, modes and players, and joining a server by its address."),
 				[this] { Host.Open(TEXT("online")); });
 			Entry(TEXT("Host game"), TEXT("Create a session on this PC for others to join"),
@@ -190,15 +198,35 @@ namespace
 					]
 				]
 				+ SHorizontalBox::Slot().FillWidth(1.0f)
-				// The player, the map of the moment and the master's news.
+				// The dashboard (Menu/ScctDashboardCards.h, the Godot MainMenu's cards): players online and the sessions
+				// with the master's announcement, what is new, the player's progress, links out and the map of the moment.
+				// It scrolls when a short window cannot hold it.
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom).Padding(0.0f, 0.0f, 0.0f, 8.0f)
 				[
-					SNew(SBox).WidthOverride(440.0f)
+					SNew(SScrollBox)
+					.ScrollBarVisibility(EVisibility::Collapsed)
+					+ SScrollBox::Slot()
 					[
-						SNew(SVerticalBox)
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)[ BuildNews() ]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)[ BuildProfile() ]
-						+ SVerticalBox::Slot().AutoHeight()[ BuildFeatured() ]
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom).Padding(0.0f, 0.0f, 16.0f, 0.0f)
+						[
+							SNew(SBox).WidthOverride(420.0f)
+							[
+								SNew(SVerticalBox)
+								+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)[ ScctDashboard::MakeOnlineCard(Host) ]
+								+ SVerticalBox::Slot().AutoHeight()[ ScctDashboard::MakeWhatsNewCard(Host) ]
+							]
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom)
+						[
+							SNew(SBox).WidthOverride(420.0f)
+							[
+								SNew(SVerticalBox)
+								+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)[ ScctDashboard::MakeProgressCard(Host) ]
+								+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)[ ScctDashboard::MakeExploreCard(Host) ]
+								+ SVerticalBox::Slot().AutoHeight()[ BuildFeatured() ]
+							]
+						]
 					]
 				]
 			];
@@ -209,6 +237,8 @@ namespace
 		virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override
 		{
 			SScctMenuPage::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+			// The master is polled for the dashboard only while this page is drawn.
+			ScctDashboard::NoteShown();
 			if (!EntriesScroll.IsValid() || !EntriesBox.IsValid())
 			{
 				return;
@@ -257,44 +287,6 @@ namespace
 			return Out.IsEmpty() ? Text : Out;
 		}
 
-		TSharedRef<SWidget> BuildProfile()
-		{
-			const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Host.Online;
-			const auto IsSignedIn = [Weak] { return Weak.IsValid() && Weak->GetStatus().AccountState == static_cast<int32>(EScctOnlineAccountState::SignedIn); };
-			return ScctUi::Card(TEXT("Agent"),
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						SNew(STextBlock).Font(ScctUi::H2()).ColorAndOpacity(ScctHudStyle::Text())
-						.Text(TAttribute<FText>::CreateLambda([Weak, IsSignedIn]
-						{
-							const FString Name = !Weak.IsValid() ? FString() : IsSignedIn() ? Weak->GetAccountName() : Weak->GetPlayerName();
-							return FText::FromString(Name.IsEmpty() ? TEXT("Player") : Name);
-						}))
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
-					[
-						SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
-						.Text(TAttribute<FText>::CreateLambda([Weak, IsSignedIn]
-						{
-							if (!Weak.IsValid() || !Weak->HasMaster()) { return FText::FromString(TEXT("Offline: no master server set")); }
-							return FText::FromString(IsSignedIn() ? TEXT("Signed in to OpenSCCT") : TEXT("Guest (not signed in)"));
-						}))
-					]
-				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.0f, 0.0f, 0.0f, 0.0f)
-				[
-					SNew(SScctButton)
-					.Look(EScctButtonLook::Chip)
-					.Text(FText::FromString(TEXT("PROFILE")))
-					.Description(FText::FromString(TEXT("Your name, and signing in to your account.")))
-					.OnPressed(FSimpleDelegate::CreateLambda([this] { Host.Open(TEXT("settings/profile")); }))
-				]);
-		}
-
 		TSharedRef<SWidget> BuildFeatured()
 		{
 			UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
@@ -313,7 +305,7 @@ namespace
 			Description = FirstSentences(Description.Replace(TEXT("|"), TEXT(" ")).TrimStartAndEnd(), 170);
 			return ScctUi::Card(FString::Printf(TEXT("%d map%s ready to play"), Count, Count == 1 ? TEXT("") : TEXT("s")),
 				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Picture(Menu->GetMapPicture(FeaturedMap, false), 392.0f, 196.0f) ]
+				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Picture(Menu->GetMapPicture(FeaturedMap, false), 360.0f, 180.0f) ]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 4.0f)
 				[
 					SNew(STextBlock).Font(ScctUi::H2()).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true).Text(FText::FromString(Menu->GetMapTitle(FeaturedMap)))
@@ -322,18 +314,6 @@ namespace
 				[
 					SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true).Text(FText::FromString(Description))
 				]);
-		}
-
-		TSharedRef<SWidget> BuildNews()
-		{
-			const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Host.Online;
-			return SNew(SBox)
-				.Visibility(TAttribute<EVisibility>::CreateLambda([Weak] { return Weak.IsValid() && !Weak->GetMotd().IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed; }))
-				[
-					ScctUi::Card(TEXT("From the master server"),
-						SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true)
-						.Text(TAttribute<FText>::CreateLambda([Weak] { return Weak.IsValid() ? FText::FromString(Weak->GetMotd()) : FText::GetEmpty(); })))
-				];
 		}
 
 		/** Asks once per offer whether to rejoin, and closes the question when the offer went (rejoined or forgotten elsewhere). */

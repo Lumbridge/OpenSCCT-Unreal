@@ -15,6 +15,7 @@
 #include "Play/ScctPoseAim.h"
 #include "Play/ScctViewPawn.h"
 #include "Runtime/ScctFeatures.h"
+#include "Runtime/ScctOfflineMatchApi.h"
 #include "UnrealClient.h"
 
 namespace
@@ -122,6 +123,7 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 	Start.SpyLivesPlusOne = FMath::Max(Options.SpyLives, -1) + 1;
 	Start.MercLivesPlusOne = FMath::Max(Options.MercLives, -1) + 1;
 	Start.RespawnPlusOne = FMath::Max(Options.RespawnSeconds, -1) + 1;
+	Start.MatchPlayers = FMath::Clamp(Options.MatchPlayers, 0, 24);
 
 	// The match only allows sidearms; which one the local merc carries is his own gear, asked of this machine when
 	// the server hands out the kit.
@@ -130,9 +132,10 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 		Play->SetSidearm(Options.Sidearm);
 	}
 
-	UE_LOG(LogOpenSCCT, Log, TEXT("Starting %s (%s) as %s with %d bots (difficulty %d, sidearms %d (own sidearm %d), rifles %d, practice rules %d, responsive smoke %d, name '%s'; own rules: time %d, spy lives %d, merc lives %d, respawn %d; -1 keeps the map's)"),
+	UE_LOG(LogOpenSCCT, Log, TEXT("Starting %s (%s) as %s with %d bots (difficulty %d, sidearms %d (own sidearm %d), rifles %d, practice rules %d, unlimited gear %d, responsive smoke %d, match players %d, name '%s'; own rules: time %d, spy lives %d, merc lives %d, respawn %d; -1 keeps the map's)"),
 		*Options.Map, *Options.Mode, Options.bMerc ? TEXT("merc") : TEXT("spy"), Start.Bots, Start.Difficulty,
-		Options.bSidearms ? 1 : 0, Options.Sidearm, Options.bRifles ? 1 : 0, Options.bOfflineRules ? 1 : 0, Options.bResponsiveSmoke ? 1 : 0, *Options.PlayerName,
+		Options.bSidearms ? 1 : 0, Options.Sidearm, Options.bRifles ? 1 : 0, Options.bOfflineRules ? 1 : 0, Options.bUnlimitedGear ? 1 : 0,
+		Options.bResponsiveSmoke ? 1 : 0, Start.MatchPlayers, *Options.PlayerName,
 		Options.TimeLimit, Options.SpyLives, Options.MercLives, Options.RespawnSeconds);
 
 	// The player's demo-saving choice as it is now, so the match records (or not) on it (Demo/ScctDemoSubsystem.h).
@@ -155,6 +158,14 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 		return false;
 	}
 	ChangeSession(Info, true);
+
+	// What the simulation's rules were started with, so the options chosen can be checked against what reached them.
+	if (const FScctOfflineMatchApi* Offline = ScctFeature<FScctOfflineMatchApi>())
+	{
+		TCHAR GameOptions[1024] = {};
+		Offline->GetGameOptions(GameOptions, UE_ARRAY_COUNT(GameOptions));
+		UE_LOG(LogOpenSCCT, Log, TEXT("Offline match game options: %s"), GameOptions);
+	}
 
 	// -ScctRestartAfter=S: the unattended check of a second match in the same world, once.
 	float RestartAfter = 0.0f;
