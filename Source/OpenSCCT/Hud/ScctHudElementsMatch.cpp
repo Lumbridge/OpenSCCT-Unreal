@@ -597,28 +597,3 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 	}
 	Painter.SetOpacity(1.0f);
 }
-
-void ScctHudElements::PaintTeammateNames(FScctHudPainter& Painter, const FScctHudModel& Model)
-{
-	if (Model.NameLabels.Num() == 0)
-	{
-		return;
-	}
-
-	// Quiet labels: they stay behind the crosshair and the objective markers, smaller and fainter with distance
-	// (full at 3 m, least from 60 m on, as the Godot client's are).
-	const FLinearColor Colour = Accent(Model.LocalTeam);
-	for (const FScctHudNameLabel& NameLabel : Model.NameLabels)
-	{
-		float Far = FMath::Clamp((NameLabel.Metres - 3.0f) / 57.0f, 0.0f, 1.0f);
-		Far = Far * Far * (3.0f - 2.0f * Far);
-		const FSlateFontInfo NameFont = Font(EWeight::Regular, 11.5f - 4.0f * Far, 40);
-		const float Alpha = 0.85f - 0.55f * Far;
-		const FVector2f TextSize = Painter.Measure(NameLabel.Name, NameFont);
-		const FVector2f At(NameLabel.Screen.X, NameLabel.Screen.Y - TextSize.Y - 5.0f);
-		Painter.Fill(HudBox(At.X - TextSize.X * 0.5f - 6.0f, At.Y - 2.0f, TextSize.X + 12.0f, TextSize.Y + 4.0f), FLinearColor(0.0f, 0.0f, 0.0f, 0.28f * Alpha), 3.0f);
-		Painter.Text(At, NameLabel.Name, NameFont, Fade(FMath::Lerp(Text(), Colour, 0.55f), Alpha), EAlign::Centre);
-		// A small tick down to the head, so two names close together still say whose they are.
-		Painter.Line(FVector2f(NameLabel.Screen.X, NameLabel.Screen.Y - 4.0f), FVector2f(NameLabel.Screen.X, NameLabel.Screen.Y), Fade(Colour, 0.6f * Alpha), 1.0f);
-	}
-}
