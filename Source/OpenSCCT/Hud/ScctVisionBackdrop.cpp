@@ -79,6 +79,17 @@ void FScctVisionBackdrop::IndexLevel(UWorld* World)
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Vision: thermal and EMF hide %d corona cards, %d beam or flare cards, %d sky domes and %d skyline meshes on this map"),
 		NumCards, NumGlowCards, NumDomes, NumSkyline);
+	// Where each one is, for unattended comparison shots (-ScctCams); a few per map.
+	for (int32 Index = 0; Index < FMath::Min(Coronas.Num(), 12); ++Index)
+	{
+		if (const UPrimitiveComponent* Card = Coronas[Index].Get())
+		{
+			const AActor* Owner = Card->GetOwner();
+			const bool bCard = Owner != nullptr && Owner->Tags.ContainsByPredicate([](const FName& Tag) { return Tag.ToString().StartsWith(CoronaTagPrefix); });
+			UE_LOG(LogOpenSCCT, Log, TEXT("Vision:   %s '%s' at %s%s"), bCard ? TEXT("corona card") : TEXT("glow card"),
+				*GetNameSafe(Owner), *Card->GetComponentLocation().ToCompactString(), Owner != nullptr && Owner->IsHidden() ? TEXT(" (unlit now)") : TEXT(""));
+		}
+	}
 }
 
 void FScctVisionBackdrop::Update(UWorld* World, bool bHide)
