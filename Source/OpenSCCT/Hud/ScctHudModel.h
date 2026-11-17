@@ -72,9 +72,11 @@ struct FScctHudMarker
 /** A teammate's name placed over his head for this frame (ToggleTeammateNames). */
 struct FScctHudNameLabel
 {
-	FString Name;
+	FString Name;                             // with "(63 HP)" after it when the player shows teammates' health
 	FVector2f Screen = FVector2f::ZeroVector; // in the full-screen layer's units: where the bottom of the name goes
 	float Metres = 0.0f;                      // from the local player
+	float Opacity = 0.5f;                     // the player's nametag opacity, 0.1 to 1
+	int32 Flags = 0;                          // EScctTeammateNameFlags (Runtime/ScctTeammateNamesApi.h): asleep, backpack
 };
 
 /**
