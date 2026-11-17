@@ -31,6 +31,8 @@ public class OpenSCCT : ModuleRules
 			"ApplicationCore",
 			// A sound wave class of our own (Play/ScctSoundWave) links against the audio proxy interfaces.
 			"AudioExtensions",
+			// The cooked map packs of OpenSCCT-Unreal-Content are downloaded at run time (Online/ScctMapPacks).
+			"HTTP",
 			"Json",
 			// The loading page is shown by the engine's movie player while a level loads (Menu/ScctLoadingSubsystem).
 			"MoviePlayer",
@@ -49,6 +51,8 @@ public class OpenSCCT : ModuleRules
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PublicSystemLibraries.Add("crypt32.lib");
+			// The downloaded map packs are checked with SHA-256 from CNG (Online/ScctMapPacks).
+			PublicSystemLibraries.Add("bcrypt.lib");
 		}
 
 		// FSoundQualityInfo, which the engine's audio decoders fill.

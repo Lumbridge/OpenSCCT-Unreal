@@ -37,7 +37,9 @@ The map codes to cook (folders of Content/Imported/Maps holding <Code>/<Code>.um
 TestRange. A publish cooks every map in one run: what counts as shared depends on which maps were cooked together.
 
 .PARAMETER Revision
-The n of the cook id, bumped for every re-cook against the same ProjectVersion. Default 1.
+The n of the cook id, bumped for every re-cook against the same ProjectVersion. It must be CookRevision of
+[OpenSCCT.MapPacks] in Config/DefaultGame.ini, which is where the game reads its own cook id from (a game only
+mounts packs of its cook): the default is that value, and another one is refused. Bump CookRevision, not this.
 
 .PARAMETER Configuration
 The game build staged with the cook: Development (default) or Shipping. The cooked containers are the same either way.
@@ -53,11 +55,11 @@ Do not build the editor and the game first (they must already be built).
 
 .EXAMPLE
 pwsh Tools/Cook/Cook-MapPaks.ps1 -Maps AquaE
-pwsh Tools/Cook/Cook-MapPaks.ps1 -Revision 2
+pwsh Tools/Cook/Cook-MapPaks.ps1 -Maps AquaE,ConvoyE
 #>
 param(
     [string[]]$Maps = @(),
-    [int]$Revision = 1,
+    [int]$Revision = 0,
     [ValidateSet('Development', 'Shipping')]
     [string]$Configuration = 'Development',
     [string]$Out = '',
@@ -106,6 +108,10 @@ if ("$($engineBuild.MajorVersion).$($engineBuild.MinorVersion)" -ne '5.8') { Fai
 $gameIni = Get-Content -LiteralPath (Join-Path $repo 'Config/DefaultGame.ini') -Raw
 $gameVersion = [regex]::Match($gameIni, '(?m)^ProjectVersion=(\S+)\s*$').Groups[1].Value
 if (-not $gameVersion) { Fail 'no ProjectVersion in Config/DefaultGame.ini' }
+$cookRevision = [regex]::Match($gameIni, '(?ms)^\[OpenSCCT\.MapPacks\][^\[]*?^CookRevision=(\d+)\s*$').Groups[1].Value
+if (-not $cookRevision) { Fail 'no CookRevision under [OpenSCCT.MapPacks] in Config/DefaultGame.ini' }
+if ($Revision -eq 0) { $Revision = [int]$cookRevision }
+if ($Revision -ne [int]$cookRevision) { Fail "-Revision $Revision is not CookRevision=$cookRevision of Config/DefaultGame.ini, so the game would not use these packs: bump CookRevision instead" }
 $cookId = "$engineVersion-$gameVersion-$Revision"
 $commit = ([string](git -C $repo rev-parse HEAD)).Trim()
 $dirty = [bool](git -C $repo status --porcelain --untracked-files=no)

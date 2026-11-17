@@ -9,6 +9,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Online/ScctMapPacks.h"
 #include "Online/ScctTokenStore.h"
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
@@ -699,12 +700,47 @@ void UScctOnlineSubsystem::FollowLevel()
 	if (IsOnARoundsMap(GetState()) && !MapToLoad.IsEmpty() && !HasFlag(EScctOnlineStatusFlags::RoundRefused))
 	{
 		const FString Level = LevelOf(MapToLoad);
+		if (!FPackageName::DoesPackageExist(Level) && UScctMapPacks::CanMountPacks())
+		{
+			// A packaged game has no imported levels of its own: the map's cooked pack is downloaded and mounted
+			// (OpenSCCT-Unreal-Content), for the version of the map this player's svmap is.
+			if (LevelFetchMap != MapToLoad)
+			{
+				LevelFetchMap = MapToLoad;
+				LevelFetchError.Reset();
+				if (UScctMapPacks* Packs = GetGameInstance()->GetSubsystem<UScctMapPacks>())
+				{
+					UE_LOG(LogOpenSCCT, Log, TEXT("Online: the server plays %s, which has no level in this game: fetching its pack"), *MapToLoad);
+					TWeakObjectPtr<UScctOnlineSubsystem> WeakThis(this);
+					const FString Map = MapToLoad;
+					Packs->EnsureMapLevel(Map, UScctMapPacks::ContentHashOfInstalledMap(Map), FScctMapLevelReady::CreateLambda(
+						[WeakThis, Map](bool bOk, const FString& LevelOrReason)
+						{
+							UScctOnlineSubsystem* Self = WeakThis.Get();
+							if (Self != nullptr && Self->LevelFetchMap == Map)
+							{
+								Self->LevelFetchError = bOk ? FString() : LevelOrReason;
+								Self->Touch();
+							}
+						}));
+				}
+			}
+			if (LevelFetchError.IsEmpty() && !FPackageName::DoesPackageExist(Level))
+			{
+				// Still downloading: the travel waits (UScctMapPacks::GetProgress has the line and the fraction).
+				return;
+			}
+		}
 		if (!FPackageName::DoesPackageExist(Level))
 		{
 			// The simulation could play it, but there is nothing to draw: the visit ends with the reason.
 			UE_LOG(LogOpenSCCT, Error, TEXT("Online: the server plays %s, which has no imported level (%s)"), *MapToLoad, *Level);
 			Api->Leave();
-			Notice = FString::Printf(TEXT("The server plays %s, which has not been imported into this game yet."), *MapToLoad);
+			Notice = LevelFetchError.IsEmpty()
+				? FString::Printf(TEXT("The server plays %s, which has not been imported into this game yet."), *MapToLoad)
+				: LevelFetchError;
+			LevelFetchMap.Reset();
+			LevelFetchError.Reset();
 			Touch();
 			return;
 		}
