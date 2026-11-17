@@ -19,7 +19,7 @@ public:
 	/** Unattended: shows a page by name ("offline", "join", "servers", "options"). */
 	void ShowPageNamed(const FString& Name);
 
-	/** Opens the Options screen on one of its pages (SScctFrontEnd::ShowOptions). */
+	/** Opens the settings page on the tab of that name (\"settings/<tab>\"). */
 	void ShowOptions(FName Page);
 
 	/** The QUIT question, as the button asks it. */

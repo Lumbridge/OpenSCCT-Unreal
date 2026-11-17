@@ -9,10 +9,9 @@
  *
  * A forced value is what FScctSettings::Get* returns for the whole run (clamped like any value), in place of the
  * stored one, and it is never written to the user settings file: the player's own settings are as they were the
- * next time the game starts. Once the option is set or reset (the Options screen applied an edit to it), the forced
+ * next time the game starts. Once the option is set or reset (the settings page changed it), the forced
  * value gives way to that.
  *
- * The Options screen's -ScctOptionsEdit edits options on the screen instead, as the player would, without applying.
  */
 namespace FScctSettingsForced
 {

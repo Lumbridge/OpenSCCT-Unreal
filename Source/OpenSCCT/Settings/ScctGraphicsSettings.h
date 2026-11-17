@@ -3,16 +3,14 @@
 #include "CoreMinimal.h"
 
 /**
- * The Graphics page of the Options screen and what puts it into effect (registered and applied by
+ * The Graphics options the settings page draws at the end of its Video tab, and what puts it into effect (registered and applied by
  * UScctDisplaySettings, Settings/ScctDisplaySettings.h):
  *
- *   Graphics.Quality             overall quality, Low to Cinematic: Unreal's scalability level for every group
- *   Graphics.ViewDistance ...    each scalability group on its own (view distance, shadows, lighting, reflections,
- *                                post-processing, textures, effects, shading), or "Same as overall"
- *   Graphics.RenderScale         the 3D picture's resolution against the screen's, 50 to 100% (the scalability
- *                                resolution, r.ScreenPercentage); the HUD and menus stay sharp
+ * The overall quality, its groups and the render scale are the settings page's (UGameUserSettings and
+ * UScctUserSettings, its Video tab); this page has what it has no row for:
+ *
  *   Graphics.AutoScaleFps        automatic render scale: dynamic resolution lowers the 3D resolution, down to 50%,
- *                                while frames take longer than the chosen rate allows, render scale being the most
+ *                                while frames take longer than the chosen rate allows, the render scale being the most
  *   Graphics.AntiAliasing        TSR, TAA, FXAA or none (r.AntiAliasingMethod)
  *   Graphics.TextureFiltering    trilinear to 16x anisotropic (r.MaxAnisotropy)
  *   Graphics.AmbientOcclusion    contact shading: screen-space AO and Lumen's short-range AO

@@ -15,7 +15,7 @@ class UScctFrontEndWidget;
  * Unattended switches (off by default):
  *   -ScctMenuPage=offline|join|servers|options   open the menu on that page (for screenshots)
  *   -ScctMenuPage=start                  open the offline page and press its START (each time the menu is shown)
- *   -ScctOptions=<Page>                  open the Options screen on that page (Display, Hud...; Menu/SScctOptionsPage.h)
+ *   -ScctOptions=<Page>                  open the settings page on that tab (video, audio, hud, online...; Menu/SScctSettingsPanel.h)
  *   -ScctConfirmTest                     open the QUIT question (a screenshot of the confirmation box)
  */
 UCLASS()

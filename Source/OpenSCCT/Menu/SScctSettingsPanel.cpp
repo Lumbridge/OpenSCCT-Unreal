@@ -4,6 +4,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "GameFramework/GameUserSettings.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Menu/SScctBrightnessPage.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctUserSettings.h"
 #include "Misc/App.h"
@@ -12,6 +13,8 @@
 #include "Play/ScctControlSettings.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctFeatures.h"
+#include "Settings/ScctGraphicsSettings.h"
+#include "Settings/ScctSettings.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
@@ -93,8 +96,26 @@ namespace
 		return FString();
 	}
 
+	/** A registry page's name as a tab label: "Hud" reads "HUD". */
+	FString RegistryTabLabel(FName Page)
+	{
+		const FString Name = Page.ToString();
+		return Name.Len() <= 3 ? Name.ToUpper() : Name;
+	}
+
 	FString Percent(float Value) { return FString::Printf(TEXT("%d %%"), FMath::RoundToInt32(Value)); }
 	FString Times(float Value) { return FString::Printf(TEXT("%.2f x"), Value); }
+}
+
+TArray<FName> SScctSettingsPanel::RegistryPagesOfTab(int32 Tab)
+{
+	switch (Tab)
+	{
+	case 0: return { TEXT("Display"), TEXT("Graphics"), TEXT("Performance") };
+	case 1: return { TEXT("Audio"), TEXT("Voice") };
+	case 2: return { TEXT("Spy"), TEXT("Mercenary"), TEXT("Controller") };
+	default: return {};
+	}
 }
 
 int32 SScctSettingsPanel::FindTab(const FString& Name)
@@ -137,6 +158,26 @@ void SScctSettingsPanel::Construct(const FArguments& InArgs, const FScctMenuHost
 		ScctUi::GameText(TEXT("All_Settings"), TEXT("BTNGame.Caption"), TEXT("Game")),
 		TEXT("Profile"),
 	};
+	TArray<FString> TabLabels(Labels, UE_ARRAY_COUNT(Labels));
+	for (const TCHAR* Name : SettingsTabNames)
+	{
+		TabNames.Add(Name);
+	}
+	// The registry's pages no fixed tab holds, each a tab of its own.
+	TArray<FName> Held;
+	for (int32 Tab = 0; Tab < 3; ++Tab)
+	{
+		Held.Append(RegistryPagesOfTab(Tab));
+	}
+	for (const FName Page : FScctSettings::Pages())
+	{
+		if (!Held.Contains(Page))
+		{
+			RegistryTabs.Add(Page);
+			TabLabels.Add(RegistryTabLabel(Page));
+			TabNames.Add(Page.ToString().ToLower());
+		}
+	}
 
 	TSharedPtr<SScctButton> ResetButton;
 	ChildSlot
@@ -145,7 +186,7 @@ void SScctSettingsPanel::Construct(const FArguments& InArgs, const FScctMenuHost
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 16.0f)
 		[
 			SAssignNew(Tabs, SScctTabBar)
-			.Tabs(TArray<FString>(Labels, UE_ARRAY_COUNT(Labels)))
+			.Tabs(TabLabels)
 			.Initial(InArgs._InitialTab)
 			.OnChanged(FSimpleDelegate::CreateSP(this, &SScctSettingsPanel::Rebuild))
 		]
@@ -214,7 +255,7 @@ void SScctSettingsPanel::ShowSub(const FString& Sub)
 		bBindMerc = Rest.Contains(TEXT("merc"));
 		bBindPad = Rest.Contains(TEXT("pad"));
 	}
-	const int32 Index = FindTab(Tab);
+	const int32 Index = TabNames.IndexOfByPredicate([&Tab](const FString& Name) { return Name.Equals(Tab, ESearchCase::IgnoreCase); });
 	if (Index != INDEX_NONE)
 	{
 		if (Index == Tabs->GetTab())
@@ -249,7 +290,8 @@ void SScctSettingsPanel::Rebuild()
 	case 2: Rows = BuildControls(); break;
 	case 3: Rows = BuildBindings(); break;
 	case 4: Rows = BuildGame(); break;
-	default: Rows = BuildProfile(); break;
+	case 5: Rows = BuildProfile(); break;
+	default: Rows = RegistryTabs.IsValidIndex(Tabs->GetTab() - 6) ? BuildRegistryTab(RegistryTabs[Tabs->GetTab() - 6]) : BuildProfile(); break;
 	}
 	Body->SetContent(
 		SNew(SScrollBox)
@@ -284,7 +326,11 @@ void SScctSettingsPanel::ResetTab()
 		}
 		case 3: Controls->ResetBindings(bBindMerc); bBindingsDirty = true; break;
 		case 4: Settings->ResetInterface(); Settings->ApplyAll(); Controls->bAutoHackComms = false; Controls->bMouseWheelSpeed = false; ApplyControls(); break;
-		default: break;
+		default: if (RegistryTabs.IsValidIndex(Tab - 6)) { FScctSettings::ResetPage(RegistryTabs[Tab - 6]); } break;
+		}
+		for (const FName Page : RegistryPagesOfTab(Tab))
+		{
+			FScctSettings::ResetPage(Page);
 		}
 		Toast(TEXT("Defaults restored."));
 		Rebuild();
@@ -294,6 +340,7 @@ void SScctSettingsPanel::ResetTab()
 void SScctSettingsPanel::Commit()
 {
 	UScctUserSettings::Get()->Save();
+	FScctSettings::Save();
 	UScctControlSettings* Controls = UScctControlSettings::Get();
 	if (bControlsDirty)
 	{
@@ -321,6 +368,8 @@ void SScctSettingsPanel::ApplyQuality()
 		Engine->ApplyNonResolutionSettings();
 		Engine->SaveSettings();
 	}
+	// The scalability groups set some of the variables the registry's graphics options set: those go again on top.
+	ScctGraphicsSettings::Apply();
 }
 
 // ---- video ----------------------------------------------------------------------------------------------------------
@@ -426,6 +475,13 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 		.Get([Settings] { return Settings->Gamma; })
 		.Set([Settings](float Value) { Settings->Gamma = Value; Settings->ApplyAll(); })
 		.Format([](float Value) { return Percent((Value / 2.2f) * 100.0f); }));
+	Rows->AddSlot().AutoHeight().HAlign(HAlign_Right).Padding(0.0f, 4.0f, 16.0f, 10.0f)
+	[
+		SNew(SScctButton)
+		.Text(FText::FromString(TEXT("CALIBRATE BRIGHTNESS")))
+		.Description(FText::FromString(TEXT("Set the brightness against a test pattern of near-black squares, the original game's calibration picture.")))
+		.OnPressed(FSimpleDelegate::CreateLambda([] { SScctBrightnessPage::Open(); }))
+	];
 
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Field of view")) ];
 	Add(SNew(SScctToggle)
@@ -440,6 +496,10 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 		.Get([Controls] { return Controls->MercFovCap; })
 		.Set([this, Controls](float Value) { Controls->MercFovCap = Value; ApplyControls(); })
 		.Format([](float Value) { return FString::Printf(TEXT("%d°"), FMath::RoundToInt32(Value)); }));
+	for (const FName Page : RegistryPagesOfTab(0))
+	{
+		AddRegistryRows(Rows, Page);
+	}
 	return Rows;
 }
 
@@ -525,6 +585,13 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildAudio()
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Menus")) ];
 	Volume(TEXT("Menu music volume"), TEXT("The music of the menus and the lobby."), &Settings->MenuMusicVolume);
 	Volume(TEXT("Menu sounds volume"), TEXT("The menus' clicks and beeps."), &Settings->MenuSoundsVolume);
+	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Match")) ];
+	Volume(TEXT("Objective sounds volume"), TEXT("The jingles that mark an objective. At OFF they are not played at all."), &Settings->ObjectiveVolume);
+	Volume(TEXT("Voice chat volume"), TEXT("Other players' voices."), &Settings->VoiceVolume);
+	for (const FName Page : RegistryPagesOfTab(1))
+	{
+		AddRegistryRows(Rows, Page);
+	}
 	return Rows;
 }
 
@@ -608,6 +675,10 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildControls()
 	Speed(TEXT("Left stick dead zone"), TEXT("Travel at the centre of the left stick that does nothing. Raise it if the player creeps with the stick untouched."), &Controls->PadDeadzoneLeft, 0.0f, 0.9f, 0.01f);
 	Speed(TEXT("Right stick dead zone"), TEXT("Travel at the centre of the right stick that does nothing. Raise it if the view drifts."), &Controls->PadDeadzoneRight, 0.0f, 0.9f, 0.01f);
 	Speed(TEXT("Trigger threshold"), TEXT("How far a trigger goes down before it counts as pressed."), &Controls->PadTriggerThreshold, 0.0f, 0.99f, 0.01f);
+	for (const FName Page : RegistryPagesOfTab(2))
+	{
+		AddRegistryRows(Rows, Page);
+	}
 	return Rows;
 }
 
@@ -832,6 +903,88 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildProfile()
 			}
 		}))
 	];
+	return Rows;
+}
+
+TSharedPtr<SWidget> SScctSettingsPanel::AddRegistryRows(const TSharedRef<SVerticalBox>& Rows, FName Page)
+{
+	TSharedPtr<SWidget> First;
+	FString Group;
+	bool bFirstGroup = true;
+	for (const FScctSettingDesc* Desc : FScctSettings::OptionsOf(Page))
+	{
+		const FString ThisGroup = Desc->Group.IsEmpty() ? Page.ToString() : Desc->Group.ToString();
+		if (bFirstGroup || ThisGroup != Group)
+		{
+			Rows->AddSlot().AutoHeight()[ ScctUi::Section(ThisGroup) ];
+			Group = ThisGroup;
+			bFirstGroup = false;
+		}
+		const FName Key = Desc->Key;
+		const FText Label = Desc->Label;
+		const FText Tooltip = Desc->Tooltip;
+		TSharedPtr<SWidget> Row;
+		switch (Desc->Type)
+		{
+		case EScctSettingType::Bool:
+			Row = SNew(SScctToggle)
+				.Label(Label)
+				.Description(Tooltip)
+				.Get([Key] { return FScctSettings::GetBool(Key); })
+				.Set([Key](bool bValue) { FScctSettings::SetBool(Key, bValue); });
+			break;
+		case EScctSettingType::Float:
+		case EScctSettingType::Int:
+		{
+			const bool bInt = Desc->Type == EScctSettingType::Int;
+			const float Step = Desc->Step > 0.0f ? Desc->Step : (bInt ? 1.0f : (Desc->Max - Desc->Min) / 100.0f);
+			const TFunction<FString(float)> Format = Desc->FormatValue;
+			Row = SNew(SScctSlider)
+				.Label(Label)
+				.Description(Tooltip)
+				.Min(Desc->Min).Max(Desc->Max).Step(Step)
+				.Get([Key, bInt] { return bInt ? static_cast<float>(FScctSettings::GetInt(Key)) : FScctSettings::GetFloat(Key); })
+				.Set([Key, bInt](float Value) { if (bInt) { FScctSettings::SetInt(Key, FMath::RoundToInt32(Value)); } else { FScctSettings::SetFloat(Key, Value); } })
+				.Format([Format, bInt](float Value) { return Format ? Format(Value) : (bInt ? FString::FromInt(FMath::RoundToInt32(Value)) : FString::SanitizeFloat(FMath::RoundToFloat(Value * 100.0f) / 100.0f)); });
+			break;
+		}
+		case EScctSettingType::Choice:
+		{
+			TArray<FString> Options;
+			for (const FText& Choice : Desc->Choices)
+			{
+				Options.Add(Choice.ToString());
+			}
+			Row = SNew(SScctStepper)
+				.Label(Label)
+				.Description(Tooltip)
+				.Wrap(false)
+				.Options(Options)
+				.Get([Key, Count = Options.Num()] { return FMath::Clamp(FScctSettings::GetInt(Key), 0, FMath::Max(Count - 1, 0)); })
+				.Set([Key](int32 Value) { FScctSettings::SetInt(Key, Value); });
+			break;
+		}
+		default:
+			Row = SNew(SScctTextRow)
+				.Label(Label)
+				.Description(Tooltip)
+				.Initial(FScctSettings::GetString(Key))
+				.OnChanged([Key](const FString& Value) { FScctSettings::SetString(Key, Value); });
+			break;
+		}
+		Rows->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 3.0f)[ Row.ToSharedRef() ];
+		if (!First.IsValid())
+		{
+			First = Row;
+		}
+	}
+	return First;
+}
+
+TSharedRef<SWidget> SScctSettingsPanel::BuildRegistryTab(FName Page)
+{
+	const TSharedRef<SVerticalBox> Rows = SNew(SVerticalBox);
+	DefaultFocus = AddRegistryRows(Rows, Page);
 	return Rows;
 }
 

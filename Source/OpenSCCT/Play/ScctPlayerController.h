@@ -49,8 +49,7 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(FScctLocalCommandEvent, FName /*Name*/, i
  * is released and no key or mouse movement reaches the player. The keys bound to a command can still be asked for
  * (FindKeysBoundTo), which is how the menu's own key closes it again.
  *
- * CONSOLE (the Options screen, Menu/SScctOptionsPage.h, holds the settings registry's options and the player's name;
- * until the controls have their page there these stay the way to change them):
+ * CONSOLE (the settings page's Controls and Key bindings tabs, Menu/SScctSettingsPanel.h, change the same values):
  *   ScctInvertY 0|1        look up and down the other way round
  *   ScctMouseScale <x>     a multiplier over every mouse count
  *   ScctBind spy|merc <key> "<command>"   bind a key for one side: the key by its binding name (W, Shift,
