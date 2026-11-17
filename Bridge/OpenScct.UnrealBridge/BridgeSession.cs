@@ -44,6 +44,15 @@ public sealed record LocalMatch
     /// </summary>
     public bool OfflineRules { get; init; }
 
+    /// <summary>The player's own rules over the map's (and over the practice rules): minutes (0 for no limit), lives of
+    /// each spy and merc (0 for unlimited) and the respawn's seconds; negative keeps what the rules gave.</summary>
+    public int TimeLimit { get; init; } = -1;
+
+    public int SpyLives { get; init; } = -1;
+
+    public int MercLives { get; init; } = -1;
+
+    public int RespawnSeconds { get; init; } = -1;
     /// <summary>
     /// Where the local player first spawns instead of a PlayerStart (the map editor's Play From Camera; a TestRange
     /// drill's ledge or lane, Test/LessonLaunch.cs), or null. Later spawns use the map's starts.
@@ -164,7 +173,53 @@ public sealed class BridgeSession : IDisposable
             NetworkProfile = match.NetworkProfile,
         }.ForLocalLaunch();
         var clock = new StopwatchClock();
-        return Wrap(match.CreateSession?.Invoke(settings, clock) ?? new PlaySession(settings, clock));
+        var session = match.CreateSession?.Invoke(settings, clock) ?? new PlaySession(settings, clock);
+        OverrideRules(session, match);
+        return Wrap(session);
+    }
+
+    /// <summary>
+    /// Puts the player's own time limit, lives and respawn over the rules the match started with. PlaySettings has no
+    /// place for them (it starts every local match from the map's untouched match page), so they are written where
+    /// the rules read them: the host's match info, its replicated copy and the lives already handed out. It runs on
+    /// the host's thread, on its first tick after the game exists.
+    /// </summary>
+    private static void OverrideRules(PlaySession session, LocalMatch match)
+    {
+        if (match.TimeLimit < 0 && match.SpyLives < 0 && match.MercLives < 0 && match.RespawnSeconds < 0)
+        {
+            return;
+        }
+
+        bool done = false;
+        session.Host.BeforeWorldTick += _ =>
+        {
+            if (done || session.Loader.Game is not { MatchInfo: { } info } game)
+            {
+                return;
+            }
+
+            done = true;
+            bool mercDeathMatch = info.GameMode == EGameMode.GM_MercDeathMatch;
+            if (match.TimeLimit >= 0) info.TimeLimit = match.TimeLimit;
+            if (match.SpyLives >= 0 && !mercDeathMatch) info.NumLivesATT = match.SpyLives == 0 ? OpenScct.Game.GameFlow.K.UnlimitedLives : match.SpyLives;
+            if (match.MercLives >= 0) info.NumLivesDEF = match.MercLives == 0 ? OpenScct.Game.GameFlow.K.UnlimitedLives : match.MercLives;
+            if (match.RespawnSeconds >= 0) info.TimesRespawn = match.RespawnSeconds;
+            if (game.GameReplicationInfo is { } gri)
+            {
+                gri.TimeLimit = info.TimeLimit;
+                gri.TeamLivesATT = info.NumLivesATT;
+                gri.TeamLivesDEF = info.NumLivesDEF;
+                gri.TimesRespawn = info.TimesRespawn;
+                for (int i = 0; i < gri.PRIArray.Count; i++)
+                {
+                    if (gri.PRIArray[i] is { Team: { } team } pri)
+                    {
+                        pri.NumLives = team.TeamIndex == 0 ? info.NumLivesATT : info.NumLivesDEF;
+                    }
+                }
+            }
+        };
     }
 
     /// <summary>

@@ -4,6 +4,9 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using OpenScct.Core;
 using OpenScct.Core.Engine;
+using OpenScct.Game.Equipment;
+using OpenScct.Game.Movement;
+using OpenScct.Physics.Collision;
 using OpenScct.Game.SBase;
 using OpenScct.Server;
 
@@ -24,12 +27,25 @@ public unsafe struct WorldDebugApi
     public delegate* unmanaged[Cdecl]<float, float, float, int, int> BreakLights;
     public delegate* unmanaged[Cdecl]<float, float, float, int, int> BreakProps;
     public delegate* unmanaged[Cdecl]<int> FireEmitters;
+    public delegate* unmanaged[Cdecl]<float, float, float, int, int, int> ShootNear;
+    public delegate* unmanaged[Cdecl]<float, float, float, float, float, float, int> ThrowFlare;
+    public delegate* unmanaged[Cdecl]<int> DirtyFeet;
 }
 
 public static unsafe class WorldDebugExports
 {
-    /// <summary>2: FireEmitters added.</summary>
-    public const int ApiVersion = 2;
+    /// <summary>2: FireEmitters added. 3: ShootNear added. 4: ThrowFlare and DirtyFeet added.</summary>
+    public const int ApiVersion = 4;
+
+    /// <summary>The merc flare launcher's throw (SProjFlare.ProjectileSpeed).</summary>
+    private const int FlareForce = 900;
+
+    /// <summary>ShootNear's targets: the map's movers (doors, lifts), or its breakable props (panes, lamps).</summary>
+    private const int ShootMovers = 0, ShootProps = 1;
+
+    /// <summary>How many marks ShootNear puts on each target, and how far apart they must be.</summary>
+    private const int MarksPerTarget = 5;
+    private const float MarkSpacing = 14f;
 
     /// <summary>Fills <paramref name="api"/>. Returns the API version.</summary>
     [UnmanagedCallersOnly]
@@ -41,7 +57,69 @@ public static unsafe class WorldDebugExports
         api->BreakLights = &BreakLights;
         api->BreakProps = &BreakProps;
         api->FireEmitters = &FireEmitters;
+        api->ShootNear = &ShootNear;
+        api->ThrowFlare = &ThrowFlare;
+        api->DirtyFeet = &DirtyFeet;
         return ApiVersion;
+    }
+
+    /// <summary>
+    /// Throws a merc flare (SProjFlare) from the point along the direction, as the flare launcher does: it flies, catches
+    /// on the first wall or floor it hits and burns there, and every machine that sees its copy hit leaves the burn
+    /// mark (an abandoned SFlareBurnProjector). Returns 1 when queued.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ThrowFlare(float x, float y, float z, float dx, float dy, float dz) =>
+        Exports.Current is { } session ? ThrowFlare(session, new FVector(x, y, z), new FVector(dx, dy, dz)) : 0;
+
+    /// <summary>The managed side of <see cref="ThrowFlare(float, float, float, float, float, float)"/> (the probes call it).</summary>
+    public static int ThrowFlare(BridgeSession session, FVector from, FVector direction) => OnServer(session, host =>
+    {
+        FRotator rotation = direction.SafeNormal().Rotation();
+        if (host.World.Level.SpawnActor(new SProjFlare(), from, rotation) is { } flare)
+        {
+            flare.Launch(FlareForce, false);
+        }
+    });
+
+    /// <summary>
+    /// Gives every pawn of the CLIENT's world the dirty feet a sand floor gives (SBasePawn.FootPrint's SetFootDirt for
+    /// SURFACE_Sand, wearing off ten times slower), so the next steps leave footprints on any floor. A footprint is
+    /// drawn by each machine for itself from its own copy's steps and the dirt is not replicated, so this is the one
+    /// entry that changes the client's world; it runs on the game thread, between the client's ticks. Returns the
+    /// number of pawns.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int DirtyFeet()
+    {
+        try
+        {
+            return Exports.Current is { IsDisposed: false } session ? DirtyFeet(session) : 0;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>The managed side of <see cref="DirtyFeet()"/> (the probes call it).</summary>
+    public static int DirtyFeet(BridgeSession session)
+    {
+        int count = 0;
+        foreach (SBasePawn pawn in session.Session.Client.World.Level.AllActors<SBasePawn>())
+        {
+            if (pawn.bDeleteMe)
+            {
+                continue;
+            }
+
+            pawn.FootDirtyness = 1f;
+            pawn.DecreaseFootDirtyness = 0.1f;
+            pawn.StepColor = new FColor { R = 140, G = 140, B = 140, A = 80 };
+            count++;
+        }
+
+        return count;
     }
 
     /// <summary>Fires the tag of every mover, as a switch or a trigger would: doors open, lifts start. Returns 1 when queued.</summary>
@@ -145,6 +223,83 @@ public static unsafe class WorldDebugExports
         Fire(level, tags);
     });
 
+    /// <summary>
+    /// Shoots the <paramref name="count"/> movers (<paramref name="kind"/> 0) or breakable props (1) nearest the point:
+    /// a few bullet marks on each, put through the impact manager as a gun's trace does (the surface's own impact
+    /// class, the hit actor as the mark's surface), so every machine draws them on that actor. The marks go where
+    /// lines across the target meet it, from the side facing the point first. Returns 1 when queued.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ShootNear(float x, float y, float z, int count, int kind)
+    {
+        var near = new FVector(x, y, z);
+        return OnServer(host =>
+        {
+            var targets = new List<Actor>();
+            foreach (Actor a in host.World.Level.AllActors<Actor>())
+            {
+                if (!a.bDeleteMe && (kind == ShootMovers ? a is Mover : kind == ShootProps && a is SGamePlayObject { bDamageable: true } and not SObjectiveTrigger))
+                {
+                    targets.Add(a);
+                }
+            }
+
+            targets.Sort((a, b) => FVector.DistSquared(a.Location, near).CompareTo(FVector.DistSquared(b.Location, near)));
+            for (int i = 0; i < targets.Count && i < count; i++)
+            {
+                Shoot(targets[i], near);
+            }
+        });
+    }
+
+    private static void Shoot(Actor target, FVector from)
+    {
+        if (MovementNatives.Driver(target) is not { } driver)
+        {
+            return;
+        }
+
+        // The horizontal line from the target to the point first, then the target's own axes both ways.
+        target.Rotation.GetAxes(out FVector ax, out FVector ay, out _);
+        FVector toward = from - target.Location;
+        toward.Z = 0f;
+        var directions = new List<FVector>();
+        if (toward.SizeSquared() > 1f)
+        {
+            directions.Add(toward.SafeNormal());
+        }
+
+        directions.AddRange([ax, ay, ax * -1f, ay * -1f]);
+        var marks = new List<FVector>();
+        float[] across = [0f, 24f, -24f, 48f, -48f, 72f, -72f];
+        float[] heights = [40f, 0f, 70f, -30f];
+        foreach (FVector d in directions)
+        {
+            FVector side = new FVector(-d.Y, d.X, 0f).SafeNormal();
+            foreach (float h in heights)
+            {
+                foreach (float a in across)
+                {
+                    if (marks.Count >= MarksPerTarget)
+                    {
+                        return;
+                    }
+
+                    FVector through = target.Location + (side * a) + new FVector(0f, 0f, h);
+                    if (!driver.Collision.LineCheck(out FCheckResult hit, null, through - (d * 160f), through + (d * 160f), default, ETraceFlags.TRACE_AllColliding) ||
+                        !ReferenceEquals(hit.Actor, target) || marks.Exists(m => FVector.DistSquared(m, hit.Location) < MarkSpacing * MarkSpacing))
+                    {
+                        continue;
+                    }
+
+                    marks.Add(hit.Location);
+                    FRotator facing = hit.Normal.Rotation();
+                    ImpactManager.AddImpact(target, SWeaponDefense.ImpactClass((ESurfaceType)hit.SurfaceType), hit.Location, facing, null, target);
+                }
+            }
+        }
+    }
+
     private static void Fire(Level level, HashSet<Name> tags)
     {
         foreach (Name tag in tags)
@@ -161,11 +316,13 @@ public static unsafe class WorldDebugExports
     /// server's world belongs to that thread, so nothing of it is touched from here. A failure there is dropped: these
     /// are checks, and a failed one shows as nothing happening.
     /// </summary>
-    private static int OnServer(Action<ServerHost> action)
+    private static int OnServer(Action<ServerHost> action) => Exports.Current is { } session ? OnServer(session, action) : 0;
+
+    private static int OnServer(BridgeSession current, Action<ServerHost> action)
     {
         try
         {
-            if (Exports.Current is not { IsRemote: false, IsDisposed: false } session || session.Session.Host is not { } host)
+            if (current is not { IsRemote: false, IsDisposed: false } session || session.Session.Host is not { } host)
             {
                 return 0;
             }

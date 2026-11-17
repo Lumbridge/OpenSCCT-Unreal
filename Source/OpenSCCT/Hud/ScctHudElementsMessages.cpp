@@ -147,7 +147,8 @@ void ScctHudElements::PaintLog(FScctHudPainter& Painter, const FScctHudModel& Mo
 	constexpr float LineHeight = 20.0f;
 
 	// Stacked upwards from above the status block (and above the vision chip while that shows), newest lowest.
-	float Y = Size.Y - Margin - 72.0f - 16.0f - Model.VisionShown * 32.0f - LineHeight;
+	// The open chat line takes the place of the newest line.
+	float Y = Size.Y - Margin - 72.0f - 16.0f - FMath::Max(Model.VisionShown * 32.0f, Model.bChatOpen ? 46.0f : 0.0f) - LineHeight;
 	for (int32 Index = Model.Log.Num() - 1; Index >= 0; --Index)
 	{
 		const FScctHudLine& Line = Model.Log[Index];
@@ -158,7 +159,18 @@ void ScctHudElements::PaintLog(FScctHudPainter& Painter, const FScctHudModel& Mo
 
 		Painter.SetOpacity(LineAlpha(Line));
 		Painter.Fill(HudBox(Margin + Slide, Y + 3.0f, 2.0f, 12.0f), Fade(Colour, 0.6f));
-		Painter.Text(FVector2f(Margin + 10.0f + Slide, Y), Line.Text, LineFont, Colour);
+		float TextX = Margin + 10.0f + Slide;
+		if (bChat && !Line.Actor.IsEmpty())
+		{
+			// Who said it, in his side's colour; a line to the team alone is marked as one.
+			const FLinearColor NameColour = Line.ActorTeam == 0 || Line.ActorTeam == 1 ? Accent(Line.ActorTeam) : TextDim();
+			if (bTeamChat)
+			{
+				TextX += Painter.Text(FVector2f(TextX, Y + 3.0f), TEXT("TEAM"), Label(7.0f), Fade(NameColour, 0.8f)).X + 8.0f;
+			}
+			TextX += Painter.Text(FVector2f(TextX, Y), Line.Actor, Font(EWeight::Bold, 10.5f), NameColour).X + 8.0f;
+		}
+		Painter.Text(FVector2f(TextX, Y), Line.Text, LineFont, bChat ? Text() : Colour);
 		Painter.SetOpacity(1.0f);
 		Y -= LineHeight;
 	}

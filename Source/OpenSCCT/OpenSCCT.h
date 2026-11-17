@@ -16,6 +16,9 @@ class OPENSCCT_API FOpenSCCTModule : public FDefaultGameModuleImpl
 public:
 	static FOpenSCCTModule& Get();
 
+	/** Keeps the engine's development notices out of the game's picture (see HideDevelopmentNotices). */
+	virtual void StartupModule() override;
+
 	/** Ends whatever the bridge still runs (a match, an online visit) before the process lets go of the module. */
 	virtual void ShutdownModule() override;
 

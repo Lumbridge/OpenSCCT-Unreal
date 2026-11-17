@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using OpenScct.Game.Combat;
@@ -22,9 +23,23 @@ Console.WriteLine($"sizes: HudState {Unsafe.SizeOf<HudState>()}, HudRound {Unsaf
     $"HudObjectiveLine {Unsafe.SizeOf<HudObjectiveLine>()}, HudBlip {Unsafe.SizeOf<HudBlip>()}, HudShownMessage {Unsafe.SizeOf<HudShownMessage>()}, " +
     $"HudScoreRow {Unsafe.SizeOf<HudScoreRow>()}, HudMessage {Unsafe.SizeOf<HudMessage>()}, HudApi {Unsafe.SizeOf<HudApi>()}");
 
+Console.WriteLine($"sizes: HudCameraView {Unsafe.SizeOf<HudCameraView>()}, HudGadgetApi {Unsafe.SizeOf<HudGadgetApi>()}");
+
 if (args.Length > 5 && args[5].Equals("api", StringComparison.OrdinalIgnoreCase))
 {
     return ApiRun(content, map, mode, merc, seconds);
+}
+
+Console.WriteLine($"sizes: HudTextureLayer {Unsafe.SizeOf<HudTextureLayer>()}, HudTextureApi {Unsafe.SizeOf<HudTextureApi>()}");
+
+if (args.Length > 5 && args[5].Equals("menu", StringComparison.OrdinalIgnoreCase))
+{
+    return MenuRun(content, map, mode, merc, seconds);
+}
+
+if (args.Length > 5 && args[5].Equals("icons", StringComparison.OrdinalIgnoreCase))
+{
+    return IconsRun(content, map, mode, merc, seconds);
 }
 
 BridgeSession.Configure(content);
@@ -418,6 +433,187 @@ static unsafe int ApiRun(string content, string map, string mode, bool merc, dou
     bridge.Stop();
     int afterStop = api.GetState(&state);
     Console.WriteLine($"api done: {ticks} ticks, {frames} frames, {drained} messages drained; after Stop GetState {afterStop} (valid {state.Valid}), bridge state {bridge.GetState()}");
+    return 0;
+}
+
+// The gadget menus and the camera page: Alt-fire held from 4 s, the gadget's menu forced at 4.2 s (the spy's sticky
+// cam menu, the merc's mine menu), the down key twice to move the selection, Alt-fire let go at 9 s (the spy's
+// selected "new cam" then launches a sticky cam and the view goes through it). Every change of the menu rows and of
+// the camera view is printed.
+static unsafe int MenuRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+    HudFeature hud = HudFeature.Of(session);
+    hud.SetViewport(1920, 1080);
+    var menu = new HudMenuLine[8];
+    var input = default(BridgeInput);
+    var run = Stopwatch.StartNew();
+    bool forced = false;
+    var commandsDone = new System.Collections.Generic.HashSet<double>();
+    string lastRows = "", lastView = "";
+    int lastState = -1;
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        const int Down = 1, AltFire = 7;
+        input.Buttons[AltFire] = (byte)(t is > 4 and < 9 ? 1 : 0);
+        input.Buttons[Down] = (byte)((t is > 6 and < 6.2) || (t is > 7 and < 7.2) ? 1 : 0);
+        // Then the spy fires the sticky cam he holds (the ordinary launch), which puts the view through it.
+        const int Fire = 6;
+        // The merc instead takes the camera network gadget at 10.5 s and fires it at 11 s.
+        input.Buttons[Fire] = (byte)((!merc && t is > 10.5 and < 10.7) || (merc && t is > 11 and < 11.2) ? 1 : 0);
+        input.MouseY = !merc && t is > 9.5 and < 10.3 ? -40f : 0f;
+        // The spy draws the Shocker with the fire-mode button held (the sticky cam launches from its muzzle).
+        const int FireMode = 11;
+        input.Buttons[FireMode] = (byte)(!merc && t is > 9.5 and < 10.2 ? 1 : 0);
+        foreach ((double at, string command) in new[] { (10.5, "Fire"), (11.0, "Fire"), (12.0, "AltFire"), (13.0, "AltFire") })
+        {
+            if (t > at && commandsDone.Add(at))
+            {
+                session.Command(command, 0);
+                Console.WriteLine($"t={t:F1} command {command}; loaded {session.Session.LocalController?.SBPawn?.WeaponLoaded}, selected {session.Session.LocalController?.SBPawn?.SelectedGadget?.GetType().Name}");
+            }
+        }
+        if (merc && t > 10.5 && session.Session.LocalController?.SBPawn is { SelectedGadget: not OpenScct.Game.SBase.SGadCamNetwork } mercPawn)
+        {
+            for (int slot = 0; slot < 8 && mercPawn.SelectedGadget is not OpenScct.Game.SBase.SGadCamNetwork; slot++)
+            {
+                session.Session.LocalController.SelectGadget(slot);
+            }
+        }
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        if (!forced && t > 4.2)
+        {
+            forced = true;
+            var held = new HudGadget[16];
+            int heldCount = hud.Frame.Gadgets.CopyTo(held);
+            Console.WriteLine($"t={t:F1} gadgets: {string.Join(", ", held.Take(heldCount).Select(g => hud.Texts.Text(g.ClassId)))}");
+            bool entered = HudGadgetExports.EnterMenu(session.Session.LocalController, merc ? 2 : 1);
+            Console.WriteLine($"t={t:F1} ForceMenu({(merc ? "mine" : "sticky")}) -> {(entered ? "in the menu" : "refused")}");
+        }
+
+        hud.GetState(out HudState s);
+        if (s.StateNameId != lastState)
+        {
+            lastState = s.StateNameId;
+            Console.WriteLine($"t={t:F1} controller state '{hud.Texts.Text(s.StateNameId)}', view {s.GadgetView}, menu lines {s.MenuLineCount}");
+        }
+
+        int count = hud.Frame.Menu.CopyTo(menu);
+        string rows = string.Join(" | ", Enumerable.Range(0, Math.Min(count, menu.Length)).Select(i =>
+            $"'{hud.Texts.Text(menu[i].TextId)}' {(menu[i].Look switch { 0 => "normal", 1 => "SELECTED", 2 => "grey", _ => "untouched" })}"));
+        if (rows != lastRows)
+        {
+            lastRows = rows;
+            Console.WriteLine($"t={t:F1} menu rows ({count}): {(count == 0 ? "none" : rows)}");
+        }
+
+        HudCameraView cam = HudGadgetExports.ReadCameraView(session.Session.LocalController);
+        string view = cam.View == 0 ? "none" : $"view {cam.View} fov {cam.Fov:F0} ({cam.MinFov:F0}..{cam.MaxFov:F0}) gas {cam.GasDoses} ready in {cam.GasReadySeconds:F1} s, alert {((s.EffectFlags & HudEffectFlags.CamNetworkAlert) != 0 ? 1 : 0)}";
+        if (view != lastView)
+        {
+            lastView = view;
+            Console.WriteLine($"t={t:F1} camera view: {view}");
+        }
+
+        Thread.Sleep(4);
+    }
+
+    return 0;
+}
+
+// The HUD's pictures: the textures the coop icons and the respawn pick draw from, the coop clips at a few moments, then
+// a match where the local pawn is killed on the server at 3 s (Merc Deathmatch: the respawn weapon pick comes up, Use
+// at 7 s cycles it) and the CoopIcon and RespawnWeapon fields are printed whenever they change.
+static unsafe int IconsRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    foreach ((string package, string name) in new[] { ("SHudTextures", "Icones_Weapons"), ("SHudTextures", "Icones_Gadgets"), ("Hud", "Move_coop"), ("Hud", "Move_coop02"), ("Hud", "heart"), ("Hud", "nothing_here") })
+    {
+        HudPng.Image? image = HudTextureExports.ReadTexture(package, name, out string? error);
+        string lit = image is null ? "" : $", {image.Bgra.Where((_, i) => i % 4 == 3).Count(a => a > 0)} texels not transparent, first opaque BGRA " +
+            string.Join(",", image.Bgra.Chunk(4).FirstOrDefault(p => p[3] > 128) ?? []);
+        Console.WriteLine($"texture {package}.{name}: {(image is null ? "missing (" + error + ")" : $"{image.Width}x{image.Height}{lit}")}");
+    }
+
+    HudTextureLibrary? library = HudTextureLibrary.Current(out _);
+    Console.WriteLine(library is not null && library.Material("Hud", "heart", out string tex, out int u0, out int v0, out int u1, out int v1)
+        ? $"material Hud.heart: {tex} ({u0},{v0})-({u1},{v1})" : "material Hud.heart: missing");
+    HudCoopIcons? icons = HudCoopIcons.Current(out string? coopError);
+    Console.WriteLine(icons is null ? $"coop icons: missing ({coopError})" : $"coop icons: bounds {icons.Bounds}");
+    for (int icon = 1; icon <= 4 && icons is not null; icon++)
+    {
+        Console.WriteLine($"   coop {icon} {icons.ClipName(icon)} bounds {icons.BoundsOf(icon)}");
+        foreach (float at in new[] { 0f, 0.5f, 1.5f, 4f })
+        {
+            var layers = HudTextureExports.ReadCoopLayers(icon, at);
+            Console.WriteLine($"   coop {icon} {icons.ClipName(icon)} at {at:F1} s: " + string.Join(" | ", layers.Select(l =>
+                $"{l.Texture} ({l.U0},{l.V0})-({l.U1},{l.V1}) at ({l.L:F0},{l.T:F0})-({l.R:F0},{l.B:F0}) rgba {l.Red:F2},{l.Green:F2},{l.Blue:F2},{l.Alpha:F2}")));
+        }
+    }
+
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+    HudFeature hud = HudFeature.Of(session);
+    hud.SetViewport(1920, 1080);
+    var input = default(BridgeInput);
+    var run = Stopwatch.StartNew();
+    bool killed = false;
+    string last = "";
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        const int Use = 10;
+        input.Buttons[Use] = (byte)(t is > 7 and < 7.3 ? 1 : 0);
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        if (!killed && t > 3 && session.Session.LocalController?.PlayerReplicationInfo is { } pri && session.Session.Host is { } host)
+        {
+            killed = true;
+            int id = pri.PlayerID;
+            void Kill(OpenScct.Server.ServerHost running)
+            {
+                running.BeforeWorldTick -= Kill;
+                Console.WriteLine($"t={run.Elapsed.TotalSeconds:F1} KillOnServer(player {id}) -> {HudTextureExports.KillOnServer(running, id)}");
+            }
+
+            host.BeforeWorldTick += Kill;
+        }
+
+        hud.GetState(out HudState s);
+        hud.GetRound(out HudRound r);
+        string now = $"state '{hud.Texts.Text(s.StateNameId)}' mode {r.GameMode} health {s.Health} lives {s.Lives} | CoopIcon {s.CoopIcon} | " +
+            $"RespawnWeapon icon ({s.RespawnWeaponIconU},{s.RespawnWeaponIconV}) class '{hud.Texts.Text(s.RespawnWeaponClassId)}'";
+        if (now != last)
+        {
+            last = now;
+            Console.WriteLine($"t={t:F1} {now}");
+        }
+
+        Thread.Sleep(4);
+    }
+
     return 0;
 }
 

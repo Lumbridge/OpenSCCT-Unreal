@@ -33,7 +33,9 @@ param(
     # Run the audio engine without a sound device (the engine's non-realtime renderer, -DeterministicAudio)
     # instead of no audio engine at all (-nosound): voices really play, into nothing. Never audible.
     [switch] $NullAudio,
-    [string] $Engine = 'F:\UE_5.8'
+    [string] $Engine = 'F:\UE_5.8',
+    # A level to open instead of the imported map (-Map still names the log): /Game/OpenSCCT/Maps/L_FrontEnd for the menu.
+    [string] $Level = ''
 )
 
 function Format-Switch([string] $Key, [string] $Value) {
@@ -51,7 +53,7 @@ New-Item -ItemType Directory -Force (Join-Path $project 'Saved\Logs') | Out-Null
 
 $arguments = @(
     "`"$project\OpenSCCTUnreal.uproject`"",
-    "`"/Game/Imported/Maps/$Map/$Map$Options`"",
+    "`"$(if ($Level) { $Level } else { "/Game/Imported/Maps/$Map/$Map" })$Options`"",
     '-game', '-RenderOffscreen', '-ResX=1920', '-ResY=1080', '-ForceRes', '-unattended', '-nosplash',
     $(if ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
     (Format-Switch 'ScctContent' $contentDir),
