@@ -2,6 +2,7 @@
 
 #include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctOverlayPages.h"
+#include "Menu/SScctTutorialsPage.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
@@ -29,7 +30,8 @@ TSharedPtr<SScctMenuPage> ScctMenuPages::Make(const FString& Name, const FScctMe
 	// The Equipment page and a map's strategic map (Menu/ScctOverlayPages.h).
 	if (Name.Equals(TEXT("gear"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("equipment"), ESearchCase::IgnoreCase)) { return MakeGear(Host); }
 	if (Name.Equals(TEXT("map"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("strategicmap"), ESearchCase::IgnoreCase)) { return MakeStrategicMap(Host); }
-	return nullptr;
+	// The Tutorials hub and the pages it opens (Menu/SScctTutorialsPage.h).
+	return ScctTutorialPages::Make(Name, Host);
 }
 
 namespace ScctUi
