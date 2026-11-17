@@ -4,6 +4,7 @@
 #include "OpenSCCT.h"
 #include "Runtime/ScctAcousticApi.h"
 #include "Runtime/ScctAudioCheckApi.h"
+#include "Runtime/ScctAudioViewApi.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctEquipmentApi.h"
 #include "Runtime/ScctEventsApi.h"
@@ -33,6 +34,7 @@ struct TScctFeatureInfo;
 
 SCCT_FEATURE_TABLE(FScctAcousticApi, "AcousticExports", ScctAcousticApiVersion);
 SCCT_FEATURE_TABLE(FScctAudioCheckApi, "AudioCheckExports", ScctAudioCheckApiVersion);
+SCCT_FEATURE_TABLE(FScctAudioViewApi, "AudioViewExports", ScctAudioViewApiVersion);
 SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
 SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
