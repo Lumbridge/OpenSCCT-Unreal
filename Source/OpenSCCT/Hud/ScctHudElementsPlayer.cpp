@@ -88,6 +88,13 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 	const FVector2f Size = Painter.Size();
 	const FBox2f Whole(FVector2f::ZeroVector, Size);
 
+	// The flash-bang after-image: the picture as it was at the flash, burnt in over the live one and fading
+	// with RemanenceBlendFactor. It belongs to the picture, so it goes under every wash.
+	if (Model.AfterImage != nullptr && Model.AfterImageAlpha > 0.0f)
+	{
+		Painter.Image(Whole, *Model.AfterImage, FLinearColor(1.0f, 1.0f, 1.0f, Model.AfterImageAlpha));
+	}
+
 	// The simulation's own washes: the value is an alpha of 0 to 255.
 	for (int32 Slot = 0; Slot < ScctHudSfxSlots; ++Slot)
 	{
@@ -103,6 +110,10 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 			break;
 		case EScctHudSfx::Red:
 			EdgeWash(Painter, Danger(), Alpha * 0.6f);
+			break;
+		case EScctHudSfx::Flash:
+			// The slot drives the after-image above; its white-out is painted over the whole HUD
+			// (PaintFlashWhiteOut), as the merc page's Flash covers the page.
 			break;
 		default:
 			break;

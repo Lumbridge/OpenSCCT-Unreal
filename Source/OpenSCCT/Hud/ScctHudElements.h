@@ -24,6 +24,10 @@ namespace ScctHudElements
 	/** Binoculars and the rifle scope. */
 	void PaintScope(FScctHudPainter& Painter, const FScctHudModel& Model);
 
+	// --- Blinding layer, above everything ------------------------------------------------------------------
+	/** The flash-bang white-out (Hud/ScctHudElementsFlash.cpp). */
+	void PaintFlashWhiteOut(FScctHudPainter& Painter, const FScctHudModel& Model);
+
 	// --- Safe-area layer -----------------------------------------------------------------------------------
 	/** Bottom left: health, lives, stance, the gauges and the vision mode. */
 	void PaintStatus(FScctHudPainter& Painter, const FScctHudModel& Model);

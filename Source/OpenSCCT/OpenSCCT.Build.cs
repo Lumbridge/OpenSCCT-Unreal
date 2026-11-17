@@ -30,6 +30,9 @@ public class OpenSCCT : ModuleRules
 			"Json",
 			"Projects",
 			"RenderCore",
+			// The flash-bang after-image is copied out of the post-processing chain (Hud/ScctScreenEffectsSubsystem).
+			"Renderer",
+			"RHI",
 			"Slate",
 			"SlateCore",
 			// The game's sounds are loose Ogg Vorbis and PCM files decoded at run time (Play/ScctSoundData).

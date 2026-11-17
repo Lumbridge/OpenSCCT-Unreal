@@ -23,5 +23,11 @@ TSharedRef<SWidget> UScctHudWidget::RebuildWidget()
 				.Model(Model)
 				.Layer(SScctHudCanvas::ELayer::SafeArea)
 			]
+		]
+		+ SOverlay::Slot()
+		[
+			SNew(SScctHudCanvas)
+			.Model(Model)
+			.Layer(SScctHudCanvas::ELayer::Blinding)
 		];
 }

@@ -109,6 +109,10 @@ public:
 	float EndAge = -1.0f;         // seconds since the round ended, negative before
 	bool bScoreboardHeld = false;
 
+	/** The flash-bang after-image: the frame frozen at the flash and how much of it covers the picture (UScctScreenEffectsSubsystem fills both). */
+	const struct FSlateBrush* AfterImage = nullptr;
+	float AfterImageAlpha = 0.0f;
+
 	/** Unattended look check only (-ScctHudCommands "PreviewEnd"): shows the end banner as if this team had won; -1 when off. */
 	int32 PreviewWinner = -1;
 

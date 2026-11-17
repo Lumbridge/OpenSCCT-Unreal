@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Hud/ScctHudModel.h"
 #include "Hud/ScctHudWidget.h"
+#include "Hud/ScctScreenEffectsSubsystem.h"
 #include "Hud/ScctVisionSubsystem.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -42,6 +43,7 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	UScctSessionSubsystem* Session = Collection.InitializeDependency<UScctSessionSubsystem>();
 	Collection.InitializeDependency<UScctVisionSubsystem>();
+	Collection.InitializeDependency<UScctScreenEffectsSubsystem>();
 	if (Session == nullptr)
 	{
 		return;
@@ -135,6 +137,10 @@ void UScctHudSubsystem::HandleMatchStopped()
 	{
 		Vision->Clear();
 	}
+	if (UScctScreenEffectsSubsystem* ScreenEffects = GetWorld()->GetSubsystem<UScctScreenEffectsSubsystem>())
+	{
+		ScreenEffects->Clear();
+	}
 }
 
 void UScctHudSubsystem::ShowWidget()
@@ -213,6 +219,10 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 	if (UScctVisionSubsystem* Vision = GetWorld()->GetSubsystem<UScctVisionSubsystem>())
 	{
 		Vision->Present(Model->bHasState ? Model->State.VisionMode : 0, DeltaSeconds);
+	}
+	if (UScctScreenEffectsSubsystem* ScreenEffects = GetWorld()->GetSubsystem<UScctScreenEffectsSubsystem>())
+	{
+		ScreenEffects->Present(*Model, DeltaSeconds);
 	}
 	LogSnapshot(DeltaSeconds);
 }
