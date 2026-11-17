@@ -4,6 +4,7 @@
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "Hud/ScctChatSubsystem.h"
 #include "Hud/ScctHudModel.h"
 #include "Hud/ScctHudWidget.h"
 #include "Hud/ScctScreenEffectsSubsystem.h"
@@ -24,9 +25,6 @@ namespace
 
 	/** A name sits this far over the top of its pawn's collision (the Godot client's 18 units). */
 	constexpr float NameLift = 18.0f;
-
-	/** Seconds a scripted chat line stays open with its text before it is sent. */
-	constexpr float ScriptedChatHold = 1.5f;
 
 	/** Reads one of the bridge's lists: up to Capacity rows, the array sized to what was written. */
 	template <typename TRow>
@@ -69,24 +67,6 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		GConfig->GetBool(HudUserSection, TeammateNameKeys[Side], bTeammateNames[Side], GGameUserSettingsIni);
 	}
 
-	// -ScctHudChat="6 all hello there;11 team go left"
-	FString Chat;
-	if (FParse::Value(FCommandLine::Get(), TEXT("ScctHudChat="), Chat, false))
-	{
-		TArray<FString> Entries;
-		Chat.ParseIntoArray(Entries, TEXT(";"));
-		for (const FString& Entry : Entries)
-		{
-			FString Time, Rest, Channel, Text;
-			if (Entry.TrimStartAndEnd().Split(TEXT(" "), &Time, &Rest) && Rest.TrimStartAndEnd().Split(TEXT(" "), &Channel, &Text))
-			{
-				FTimedChat& Line = TimedChat.AddDefaulted_GetRef();
-				Line.Time = FCString::Atof(*Time);
-				Line.bTeamOnly = Channel.Equals(TEXT("team"), ESearchCase::IgnoreCase);
-				Line.Text = Text.TrimStartAndEnd();
-			}
-		}
-	}
 	InitGadgetViews();
 	InitIcons();
 
@@ -142,16 +122,8 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	{
 		Command.bDone = false;
 	}
-	for (FTimedChat& Line : TimedChat)
-	{
-		Line.Stage = 0;
-	}
 
-	// A chat line or a status page of the match before goes with it, and the keys with them.
-	if (IsValid(Widget) && Widget->IsChatOpen())
-	{
-		Widget->CloseChat();
-	}
+	// A status page of the match before goes with it, and the keys with it.
 	if (StatusCloseKeys.Num() > 0)
 	{
 		SetStatusPage(false);
@@ -189,10 +161,6 @@ void UScctHudSubsystem::HandleLocalCommand(FName Name, int32 Arg, bool bPressed)
 	{
 		Api->SetOption(EScctHudOption::SwitchEnhancedReality, 0);
 	}
-	else if (bPressed && (Name == TEXT("Talk") || Name == TEXT("TeamTalk")))
-	{
-		OpenChat(Name == TEXT("TeamTalk"));
-	}
 	else if (bPressed && Name == TEXT("DisplaySessionStatus"))
 	{
 		SetStatusPage(true);
@@ -211,50 +179,6 @@ void UScctHudSubsystem::HandleLocalCommand(FName Name, int32 Arg, bool bPressed)
 		bStrategicMapNoted = true;
 		UE_LOG(LogOpenSCCT, Warning, TEXT("HUD: DisplayStrategicMap is not served: the bridge hands over no plan of the map (its picture, scale and the live positions on it)"));
 	}
-}
-
-void UScctHudSubsystem::OpenChat(bool bTeamOnly)
-{
-	AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController());
-	if (!IsValid(Widget) || Player == nullptr || Widget->IsChatOpen() || Player->IsMenuOpen() || !Model->bHasRound)
-	{
-		return;
-	}
-
-	Widget->OnChatSubmitted.BindUObject(this, &UScctHudSubsystem::HandleChatSubmitted);
-	Widget->OnChatClosed.BindUObject(this, &UScctHudSubsystem::HandleChatClosed);
-	// The keys are the line's while it is open: the controls let go of everything held and raise no commands.
-	Player->SetMenuOpen(true);
-	if (!FApp::IsUnattended())
-	{
-		FInputModeGameAndUI Mode;
-		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::LockAlways);
-		Mode.SetHideCursorDuringCapture(true);
-		Player->SetInputMode(Mode);
-	}
-	Widget->OpenChat(bTeamOnly);
-	UE_LOG(LogOpenSCCT, Log, TEXT("HUD: chat line opened (%s)"), bTeamOnly ? TEXT("team") : TEXT("everyone"));
-}
-
-void UScctHudSubsystem::HandleChatSubmitted(const FString& Text, bool bTeamOnly)
-{
-	FString Error;
-	const FScctPlayApi* Play = ScctFeature<FScctPlayApi>(&Error);
-	const bool bSent = Play != nullptr && Play->SendChat(*Text, bTeamOnly ? 1 : 0) != 0;
-	if (bSent)
-	{
-		UE_LOG(LogOpenSCCT, Log, TEXT("HUD: chat line sent to %s: \"%s\""), bTeamOnly ? TEXT("the team") : TEXT("everyone"), *Text);
-	}
-	else
-	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("HUD: the chat line was not sent (%s)"), Play == nullptr ? *Error : TEXT("no session takes it"));
-	}
-}
-
-void UScctHudSubsystem::HandleChatClosed()
-{
-	UE_LOG(LogOpenSCCT, Log, TEXT("HUD: chat line closed"));
-	GiveInputToGame();
 }
 
 void UScctHudSubsystem::SetStatusPage(bool bOpen)
@@ -302,30 +226,6 @@ void UScctHudSubsystem::GiveInputToGame()
 		Player->SetInputMode(FInputModeGameOnly());
 	}
 	Player->SetShowMouseCursor(false);
-}
-
-void UScctHudSubsystem::RunTimedChat(float DeltaSeconds)
-{
-	for (FTimedChat& Line : TimedChat)
-	{
-		if (Line.Stage == 0 && Model->Clock >= Line.Time)
-		{
-			OpenChat(Line.bTeamOnly);
-			if (IsValid(Widget) && Widget->IsChatOpen())
-			{
-				Widget->SetChatText(Line.Text);
-				Line.Stage = 1;
-			}
-		}
-		else if (Line.Stage == 1 && Model->Clock >= Line.Time + ScriptedChatHold)
-		{
-			Line.Stage = 2;
-			if (IsValid(Widget))
-			{
-				Widget->SubmitChat();
-			}
-		}
-	}
 }
 
 void UScctHudSubsystem::ProjectNames()
@@ -424,7 +324,7 @@ void UScctHudSubsystem::ShowWidget()
 	if (IsValid(Widget))
 	{
 		Widget->SetModel(Model);
-		// Nothing of the HUD takes the mouse; its chat line takes the keyboard while it is open.
+		// Nothing of the HUD takes the mouse or the keyboard (the chat draws its own composer).
 		Widget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 		Widget->AddToViewport(10);
 		UE_LOG(LogOpenSCCT, Log, TEXT("HUD: widget added to the viewport"));
@@ -435,8 +335,6 @@ void UScctHudSubsystem::HideWidget()
 {
 	if (IsValid(Widget))
 	{
-		Widget->OnChatSubmitted.Unbind();
-		Widget->OnChatClosed.Unbind();
 		Widget->RemoveFromParent();
 	}
 	Widget = nullptr;
@@ -474,7 +372,6 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 	ProjectMarkers();
 	ProjectNames();
 	RunTimedCommands();
-	RunTimedChat(DeltaSeconds);
 	RunGadgetChecks(DeltaSeconds);
 
 	// The scoreboard follows the player's bindings, which arrive as interface commands.
@@ -485,8 +382,9 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 		CommandHandle = Player->OnLocalCommand.AddUObject(this, &UScctHudSubsystem::HandleLocalCommand);
 	}
 	Model->bScoreboardHeld = bScoreboardForced || bScoreboardKeyHeld || bScoreboardToggled;
-	Model->bChatOpen = IsValid(Widget) && Widget->IsChatOpen();
-	Model->bChatTeam = Model->bChatOpen && Widget->IsChatForTeam();
+	// The chat's composer (UScctChatSubsystem) open: the log above it stays readable.
+	const UScctChatSubsystem* Chat = GetWorld()->GetSubsystem<UScctChatSubsystem>();
+	Model->bChatOpen = Chat != nullptr && Chat->IsOpen();
 
 	// The status page's exit keys. The press that opened the page must not close it: a key counts once every
 	// exit key has been up since it opened.

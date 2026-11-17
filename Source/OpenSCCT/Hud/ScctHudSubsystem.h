@@ -20,10 +20,9 @@ class UScctHudWidget;
  *   SwitchEnhancedReality   objective markers on or off (F9)
  *   DisplaySessionStatus    the mission status page: the scoreboard with the mission's objectives under it. It
  *                           stays open and holds the player's keys back until the same key, Escape or Enter (F8)
- *   Talk, TeamTalk          the chat line, to everyone (Enter or F5) or to the team (F6). Enter sends it through the
- *                           bridge (FScctPlayApi::SendChat); the server relays it back and it shows in the log
  *   ToggleTeammateNames     names over the heads of the player's own side, seen through walls, kept per side in
  *                           the user's settings (N)
+ * Talk and TeamTalk are the chat's (Hud/ScctChatSubsystem.h), which draws its composer and transcript over the HUD.
  * Not served, as in the Godot client, which lists both as legacy shortcuts with no handler: DisplayHud and Quit.
  * DisplayStrategicMap is not served either: the bridge has no table for the map's plan (see the log line).
  *
@@ -42,9 +41,6 @@ class UScctHudWidget;
  *        PreviewCoop N shows coop icon N (1 offer a ladder, 2 climb on the mate, 3 offer a hoist, 4 be boosted up;
  *        0 takes it away) as if the game offered it. Die kills the local pawn on the local match's server (lives
  *        left as they are), e.g. to see the Merc Deathmatch respawn weapon pick.
- *   -ScctHudChat="6 all hello there;11 team go left"
- *        timed chat lines, "seconds-into-the-match all|team text": the chat line opens with the text in it and
- *        is sent a second and a half later, so a screenshot in between shows the open line
  *   -ScctHudTexture=Package.Name[,Package.Name...]
  *        loads those textures of the content as the session starts and logs their size ("ScctHudTextures: ...").
  *   -ScctHudLog=S
@@ -100,18 +96,11 @@ private:
 	/** Places the names over the local player's teammates for this frame's camera, while he has them on. */
 	void ProjectNames();
 
-	/** The chat line: opens it (holding the player's keys back), sends what was typed, gives the keys back. */
-	void OpenChat(bool bTeamOnly);
-	void HandleChatSubmitted(const FString& Text, bool bTeamOnly);
-	void HandleChatClosed();
-
 	/** Opens or closes the mission status page and holds the player's keys back while it is open. */
 	void SetStatusPage(bool bOpen);
 
-	/** Hands the keys and the mouse back to the match after the chat line or the status page had them. */
+	/** Hands the keys and the mouse back to the match after the status page had them. */
 	void GiveInputToGame();
-
-	void RunTimedChat(float DeltaSeconds);
 
 	void ShowWidget();
 	void HideWidget();
@@ -174,17 +163,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UScctHudWidget> Widget;
 
-	struct FTimedChat
-	{
-		float Time = 0.0f;
-		bool bTeamOnly = false;
-		FString Text;
-		/** 0 waiting, 1 typed into the open line, 2 sent. */
-		int32 Stage = 0;
-	};
-
 	TArray<FTimedCommand> TimedCommands;
-	TArray<FTimedChat> TimedChat;
 	bool bScoreboardForced = false;
 
 	/** The keys that close the open status page (those bound to DisplaySessionStatus, Escape, Enter) and whether all have been up since it opened. */

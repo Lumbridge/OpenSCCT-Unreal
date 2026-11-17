@@ -163,9 +163,8 @@ public:
 	bool bStatusPage = false;
 	float StatusShown = 0.0f;     // 0..1
 
-	/** The chat line is open (Talk, TeamTalk) and for whom: the log above it stays readable and is not faded. */
+	/** The chat's composer is open (UScctChatSubsystem): the log above it stays readable and is not faded. */
 	bool bChatOpen = false;
-	bool bChatTeam = false;
 	/** The flash-bang after-image: the frame frozen at the flash and how much of it covers the picture (UScctScreenEffectsSubsystem fills both). */
 	const struct FSlateBrush* AfterImage = nullptr;
 	float AfterImageAlpha = 0.0f;
