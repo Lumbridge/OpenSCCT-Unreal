@@ -297,7 +297,7 @@ static unsafe int ApiRun(string content, string map, string mode, bool merc, dou
 {
     BridgeApi bridgeTable;
     HudApi hudTable;
-    int bridgeVersion = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApi)(&bridgeTable, sizeof(BridgeApi));
+    int bridgeVersion = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApiSized)(&bridgeTable, sizeof(BridgeApi));
     int hudVersion = ((delegate* unmanaged<HudApi*, int>)&HudExports.GetApi)(&hudTable);
     BridgeApi bridge = bridgeTable;
     HudApi api = hudTable;

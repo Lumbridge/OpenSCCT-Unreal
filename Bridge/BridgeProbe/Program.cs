@@ -223,7 +223,7 @@ internal static unsafe class Tables
 
         int version = ((delegate* unmanaged<int>)&Exports.GetApiVersion)();
         BridgeApi api = default;
-        int filled = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApi)(&api, sizeof(BridgeApi));
+        int filled = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApiSized)(&api, sizeof(BridgeApi));
         Console.WriteLine($"GetApiVersion {version}, GetApi {filled}, table version {api.Version}");
         ok &= version == BridgeSession.ApiVersion && filled == version && api.Version == version && api.Shutdown != null;
 

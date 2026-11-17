@@ -280,8 +280,16 @@ public sealed class GlbCharacter
             }
 
             BoneNames[b] = node.TryGetProperty("name", out JsonElement name) ? name.GetString() ?? "" : "";
-            // Two nodes can share a name once nodes outside the skin count as bones: the first (a skin joint) keeps it.
-            _bones.TryAdd(BoneNames[b], b);
+            // Among the skin's joints a later one of the same name takes it, as before nodes outside the skin counted
+            // as bones; such a node never takes a name a joint (or an earlier such node) has.
+            if (b < JointCount)
+            {
+                _bones[BoneNames[b]] = b;
+            }
+            else
+            {
+                _bones.TryAdd(BoneNames[b], b);
+            }
             // A bone under a node that is not a bone is a root: the converter writes the skeleton at the scene's top.
             Parents[b] = parentNode[joints[b]] >= 0 ? boneOfNode[parentNode[joints[b]]] : -1;
             RestPosition[b] = node.TryGetProperty("translation", out JsonElement t) ? Vector3Of(t) : Vector3.Zero;

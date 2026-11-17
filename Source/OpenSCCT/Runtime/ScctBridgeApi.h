@@ -6,13 +6,17 @@
 // field for field; change both together and bump the version. The static_asserts at the end hold the sizes the
 // C# side has (Bridge/BridgeProbe prints and checks the same numbers).
 //
-// Getting the table (type OpenScct.UnrealBridge.Exports; both __stdcall, as every [UnmanagedCallersOnly] default):
-//   int32 GetApiVersion()                         ask this first; it writes nothing. If it is not
-//                                                 ScctBridgeApiVersion, stop with "rebuild the bridge" and do not
-//                                                 call GetApi.
-//   int32 GetApi(FScctBridgeApi* Api, int32 Size) pass a zeroed table and sizeof(FScctBridgeApi). The bridge copies
-//                                                 at most Size bytes, so a longer table on its side cannot run over
-//                                                 this one. Returns the version, 0 when it wrote nothing.
+// Getting the table (type OpenScct.UnrealBridge.Exports; all __stdcall, as every [UnmanagedCallersOnly] default):
+//   int32 GetApiVersion()                              ask this first; it writes nothing. If it is not
+//                                                      ScctBridgeApiVersion, stop with "rebuild the bridge" and do
+//                                                      not ask for the table.
+//   int32 GetApiSized(FScctBridgeApi* Api, int32 Size) pass a zeroed table and sizeof(FScctBridgeApi). The bridge
+//                                                      copies at most Size bytes, so a longer table on its side
+//                                                      cannot run over this one. Returns the version, 0 when it
+//                                                      wrote nothing.
+//   int32 GetApi(FScctBridgeApi* Api)                  the hand-over of versions 1 and 2, kept for callers built
+//                                                      against them: it writes only the first 104 bytes (version
+//                                                      and the twelve entries of version 2). Do not use it here.
 // The table only grows at its end.
 //
 // One session plays at a time, of either kind: a local match (StartLocal / StartLocalEx) or a round on a remote

@@ -14,11 +14,11 @@ namespace OpenScct.UnrealBridge;
 
 /// <summary>
 /// The table of entry points Unreal calls. Unreal asks <see cref="Exports.GetApiVersion"/> first, then
-/// <see cref="Exports.GetApi"/> once with the size of its own table, and keeps the table. Every entry catches its
+/// <see cref="Exports.GetApiSized"/> once with the size of its own table, and keeps the table. Every entry catches its
 /// exceptions (none may cross into native code) and keeps the text for <see cref="LastError"/>. Strings are UTF-16,
 /// zero terminated.
 /// <para>The table only ever grows at its end, so a caller built against an older version can use the entries it
-/// knows from a newer bridge, and <see cref="Exports.GetApi"/> never writes more than the caller has room for.</para>
+/// knows from a newer bridge, and <see cref="Exports.GetApiSized"/> never writes more than the caller has room for.</para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public unsafe struct BridgeApi
@@ -113,7 +113,7 @@ public static unsafe class Exports
         }
         else
         {
-            session.Dispose();
+            End(session);
         }
     }
 
@@ -148,11 +148,24 @@ public static unsafe class Exports
         }
 
         s_session = session;
-        SessionStarted?.Invoke(session);
+        try
+        {
+            SessionStarted?.Invoke(session);
+        }
+        catch (Exception e)
+        {
+            // A listener's error is not the session's: the match plays on.
+            s_lastError = e.ToString();
+        }
+
         return session;
     }
 
-    /// <summary>Ends the session in the slot. The slot is emptied first, so a failing stop cannot leave a dead session in it.</summary>
+    /// <summary>
+    /// Ends the session in the slot. The slot is emptied first, so a failing stop cannot leave a dead session in it.
+    /// Never throws: the session is stopped whatever a feature or a listener did while it ended (their error is kept
+    /// for <c>LastError</c>), so the start, the release or the stop that asked for it goes on.
+    /// </summary>
     private static void EndCurrent()
     {
         if (s_session is not { } session)
@@ -161,13 +174,27 @@ public static unsafe class Exports
         }
 
         s_session = null;
+        End(session);
+        try
+        {
+            SessionEnded?.Invoke(session);
+        }
+        catch (Exception e)
+        {
+            s_lastError = e.ToString();
+        }
+    }
+
+    /// <summary>Disposes <paramref name="session"/>; an error while it ends is kept for <c>LastError</c>, not thrown.</summary>
+    private static void End(BridgeSession session)
+    {
         try
         {
             session.Dispose();
         }
-        finally
+        catch (Exception e)
         {
-            SessionEnded?.Invoke(session);
+            s_lastError = e.ToString();
         }
     }
 
@@ -181,9 +208,23 @@ public static unsafe class Exports
 
     // ---- the table ----------------------------------------------------------------------------------------------
 
-    /// <summary>The version of the table <see cref="GetApi"/> fills. Ask this first: it writes nothing.</summary>
+    /// <summary>The version of the table <see cref="GetApiSized"/> fills. Ask this first: it writes nothing.</summary>
     [UnmanagedCallersOnly]
     public static int GetApiVersion() => BridgeSession.ApiVersion;
+
+    /// <summary>
+    /// The size of the table as version 2 had it (the version, padding and twelve entries), the last one handed over
+    /// without a size.
+    /// </summary>
+    private const int Version2TableSize = 8 + 12 * 8;
+
+    /// <summary>
+    /// The hand-over of versions 1 and 2, which takes no size: kept under its old name and signature so a caller
+    /// built against version 2 that loads this bridge gets its own 104 bytes and nothing past them, reads a version
+    /// it does not know and refuses cleanly. New callers use <see cref="GetApiSized"/>.
+    /// </summary>
+    [UnmanagedCallersOnly]
+    public static int GetApi(BridgeApi* api) => Fill(api, Version2TableSize);
 
     /// <summary>
     /// Copies the table into <paramref name="api"/>, at most <paramref name="size"/> bytes of it (the caller's
@@ -192,7 +233,9 @@ public static unsafe class Exports
     /// Returns the API version, or 0 when nothing was written (a null table or a size that cannot be one).
     /// </summary>
     [UnmanagedCallersOnly]
-    public static int GetApi(BridgeApi* api, int size)
+    public static int GetApiSized(BridgeApi* api, int size) => Fill(api, size);
+
+    private static int Fill(BridgeApi* api, int size)
     {
         if (api == null || size < sizeof(int) || size > MaxTableSize)
         {
@@ -248,6 +291,7 @@ public static unsafe class Exports
     {
         if (map == null || mode == null)
         {
+            s_lastError = "StartLocal needs a map and a mode.";
             return 0;
         }
 
@@ -263,6 +307,7 @@ public static unsafe class Exports
     {
         if (options == null || options->Size < sizeof(int))
         {
+            s_lastError = "StartLocalEx needs its options with Size set.";
             return 0;
         }
 
@@ -634,13 +679,8 @@ public static unsafe class Exports
 
         s_failed = true;
         s_failedId = session.Id;
-        try
-        {
-            EndCurrent();
-        }
-        catch (Exception e)
-        {
-            s_lastError = message + Environment.NewLine + "While stopping the failed session: " + e;
-        }
+        EndCurrent();
+        // The failure is the error to read, not what ending the session may have added.
+        s_lastError = message;
     }
 }

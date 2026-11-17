@@ -175,21 +175,22 @@ internal static unsafe class Probe
     {
         int version = ((delegate* unmanaged<int>)&Exports.GetApiVersion)();
         BridgeApi main = default;
-        int filled = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApi)(&main, sizeof(BridgeApi));
+        int filled = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApiSized)(&main, sizeof(BridgeApi));
 
-        // A caller with an older, shorter table: nothing past its size may be written.
+        // A caller built against version 2 (the old one-argument GetApi, a 104-byte table): nothing past its size
+        // may be written.
         BridgeApi* guard = stackalloc BridgeApi[2];
         new Span<byte>(guard, 2 * sizeof(BridgeApi)).Fill(0xCD);
         int shortSize = sizeof(int) + 4 + 12 * sizeof(void*);
-        int shortFilled = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApi)(guard, shortSize);
+        int shortFilled = ((delegate* unmanaged<BridgeApi*, int>)&Exports.GetApi)(guard);
         bool untouched = true;
         foreach (byte b in new ReadOnlySpan<byte>((byte*)guard + shortSize, 2 * sizeof(BridgeApi) - shortSize))
         {
             untouched &= b == 0xCD;
         }
 
-        int refused = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApi)(null, sizeof(BridgeApi));
-        Console.WriteLine($"main table: GetApiVersion {version}, GetApi {filled} (table says {main.Version}, {sizeof(BridgeApi)} bytes); a version 2 caller's {shortSize} bytes: returned {shortFilled}, bytes past its table untouched {untouched}, GetPawnPose filled {guard->GetPawnPose != null}; null table -> {refused}");
+        int refused = ((delegate* unmanaged<BridgeApi*, int, int>)&Exports.GetApiSized)(null, sizeof(BridgeApi));
+        Console.WriteLine($"main table: GetApiVersion {version}, GetApiSized {filled} (table says {main.Version}, {sizeof(BridgeApi)} bytes); a version 2 caller's one-argument GetApi ({shortSize} bytes): returned {shortFilled}, bytes past its table untouched {untouched}, GetPawnPose filled {guard->GetPawnPose != null}; null table -> {refused}");
         s_main = main;
 
         HudApi hud = default;

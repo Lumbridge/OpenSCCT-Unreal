@@ -159,7 +159,7 @@ internal static unsafe class Probe
     {
         BridgeApi bridge = default;
         EquipmentApi api = default;
-        delegate* unmanaged<BridgeApi*, int, int> getBridge = &Exports.GetApi;
+        delegate* unmanaged<BridgeApi*, int, int> getBridge = &Exports.GetApiSized;
         delegate* unmanaged<EquipmentApi*, int> getApi = &EquipmentExports.GetApi;
         getBridge(&bridge, sizeof(BridgeApi));
         getApi(&api);
