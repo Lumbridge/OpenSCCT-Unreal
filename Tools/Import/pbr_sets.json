@@ -1,0 +1,264 @@
+{
+  "about": "CC0 assets the importer layers under the original art. fetch_assets.py downloads and packs them, import_assets.py turns them into the committed uassets under /Game/OpenSCCT/ThirdParty. 'tile_cm' is the real-world size one repeat of the set covers; surface classes (surface_classes.json) pick a set by its key here.",
+  "sets": {
+    "Concrete034": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Concrete034_2K-JPG.zip",
+      "tile_cm": 220,
+      "use": "bare concrete, cast floors and walls",
+      "stats": {
+        "normal_rms": 0.105,
+        "rough_std": 0.023,
+        "luma_std": 0.014
+      }
+    },
+    "Concrete015": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Concrete015_2K-JPG.zip",
+      "tile_cm": 250,
+      "use": "dirty, stained concrete; brick and cut stone faces",
+      "stats": {
+        "normal_rms": 0.103,
+        "rough_std": 0.042,
+        "luma_std": 0.024
+      }
+    },
+    "PaintedPlaster017": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=PaintedPlaster017_2K-JPG.zip",
+      "tile_cm": 200,
+      "use": "painted concrete and painted walls",
+      "stats": {
+        "normal_rms": 0.18,
+        "rough_std": 0.019,
+        "luma_std": 0.008
+      }
+    },
+    "Plaster001": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Plaster001_2K-JPG.zip",
+      "tile_cm": 200,
+      "use": "rough plaster, ceilings",
+      "stats": {
+        "normal_rms": 0.091,
+        "rough_std": 0.026,
+        "luma_std": 0.01
+      }
+    },
+    "Rock030": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Rock030_2K-JPG.zip",
+      "tile_cm": 300,
+      "use": "natural rock, cave walls",
+      "stats": {
+        "normal_rms": 0.421,
+        "rough_std": 0.062,
+        "luma_std": 0.093
+      }
+    },
+    "Marble006": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Marble006_2K-JPG.zip",
+      "tile_cm": 200,
+      "use": "polished stone and marble",
+      "stats": {
+        "normal_rms": 0.006,
+        "rough_std": 0.025,
+        "luma_std": 0.233
+      }
+    },
+    "SurfaceImperfections001": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=SurfaceImperfections001_2K-JPG.zip",
+      "tile_cm": 150,
+      "use": "smudges on glazed tiles, plastic and screens",
+      "stats": {
+        "normal_rms": 0.019,
+        "rough_std": 0.114,
+        "luma_std": 0.002
+      }
+    },
+    "Metal032": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Metal032_2K-JPG.zip",
+      "tile_cm": 120,
+      "use": "worn bare metal",
+      "stats": {
+        "normal_rms": 0.006,
+        "rough_std": 0.015,
+        "luma_std": 0.011
+      }
+    },
+    "Metal009": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Metal009_2K-JPG.zip",
+      "tile_cm": 120,
+      "use": "brushed, cleaner metal",
+      "stats": {
+        "normal_rms": 0.016,
+        "rough_std": 0.037,
+        "luma_std": 0.014
+      }
+    },
+    "PaintedMetal007": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=PaintedMetal007_2K-JPG.zip",
+      "tile_cm": 150,
+      "use": "painted metal: doors, lockers, machines",
+      "stats": {
+        "normal_rms": 0.079,
+        "rough_std": 0.178,
+        "luma_std": 0.129
+      }
+    },
+    "Rust004": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Rust004_2K-JPG.zip",
+      "tile_cm": 150,
+      "use": "rusted metal",
+      "stats": {
+        "normal_rms": 0.099,
+        "rough_std": 0.101,
+        "luma_std": 0.064
+      }
+    },
+    "Wood049": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Wood049_2K-JPG.zip",
+      "tile_cm": 120,
+      "use": "wood planks, crates and furniture",
+      "stats": {
+        "normal_rms": 0.095,
+        "rough_std": 0.051,
+        "luma_std": 0.059
+      }
+    },
+    "Fabric030": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Fabric030_2K-JPG.zip",
+      "tile_cm": 60,
+      "use": "cloth, curtains, upholstery",
+      "stats": {
+        "normal_rms": 0.311,
+        "rough_std": 0.076,
+        "luma_std": 0.052
+      }
+    },
+    "Carpet016": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Carpet016_2K-JPG.zip",
+      "tile_cm": 120,
+      "use": "carpet",
+      "stats": {
+        "normal_rms": 0.204,
+        "rough_std": 0.03,
+        "luma_std": 0.019
+      }
+    },
+    "Ground037": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Ground037_2K-JPG.zip",
+      "tile_cm": 250,
+      "use": "dirt and earth",
+      "stats": {
+        "normal_rms": 0.19,
+        "rough_std": 0.043,
+        "luma_std": 0.063
+      }
+    },
+    "Ground054": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Ground054_2K-JPG.zip",
+      "tile_cm": 250,
+      "use": "sand",
+      "stats": {
+        "normal_rms": 0.231,
+        "rough_std": 0.034,
+        "luma_std": 0.019
+      }
+    },
+    "Gravel022": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Gravel022_2K-JPG.zip",
+      "tile_cm": 200,
+      "use": "gravel",
+      "stats": {
+        "normal_rms": 0.469,
+        "rough_std": 0.05,
+        "luma_std": 0.108
+      }
+    },
+    "Asphalt012": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Asphalt012_2K-JPG.zip",
+      "tile_cm": 250,
+      "use": "asphalt and roofing felt",
+      "stats": {
+        "normal_rms": 0.099,
+        "rough_std": 0.059,
+        "luma_std": 0.055
+      }
+    },
+    "Snow006": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Snow006_2K-JPG.zip",
+      "tile_cm": 250,
+      "use": "snow",
+      "stats": {
+        "normal_rms": 0.114,
+        "rough_std": 0.023,
+        "luma_std": 0.009
+      }
+    },
+    "Plastic010": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Plastic010_2K-JPG.zip",
+      "tile_cm": 60,
+      "use": "moulded plastic, rubber",
+      "stats": {
+        "normal_rms": 0.006,
+        "rough_std": 0.031,
+        "luma_std": 0.002
+      }
+    },
+    "Leather026": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Leather026_2K-JPG.zip",
+      "tile_cm": 60,
+      "use": "leather seats",
+      "stats": {
+        "normal_rms": 0.051,
+        "rough_std": 0.015,
+        "luma_std": 0.055
+      }
+    },
+    "Grass004": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Grass004_2K-JPG.zip",
+      "tile_cm": 200,
+      "use": "grass",
+      "stats": {
+        "normal_rms": 0.201,
+        "rough_std": 0.062,
+        "luma_std": 0.099
+      }
+    }
+  },
+  "hdris": {
+    "kloppenheim_02_puresky": {
+      "source": "Poly Haven",
+      "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloppenheim_02_puresky_4k.hdr",
+      "use": "clear night sky with stars and a moon"
+    },
+    "kloppenheim_07_puresky": {
+      "source": "Poly Haven",
+      "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloppenheim_07_puresky_4k.hdr",
+      "use": "overcast night sky"
+    },
+    "qwantani_dusk_2_puresky": {
+      "source": "Poly Haven",
+      "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/qwantani_dusk_2_puresky_4k.hdr",
+      "use": "dusk sky with a low glow on the horizon"
+    }
+  }
+}
