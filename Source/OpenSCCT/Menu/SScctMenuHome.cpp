@@ -3,9 +3,11 @@
 #include "Menu/ScctMenuPage.h"
 
 #include "Menu/ScctMenuSubsystem.h"
+#include "Menu/ScctRejoinPrompt.h"
 #include "Menu/ScctSplashTrivia.h"
 #include "OpenSCCT.h"
 #include "Online/ScctOnlineSubsystem.h"
+#include "Online/ScctRejoinSubsystem.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
@@ -45,7 +47,7 @@ namespace
 			const auto Entry = [this, &Entries](const FString& Caption, const FString& Sub, const FString& Description, TFunction<void()> OnPressed) -> TSharedRef<SScctButton>
 			{
 				TSharedPtr<SScctButton> Made;
-				Entries->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
+				Entries->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 0.0f)
 				[
 					SAssignNew(Made, SScctButton)
 					.Look(EScctButtonLook::Menu)
@@ -56,6 +58,40 @@ namespace
 				];
 				return Made.ToSharedRef();
 			};
+
+			// A round this game dropped out of that is still being played: shown once the master or the server confirmed
+			// it (Online/ScctRejoinSubsystem.h), with a question the first time it is offered.
+			if (UScctOnlineSubsystem* Visit = Host.Online.Get())
+			{
+				Rejoin = Visit->GetGameInstance()->GetSubsystem<UScctRejoinSubsystem>();
+			}
+			if (UScctRejoinSubsystem* RejoinNow = Rejoin.Get())
+			{
+				RejoinNow->Check();
+				const TWeakObjectPtr<UScctRejoinSubsystem> WeakRejoin = Rejoin;
+				Entries->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
+				[
+					SNew(SBox)
+					.Visibility(TAttribute<EVisibility>::CreateLambda([WeakRejoin]
+					{
+						FScctRejoinChoice Choice;
+						return WeakRejoin.IsValid() && WeakRejoin->GetOffer(Choice) ? EVisibility::Visible : EVisibility::Collapsed;
+					}))
+					[
+						SNew(SScctButton)
+						.Look(EScctButtonLook::Menu)
+						.Text(TAttribute<FText>::CreateLambda([WeakRejoin]
+						{
+							FScctRejoinChoice Choice;
+							return FText::FromString(WeakRejoin.IsValid() && WeakRejoin->GetOffer(Choice) ? FString::Printf(TEXT("REJOIN %s"), Choice.ServerName).ToUpper() : FString(TEXT("REJOIN")));
+						}))
+						.SubText(TAttribute<FText>::CreateLambda([WeakRejoin] { return FText::FromString(ScctRejoinPrompt::Describe(WeakRejoin.Get()) + TEXT(", still being played")); }))
+						.Description(FText::FromString(TEXT("Back into the round this game dropped out of, on the same side and with the score and lives kept, as the server held them.")))
+						.OnPressed(FSimpleDelegate::CreateLambda([WeakRejoin] { if (WeakRejoin.IsValid()) { WeakRejoin->Rejoin(); } }))
+					]
+				];
+				RegisterActiveTimer(0.25f, FWidgetActiveTimerDelegate::CreateSP(this, &SScctMenuHome::WatchRejoin));
+			}
 
 			const TSharedRef<SScctButton> First = Entry(TEXT("Play offline"), TEXT("A match against bots on any map installed here"),
 				TEXT("Pick a map, a mode and a side, set the bots and the rules, and play at once. Nothing is sent over the network."),
@@ -73,6 +109,9 @@ namespace
 			Entry(ScctUi::GameText(TEXT("Tutorials_Page"), TEXT("TitlePage"), TEXT("Tutorials")), TEXT("The HUD, tips, gadgets and the tutorial maps"),
 				TEXT("The HUD and keyboard pictures, every tip and gadget of both sides, the spy and mercenary tutorial maps with your progress, and visiting a map alone with its help paths."),
 				[this] { Host.Open(TEXT("tutorials")); });
+			Entry(TEXT("Maps & Content"), TEXT("Download maps and shared content"),
+				TEXT("The maps of OpenSCCT-Content with what this PC has: download, update or remove a map, follow each download, and open the downloads folder."),
+				[this] { Host.Open(TEXT("content")); });
 			Entry(TEXT("Account"), TEXT("Your name, rank and career"),
 				TEXT("Sign in or out, claim or change the name the servers show, see your rank, experience and career, prestige, and choose an emblem and a title."),
 				[this] { Host.Open(TEXT("account")); });
@@ -97,7 +136,7 @@ namespace
 			[
 				SNew(SHorizontalBox)
 				// The wordmark and the menu.
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 30.0f, 0.0f, 0.0f)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 8.0f, 0.0f, 0.0f)
 				[
 					SNew(SBox).WidthOverride(600.0f)
 					[
@@ -126,7 +165,7 @@ namespace
 							.Font(ScctHudStyle::Font(ScctHudStyle::EWeight::Regular, 12.0f))
 							.ColorAndOpacity(ScctHudStyle::Fade(ScctHudStyle::TextDim(), 0.85f))
 						]
-						+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 22.0f, 0.0f, 34.0f)
+						+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 14.0f, 0.0f, 16.0f)
 						[
 							SNew(SBox).WidthOverride(64.0f).HAlign(HAlign_Left)[ SNew(SBox).WidthOverride(64.0f)[ ScctUi::Rule(0.5f) ] ]
 						]
@@ -264,7 +303,39 @@ namespace
 				];
 		}
 
+		/** Asks once per offer whether to rejoin, and closes the question when the offer went (rejoined or forgotten elsewhere). */
+		EActiveTimerReturnType WatchRejoin(double, float)
+		{
+			UScctRejoinSubsystem* RejoinNow = Rejoin.Get();
+			if (RejoinNow == nullptr || !Host.Dialogs.IsValid())
+			{
+				return EActiveTimerReturnType::Continue;
+			}
+			FScctRejoinChoice Choice;
+			const bool bOffered = RejoinNow->GetOffer(Choice);
+			// Once per offer for the whole run: LATER, then back on the main menu, does not ask again.
+			static int32 AskedRevision = -1;
+			if (bOffered && Choice.Revision != AskedRevision && !Host.Dialogs->IsOpen())
+			{
+				AskedRevision = Choice.Revision;
+				ScctRejoinPrompt::Show(Host.Dialogs, RejoinNow);
+				bAsking = true;
+			}
+			else if (bAsking && !Host.Dialogs->IsOpen())
+			{
+				bAsking = false;
+			}
+			else if (bAsking && !bOffered)
+			{
+				bAsking = false;
+				Host.Dialogs->Answer(1);
+			}
+			return EActiveTimerReturnType::Continue;
+		}
+
 		FString FeaturedMap;
+		TWeakObjectPtr<UScctRejoinSubsystem> Rejoin;
+		bool bAsking = false;
 	};
 }
 

@@ -6,7 +6,7 @@
 // reach only later. Mirrors Bridge/OpenScct.UnrealBridge/Events/AudioCheckExports.cs; change both together and
 // bump the version. Fetched with ScctFeature<FScctAudioCheckApi>() (Runtime/ScctFeatures.h).
 
-constexpr int32 ScctAudioCheckApiVersion = 1;
+constexpr int32 ScctAudioCheckApiVersion = 2;
 
 struct FScctAudioCheckApi
 {
@@ -18,4 +18,11 @@ struct FScctAudioCheckApi
 	 * session runs or the sound is unknown or has no file.
 	 */
 	int32 (__cdecl* PlayMusic)(const TCHAR* Song, float FadeSeconds);
+
+	/**
+	 * Version 2. Plays the named Sound at X, Y, Z with the radius given (0: the default hearer radius) as a PlaySound
+	 * call of no actor: a test emitter that arrives as an ordinary Play record (a looping sound loops until the session
+	 * ends). Returns the call's id, 0 when no session runs or the sound is unknown or has no file.
+	 */
+	int32 (__cdecl* PlaySoundAt)(const TCHAR* Sound, float X, float Y, float Z, float Radius);
 };

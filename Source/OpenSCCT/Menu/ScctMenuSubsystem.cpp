@@ -13,6 +13,10 @@
 #include "Misc/Paths.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "Play/ScctAudioMix.h"
+#include "Play/ScctFrontEndAudio.h"
 #include "Play/ScctSoundWave.h"
 #include "Runtime/ScctFeatures.h"
 
@@ -29,7 +33,7 @@ namespace
 		TEXT("Menu_navig_1.wav"), TEXT("Menu_valide_1.wav"), TEXT("Menu_bipIcone.wav"), TEXT("Menu_OpenPage.wav"), TEXT("bip_message.wav"),
 	};
 	const float SoundLevels[] = { 0.55f, 0.8f, 0.6f, 0.6f, 0.7f };
-	constexpr int32 MusicSlot = 100;
+	const TCHAR* const SoundNames[] = { TEXT("Move"), TEXT("Accept"), TEXT("Back"), TEXT("Open"), TEXT("Notice") };
 
 	template <typename TRead>
 	FString ReadMenuSubsystemText(TRead&& Read)
@@ -45,8 +49,6 @@ namespace
 		Buffer.Last() = TEXT('\0');
 		return FString(Buffer.GetData());
 	}
-
-	FTSTicker::FDelegateHandle MusicTicker;
 }
 
 UScctMenuSubsystem* UScctMenuSubsystem::Get(const UObject* WorldContext)
@@ -65,20 +67,11 @@ void UScctMenuSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	UScctUserSettings* Settings = UScctUserSettings::Get();
 	Settings->ApplyAll();
 	Settings->LogValues(TEXT("loaded"));
-
-	MusicTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateWeakLambda(this, [this](float)
-	{
-		if (bMusicWanted)
-		{
-			SetMusicPlaying(true);
-		}
-		return true;
-	}), 0.5f);
+	bLogSounds = FParse::Param(FCommandLine::Get(), TEXT("ScctMenuSoundLog"));
 }
 
 void UScctMenuSubsystem::Deinitialize()
 {
-	FTSTicker::GetCoreTicker().RemoveTicker(MusicTicker);
 	SoundCache.Reset();
 	Brushes.Reset();
 	Super::Deinitialize();
@@ -97,6 +90,11 @@ const FScctMenuApi* UScctMenuSubsystem::Connect()
 		if (Api != nullptr)
 		{
 			SharedRoot = ReadMenuSubsystemText([this](TCHAR* Buffer, int32 Capacity) { return Api->GetText(static_cast<int32>(EScctMenuText::SharedRoot), Buffer, Capacity); });
+			// The interface sounds are decoded now, so the first press of each is heard too.
+			for (int32 Slot = 0; Slot < static_cast<int32>(EScctUiSound::Count) && !SharedRoot.IsEmpty(); ++Slot)
+			{
+				FindWave(Slot, SharedRoot / TEXT("audio/wav/Interface/Menu") / SoundFiles[Slot], false);
+			}
 		}
 	}
 	return Api;
@@ -177,6 +175,15 @@ const FScctMenuMapInfo* UScctMenuSubsystem::FindMap(const FString& Id)
 	const auto Same = [&Id](const FScctMenuMapInfo& Map) { return Map.Id.Equals(Id, ESearchCase::IgnoreCase); };
 	const FScctMenuMapInfo* Found = AllMaps.FindByPredicate(Same);
 	return Found != nullptr ? Found : PlayableMaps.FindByPredicate(Same);
+}
+
+void UScctMenuSubsystem::RefreshMaps()
+{
+	if (const FScctMenuApi* Menu = Connect())
+	{
+		Menu->RefreshMaps();
+	}
+	bMapsLoaded = false;
 }
 
 FString UScctMenuSubsystem::GetMapTitle(const FString& Id)
@@ -309,6 +316,8 @@ void UScctMenuSubsystem::PlaySound(EScctUiSound Sound)
 	UWorld* World = GetGameInstance() != nullptr ? GetGameInstance()->GetWorld() : nullptr;
 	if (World == nullptr || World->GetAudioDeviceRaw() == nullptr || Connect() == nullptr || SharedRoot.IsEmpty())
 	{
+		UE_CLOG(bLogSounds, LogOpenSCCT, Log, TEXT("Menu: sound %s not played (%s)"), SoundNames[static_cast<int32>(Sound)],
+			World == nullptr || World->GetAudioDeviceRaw() == nullptr ? TEXT("no audio device") : TEXT("no content"));
 		return;
 	}
 	// A held arrow key walks a list fast: the tick is not played more than about fifteen times a second.
@@ -329,75 +338,48 @@ void UScctMenuSubsystem::PlaySound(EScctUiSound Sound)
 		return;
 	}
 	// The first use of a sound only starts its decode; it is heard from the next press on.
-	if (UScctSoundWave* Wave = FindWave(Slot, SharedRoot / TEXT("audio/wav/Interface/Menu") / SoundFiles[Slot], false))
+	UScctSoundWave* Wave = FindWave(Slot, SharedRoot / TEXT("audio/wav/Interface/Menu") / SoundFiles[Slot], false);
+	if (Wave != nullptr)
 	{
-		UGameplayStatics::PlaySound2D(World, Wave, Gain);
+		// On the menu sounds' class, so the Menu sounds submix carries them (Play/ScctAudioMix.h).
+		if (UAudioComponent* Voice = UGameplayStatics::CreateSound2D(World, Wave, Gain, 1.0f, 0.0f, nullptr, false, true))
+		{
+			const UScctAudioMix* Mix = GetGameInstance()->GetSubsystem<UScctAudioMix>();
+			Voice->SoundClassOverride = Mix != nullptr ? Mix->GetClass(EScctAudioCategory::MenuSound) : nullptr;
+			Voice->bIsUISound = true;
+			Voice->Play();
+		}
 	}
+	UE_CLOG(bLogSounds, LogOpenSCCT, Log, TEXT("Menu: sound %s (%s) %s at %.2f"), SoundNames[Slot], SoundFiles[Slot], Wave != nullptr ? TEXT("played") : TEXT("decoding, not played this time"), Gain);
 }
 
 void UScctMenuSubsystem::SetMusicPlaying(bool bPlaying)
 {
-	bMusicWanted = bPlaying;
-	UWorld* World = GetGameInstance() != nullptr ? GetGameInstance()->GetWorld() : nullptr;
-	if (!bPlaying)
+	// The music itself follows the page on screen (Play/ScctFrontEndAudio.h); the menus can only switch it off.
+	if (UScctFrontEndAudio* Audio = GetGameInstance() != nullptr ? GetGameInstance()->GetSubsystem<UScctFrontEndAudio>() : nullptr)
 	{
-		if (IsValid(Music))
-		{
-			Music->FadeOut(0.6f, 0.0f);
-		}
-		Music = nullptr;
-		return;
-	}
-	if (World == nullptr || World->GetAudioDeviceRaw() == nullptr || Connect() == nullptr)
-	{
-		return;
-	}
-	if (IsValid(Music) && Music->GetWorld() == World && Music->IsPlaying())
-	{
-		return;
-	}
-
-	if (MusicFile.IsEmpty())
-	{
-		// The front end level's own song (the Entry map's), as the original's menus play it.
-		const FString ContentRoot = ReadMenuSubsystemText([this](TCHAR* Buffer, int32 Capacity) { return Api->GetText(static_cast<int32>(EScctMenuText::ContentRoot), Buffer, Capacity); });
-		const FString Candidates[] = {
-			ContentRoot / TEXT("svmap/Entry/audio/streams/Interface/Menu_music1.ogg"),
-			ContentRoot / TEXT("svmap/Lobby/audio/streams/Interface/Menu_music1.ogg"),
-		};
-		for (const FString& Candidate : Candidates)
-		{
-			if (IFileManager::Get().FileExists(*Candidate))
-			{
-				MusicFile = Candidate;
-				break;
-			}
-		}
-		if (MusicFile.IsEmpty())
-		{
-			bMusicWanted = false;
-			UE_LOG(LogOpenSCCT, Log, TEXT("Menu: the content has no menu music (svmap/Entry/audio/streams/Interface/Menu_music1.ogg)"));
-			return;
-		}
-	}
-
-	if (UScctSoundWave* Wave = FindWave(MusicSlot, MusicFile, true))
-	{
-		Music = UGameplayStatics::CreateSound2D(World, Wave, 1.0f, 1.0f, 0.0f, nullptr, false, false);
-		if (IsValid(Music))
-		{
-			Music->bIsMusic = true;
-			Music->bIsUISound = true;
-			Music->FadeIn(1.5f, FMath::Max(UScctUserSettings::Get()->GetGain(EScctSoundKind::MenuMusic), 0.0001f));
-			UE_LOG(LogOpenSCCT, Log, TEXT("Menu: music %s"), *MusicFile);
-		}
+		Audio->SetMusicAllowed(bPlaying);
 	}
 }
 
 void UScctMenuSubsystem::RefreshVolumes()
 {
-	if (IsValid(Music))
+	if (UScctFrontEndAudio* Audio = GetGameInstance() != nullptr ? GetGameInstance()->GetSubsystem<UScctFrontEndAudio>() : nullptr)
 	{
-		Music->SetVolumeMultiplier(FMath::Max(UScctUserSettings::Get()->GetGain(EScctSoundKind::MenuMusic), 0.0001f));
+		Audio->RefreshVolume();
+	}
+}
+
+FString UScctMenuSubsystem::GetContentRoot()
+{
+	return Connect() == nullptr ? FString() : ReadMenuSubsystemText([this](TCHAR* Buffer, int32 Capacity) { return Api->GetText(static_cast<int32>(EScctMenuText::ContentRoot), Buffer, Capacity); });
+}
+
+void UScctMenuSubsystem::PrepareSound(EScctUiSound Sound)
+{
+	if (Connect() != nullptr && !SharedRoot.IsEmpty())
+	{
+		const int32 Slot = static_cast<int32>(Sound);
+		FindWave(Slot, SharedRoot / TEXT("audio/wav/Interface/Menu") / SoundFiles[Slot], false);
 	}
 }

@@ -1489,13 +1489,14 @@ void SScctDialogLayer::Show(const FScctDialog& Dialog)
 	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
 	Box->AddSlot().AutoHeight()[ ScctUi::Text(ScctUi::ToText(Dialog.Title.ToUpper()), ScctUi::H2()) ];
 	Box->AddSlot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 0.0f)[ ScctUi::Rule() ];
-	if (!Dialog.Body.IsEmpty() || Dialog.Timeout > 0.0f)
+	if (!Dialog.Body.IsEmpty() || Dialog.Timeout > 0.0f || Dialog.LiveBody)
 	{
 		Box->AddSlot().AutoHeight().Padding(0.0f, 18.0f, 0.0f, 0.0f)
 		[
 			ScctUi::Text(TAttribute<FText>::CreateLambda([this]
 			{
-				return FText::FromString(Current.Timeout > 0.0f ? FString::Printf(TEXT("%s %d"), *Current.Body, FMath::CeilToInt32(TimeLeft)) : Current.Body);
+				const FString Shown = Current.LiveBody ? Current.LiveBody() : Current.Body;
+				return FText::FromString(Current.Timeout > 0.0f ? FString::Printf(TEXT("%s %d"), *Shown, FMath::CeilToInt32(TimeLeft)) : Shown);
 			}), ScctUi::Body(), FSlateColor(ScctHudStyle::TextDim()), true)
 		];
 	}

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Runtime/ScctWorldApi.h"
+#include "Runtime/ScctWorldEmitterApi.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctLevelStateSubsystem.generated.h"
 
@@ -65,7 +66,13 @@ struct FScctWorldDebugApi;
  *                              breakable props nearest the camera, "emitters" fires every map Emitter's tag
  *                              (the waiting ones start, the running ones stop), "shootmovers" puts bullet marks on
  *                              the two movers nearest the camera and "shootprops" on the three breakable props
- *                              nearest it (to see marks follow a door and go with a pane).
+ *                              nearest it (to see marks follow a door and go with a pane), "camnetoff" puts every
+ *                              network camera out as a spy's shocker does (a spy must be playing), "modem" places a
+ *                              PS2 sabotage modem (at the map's PS2 target, else on the wall ahead of the camera
+ *                              with a stand-in mesh), "modemhit" shoots every modem (its smoke and flash) and
+ *                              "breakglass" breaks every pane drawn now with a hit off its middle from the
+ *                              camera's side (the log names a camera on each pane for -ScctCams) and "rain"
+ *                              stands every pawn in the map's biggest rain volume (rain splashing on bodies).
  *                              Example: -ScctLevelDo="movers@8;breaklights@14"
  *   -ScctMarkTest              the same as -ScctLevelDo="shootmovers@4;shootprops@4.5;movers@9;props@15"
  */
@@ -223,6 +230,28 @@ private:
 		bool bOn = false;
 	};
 
+	/** A map Emitter that rides a mover or hangs on a bone (FScctWorldEmitter), by its name id. */
+	struct FRidingEmitter
+	{
+		/** The importer's particle actors of that Emitter, where each was imported, and that place in the Emitter's placed frame. */
+		struct FPart
+		{
+			TWeakObjectPtr<AActor> Actor;
+			FTransform Original;
+			FTransform InEmitter;
+		};
+		TArray<FPart> Parts;
+		/** On a bone: the bone's turn when first seen, so the Emitter keeps its placed turn against the bone's axes. */
+		FQuat FirstBoneQuat = FQuat::Identity;
+		FVector FirstLocation = FVector::ZeroVector;
+		FVector LastLogged = FVector::ZeroVector;
+		float LastLogSeconds = -100.0f;
+		float MaxTravel = 0.0f;
+		bool bBound = false;
+		bool bBoneSeen = false;
+		bool bMoved = false;
+	};
+
 	struct FDebugAction
 	{
 		FString What;
@@ -250,8 +279,18 @@ private:
 	class UAnimSequenceBase* FindPropSequence(const ASkeletalMeshActor& Actor, const FString& Sequence);
 	/** Places a light that hangs on a prop's bone where that bone is now; false when the prop or the bone is not there. */
 	bool FollowBone(FLightState& State, const FScctWorldLight& Record);
+	/** Moves the particle actors of the map Emitters that ride a mover or hang on a bone (Play/ScctLevelStateEmitters.cpp). */
+	void UpdateAttachedEmitters();
+	/** Puts those particle actors back where they were imported. */
+	void RestoreAttachedEmitters(bool bTearingDown);
+	/** The summary line of the riding emitters. */
+	void LogAttachedEmitters();
 	void DrainEvents();
 	void RunDebugActions();
+	/** -ScctLevelDo "breakglass": every pane drawn now is broken on the local server, hit off its middle from the camera's side; returns 1 when any was queued. */
+	int32 BreakEveryPane(const FVector& Eye);
+	/** A pane broke: its glints, and its drawn mesh cut into shards (ScctGlassShards). */
+	void BreakPaneShards(const FScctWorldEvent& Event);
 
 	void FirstSight(FActorState& State, const FScctWorldActor& Record);
 	/** Takes a carried actor off its pawn's bone and back into the world. */
@@ -328,6 +367,11 @@ private:
 	TMap<FString, TArray<TWeakObjectPtr<class UAnimSequenceBase>>> PropSequences;
 	TArray<FScctWorldEvent> EventBuffer;
 	TArray<FDebugAction> DebugActions;
+	/** The bridge's attached-emitter table (Runtime/ScctWorldEmitterApi.h), the riding emitters by name id, and the read buffer. */
+	const FScctWorldEmitterApi* EmitterApi = nullptr;
+	bool bEmitterApiTried = false;
+	TMap<int32, FRidingEmitter> RidingEmitters;
+	TArray<FScctWorldEmitter> EmitterBuffer;
 
 	/** Names already reported as missing, so each is logged once. */
 	TSet<FString> ReportedMissing;

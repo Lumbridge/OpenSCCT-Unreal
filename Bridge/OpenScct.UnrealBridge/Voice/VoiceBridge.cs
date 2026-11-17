@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using OpenScct.Core.Engine;
+using OpenScct.Game.SBase;
 using OpenScct.Net;
 using OpenScct.Net.Voice;
 using OpenScct.Server;
@@ -25,23 +26,27 @@ namespace OpenScct.UnrealBridge.Voice;
 /// <see cref="AfterVisitTick"/>, which the online bridge calls once a frame after its visit tick; the echo test by
 /// <see cref="Update"/>.</para>
 /// </summary>
-public sealed class VoiceBridge : IDisposable
+public sealed partial class VoiceBridge : IDisposable
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 4;
 
     /// <summary>The talker id the echo test comes back on (<see cref="ReadFrame"/>).</summary>
     public const int EchoTalker = VoiceEchoTest.Talker;
 
     private readonly VoiceSettings _settings = new();
-    private readonly VoiceVolumes _volumes = new();
+    private VoiceVolumes _volumes = new();
     private readonly float[] _scratch = new float[VoiceK.FrameSamples];
     private readonly Dictionary<ushort, int> _teams = new();
     private OnlineClient? _visit;
     private OnlineVoice? _online;
     private VoiceEchoTest? _echo;
+    private readonly VoiceSettings _meterSettings = new();
+    private VoiceClient? _meter;
+    private bool _meterWanted;
     private int _captureRate = VoiceK.SampleRate;
     private bool _talkKey;
     private bool _teamKey;
+    private VoiceLinks.Own _own;
 
     private static VoiceBridge? s_instance;
 
@@ -57,8 +62,11 @@ public sealed class VoiceBridge : IDisposable
     /// <summary>The visit's voice, or null when not online.</summary>
     public OnlineVoice? Online => _online;
 
-    /// <summary>The client the microphone goes to: the echo test's while it runs, else the visit's, else none.</summary>
-    public VoiceClient? Capturing => _echo is { Running: true } echo ? echo.Client : _online?.Voice;
+    /// <summary>
+    /// The client the microphone goes to: the echo test's while it runs, else the visit's, else the Voice page's level
+    /// meter while it is wanted, else none.
+    /// </summary>
+    public VoiceClient? Capturing => _echo is { Running: true } echo ? echo.Client : _online?.Voice ?? _meter;
 
     internal VoiceEchoTest? Echo => _echo;
 
@@ -83,9 +91,9 @@ public sealed class VoiceBridge : IDisposable
                 StartVisit(client);
             }
 
-            _online!.Voice.TalkKey = _talkKey;
-            _online.Voice.TeamKey = _teamKey;
-            _online.Update();
+            _own = VoiceLinks.ReadOwn(VoiceLinks.LocalController(client));
+            ApplyKeys();
+            _online!.Update();
         }
         catch (Exception e)
         {
@@ -99,6 +107,7 @@ public sealed class VoiceBridge : IDisposable
         _online?.Dispose();
         _online = null;
         _visit = null;
+        _own = default;
         _teams.Clear();
     }
 
@@ -111,6 +120,11 @@ public sealed class VoiceBridge : IDisposable
         voice.SetCaptureRate(_captureRate);
         _online = new OnlineVoice(client, voice, _volumes);
         _visit = client;
+        // The players muted earlier in this run (another visit, or before this one began) stay muted.
+        foreach (string name in _mutedNames)
+        {
+            _online.SetMuted(name, true);
+        }
     }
 
     // ---- the microphone and the keys ----------------------------------------------------------------------------
@@ -121,6 +135,7 @@ public sealed class VoiceBridge : IDisposable
         _captureRate = Math.Clamp(sampleRate, 8000, 192000);
         _online?.Voice.SetCaptureRate(_captureRate);
         _echo?.Client.SetCaptureRate(_captureRate);
+        _meter?.SetCaptureRate(_captureRate);
     }
 
     /// <summary>Microphone samples, mono, -1 to 1, at the capture rate. Dropped when nothing listens.</summary>
@@ -134,11 +149,24 @@ public sealed class VoiceBridge : IDisposable
     {
         _talkKey = talk;
         _teamKey = team;
-        if (_online is not null)
+        ApplyKeys();
+    }
+
+    /// <summary>
+    /// The keys onto the visit's client. Answering the HUD's Speak prompt (the Hack Comm key next to a downed enemy, or
+    /// on the merc a spy holds) talks on the all channel, as a held all-channel key would: downed chat and grab talk go
+    /// only on that channel, so push to talk or a held team key would otherwise leave the prompt saying nothing.
+    /// </summary>
+    private void ApplyKeys()
+    {
+        if (_online is null)
         {
-            _online.Voice.TalkKey = talk;
-            _online.Voice.TeamKey = team;
+            return;
         }
+
+        bool speak = _own.TalkLink != VoiceLink.All;
+        _online.Voice.TalkKey = _talkKey || speak;
+        _online.Voice.TeamKey = _teamKey && !speak;
     }
 
     public void ApplySettings(in VoiceSettingsBlock s)
@@ -212,12 +240,12 @@ public sealed class VoiceBridge : IDisposable
         status.Transmitting = client.Transmitting ? 1 : 0;
         status.Channel = (int)client.TransmitChannel;
         status.LocalTalker = client.LocalTalker;
-        status.TalkerCount = ListenerOf().Talkers.Count;
+        status.TalkerCount = ListenerOf()?.Talkers.Count ?? 0;
         status.InputLevel = client.InputLevel;
         status.AutoGain = client.AutoGain;
         status.FramesCaptured = client.Stats.FramesCaptured;
         status.FramesSent = client.Stats.FramesSent;
-        status.PacketsReceived = ListenerOf().Stats.PacketsReceived;
+        status.PacketsReceived = ListenerOf()?.Stats.PacketsReceived ?? 0;
         return status;
     }
 
@@ -245,12 +273,15 @@ public sealed class VoiceBridge : IDisposable
         }
 
         FillTeams();
+        SPlayerController? local = VoiceLinks.LocalController(_visit);
         IReadOnlyList<VoiceTalker> talkers = online.Voice.Talkers;
         for (int i = 0; i < talkers.Count && i < into.Length; i++)
         {
             VoiceTalker t = talkers[i];
             string name = online.NameOf(t.Id) ?? "Player " + t.Id.ToString(CultureInfo.InvariantCulture);
-            Write(ref into[i], t, name, _teams.GetValueOrDefault(t.Id, -1));
+            int team = _teams.GetValueOrDefault(t.Id, -1);
+            Write(ref into[i], t, name, team);
+            into[i].Link = (int)VoiceLinks.Of(local, t.Id, t.Channel, team);
         }
 
         return talkers.Count;
@@ -268,6 +299,7 @@ public sealed class VoiceBridge : IDisposable
         row.QueuedFrames = t.Buffer.Count;
         row.FramesDecoded = t.FramesDecoded;
         row.DecodeErrors = t.DecodeErrors;
+        row.Link = (int)(t.Channel == EVoiceChannel.Team ? VoiceLink.Team : VoiceLink.All);
         fixed (char* text = row.Name)
         {
             OnlineTextCopy.Fixed(text, VoiceTalkerInfo.NameCapacity, name);
@@ -343,7 +375,7 @@ public sealed class VoiceBridge : IDisposable
 
         if (online.NameOf((ushort)talker) is { } name)
         {
-            online.SetMuted(name, muted);
+            SetPlayerMuted(name, muted);
         }
         else
         {
@@ -369,7 +401,74 @@ public sealed class VoiceBridge : IDisposable
         }
     }
 
-    private VoiceClient ListenerOf() => _online is null && _echo is { } echo ? echo.Listener : _online!.Voice;
+    /// <summary>The client whose talkers Unreal hears: the echo test's listener, else the visit's; none for the meter.</summary>
+    private VoiceClient? ListenerOf() => _online is null && _echo is { } echo ? echo.Listener : _online?.Voice;
+
+    // ---- the lobby's "Restrict Mic to Team" ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Sends the lobby's "Restrict Mic to Team" (SPlayerController.ServerSetTeamVoiceOnly through the session's
+    /// "teamvoice" line); the server keeps it across the maps. False when there is no visit to send it on.
+    /// </summary>
+    public bool SetTeamVoiceOnly(bool only)
+    {
+        if (_visit is not { } client)
+        {
+            return false;
+        }
+
+        client.SetTeamVoiceOnly(only);
+        return true;
+    }
+
+    /// <summary>The local player's "Restrict Mic to Team" as the server last sent it: -1 when not known (no visit, or no
+    /// lobby row for him yet), else 0 or 1.</summary>
+    public int TeamVoiceOnly => _visit?.Lobby.Local is { } local ? (local.TeamVoiceOnly ? 1 : 0) : -1;
+
+    // ---- the Voice page's level meter ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// The Voice page's microphone level outside a visit (Godot's OptionsMenu meter): while wanted, and neither a visit
+    /// nor the echo test has the microphone, an unconnected voice client takes the microphone through the player's
+    /// clean-up and gain, so <c>GetState</c>'s input level is what the gate would see. It sends nothing.
+    /// </summary>
+    public void SetMeter(bool on)
+    {
+        _meterWanted = on;
+        if (!on)
+        {
+            StopMeter();
+        }
+    }
+
+    private void UpdateMeter()
+    {
+        if (!_meterWanted || _online is not null || _echo is { Running: true })
+        {
+            StopMeter();
+            return;
+        }
+
+        // The player's clean-up and gain; never muted or gated off, and no voices to cancel.
+        Copy(_settings, _meterSettings);
+        _meterSettings.Enabled = true;
+        _meterSettings.MicMuted = false;
+        _meterSettings.PushToTalk = false;
+        _meterSettings.EchoCancellation = false;
+        if (_meter is null)
+        {
+            _meter = new VoiceClient(_meterSettings, UnrealBridge.Online.OnlineBridge.Instance.Clock);
+            _meter.SetCaptureRate(_captureRate);
+        }
+
+        _meter.Update();
+    }
+
+    private void StopMeter()
+    {
+        _meter?.Dispose();
+        _meter = null;
+    }
 
     // ---- the echo test ------------------------------------------------------------------------------------------
 
@@ -396,12 +495,17 @@ public sealed class VoiceBridge : IDisposable
         _echo = null;
     }
 
-    /// <summary>Once a frame while the echo test runs: moves its datagrams and records what came back.</summary>
-    public void Update() => _echo?.Update(_settings);
+    /// <summary>Once a frame: the echo test moves its datagrams and records what came back; the level meter runs.</summary>
+    public void Update()
+    {
+        _echo?.Update(_settings);
+        UpdateMeter();
+    }
 
     public void Dispose()
     {
         StopEchoTest();
+        StopMeter();
         EndVisit();
         if (ReferenceEquals(s_instance, this))
         {

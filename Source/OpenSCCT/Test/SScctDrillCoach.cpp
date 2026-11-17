@@ -16,7 +16,7 @@ namespace
 	/** Where the panel sits: the Godot coach's corner, below the HUD's map and objectives box. */
 	constexpr float PanelLeft = 40.0f;
 	constexpr float PanelTop = 170.0f;
-	constexpr float PanelWidth = 420.0f;
+	constexpr float CoachPanelWidth = 420.0f;
 
 	/** The return portal's green (the Godot portal's albedo, sRGB). */
 	FLinearColor PortalColour(float Alpha)
@@ -92,7 +92,7 @@ void SScctDrillCoach::Construct(const FArguments& InArgs)
 		SNew(SOverlay).Visibility(EVisibility::SelfHitTestInvisible)
 		+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(PanelLeft, PanelTop, 0.0f, 0.0f)
 		[
-			SNew(SBox).WidthOverride(PanelWidth).Visibility(EVisibility::SelfHitTestInvisible)
+			SNew(SBox).WidthOverride(CoachPanelWidth).Visibility(EVisibility::SelfHitTestInvisible)
 			[
 				ScctMenuStyle::Glass(Column, FMargin(16.0f, 12.0f), 0.8f)
 			]

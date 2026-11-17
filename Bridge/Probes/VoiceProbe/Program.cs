@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using OpenScct.Net;
 using OpenScct.Net.Voice;
@@ -24,7 +25,19 @@ using OpenScct.UnrealBridge.Voice;
 //      the bots have. First the bridge's player talks (the tone into SubmitCapture) and the other hears him, then the
 //      other talks and the bridge's player hears him through GetTalkers and ReadFrame: the same wire Godot uses.
 // The server CLI is run with --no-build; build it once beforehand (dotnet build -c Release src/OpenScct.Server.Cli).
-return Probe.Run(args);
+//
+// VoiceProbe listen <address> <content root> [seconds] [talker name] [tone Hz]
+//
+// A second player for a game already on a server (Tools/Run-OnlineCheck.ps1 with the Unreal client): a plain OpenSCCT
+// visit with its own voice joins, says ready, follows the server from lobby to round, talks a tone the whole time
+// (voice activation) and listens. Every two seconds it prints what it heard from each talker; at the end the talker
+// named <talker name> (default UnrealCheck) must have been heard at rms > 0.1 and the tone's pitch.
+//
+// VoiceProbe hack [content root] [port] [map]
+//
+// Hacked comms in a real round with a server in this process (HackProbe.cs): a merc talking on the team channel is
+// heard by the bridge's spy with auto-hack on or the Hack Comm key held while the spies have him tagged, and not otherwise.
+return args.Length > 0 && args[0] == "listen" ? Listener.Run(args) : args.Length > 0 && args[0] == "hack" ? HackProbe.Run(args) : args.Length > 0 && args[0] == "hackhost" ? HackProbe.Host(args) : Probe.Run(args);
 
 internal static unsafe class Probe
 {
@@ -35,6 +48,7 @@ internal static unsafe class Probe
     private static OnlineApi s_online;
     private static readonly Stopwatch s_run = Stopwatch.StartNew();
     private static double s_tonePhase;
+    private static string s_volumeFile = string.Empty;
 
     private static double Now => s_run.Elapsed.TotalSeconds;
 
@@ -67,6 +81,7 @@ internal static unsafe class Probe
 
         ok &= EchoTest(recordSeconds: 2);
         ok &= EchoTest(recordSeconds: 0);
+        ok &= Meter();
 
         BridgeSession.Configure(content);
         string work = Path.Combine(Path.GetTempPath(), "osu-voice-probe-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
@@ -75,6 +90,12 @@ internal static unsafe class Probe
         try
         {
             server = StartServer(openScct, content, work, port);
+            s_volumeFile = Path.Combine(work, "VoiceVolumes.json");
+            fixed (char* path = s_volumeFile)
+            {
+                s_voice.SetVolumeFile(path);
+            }
+
             ok &= Lobby(port);
         }
         finally
@@ -128,8 +149,10 @@ internal static unsafe class Probe
         [
             ("VoiceSettingsBlock", sizeof(VoiceSettingsBlock), 48),
             ("VoiceStatus", sizeof(VoiceStatus), 64),
-            ("VoiceTalkerInfo", sizeof(VoiceTalkerInfo), 176),
-            ("VoiceApi", sizeof(VoiceApi), 8 + 15 * sizeof(void*)),
+            ("VoiceTalkerInfo", sizeof(VoiceTalkerInfo), 184),
+            ("VoicePlayerInfo", sizeof(VoicePlayerInfo), 28),
+            ("VoiceContext", sizeof(VoiceContext), 28),
+            ("VoiceApi", sizeof(VoiceApi), 8 + 24 * sizeof(void*)),
         ];
         bool ok = true;
         foreach ((string name, int size, int expected) in sizes)
@@ -200,6 +223,45 @@ internal static unsafe class Probe
         bool done = recordSeconds == 0 || status.EchoPhase == (int)VoiceEchoPhase.Done;
         return done && heard.Count >= (recordSeconds > 0 ? recordSeconds * 35 : 80) * VoiceK.FrameSamples && rms is > 0.15 and < 0.3 &&
             Math.Abs(hz - ToneHz) < 15 && row.DecodeErrors == 0;
+    }
+
+    /// <summary>
+    /// The Voice page's level meter: with no visit and no echo test, the tone's level after the gain comes back in the
+    /// state (0.21 at gain 1, 0.42 at gain 2, 0 at gain 0), and nothing once the meter is off.
+    /// </summary>
+    private static bool Meter()
+    {
+        VoiceSettingsBlock saved = default;
+        s_voice.GetSettings(&saved);
+        VoiceSettingsBlock settings = saved;
+        var scratch = new float[VoiceK.FrameSamples];
+        float LevelAt(float gain, bool meter)
+        {
+            VoiceSettingsBlock s = settings;
+            s.InputGain = gain;
+            s_voice.ApplySettings(&s);
+            s_voice.SetMeter(meter ? 1 : 0);
+            double from = Now;
+            double fed = 0;
+            VoiceStatus status = default;
+            while (Now - from < 0.5)
+            {
+                fed = FeedTone(from, fed, scratch);
+                s_voice.Update();
+                Thread.Sleep(10);
+            }
+
+            s_voice.GetState(&status);
+            return status.InputLevel;
+        }
+
+        float one = LevelAt(1f, true);
+        float two = LevelAt(2f, true);
+        float zero = LevelAt(0f, true);
+        float off = LevelAt(1f, false);
+        s_voice.ApplySettings(&saved);
+        Console.WriteLine($"meter: level {one:F3} at gain 1, {two:F3} at gain 2, {zero:F3} at gain 0, {off:F3} with the meter off");
+        return one is > 0.18f and < 0.24f && two is > 0.38f and < 0.46f && zero < 0.001f && off == 0f;
     }
 
     /// <summary>Feeds the tone that is due by the clock since <paramref name="from"/> into SubmitCapture.</summary>
@@ -421,8 +483,80 @@ internal static unsafe class Probe
             s_voice.SetMuted(otherTalker, 0);
             s_voice.SetVolume(otherTalker, 1f);
 
-            Console.WriteLine($"bridge talks {(okA ? "ok" : "FAILED")}, bridge hears {(okB ? "ok" : "FAILED")}, volume and mute {(okC ? "ok" : "FAILED")}");
-            return okA && okB && okC;
+            // "Restrict Mic to Team" through the voice table: the server takes it and every client sees it.
+            int knownBefore = s_voice.GetTeamVoiceOnly();
+            int sent = s_voice.SetTeamVoiceOnly(1);
+            bool restricted = Wait(() => s_voice.GetTeamVoiceOnly() == 1 &&
+                other.Lobby.Players.Any(p => p.Name == "UnrealVoice" && p.TeamVoiceOnly), 10);
+            s_voice.SetTeamVoiceOnly(0);
+            bool unrestricted = Wait(() => s_voice.GetTeamVoiceOnly() == 0 &&
+                other.Lobby.Players.Any(p => p.Name == "UnrealVoice" && !p.TeamVoiceOnly), 10);
+            Console.WriteLine($"t={Now:F1} restrict mic to team: before {knownBefore}, sent {sent}, restricted {restricted}, unrestricted {unrestricted}");
+            bool okD = knownBefore == 0 && sent == 1 && restricted && unrestricted;
+
+            // By name, as the overlay and the lobby do: volume 0 is still received but heard as silence, and saved.
+            VoicePlayerInfo PlayerVoice(string name)
+            {
+                VoicePlayerInfo info = default;
+                fixed (char* n = name)
+                {
+                    s_voice.GetPlayerVoice(n, &info);
+                }
+
+                return info;
+            }
+
+            void ByName(string name, float? volume, bool? muted)
+            {
+                fixed (char* n = name)
+                {
+                    if (volume is { } v)
+                    {
+                        s_voice.SetPlayerVolume(n, v);
+                    }
+
+                    if (muted is { } m)
+                    {
+                        s_voice.SetPlayerMuted(n, m ? 1 : 0);
+                    }
+                }
+            }
+
+            Wait(() => false, 1.0);
+            ByName("GodotVoice", 0f, null);
+            before = State().PacketsReceived;
+            heardByBridge.Clear();
+            Wait(() => heardByBridge.Count > 60 * VoiceK.FrameSamples, 10);
+            double silent = Rms(heardByBridge, 0);
+            long packetsAtZero = State().PacketsReceived - before;
+            VoicePlayerInfo other0 = PlayerVoice("GodotVoice");
+            VoicePlayerInfo self = PlayerVoice("UnrealVoice");
+            string savedAtZero = File.Exists(s_volumeFile) ? File.ReadAllText(s_volumeFile) : "(no file)";
+            VoiceContext context = default;
+            s_voice.GetContext(&context);
+            Console.WriteLine($"t={Now:F1} by name at volume 0: {heardByBridge.Count / VoiceK.FrameSamples} frames rms={silent:F4}, {packetsAtZero} packets; " +
+                $"row visit={other0.Visit} talker={other0.Talker} speaking={other0.Speaking} volume={other0.Volume:F2} muted={other0.Muted}; " +
+                $"own row local={self.Local} talker={self.Talker}; context visit={context.Visit} round={context.InRound} team={context.LocalTeam}; saved {savedAtZero}");
+            bool okE = heardByBridge.Count > 40 * VoiceK.FrameSamples && silent < 1e-6 && packetsAtZero > 40 && other0.Visit == 1 &&
+                other0.Talker == otherTalker && other0.Speaking != 0 && other0.Volume == 0f && self.Local == 1 &&
+                context.Visit == 1 && context.InRound == 0 && context.LocalTeam == 0 && savedAtZero.Contains("\"GodotVoice\":0", StringComparison.Ordinal);
+
+            ByName("GodotVoice", null, true);
+            Wait(() => false, 1.0);
+            before = State().PacketsReceived;
+            Wait(() => false, 2.0);
+            long packetsMuted = State().PacketsReceived - before;
+            bool mutedRow = PlayerVoice("GodotVoice").Muted == 1;
+            ByName("GodotVoice", 1f, false);
+            Wait(() => false, 1.0);
+            string savedAtOne = File.ReadAllText(s_volumeFile);
+            int banSent = s_voice.SetVoiceBanned(other.Lobby.LocalId, 1);
+            Console.WriteLine($"t={Now:F1} by name muted: {packetsMuted} packets in 2 s, row muted {mutedRow}; back to 100%: saved {savedAtOne}; voice ban sent {banSent} (the server checks the sender)");
+            bool okF = packetsMuted < 5 && mutedRow && !savedAtOne.Contains("GodotVoice", StringComparison.Ordinal) && banSent == 1;
+
+            Console.WriteLine($"bridge talks {(okA ? "ok" : "FAILED")}, bridge hears {(okB ? "ok" : "FAILED")}, volume and mute {(okC ? "ok" : "FAILED")}, team only {(okD ? "ok" : "FAILED")}, " +
+                $"by name {(okE ? "ok" : "FAILED")}, by name muted {(okF ? "ok" : "FAILED")}");
+            return okA && okB && okC && okD && okE && okF;
         }
         finally
         {
@@ -560,6 +694,199 @@ internal static unsafe class Probe
     }
 
     private sealed class ProbeClock : IClock
+    {
+        private readonly long _start = Stopwatch.GetTimestamp();
+
+        public long NowMicroseconds => (long)Stopwatch.GetElapsedTime(_start).TotalMicroseconds;
+    }
+}
+
+/// <summary>
+/// <c>VoiceProbe listen</c>: a second player who talks a tone and listens, for a check with the Unreal client on the
+/// same server (see the top of this file).
+/// </summary>
+internal static class Listener
+{
+    public static int Run(string[] args)
+    {
+        string address = args.Length > 1 ? args[1] : "127.0.0.1:28961";
+        string content = args.Length > 2 ? args[2] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
+        double seconds = args.Length > 3 ? double.Parse(args[3], CultureInfo.InvariantCulture) : 60;
+        string expect = args.Length > 4 ? args[4] : "UnrealCheck";
+        double toneHz = args.Length > 5 ? double.Parse(args[5], CultureInfo.InvariantCulture) : 660;
+        const float amplitude = 0.3f;
+
+        BridgeSession.Configure(content);
+        var clock = new ListenerClock();
+        var client = new OnlineClient(JoinTarget.FromAddress(address), new OnlineClientSettings
+        {
+            PlayerName = "VoiceListener",
+            InstallId = "00000000000000bb",
+            Key = PlayerKey.Create(),
+            PreferredTeam = 0,
+            Maps = OnlineBridge.Instance.Catalog.Maps,
+            Classes = OnlineBridge.Instance.Classes,
+            LoopbackOnly = true,
+        }, clock.NowMicroseconds);
+        // The clean-up off, as for any synthetic microphone; voice activation, so the tone is always sent.
+        var settings = new VoiceSettings { NoiseSuppression = false, AutoGain = false, EchoCancellation = false, PushToTalk = false };
+        var voice = new OnlineVoice(client, new VoiceClient(settings, clock));
+        var window = new Dictionary<ushort, List<float>>();
+        var total = new Dictionary<ushort, List<float>>();
+        var frame = new float[VoiceK.FrameSamples];
+        var tone = new float[VoiceK.FrameSamples];
+        var run = Stopwatch.StartNew();
+        long start = clock.NowMicroseconds;
+        long ticks = 0;
+        double fed = 0;
+        double phase = 0;
+        double owed = 0;
+        double lastPaced = 0;
+        double nextReport = 2;
+        bool saidReady = false;
+        double? heardEnough = null;
+        OnlineClientState lastState = (OnlineClientState)(-1);
+        string lastMap = string.Empty;
+        try
+        {
+            while (run.Elapsed.TotalSeconds < seconds)
+            {
+                double now = run.Elapsed.TotalSeconds;
+                long due = (clock.NowMicroseconds - start) * 60 / 1_000_000;
+                while (ticks < due)
+                {
+                    ticks++;
+                    client.Tick(start + ticks * 1_000_000 / 60);
+                }
+
+                if (client.State != lastState || (client.CurrentMap ?? string.Empty) != lastMap)
+                {
+                    lastState = client.State;
+                    lastMap = client.CurrentMap ?? string.Empty;
+                    Console.WriteLine($"t={now:F1} listener: {client.State} map '{lastMap}'{(client.Error is { } e ? " error: " + e : string.Empty)}");
+                }
+
+                // Ready once the talker to check is in the lobby too, so the round starts with both in it (a player
+                // who joins a round already under way watches, and watchers hear no one).
+                if (client.State == OnlineClientState.Lobby && !saidReady &&
+                    client.Lobby.Players.Any(p => p.Name.StartsWith(expect, StringComparison.Ordinal)))
+                {
+                    client.SetReady(true);
+                    saidReady = true;
+                    Console.WriteLine($"t={now:F1} listener: {expect} is in the lobby; saying ready");
+                }
+
+                // Done once the talker was heard for ten seconds and has heard us as long.
+                if (heardEnough is null && total.Any(kv => voice.NameOf(kv.Key)?.StartsWith(expect, StringComparison.Ordinal) == true && kv.Value.Count >= 500 * VoiceK.FrameSamples))
+                {
+                    heardEnough = now;
+                }
+
+                if (heardEnough is { } since && now - since > 10)
+                {
+                    break;
+                }
+
+                if (client.State is OnlineClientState.Failed or OnlineClientState.Left)
+                {
+                    break;
+                }
+
+                // The tone the clock says a microphone would have delivered by now.
+                int n = (int)(now * VoiceK.SampleRate - fed);
+                while (n > 0)
+                {
+                    int take = Math.Min(n, tone.Length);
+                    for (int i = 0; i < take; i++)
+                    {
+                        tone[i] = amplitude * (float)Math.Sin(phase);
+                        phase += 2 * Math.PI * toneHz / VoiceK.SampleRate;
+                    }
+
+                    voice.Voice.SubmitCapture(tone.AsSpan(0, take));
+                    fed += take;
+                    n -= take;
+                }
+
+                voice.Update();
+
+                // Read as an audio output would: 50 frames a second per talker.
+                owed += (now - lastPaced) * VoiceK.FramesPerSecond;
+                lastPaced = now;
+                int paced = (int)Math.Min(owed, VoiceK.MaxJitterFrames);
+                owed -= paced;
+                foreach (VoiceTalker t in voice.Voice.Talkers)
+                {
+                    for (int i = 0; i < paced && t.ReadFrame(frame); i++)
+                    {
+                        (window.TryGetValue(t.Id, out List<float>? w) ? w : window[t.Id] = new List<float>()).AddRange(frame);
+                        (total.TryGetValue(t.Id, out List<float>? a) ? a : total[t.Id] = new List<float>()).AddRange(frame);
+                    }
+                }
+
+                if (now >= nextReport)
+                {
+                    nextReport += 2;
+                    Console.WriteLine($"t={now:F1} listener: voice connected {voice.IsConnected} talker {voice.Voice.LocalTalker}, sent {voice.Voice.Stats.FramesSent} frames, talkers {voice.Voice.Talkers.Count}");
+                    foreach ((ushort id, List<float> heard) in window)
+                    {
+                        Console.WriteLine($"   heard talker={id} name={voice.NameOf(id)} rms={Rms(heard):F3} tone={Hz(heard):F0}Hz frames={heard.Count / VoiceK.FrameSamples}");
+                    }
+
+                    window.Clear();
+                }
+
+                Thread.Sleep(5);
+            }
+        }
+        finally
+        {
+            voice.Dispose();
+            client.Leave();
+            client.Dispose();
+        }
+
+        bool ok = false;
+        foreach ((ushort id, List<float> heard) in total)
+        {
+            string? name = voice.NameOf(id);
+            // The last half of what was heard: the tone's start and the jitter buffer filling are left out.
+            List<float> tail = heard.GetRange(heard.Count / 2, heard.Count - heard.Count / 2);
+            double rms = Rms(tail);
+            Console.WriteLine($"voice heard talker={id} name={name} rms={rms:F3} tone={Hz(tail):F0}Hz frames={heard.Count / VoiceK.FrameSamples} (by the listener)");
+            ok |= name is not null && name.StartsWith(expect, StringComparison.Ordinal) && rms > 0.1 && heard.Count > 50 * VoiceK.FrameSamples;
+        }
+
+        Console.WriteLine(ok ? $"LISTEN OK: heard {expect}" : $"LISTEN FAILED: {expect} not heard");
+        return ok ? 0 : 1;
+    }
+
+    private static double Rms(List<float> samples)
+    {
+        double sum = 0;
+        foreach (float s in samples)
+        {
+            sum += s * (double)s;
+        }
+
+        return samples.Count == 0 ? 0 : Math.Sqrt(sum / samples.Count);
+    }
+
+    private static double Hz(List<float> samples)
+    {
+        int crossings = 0;
+        for (int i = 1; i < samples.Count; i++)
+        {
+            if ((samples[i - 1] < 0f) != (samples[i] < 0f))
+            {
+                crossings++;
+            }
+        }
+
+        return samples.Count == 0 ? 0 : crossings / 2.0 / (samples.Count / (double)VoiceK.SampleRate);
+    }
+
+    private sealed class ListenerClock : IClock
     {
         private readonly long _start = Stopwatch.GetTimestamp();
 

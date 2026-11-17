@@ -13,7 +13,8 @@ pwsh Tools/Cook/Cook-MapPaks.ps1 -Maps AquaE   # one map, for trying the pipelin
 
 It builds the editor and the game, then runs `RunUAT BuildCookRun -cook -stage -pak -iostore` headless with
 `-CustomConfig=MapPaks`. That layer (`Config/Custom/MapPaks`) is read only by this cook: it turns chunking on, lifts
-the release's never-cook rule for `/Game/Imported`, and makes `UScctMapPakAssetManager` (`Source/OpenSCCT/Cook`) the
+the release's never-cook rule for `/Game/Imported` (`!DirectoriesToNeverCook=ClearArray`, and its own `MapsToCook` and
+`DirectoriesToAlwaysCook` in place of the release's), and makes `UScctMapPakAssetManager` (`Source/OpenSCCT/Cook`) the
 asset manager, which puts every package into exactly one container:
 
 | Container | Holds |

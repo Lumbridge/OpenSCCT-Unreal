@@ -48,6 +48,10 @@ public sealed partial class OnlineBridge : IDisposable
     private int _factsRevision = -1;
     private LobbyFacts _facts;
 
+    /// <summary>How the visit's server was reached, for the rejoin record: its master id (a listed join) and password.</summary>
+    private string? _visitMasterId;
+    private string? _visitPassword;
+
     private string _playerName = "Player";
     private string _installId = NewInstallId();
     private PlayerKey _key = PlayerKey.Create();
@@ -55,6 +59,8 @@ public sealed partial class OnlineBridge : IDisposable
     public OnlineBridge()
     {
         Master = new OnlineMaster(this);
+        Browser = new ServerBrowser(this);
+        Rejoin = new RejoinService(this);
     }
 
     /// <summary>The one online bridge of the process, made on first use (the entry points and the probe use it).</summary>
@@ -74,6 +80,12 @@ public sealed partial class OnlineBridge : IDisposable
     /// <summary>The master's list, listed joins and the account.</summary>
     public OnlineMaster Master { get; }
 
+    /// <summary>The server browser: the master's list, the LAN and the saved addresses, with pings (Online/ServerBrowser.cs).</summary>
+    public ServerBrowser Browser { get; }
+
+    /// <summary>The round to rejoin after a crash, a lost connection or a quit (Online/RejoinService.cs).</summary>
+    public RejoinService Rejoin { get; }
+
     /// <summary>
     /// The maps this client plays (every installed map with its play loader), read on first use. It is read again
     /// when the content folder was configured or changed since (Unreal may ask for the server list before it sets
@@ -83,7 +95,8 @@ public sealed partial class OnlineBridge : IDisposable
     {
         get
         {
-            if (_catalog is null || (Client is null && !string.Equals(_catalogRoot, ContentPaths.Root, StringComparison.OrdinalIgnoreCase)))
+            if (_catalog is null || (Client is null && (!string.Equals(_catalogRoot, ContentPaths.Root, StringComparison.OrdinalIgnoreCase)
+                || _catalog.Revision != MapFolders.Revision)))
             {
                 _catalogRoot = ContentPaths.Root;
                 _catalog = new PlayCatalog();
@@ -186,10 +199,12 @@ public sealed partial class OnlineBridge : IDisposable
     /// for that server when the player is signed in; <paramref name="preferredTeam"/> 0 spies, 1 mercs, 255 watch,
     /// -1 the smaller side.
     /// </summary>
-    public void Join(JoinTarget target, string? password, string? ticket, int preferredTeam = -1, bool loopbackOnly = false, string? hostKey = null)
+    public void Join(JoinTarget target, string? password, string? ticket, int preferredTeam = -1, bool loopbackOnly = false, string? hostKey = null, string? masterId = null)
     {
         ArgumentNullException.ThrowIfNull(target);
         EndVisit();
+        _visitMasterId = string.IsNullOrEmpty(masterId) ? null : masterId;
+        _visitPassword = string.IsNullOrEmpty(password) ? null : password;
         _error = null;
         _stateOverride = OnlineState.Idle;
         // Read after the old visit ended, so a content folder set since then is seen.
@@ -247,6 +262,11 @@ public sealed partial class OnlineBridge : IDisposable
     /// <summary>Leaves the server (it tells the others) and clears the visit: the state is Idle afterwards. A host stops hosting.</summary>
     public void Leave()
     {
+        if (Client is not null)
+        {
+            Rejoin.LeftByChoice();
+        }
+
         Master.CancelJoin();
         EndVisit();
         StopHosting();
@@ -360,6 +380,15 @@ public sealed partial class OnlineBridge : IDisposable
     /// <summary>Logs in as an admin of a dedicated server.</summary>
     public void Admin(string password) => Client?.Admin(password);
 
+    /// <summary>Host or admin: removes a player from the server (the server refuses it for anyone else, a bot or oneself).</summary>
+    public void Kick(int playerId) => Client?.Kick(playerId);
+
+    /// <summary>Host or admin: removes a player and keeps him out (his install id and address go on the server's ban list).</summary>
+    public void Ban(int playerId) => Client?.Ban(playerId);
+
+    /// <summary>Host or admin: bans a player from voice chat, or lifts it; the player's VoiceBanned flag follows.</summary>
+    public void SetVoiceBanned(int playerId, bool banned) => Client?.SetVoiceBanned(playerId, banned);
+
     /// <summary>An admin console command (status, map, set...); the answers arrive as system chat lines.</summary>
     public void Command(string command) => Client?.Command(command);
 
@@ -413,6 +442,9 @@ public sealed partial class OnlineBridge : IDisposable
     {
         Master.Pump();
         PumpHost();
+        Browser.Pump();
+        UpdateMapFetch();
+        Rejoin.Pump();
         if (Client is not { } client)
         {
             return 0;
@@ -449,6 +481,7 @@ public sealed partial class OnlineBridge : IDisposable
         }
 
         FollowState(client);
+        Rejoin.Follow(client, _visitMasterId, _visitPassword);
 
         // The round is ticked here, on the same clock the visit ticked the connection on so far (a fresh clock would
         // start behind it and the driver would see time go backwards). Also when the main session slot adopted it:
@@ -565,6 +598,8 @@ public sealed partial class OnlineBridge : IDisposable
         EndVisit();
         StopHosting();
         Master.Dispose();
+        Browser.Dispose();
+        Rejoin.Dispose();
         if (ReferenceEquals(s_instance, this))
         {
             s_instance = null;

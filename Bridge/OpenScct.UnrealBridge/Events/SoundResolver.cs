@@ -20,7 +20,7 @@ namespace OpenScct.UnrealBridge.Events;
 /// radius, minimum distance and pitch of the source.</item>
 /// </list>
 /// Left to Unreal: the voices themselves (the original mixes 32 and steals by slot and priority), the distance gain,
-/// occlusion, Doppler and reverb.
+/// Doppler and reverb. A playing voice's occlusion is AcousticVoices', which Unreal asks each frame.
 /// </summary>
 internal sealed class SoundResolver
 {
@@ -68,6 +68,7 @@ internal sealed class SoundResolver
     private readonly Dictionary<(int Actor, Name Sound), (long Tick, bool Heard)> _last = [];
     private readonly List<(int Actor, Name Sound)> _stale = [];
     private readonly List<LoopCall> _loops = [];
+    private readonly Func<FVector, FVector, int, float>? _reachFactor;
 
     // What may still be playing, by actor and sound (the call's and the leaf's), with the tick it ends: a StopSound
     // for anything else stops nothing and is not passed on.
@@ -77,11 +78,17 @@ internal sealed class SoundResolver
     private int _pendingSwitch = -1;
     private int _callId;
 
-    public SoundResolver(SoundLibrary library, PlaySession session, DrainQueue<BridgeSound> output)
+    /// <summary>
+    /// <paramref name="reachFactor"/> (ear, source, actor) gives the factor a blocked call's radius shrinks by for the
+    /// hearing reach (1 when nothing is in the way); null leaves the reach unshrunk.
+    /// </summary>
+    public SoundResolver(SoundLibrary library, PlaySession session, DrainQueue<BridgeSound> output,
+        Func<FVector, FVector, int, float>? reachFactor = null)
     {
         _library = library;
         _session = session;
         _out = output;
+        _reachFactor = reachFactor;
     }
 
     /// <summary>PlaySound calls that started at least one file.</summary>
@@ -95,6 +102,12 @@ internal sealed class SoundResolver
 
     /// <summary>Calls dropped because the viewed actor is beyond 100 x the radius.</summary>
     public long OutOfReach { get; private set; }
+
+    /// <summary>Attenuated calls whose radius was shrunk because something blocks the line to the ear.</summary>
+    public long ReachShrunk { get; private set; }
+
+    /// <summary>Of those, the calls the shrink put out of reach (they count in <see cref="OutOfReach"/> too).</summary>
+    public long ReachDropped { get; private set; }
 
     /// <summary>Sounds the events named that the library does not have (the newest few).</summary>
     public List<string> Unknown { get; } = [];
@@ -130,6 +143,20 @@ internal sealed class SoundResolver
         long before = Silent + UnknownCount;
         PlayMusic(tick, song, fadeIn);
         return Silent + UnknownCount == before;
+    }
+
+    /// <summary>
+    /// Plays <paramref name="sound"/> at <paramref name="location"/> as a PlaySound call of no actor would (a check's
+    /// test emitter, not the game). Returns the call's id, or 0 when the sound is unknown or resolves to no file.
+    /// </summary>
+    public int PlaySoundForCheck(long tick, string sound, FVector location, float radius)
+    {
+        long before = Started;
+        PlaySound(tick, new SimEvent
+        {
+            Kind = SimEventKind.PlaySound, Tick = tick, What = sound, Location = location, Volume = 1f, Radius = radius, Pitch = 1f,
+        });
+        return Started > before ? _callId : 0;
     }
 
     /// <summary>
@@ -251,8 +278,9 @@ internal sealed class SoundResolver
     /// <summary>
     /// SoundSystem.InHearingReach (APlayerController::HearSound): an attenuated call this machine's own simulation
     /// made plays only when the actor the player views is nearer than 100 x its radius. The server tested its own
-    /// calls before sending them. Not ported: the radius shrinking by 0.8 ^ (ZoneDist ^ 2) when something is in the
-    /// way (it needs the occlusion trace and the map's zone distance table).
+    /// calls before sending them. When the occlusion line check from the ear is blocked (and the actor's
+    /// SoundOcclusion is not None) the radius shrinks by 0.8 ^ (ZoneDist ^ 2) between the ear's zone and the
+    /// source's (APlayerController::HearSound, editor 0x11189770 and its helper 0x111895e0).
     /// </summary>
     private bool InHearingReach(in SimEvent e)
     {
@@ -263,7 +291,24 @@ internal sealed class SoundResolver
         }
 
         float reach = RangeFactor * e.Radius;
-        return FVector.DistSquared(viewed.Location, e.Location) < reach * reach;
+        float distanceSquared = FVector.DistSquared(viewed.Location, e.Location);
+        if (distanceSquared >= reach * reach || _reachFactor is null)
+        {
+            return distanceSquared < reach * reach;
+        }
+
+        // Only a call in reach unshrunk needs the trace: the shrink can only take it out of reach.
+        float factor = _reachFactor(viewed.Location, e.Location, e.ActorId);
+        if (factor >= 1f)
+        {
+            return true;
+        }
+
+        ReachShrunk++;
+        float shrunk = reach * factor;
+        bool heard = distanceSquared < shrunk * shrunk;
+        ReachDropped += heard ? 0 : 1;
+        return heard;
     }
 
     /// <summary>SoundSystem.PlaySound and Start (rules 9 to 14) for one call.</summary>
