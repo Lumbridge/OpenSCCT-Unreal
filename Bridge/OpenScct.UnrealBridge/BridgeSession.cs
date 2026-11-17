@@ -46,6 +46,8 @@ public sealed record LocalMatch
 
     /// <summary>Responsive smoke: smoke grenades fill the shared simulated cloud (the match option SvmResponsiveSmoke).</summary>
     public bool ResponsiveSmoke { get; init; }
+    /// <summary>Visit a Map practice: unlimited ammunition and gadgets, instant gear changes, and Switch Team in the menu.</summary>
+    public bool UnlimitedGear { get; init; }
     /// <summary>The player's own rules over the map's (and over the practice rules): minutes (0 for no limit), lives of
     /// each spy and merc (0 for unlimited) and the respawn's seconds; negative keeps what the rules gave.</summary>
     public int TimeLimit { get; init; } = -1;
@@ -66,6 +68,9 @@ public sealed record LocalMatch
 
     /// <summary>The server ticks on the caller's thread just before the client (the drills read it between ticks).</summary>
     public bool InlineHost { get; init; }
+
+    /// <summary>The folder the match is recorded into as a demo (PlaySettings.DemoFolder, Demo/DemoSaving.cs), or null.</summary>
+    public string? DemoFolder { get; init; }
 }
 
 /// <summary>
@@ -151,10 +156,11 @@ public sealed class BridgeSession : IDisposable
             Rifles = match.Rifles,
             OfflineRules = match.OfflineRules,
             ResponsiveSmoke = match.ResponsiveSmoke,
-            UnlimitedGear = match.OfflineRules,
+            UnlimitedGear = match.OfflineRules || match.UnlimitedGear,
             StartAt = match.StartAt,
             Rules = match.PlayLevel ? PlayRules.PlayLevel : PlayRules.MapSettings,
             HostMode = match.InlineHost ? PlayHostMode.Inline : PlayHostMode.Thread,
+            DemoFolder = match.DemoFolder,
         }.ForLocalLaunch();
         var session = new PlaySession(settings, new StopwatchClock());
         OverrideRules(session, match);

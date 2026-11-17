@@ -21,6 +21,7 @@ class UScctMatchMenuWidget;
  *   ?Rifles=1           the mercs may pick OpenSCCT's additional rifles
  *   ?Practice=1         practice rules: no time limit, unlimited lives, 5 s respawn
  *   ?ResponsiveSmoke=1  smoke grenades fill the shared simulated cloud (Play/ScctEffectsSmokeVolume.cpp draws it)
+ *   ?UnlimitedGear=1    Visit a Map practice: unlimited gear, instant gear changes, Switch Team in the menu
  *   ?Name=Sam           the local player's name (Unreal's own player-name option; default "Player")
  *   ?TimeLimit=10       the player's own rules over the map's: minutes (0 for none), ?SpyLives=3 and ?MercLives=3
  *                       (0 for unlimited), ?Respawn=5 seconds
@@ -40,6 +41,12 @@ class UScctMatchMenuWidget;
  *   -ScctLeaveMatchAfter=S  S seconds after the level started, do what the in-match menu's last button does: back
  *                       to the main menu from a local match, leave the server from an online round
  *   -ScctLeaveMatchTimes=N  -ScctLeaveMatchAfter counts in the first N levels of the run (default 1)
+ *   -ScctPlayErrorLeaveAfter=S  in an unattended run the play error page leaves on its own S seconds after it
+ *                       came up (default 10), as its LEAVE button does
+ *
+ * Play errors: when the session subsystem raises OnPlayError (the match could not start, the connection was lost
+ * or refused, the match's server stopped) the match overlay shows the play error page (Menu/SScctPlayErrorPage.h)
+ * over everything; it takes the mouse, and Escape or its LEAVE button leave the level as the menu's last button does.
  */
 UCLASS()
 class OPENSCCT_API AScctGameMode : public AGameModeBase
@@ -62,6 +69,15 @@ private:
 
 	/** Gives the keyboard and the mouse to the match (the front end's menu, or the in-match menu, had them). */
 	void GiveInputToGame(APlayerController* Player);
+
+	/** The session subsystem's OnPlayError: the play error page covers the level and takes the mouse and keys. */
+	void HandlePlayError(const FScctPlayError& Error);
+
+	/** While the play error page is up: Escape leaves; an unattended run leaves on its own. */
+	void TickPlayError(APlayerController* Player, float DeltaSeconds);
+
+	/** Unattended: seconds until the play error page is left; negative when not counting. */
+	float PlayErrorLeaveIn = -1.0f;
 
 	FScctLocalMatchOptions Match;
 

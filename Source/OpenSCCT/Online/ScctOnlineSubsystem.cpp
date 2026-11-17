@@ -1,5 +1,6 @@
 #include "Online/ScctOnlineSubsystem.h"
 
+#include "Demo/ScctDemoSubsystem.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -156,6 +157,8 @@ const FScctOnlineApi* UScctOnlineSubsystem::Connect()
 	}
 
 	LoadIdentity();
+	// Every visit is made with the demo-saving choice (Demo/ScctDemoSubsystem.h), so it is in the bridge before any join.
+	UScctDemoSubsystem::PushChoice();
 
 	FString MasterUrl, InviteKey;
 	ReadMasterSettings(MasterUrl, InviteKey);
@@ -712,6 +715,13 @@ void UScctOnlineSubsystem::FollowLevel()
 		{
 			Wanted = FString::Printf(TEXT("%s?%s=1"), *Level, OnlineOption);
 		}
+	}
+	else if (bInOnlineLevel && GetState() == EScctOnlineState::Failed)
+	{
+		// The connection was lost or refused in the round: the level's play error page says why and stays until the
+		// player leaves it (Leave dismisses the failure, and the next frame goes back to the front end).
+		TravelDelay = 0.0f;
+		return;
 	}
 	else if (bInOnlineLevel)
 	{

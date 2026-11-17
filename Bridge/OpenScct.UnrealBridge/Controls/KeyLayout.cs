@@ -78,7 +78,77 @@ public sealed class KeyLayout
         return true;
     }
 
-    public KeyLayout Clone() => new(_bindings);
+    /// <summary>
+    /// The order the bindings editor shows an action's keys in (primary first), by action id. Only the editor reads
+    /// it; play does not. A key that is no longer the action's is skipped (KeyLayout.InputOrder in the Godot client).
+    /// </summary>
+    public IReadOnlyDictionary<string, string[]> InputOrders => _inputOrder;
+
+    private readonly SortedDictionary<string, string[]> _inputOrder = new(StringComparer.Ordinal);
+
+    /// <summary><paramref name="inputs"/> in the order kept for <paramref name="action"/>, then the rest as given.</summary>
+    public IReadOnlyList<string> InputOrder(string action, IEnumerable<string> inputs)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        var available = new List<string>();
+        foreach (string key in inputs)
+        {
+            if (!available.Exists(k => k.Equals(key, StringComparison.OrdinalIgnoreCase)))
+            {
+                available.Add(key);
+            }
+        }
+
+        var ordered = new List<string>();
+        if (_inputOrder.TryGetValue(action, out string[]? saved))
+        {
+            foreach (string key in saved)
+            {
+                int index = available.FindIndex(k => k.Equals(key, StringComparison.OrdinalIgnoreCase));
+                if (index >= 0)
+                {
+                    ordered.Add(available[index]);
+                    available.RemoveAt(index);
+                }
+            }
+        }
+
+        ordered.AddRange(available);
+        return ordered;
+    }
+
+    public void SetInputOrder(string action, IEnumerable<string> inputs)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        var order = new List<string>();
+        foreach (string key in inputs)
+        {
+            if (!string.IsNullOrWhiteSpace(key) && !order.Exists(k => k.Equals(key, StringComparison.OrdinalIgnoreCase)))
+            {
+                order.Add(key);
+            }
+        }
+
+        if (order.Count == 0)
+        {
+            _inputOrder.Remove(action);
+        }
+        else
+        {
+            _inputOrder[action] = order.ToArray();
+        }
+    }
+
+    public KeyLayout Clone()
+    {
+        var copy = new KeyLayout(_bindings);
+        foreach ((string action, string[] order) in _inputOrder)
+        {
+            copy._inputOrder[action] = (string[])order.Clone();
+        }
+
+        return copy;
+    }
 
     /// <summary>The same bindings (the text a save would write).</summary>
     public bool SameAs(KeyLayout other)

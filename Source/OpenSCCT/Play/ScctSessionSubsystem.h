@@ -55,6 +55,37 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FScctFrameEvent, float /*DeltaSeconds*/);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FScctSessionChangedEvent, int32 /*OldSessionId*/, int32 /*NewSessionId*/);
 DECLARE_DELEGATE_OneParam(FScctViewOverride, FScctBridgeView& /*InOutView*/);
 
+/** Why play stopped or never began, as the play error page (Menu/SScctPlayErrorPage.h) words it. */
+enum class EScctPlayErrorKind : uint8
+{
+	None,
+	/** The match could not be started: "Could not start play on X: reason" (the Godot PlayRoot's load error). */
+	StartFailed,
+	/** The connection to the server was lost or refused in a round: "Could not play X: reason. Press Escape to leave." */
+	Disconnected,
+	/** The match's own server (the local match this machine hosts) failed: "Server stopped: reason". */
+	ServerStopped,
+};
+
+struct FScctPlayError
+{
+	EScctPlayErrorKind Kind = EScctPlayErrorKind::None;
+
+	/** The OpenSCCT map's folder name ("AquaE"), or empty when none was known. */
+	FString Map;
+
+	/** The first line of what went wrong, as a player reads it. */
+	FString Reason;
+
+	/** The server refused the player (rejected, kicked or banned) rather than the connection dropping. */
+	bool bRejected = false;
+
+	/** Counts up with every error, so a page that showed one can tell a new one from it. */
+	int32 Serial = 0;
+};
+
+DECLARE_MULTICAST_DELEGATE_OneParam(FScctPlayErrorEvent, const FScctPlayError& /*Error*/);
+
 /** What a local match is started with. The game mode fills it from the level's URL options. */
 USTRUCT(BlueprintType)
 struct FScctLocalMatchOptions
@@ -102,6 +133,9 @@ struct FScctLocalMatchOptions
 	/** Responsive smoke: smoke grenades fill the shared simulated cloud that shots and blasts push through. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	bool bResponsiveSmoke = false;
+	/** Visit a Map practice: unlimited gear, instant gear changes, and Switch Team in the in-match menu. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	bool bUnlimitedGear = false;
 
 	/** Empty: "Player". */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
@@ -136,6 +170,14 @@ struct FScctLocalMatchOptions
  *                                                         its own eyes (for tour cameras that look at the player)
  *   -ScctRestartAfter=S                                   S seconds into the first match, start it again once
  *                                                         (a second match in the same world: a new session id)
+ *   -ScctForceDisconnect=S                                S seconds into the first session this world presents,
+ *                                                         end it as a lost connection does: the session is stopped
+ *                                                         and OnPlayError says Disconnected ("Connection closed"),
+ *                                                         so the disconnect page can be seen without a server
+ *
+ * Errors: whatever stops play or keeps it from starting (the bridge cannot be loaded, the match cannot start, its
+ * server fails, the online visit loses or is refused its connection while this world presents its round) is
+ * recorded once as GetPlayError and raised as OnPlayError; the match overlay shows it as the play error page.
  */
 UCLASS()
 class OPENSCCT_API UScctSessionSubsystem : public UTickableWorldSubsystem
@@ -171,6 +213,12 @@ public:
 	/** Why the match stopped or did not start; empty while all is well. Set once per failure, cleared by the next start. */
 	UFUNCTION(BlueprintPure, Category = "OpenSCCT")
 	const FString& GetFailure() const { return Failure; }
+
+	/** The last error that stopped play or kept it from starting in this world; Kind None while there was none. */
+	const FScctPlayError& GetPlayError() const { return PlayError; }
+
+	/** Raised once per error, as it is recorded (see "Errors" above). */
+	FScctPlayErrorEvent OnPlayError;
 
 	/** The id of the session this world presents; 0 when none. A new number for every match and online round. */
 	UFUNCTION(BlueprintPure, Category = "OpenSCCT")
@@ -244,8 +292,14 @@ private:
 	/** Steps a to d of "A session changes". NewInfo describes the new session (Id 0: none). */
 	void ChangeSession(const FScctBridgeSessionInfo& NewInfo, bool bStartedHere);
 
-	/** Records and shows a failure once. */
-	void Fail(const FString& Reason);
+	/** Records a failure once and raises it as a play error of Kind for Map. */
+	void Fail(const FString& Reason, EScctPlayErrorKind Kind = EScctPlayErrorKind::StartFailed, const FString& Map = FString(), bool bRejected = false);
+
+	/** While this world follows the bridge: the online visit failed (lost or refused its connection) in its round. */
+	void CheckVisitFailure();
+
+	/** -ScctForceDisconnect: ends the session as a lost connection would, once. */
+	void TickForcedDisconnect(float DeltaTime);
 
 	void DestroyProxies();
 	void UpdatePawns();
@@ -293,6 +347,20 @@ private:
 
 	int32 TicksThisFrame = 0;
 	FString Failure;
+	FScctPlayError PlayError;
+
+	/** The online visit's failure was seen (and reported, if this world presented its round); cleared when it is over. */
+	bool bVisitFailureSeen = false;
+
+	/** PlayError's serial while the visit had not failed: a newer Disconnected error is the same failure. */
+	int32 SerialBeforeVisitFailure = 0;
+
+	/** The map of the last session this world presented, for an error that comes after it is gone. */
+	FString LastPresentedMap;
+
+	/** -ScctForceDisconnect: seconds left once a session plays; negative when not asked for or done. */
+	float ForceDisconnectIn = -1.0f;
+	bool bForceDisconnectRead = false;
 	FScctBridgeView View = {};
 	TArray<FScctBridgePawn> PawnBuffer;
 	int32 PawnCount = 0;

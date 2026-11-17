@@ -24,6 +24,9 @@
 
 namespace
 {
+	/** GUI.SSMenu_LANMainPage s_Init: Sleep(0.5), then keys count (InGameMenuK.KeyIgnoreSeconds). */
+	constexpr float MatchMenuKeyHold = 0.5f;
+
 	bool MatchMenuIsBackKey(const FKey& Key)
 	{
 		return Key == EKeys::Escape || Key == EKeys::Gamepad_FaceButton_Right;
@@ -104,6 +107,12 @@ void SScctMatchMenu::Construct(const FArguments& InArgs)
 				SAssignNew(Body, SBox)
 				.Visibility_Lambda([this] { return bOpen ? EVisibility::Visible : IsShowingResults() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
 			]
+			// The Equipment page, the strategic map and the help page, over the menu (Menu/SScctMatchMenuEntries.cpp).
+			+ SOverlay::Slot()
+			[
+				SAssignNew(PageLayer, SOverlay)
+				.Visibility_Lambda([this] { return bOpen ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; })
+			]
 			+ SOverlay::Slot()[ Dialogs.ToSharedRef() ])
 	];
 	Show(EView::Pause);
@@ -119,12 +128,17 @@ void SScctMatchMenu::SetOpen(bool bInOpen)
 	if (bOpen)
 	{
 		Shown = 0.0f;
+		OpenedSeconds = 0.0f;
 		ScctUi::Play(EScctUiSound::Open);
+		// Who the player is now decides the pause page's entries (logged as the menu opens).
+		ShownEntries.Reset();
+		RefreshContext(false);
 		// Offline the results are the menu's page while the round is over; otherwise the menu opens on its first page.
 		Show(bResultsReady && !bOnlineLevel ? EView::Results : EView::Pause);
 	}
 	else
 	{
+		CloseOverlayPages();
 		if (Settings.IsValid())
 		{
 			Settings->OnClosing();
@@ -205,6 +219,21 @@ void SScctMatchMenu::ShowNamed(const FString& Name)
 	{
 		Show(EView::Results);
 	}
+	else if (Page.Equals(TEXT("gear"), ESearchCase::IgnoreCase))
+	{
+		Show(EView::Pause);
+		ShowGear(Sub.Equals(TEXT("merc"), ESearchCase::IgnoreCase) ? 1 : Sub.Equals(TEXT("spy"), ESearchCase::IgnoreCase) ? 0 : -1, false);
+	}
+	else if (Page.Equals(TEXT("map"), ESearchCase::IgnoreCase))
+	{
+		Show(EView::Pause);
+		ShowStrategicMap(false);
+	}
+	else if (Page.Equals(TEXT("help"), ESearchCase::IgnoreCase))
+	{
+		Show(EView::Pause);
+		ShowHelp();
+	}
 	else
 	{
 		Show(EView::Pause);
@@ -248,6 +277,17 @@ FReply SScctMatchMenu::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& I
 	}
 	if (MatchMenuIsBackKey(Key))
 	{
+		if (BackFromOverlayPage())
+		{
+			return FReply::Handled();
+		}
+		if (View == EView::Pause && OpenedSeconds < MatchMenuKeyHold)
+		{
+			// SSMenu_LANMainPage s_Init: the menu takes no key in its first half second, so a key pressed twice by
+			// mistake does not close it again at once.
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: a close key %.2f s after opening is ignored (the first %.1f s are held)"), OpenedSeconds, MatchMenuKeyHold);
+			return FReply::Handled();
+		}
 		if (!(View == EView::Settings && Settings.IsValid() && Settings->HandleBack()))
 		{
 			GoBack();
@@ -300,6 +340,20 @@ void SScctMatchMenu::Tick(const FGeometry& AllottedGeometry, const double InCurr
 {
 	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
 	Shown = ScctHudStyle::Ease(Shown, bOpen || IsShowingResults() ? 1.0f : 0.0f, FMath::Min(InDeltaTime, 0.05f), 10.0f);
+
+	// The match goes on behind the menu: who the player is is followed (a team change asked from it is logged when it
+	// lands, the entries come and go), and -ScctMatchMenuAct acts once the menu has been open a moment.
+	ContextTimer += InDeltaTime;
+	if (ContextTimer >= 0.25f)
+	{
+		ContextTimer = 0.0f;
+		RefreshContext(false);
+	}
+	if (bOpen)
+	{
+		OpenedSeconds += InDeltaTime;
+		TickUnattended(InDeltaTime);
+	}
 
 	// Unattended runs only (-ScctMenuDo): a page asked for while the menu is closed opens it.
 	FScctMenuDriver::FHost DriverHost;
@@ -503,45 +557,43 @@ TSharedRef<SWidget> SScctMatchMenu::BuildPause()
 		return Made.ToSharedRef();
 	};
 
-	DefaultFocus = Entry(TEXT("Resume"), TEXT("Back to the match"), TEXT("Close the menu and play on. Escape and B do the same."), [this] { ScctUi::Play(EScctUiSound::Accept); OnResume.ExecuteIfBound(); });
-	OptionsEntry = Entry(ScctUi::GameText(TEXT("Start_Menu"), TEXT("Options.Caption"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
-		TEXT("The settings, the same as in the main menu. Changes are in force at once."), [this] { ScctUi::Play(EScctUiSound::Accept); Show(EView::Settings); });
-	if (CanChangeSide())
+	// The entries the Godot client shows for who the player is (Menu/SScctMatchMenuEntries.cpp), each with what it does.
+	const bool bMerc = bContextKnown ? Context.LocalTeam == 1 : IsMercLocal();
+	const FString Other = ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), bMerc ? 0 : 1, bMerc ? TEXT("Spy") : TEXT("Mercenary"));
+	const TArray<int32> PauseEntries = ShownEntries.Num() > 0 ? ShownEntries : GetEntries();
+	DefaultFocus.Reset();
+	for (const int32 Id : PauseEntries)
 	{
-		const bool bMerc = IsMercLocal();
-		const FString Other = ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), bMerc ? 0 : 1, bMerc ? TEXT("Spy") : TEXT("Mercenary"));
-		const FString SwitchCaption = ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Button2"), TEXT("Switch Team"));
-		Entry(SwitchCaption, FString::Printf(TEXT("Play this map as a %s"), *Other.ToLower()),
-			TEXT("Start this match again on the other side, with the same map, mode, bots and rules."), [this, Other, SwitchCaption]
-			{
-				// The dialog is named as the entry that opened it.
-				ScctUi::Confirm(Dialogs, SwitchCaption, FString::Printf(TEXT("Start the match again as a %s? This round's score is lost."), *Other.ToLower()),
-					SwitchCaption, TEXT("Cancel"), [this] { Restart(true); });
-			});
-		Entry(TEXT("Restart"), TEXT("The same match from the start"), TEXT("Start this match again with the same side, map, mode, bots and rules."), [this]
+		FString Sub, Description;
+		switch (Id)
 		{
-			ScctUi::Confirm(Dialogs, TEXT("Restart"), TEXT("Start the match again from the beginning? This round's score is lost."), TEXT("Restart"), TEXT("Cancel"), [this] { Restart(false); });
-		});
-	}
-	const UScctOnlineSubsystem* Visit = Online.Get();
-	if (bOnlineLevel && Visit != nullptr && Visit->HasFlag(EScctOnlineStatusFlags::CanControl))
-	{
-		Entry(ScctUi::GameText(TEXT("Start_Menu"), TEXT("Returntolobby.Caption"), TEXT("Return to lobby")), TEXT("End the match for everyone"),
-			TEXT("You control this server: stop the match and bring every player back to the lobby."), [this]
-			{
-				ScctUi::Confirm(Dialogs, ScctUi::GameText(TEXT("Start_Menu"), TEXT("Returntolobby.Caption"), TEXT("Return to lobby")),
-					ScctUi::GameText(TEXT("BackToLobbyValidation"), TEXT("LabelCaption"), TEXT("Stop the match and bring everyone back to the lobby?")),
-					TEXT("Return to lobby"), TEXT("Cancel"), [this] { if (UScctOnlineSubsystem* V = Online.Get()) { V->BackToLobby(); } }, true);
-			});
-	}
-	const FString LeaveCaption = bOnlineLevel ? FString(TEXT("Leave the server")) : ScctUi::GameText(TEXT("Start_Menu"), TEXT("Quit.Caption"), TEXT("Quit Session"));
-	Entry(LeaveCaption, bOnlineLevel ? TEXT("Back to the menus; your place is given up") : TEXT("Back to the main menu"),
-		bOnlineLevel ? TEXT("Leave the server. The match goes on without you.") : TEXT("End this match and go back to the main menu."), [this, LeaveCaption]
+		case EScctMatchMenuButton::Back: Sub = TEXT("Back to the match"); Description = TEXT("Close the menu and play on. Escape and B do the same."); break;
+		case EScctMatchMenuButton::ChangeGear: Sub = TEXT("Gadgets, weapon and sidearm"); Description = TEXT("The Equipment page: pick your kit. In the round it goes on at once while the server allows, else at your next spawn."); break;
+		case EScctMatchMenuButton::SwitchTeam: Sub = FString::Printf(TEXT("Play on as a %s"), *Other.ToLower()); Description = TEXT("A practice round: change side now, without starting again."); break;
+		case EScctMatchMenuButton::StrategicMap: Sub = TEXT("The floors, the places and your team"); Description = TEXT("The map of this level with where you and your team mates are. Its own key opens and closes it too."); break;
+		case EScctMatchMenuButton::Options: Sub = TEXT("Video, audio, controls and key bindings"); Description = TEXT("The settings, the same as in the main menu. Changes are in force at once."); break;
+		case EScctMatchMenuButton::Help: Sub = TEXT("Your keys and the round's goals"); Description = TEXT("The controls of your side with the keys you have on them, and what this round asks of each side."); break;
+		case EScctMatchMenuButton::Resign: Sub = TEXT("Give up your remaining lives"); Description = TEXT("Stop playing this round: your lives are given up and the server says so."); break;
+		case EScctMatchMenuButton::ReturnToLobby: Sub = TEXT("End the match for everyone"); Description = TEXT("You control this server: stop the match and bring every player back to the lobby."); break;
+		case EScctMatchMenuButton::QuitSession:
+			Sub = bOnlineLevel ? TEXT("Back to the menus; your place is given up") : TEXT("Back to the main menu");
+			Description = bOnlineLevel ? TEXT("Leave the server. The match goes on without you.") : TEXT("End this match and go back to the main menu.");
+			break;
+		case 100: Sub = TEXT("Close OpenSCCT"); Description = TEXT("Leave the match and close the game."); break;
+		case 101: Sub = FString::Printf(TEXT("Play this map as a %s"), *Other.ToLower()); Description = TEXT("Start this match again on the other side, with the same map, mode, bots and rules."); break;
+		case 102: Sub = TEXT("The same match from the start"); Description = TEXT("Start this match again with the same side, map, mode, bots and rules."); break;
+		default: break;
+		}
+		const TSharedRef<SScctButton> Made = Entry(EntryCaption(Id), Sub, Description, [this, Id] { Act(Id); });
+		if (!DefaultFocus.IsValid())
 		{
-			ScctUi::Confirm(Dialogs, LeaveCaption,
-				bOnlineLevel ? TEXT("Leave the server and go back to the menus?") : TEXT("End the match and go back to the main menu?"),
-				bOnlineLevel ? TEXT("Leave") : TEXT("Quit match"), TEXT("Cancel"), [this] { OnLeave.ExecuteIfBound(); }, true);
-		});
+			DefaultFocus = Made;
+		}
+		if (Id == EScctMatchMenuButton::Options)
+		{
+			OptionsEntry = Made;
+		}
+	}
 
 	return SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)

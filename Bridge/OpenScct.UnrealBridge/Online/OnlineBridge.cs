@@ -211,6 +211,10 @@ public sealed partial class OnlineBridge : IDisposable
             InstallGameplayServices = false,
             // The server's start gate waits for ReportLoaded: Unreal says when its level is up.
             AutoReportReady = false,
+            // The player's demo-saving choice (Demo/DemoSaving.cs, OnlineService.ClientSettings): the folder always
+            // goes with the visit, so turning saving on mid-visit works from the next round.
+            RecordDemos = Demo.DemoSaving.OnlineEnabled,
+            DemoFolder = Demo.DemoSaving.VisitFolder(),
         };
         _start = _clock.NowMicroseconds;
         _ticks = 0;

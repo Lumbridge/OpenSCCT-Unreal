@@ -219,5 +219,7 @@ public static class BridgeStartFlags
     public const int OfflineRules = 4;
 
     /// <summary>Responsive smoke: smoke grenades fill a shared simulated cloud that shots and blasts push through (SvmResponsiveSmoke).</summary>
-    public const int ResponsiveSmoke = 8;
+    public const int ResponsiveSmoke = 16;
+    /// <summary>Visit a Map practice: unlimited gear, instant gear changes, the in-match menu's Switch Team.</summary>
+    public const int UnlimitedGear = 8;
 }
