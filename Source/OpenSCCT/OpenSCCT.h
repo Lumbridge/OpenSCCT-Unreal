@@ -19,6 +19,24 @@ public:
 	 */
 	const FScctBridgeApi* GetBridge(FString& OutError);
 
+	/**
+	 * Fetches the function table of a bridge feature: calls the static GetApi(table*) of the bridge class
+	 * TypeName (for example "OpenScct.UnrealBridge.Events.EventsExports"). The tables are mirrored in
+	 * Runtime/Scct*Api.h. Returns the feature's version, or 0 with the reason in OutError.
+	 */
+	template <typename TTable>
+	int32 GetFeatureTable(const TCHAR* TypeName, TTable& OutTable, FString& OutError)
+	{
+		if (GetBridge(OutError) == nullptr)
+		{
+			return 0;
+		}
+
+		using FGetTable = int32(__stdcall*)(TTable*);
+		const auto GetTable = static_cast<FGetTable>(Host.GetFunction(TypeName, TEXT("GetApi"), OutError));
+		return GetTable != nullptr ? GetTable(&OutTable) : 0;
+	}
+
 	/** The text of the bridge's last failure. */
 	FString GetBridgeError() const;
 

@@ -7,7 +7,9 @@
 #include "Misc/Paths.h"
 #include "UnrealClient.h"
 #include "OpenSCCT.h"
+#include "GameFramework/PlayerController.h"
 #include "Play/ScctPawnProxy.h"
+#include "Play/ScctViewPawn.h"
 
 namespace
 {
@@ -54,6 +56,7 @@ bool UScctSessionSubsystem::StartLocalMatch(const FString& Map, const FString& M
 		Skeletons[Kind].SetNum(FMath::Clamp(Count, 0, MaxBones));
 	}
 	bPlaying = true;
+	OnMatchStarted.Broadcast();
 	return true;
 }
 
@@ -61,6 +64,7 @@ void UScctSessionSubsystem::StopMatch()
 {
 	if (Api != nullptr && bPlaying)
 	{
+		OnMatchStopped.Broadcast();
 		Api->Stop();
 	}
 	bPlaying = false;
@@ -102,21 +106,30 @@ void UScctSessionSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 	TickAutoShots(DeltaTime);
+	if (bPlaying)
+	{
+		Api->Update();
+		if (Api->GetState() == static_cast<int32>(EScctBridgeState::Failed))
+		{
+			Fail(FOpenSCCTModule::Get().GetBridgeError());
+		}
+		else
+		{
+			Api->GetView(&View);
+		}
+	}
+
+	// The camera is placed here, in the subsystem's tick: the engine caches the camera right after it, so a
+	// pawn that moved itself in a later tick group would be drawn one frame behind the world.
+	ApplyTourCamera();
+	ApplyViewToPlayer();
 	if (!bPlaying)
 	{
 		return;
 	}
 
-	Api->Update();
-	if (Api->GetState() == static_cast<int32>(EScctBridgeState::Failed))
-	{
-		Fail(FOpenSCCTModule::Get().GetBridgeError());
-		return;
-	}
-
-	Api->GetView(&View);
-	ApplyTourCamera();
 	UpdatePawns();
+	OnFrame.Broadcast(DeltaTime);
 }
 
 void UScctSessionSubsystem::UpdatePawns()
@@ -164,6 +177,21 @@ void UScctSessionSubsystem::UpdatePawns()
 	}
 }
 
+AScctPawnProxy* UScctSessionSubsystem::FindProxy(int32 ActorId) const
+{
+	const TObjectPtr<AScctPawnProxy>* Proxy = Proxies.Find(ActorId);
+	return Proxy != nullptr && IsValid(*Proxy) ? Proxy->Get() : nullptr;
+}
+
+void UScctSessionSubsystem::ApplyViewToPlayer()
+{
+	const APlayerController* Player = GetWorld()->GetFirstPlayerController();
+	if (AScctViewPawn* ViewPawn = Player != nullptr ? Cast<AScctViewPawn>(Player->GetPawn()) : nullptr)
+	{
+		ViewPawn->ApplyView(View);
+	}
+}
+
 void UScctSessionSubsystem::Fail(const FString& Reason)
 {
 	Failure = Reason;
@@ -202,6 +230,13 @@ void UScctSessionSubsystem::TickAutoShots(float DeltaTime)
 		}
 	}
 
+	if (bAdvanceTour)
+	{
+		// The shot requested last tick has been taken from the old point.
+		bAdvanceTour = false;
+		++TourIndex;
+	}
+
 	if (QuitTimer >= 0.0f)
 	{
 		QuitTimer -= DeltaTime;
@@ -226,6 +261,7 @@ void UScctSessionSubsystem::TickAutoShots(float DeltaTime)
 	FParse::Value(FCommandLine::Get(), TEXT("ScctShotDir="), Directory);
 	const FString File = Directory / FString::Printf(TEXT("%s_%02d.png"), *GetWorld()->GetMapName(), ShotIndex++);
 	FScreenshotRequest::RequestScreenshot(File, false, false);
+	bAdvanceTour = true;
 	UE_LOG(LogOpenSCCT, Log, TEXT("Screenshot %s (view valid %d at %.0f %.0f %.0f, playing %d)"), *File, View.Valid, View.X, View.Y, View.Z, bPlaying ? 1 : 0);
 
 	float Every = 5.0f;
@@ -240,13 +276,13 @@ void UScctSessionSubsystem::TickAutoShots(float DeltaTime)
 
 void UScctSessionSubsystem::ApplyTourCamera()
 {
-	if (!bTourView || !TourCameras.IsValidIndex(ShotIndex))
+	if (!bTourView || !TourCameras.IsValidIndex(TourIndex))
 	{
 		return;
 	}
 
 	// The camera sits at the next shot's point for the whole wait, so lighting and exposure settle there.
-	const FTransform& Camera = TourCameras[ShotIndex];
+	const FTransform& Camera = TourCameras[TourIndex];
 	const FRotator Rotation = Camera.Rotator();
 	View.X = Camera.GetLocation().X;
 	View.Y = Camera.GetLocation().Y;

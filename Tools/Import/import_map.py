@@ -331,6 +331,10 @@ def main():
     for instance in gltf["extras"]["svmap"]["instances"]:
         if instance.get("hidden") or instance.get("skyZone"):
             continue
+        if instance.get("projectorOf"):
+            # A copy of a surface that carries a projected texture (rain streaks, caustics). Placed as geometry it
+            # would be an opaque duplicate fighting the real surface; projectors come back as decals.
+            continue
         mesh = meshes.get(key(instance["mesh"]))
         if not mesh:
             missing += 1
@@ -350,6 +354,9 @@ def main():
     log("placed %d meshes, %d without a mesh asset" % (placed, missing))
 
     # ---- lights -----------------------------------------------------------------------------------------------
+    # Every light of the map is placed, also those the original used only for characters (apply_static false):
+    # the lights its lightmaps were baked from are mostly not in the map file, and the character lights sit at the
+    # real fixtures, so together they are the best record of how each room was lit.
     count = 0
     for light in lighting["lights"]:
         if light.get("hidden"):
@@ -367,7 +374,8 @@ def main():
         component.set_editor_property("intensity_units", unreal.LightUnits.CANDELAS)
         candelas = light["brightness"] * CANDELAS_PER_BRIGHTNESS * (radius / 500.0) ** 2
         component.set_intensity(candelas)
-        colour = light["color"]
+        # The map's colours come from hue and saturation, in display (gamma) space.
+        colour = [channel ** 2.2 for channel in light["color"]]
         component.set_light_color(unreal.LinearColor(colour[0], colour[1], colour[2], 1.0))
         component.set_attenuation_radius(radius * 1.5)
         component.set_source_radius(6.0)
@@ -375,10 +383,14 @@ def main():
         component.set_cast_shadows(True)
         try_set(component, "volumetric_scattering_intensity", 1.5 if spot else 0.6)
         if spot:
-            outer = max(5.0, min(80.0, light["cone"] / 255.0 * 90.0))
+            # The original's cone: full angle 1.15 * acos((1 - LightCone/256)^2) (OpenSCCT docs/RENDERING.md).
+            # Its inner cone is a twentieth of that; a softer edge reads better with real shadows.
+            full = math.degrees(1.15 * math.acos((1.0 - min(light["cone"], 255) / 256.0) ** 2))
+            outer = max(5.0, min(80.0, full * 0.5))
             component.set_outer_cone_angle(outer)
-            component.set_inner_cone_angle(outer * 0.55)
-        if not light.get("initially_on", True):
+            component.set_inner_cone_angle(outer * 0.45)
+        # LightType 0 is "none": a light that exists to be switched on by the simulation.
+        if not light.get("initially_on", True) or light.get("ltype") == 0:
             component.set_visibility(False)
         count += 1
     log("lights: %d" % count)
