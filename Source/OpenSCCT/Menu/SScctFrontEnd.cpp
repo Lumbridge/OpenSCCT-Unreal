@@ -5,9 +5,11 @@
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformMisc.h"
+#include "Hub/ScctHubSubsystem.h"
 #include "Menu/SScctConfirm.h"
-#include "Menu/SScctOptionsPage.h"
 #include "Menu/SScctHostPage.h"
+#include "Menu/SScctHubPage.h"
+#include "Menu/SScctOptionsPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -123,6 +125,15 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 	// A visit takes the screen over, whichever page it was started from, and gives that page back at its end.
 	// The Options screen is left alone (it may have been opened from the lobby); its BACK goes to the visit.
 	const bool bVisiting = Visit->IsVisiting();
+
+	// A hub visit that failed (a refusal, a hub that never answered) comes back to the hub page with the reason
+	// (not over the Options screen, which is left alone).
+	const UScctHubSubsystem* HubVisit = Visit->GetGameInstance()->GetSubsystem<UScctHubSubsystem>();
+	if (!bVisiting && Page != EPage::Hub && Page != EPage::Options && HubVisit != nullptr && HubVisit->GetState() == EScctHubState::Failed && !HubVisit->GetNotice().IsEmpty())
+	{
+		ShowPage(EPage::Hub);
+	}
+
 	if (Page == EPage::Options)
 	{
 		if (bVisiting && PageBeforeOptions != EPage::Visit)
@@ -203,6 +214,10 @@ void SScctFrontEnd::ShowPageNamed(const FString& Name)
 	{
 		ShowPage(EPage::Host);
 	}
+	else if (Name.Equals(TEXT("hub"), ESearchCase::IgnoreCase))
+	{
+		ShowPage(EPage::Hub);
+	}
 	else if (Name.Equals(TEXT("start"), ESearchCase::IgnoreCase))
 	{
 		// Unattended: the offline page with its choices as they stand, and its START pressed.
@@ -276,6 +291,7 @@ void SScctFrontEnd::Rebuild()
 		// Create Session (Menu/SScctHostPage.h); a hosted game's lobby then takes the screen over as any visit does.
 		Content = SNew(SScctHostPage).Online(Online).OnBack(FSimpleDelegate::CreateLambda([this] { ShowPage(EPage::Home); }));
 		break;
+	case EPage::Hub: Content = BuildHub(); break;
 	}
 	PageBox->SetContent(Content);
 	SeenRevision = -1;
@@ -315,6 +331,7 @@ TSharedRef<SWidget> SScctFrontEnd::BuildHome()
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("HOST GAME"), EPage::Host) ]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("JOIN BY ADDRESS"), EPage::Join) ]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("SERVER LIST"), EPage::Servers) ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("HUB"), EPage::Hub) ]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 20.0f)
 			[
 				Ui::Button(Ui::ToText(TEXT("OPTIONS")), FOnClicked::CreateLambda([this] { ShowOptions(NAME_None); return FReply::Handled(); }), false, Ui::Accent(), 240.0f)
@@ -324,6 +341,15 @@ TSharedRef<SWidget> SScctFrontEnd::BuildHome()
 				Ui::Button(Ui::ToText(TEXT("QUIT")), FOnClicked::CreateLambda([this] { AskQuit(); return FReply::Handled(); }))
 			])
 	];
+}
+
+TSharedRef<SWidget> SScctFrontEnd::BuildHub()
+{
+	UScctHubSubsystem* HubVisit = Online.IsValid() ? Online->GetGameInstance()->GetSubsystem<UScctHubSubsystem>() : nullptr;
+	return SNew(SScctHubPage)
+		.Hub(HubVisit)
+		.Online(Online)
+		.OnBack(FSimpleDelegate::CreateLambda([this] { ShowPage(EPage::Home); }));
 }
 
 FReply SScctFrontEnd::HandleShowPage(EPage Target)

@@ -25,6 +25,7 @@ class UScctOnlineSubsystem;
  *   Options   the Options screen (Menu/SScctOptionsPage.h), from the home page or the lobby; a visit does not
  *             take the screen from it
  *   Host      Create Session: map, rules and hosting choices, create (Menu/SScctHostPage.h)
+ *   Hub       the master's hubs, join by address, host a hub on this PC (SScctHubPage)
  *   Visit     shown instead of the above while UScctOnlineSubsystem::IsVisiting
  */
 class SScctFrontEnd : public SCompoundWidget
@@ -40,7 +41,7 @@ public:
 
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
 
-	/** Unattended: shows a page by name ("offline", "join", "servers", "options"), for screenshots. */
+	/** Unattended: shows a page by name ("offline", "join", "servers", "options", "host", "hub"), for screenshots. */
 	void ShowPageNamed(const FString& Name);
 
 	/** Opens the Options screen on one of its pages (the first when unknown); BACK returns to the page shown now. */
@@ -59,6 +60,7 @@ private:
 		Visit,
 		Options,
 		Host,
+		Hub,
 	};
 
 	/** What the visit page is showing; a change rebuilds it. */
@@ -83,6 +85,7 @@ private:
 	TSharedRef<SWidget> BuildServers();
 	TSharedRef<SWidget> BuildVisit();
 	TSharedRef<SWidget> BuildLobby();
+	TSharedRef<SWidget> BuildHub();
 
 	void RefillLobby();
 	void RefillServers();

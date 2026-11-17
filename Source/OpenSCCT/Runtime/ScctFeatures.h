@@ -7,6 +7,8 @@
 #include "Runtime/ScctEquipmentApi.h"
 #include "Runtime/ScctEventsApi.h"
 #include "Runtime/ScctHostApi.h"
+#include "Runtime/ScctHubApi.h"
+#include "Runtime/ScctHubSocialApi.h"
 #include "Runtime/ScctHudApi.h"
 #include "Runtime/ScctOnlineApi.h"
 #include "Runtime/ScctVisionApi.h"
@@ -37,6 +39,8 @@ SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
 SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
 SCCT_FEATURE_TABLE(FScctHostApi, "HostExports", ScctHostApiVersion);
+SCCT_FEATURE_TABLE(FScctHubApi, "HubExports", ScctHubApiVersion);
+SCCT_FEATURE_TABLE(FScctHubSocialApi, "HubSocialExports", ScctHubSocialApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
 SCCT_FEATURE_TABLE(FScctVisionApi, "VisionExports", ScctVisionApiVersion);
