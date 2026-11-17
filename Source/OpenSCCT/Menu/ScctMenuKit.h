@@ -542,6 +542,8 @@ struct FScctDialog
 {
 	FString Title;
 	FString Body;
+	/** Read each frame in place of Body when set (a download's progress). */
+	TFunction<FString()> LiveBody;
 	TArray<FScctDialogButton> Buttons;
 	/** A text field under the body (a password, a name). */
 	bool bTextField = false;

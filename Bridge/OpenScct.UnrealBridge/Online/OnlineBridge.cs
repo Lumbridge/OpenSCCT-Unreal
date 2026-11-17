@@ -424,6 +424,7 @@ public sealed partial class OnlineBridge : IDisposable
         Master.Pump();
         PumpHost();
         Browser.Pump();
+        UpdateMapFetch();
         if (Client is not { } client)
         {
             return 0;

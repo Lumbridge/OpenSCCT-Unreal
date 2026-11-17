@@ -7,6 +7,7 @@
 #include "Menu/ScctMenuPage.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Online/ScctContentDownloads.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
 #include "Fonts/FontMeasure.h"
@@ -532,6 +533,7 @@ TSharedRef<SWidget> SScctFrontEnd::BuildVisit()
 	FString PrimaryLabel;
 	FString SecondaryLabel = TEXT("Cancel");
 	TFunction<void()> OnPrimary;
+	TAttribute<EVisibility> PrimaryVisibility = EVisibility::Visible;
 	TAttribute<FText> Body = FText::GetEmpty();
 	bool bBusy = true;
 	bool bFailed = false;
@@ -552,7 +554,22 @@ TSharedRef<SWidget> SScctFrontEnd::BuildVisit()
 		if (Visit->HasFlag(EScctOnlineStatusFlags::RoundRefused))
 		{
 			Heading = TEXT("Round in progress");
-			Body = FText::FromString(TEXT("The server is playing a map that is not installed here. You are back in the lobby when the round is over."));
+			// The map from OpenSCCT-Content, as the lobby offers it: ready for the next round once it is in.
+			Body = TAttribute<FText>::CreateLambda([]
+			{
+				FScctLobbyMapFetch Fetch;
+				ScctContentDownloads::GetLobbyFetch(Fetch);
+				const FString Base = TEXT("The server is playing a map that is not installed here. You are back in the lobby when the round is over.");
+				return FText::FromString(Fetch.IsShown() ? Base + TEXT("\n\n") + Fetch.Line : Base);
+			});
+			PrimaryLabel = TEXT("Download map");
+			OnPrimary = [] { ScctContentDownloads::StartLobbyFetch(); };
+			PrimaryVisibility = TAttribute<EVisibility>::CreateLambda([]
+			{
+				FScctLobbyMapFetch Fetch;
+				ScctContentDownloads::GetLobbyFetch(Fetch);
+				return Fetch.CanDownload() ? EVisibility::Visible : EVisibility::Collapsed;
+			});
 			bBusy = false;
 		}
 		else
@@ -594,10 +611,13 @@ TSharedRef<SWidget> SScctFrontEnd::BuildVisit()
 		TSharedPtr<SScctButton> Made;
 		Buttons->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 10.0f, 0.0f)
 		[
-			SAssignNew(Made, SScctButton).Look(EScctButtonLook::Primary).MinWidth(150.0f).Text(FText::FromString(PrimaryLabel.ToUpper()))
+			SAssignNew(Made, SScctButton).Look(EScctButtonLook::Primary).MinWidth(150.0f).Text(FText::FromString(PrimaryLabel.ToUpper())).Visibility(PrimaryVisibility)
 			.OnPressed(FSimpleDelegate::CreateLambda([OnPrimary] { OnPrimary(); }))
 		];
-		Focus = Made;
+		if (PrimaryVisibility.Get() == EVisibility::Visible)
+		{
+			Focus = Made;
+		}
 	}
 	{
 		TSharedPtr<SScctButton> Made;

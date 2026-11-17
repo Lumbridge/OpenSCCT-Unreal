@@ -27,12 +27,16 @@
 
 #include "Framework/Application/SlateApplication.h"
 #include "Menu/SScctSessionOptions.h"
+#include "Menu/ScctBotNavPrompt.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "Online/ScctContentDownloads.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
+#include "Runtime/ScctContentApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Widgets/Notifications/SProgressBar.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBorder.h"
@@ -222,7 +226,7 @@ namespace
 									return FText::FromString((V != nullptr && V->HasFlag(EScctOnlineStatusFlags::LocalReady) ? NotReady : Ready).ToUpper());
 								})
 								.Description(FText::FromString(TEXT("Say you are ready, or (when you run the server) start the match. A match starts when everyone on a side is ready.")))
-								.OnPressed(FSimpleDelegate::CreateLambda([Weak]
+								.OnPressed(FSimpleDelegate::CreateLambda([this, Weak]
 								{
 									UScctOnlineSubsystem* V = Weak.Get();
 									if (V == nullptr) { return; }
@@ -230,7 +234,17 @@ namespace
 									{
 										// The server starts a match only when everyone is ready, the one launching it too.
 										if (!V->HasFlag(EScctOnlineStatusFlags::LocalReady)) { V->SetReady(true); }
-										V->Launch();
+										// A countdown already running is cancelled at once; a game this player hosts with bots
+										// first offers the map's prebuilt bot navigation (the Godot lobby's Start).
+										if (V->GetStatus().Countdown > 0.0f || !V->IsHosting() || !HasBots(V))
+										{
+											V->Launch();
+											return;
+										}
+										const FString Map = V->GetSetupMap();
+										ScctBotNavPrompt::OfferThenLaunch(Host.Dialogs, Map,
+											[Weak, Map] { return Weak.IsValid() && Weak->GetState() == EScctOnlineState::Lobby && Weak->GetSetupMap() == Map && Weak->HasFlag(EScctOnlineStatusFlags::CanLaunch); },
+											[Weak] { if (UScctOnlineSubsystem* Now = Weak.Get()) { Now->Launch(); } });
 									}
 									else { V->SetReady(!V->HasFlag(EScctOnlineStatusFlags::LocalReady)); }
 								}))
@@ -328,6 +342,21 @@ namespace
 		virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override
 		{
 			SScctMenuPage::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+			// The missing map's download, and the maps this game can play once one came in.
+			ScctContentDownloads::GetLobbyFetch(Fetch);
+			const int32 Generation = ScctContentDownloads::Generation();
+			if (Generation != SeenGeneration)
+			{
+				if (SeenGeneration >= 0)
+				{
+					PlayableMaps.Reset();
+					for (const FString& Map : UScctOnlineSubsystem::FindPlayableMaps())
+					{
+						PlayableMaps.Add(Map.ToLower());
+					}
+				}
+				SeenGeneration = Generation;
+			}
 			const UScctOnlineSubsystem* Visit = Host.Online.Get();
 			if (Visit != nullptr && (Visit->GetRevision() != SeenRevision || Visit->GetChat().Num() != SeenChat))
 			{
@@ -392,6 +421,11 @@ namespace
 
 		// ---- launch feedback ------------------------------------------------------------------------------------
 
+		static bool HasBots(const UScctOnlineSubsystem* Visit)
+		{
+			return Visit->GetStatus().Bots != 0 || Visit->GetPlayers().ContainsByPredicate([](const FScctOnlinePlayer& Player) { return (Player.Flags & EScctOnlinePlayerFlags::Bot) != 0; });
+		}
+
 		bool LocalHasMap() const
 		{
 			const UScctOnlineSubsystem* Visit = Host.Online.Get();
@@ -436,7 +470,7 @@ namespace
 			TArray<FString> Lines;
 			if (LocalState == LobbyMapMissing)
 			{
-				Lines.Add(FString::Printf(TEXT("You don't have %s, so you cannot be ready and the match cannot start with you on a side. This game cannot download maps yet: watching lets the others play."), *Map));
+				Lines.Add(FString::Printf(TEXT("You don't have %s, so you cannot be ready and the match cannot start with you on a side until you have it. Watching lets the others play."), *Map));
 			}
 			else if (LocalState == LobbyMapDiffers)
 			{
@@ -817,7 +851,51 @@ namespace
 					SNew(STextBlock).Font(ScctUi::Small()).AutoWrapText(true)
 					.ColorAndOpacity_Lambda([this] { bool bProblem = false; MapLine(bProblem); return FSlateColor(bProblem ? ScctHudStyle::Danger() : ScctHudStyle::Good()); })
 					.Text_Lambda([this] { bool bProblem = false; return FText::FromString(MapLine(bProblem)); })
-				], FMargin(24.0f, 20.0f));
+				]
+				// The missing map from OpenSCCT-Content: its line, a progress bar and Download or Stop.
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)[ BuildMapFetch() ], FMargin(24.0f, 20.0f));
+		}
+
+		/** The Godot lobby's map fetch row (OnlineLobby.MapFetch): shown while this player lacks the setup's map. */
+		TSharedRef<SWidget> BuildMapFetch()
+		{
+			return SNew(SVerticalBox)
+				.Visibility_Lambda([this] { return Fetch.IsShown() ? EVisibility::Visible : EVisibility::Collapsed; })
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(STextBlock).Font(ScctUi::Small()).AutoWrapText(true)
+					.ColorAndOpacity_Lambda([this] { return FSlateColor(Fetch.IsProblem() ? ScctHudStyle::Danger() : ScctHudStyle::Text()); })
+					.Text_Lambda([this] { return FText::FromString(Fetch.Line); })
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
+				[
+					SNew(SBox).HeightOverride(6.0f).Visibility_Lambda([this] { return Fetch.IsRunning() ? EVisibility::Visible : EVisibility::Collapsed; })
+					[
+						SNew(SProgressBar).Percent_Lambda([this] { return TOptional<float>(Fetch.Fraction); }).FillColorAndOpacity(ScctUi::Accent())
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(0.0f, 8.0f, 0.0f, 0.0f)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SNew(SScctButton)
+						.Look(EScctButtonLook::Chip)
+						.Visibility_Lambda([this] { return Fetch.CanDownload() ? EVisibility::Visible : EVisibility::Collapsed; })
+						.Text_Lambda([this] { return FText::FromString(Fetch.State == static_cast<int32>(EScctContentDownloadState::Failed) ? TEXT("RETRY") : TEXT("DOWNLOAD")); })
+						.Description(FText::FromString(TEXT("Download the host's version of this map from OpenSCCT-Content. It is kept for next time.")))
+						.OnPressed(FSimpleDelegate::CreateLambda([] { ScctContentDownloads::StartLobbyFetch(); }))
+					]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SNew(SScctButton)
+						.Look(EScctButtonLook::Chip)
+						.Visibility_Lambda([this] { return Fetch.IsRunning() ? EVisibility::Visible : EVisibility::Collapsed; })
+						.Text(FText::FromString(TEXT("STOP")))
+						.Description(FText::FromString(TEXT("Stop the download. A half-downloaded map is never installed.")))
+						.OnPressed(FSimpleDelegate::CreateLambda([] { ScctContentDownloads::CancelLobbyFetch(); }))
+					]
+				];
 		}
 
 		/** Session Options (every row, read-only for the others) and, for the controller, a random map. */
@@ -946,6 +1024,10 @@ namespace
 
 		// Launch feedback: the maps this game can play (an imported level or a runtime map folder), lower case.
 		TSet<FString> PlayableMaps;
+
+		// The setup's map from OpenSCCT-Content when this player lacks it, read each frame.
+		FScctLobbyMapFetch Fetch;
+		int32 SeenGeneration = -1;
 
 		// Session Options, and whether it is shown in place of the lobby.
 		TSharedPtr<SWidgetSwitcher> Switcher;

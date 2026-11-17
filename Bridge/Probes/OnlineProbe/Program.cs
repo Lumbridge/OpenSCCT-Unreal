@@ -37,7 +37,8 @@ using OpenScct.UnrealBridge.Online;
 // machine).
 return args.Length > 0 && args[0] == "host" ? HostProbe.Run(args[1..]) : args.Length > 0 && args[0] == "setup" ? SetupProbe.Run(args[1..])
     : args.Length > 0 && args[0] == "lan" ? LanProbe.Run(args[1..]) : args.Length > 0 && args[0] == "endround" ? EndRoundProbe.Run(args[1..])
-    : args.Length > 0 && args[0] == "maps" ? MapsProbe.Run(args[1..]) : Probe.Run(args);
+    : args.Length > 0 && args[0] == "maps" ? MapsProbe.Run(args[1..])
+    : args.Length > 0 && args[0] == "download" ? DownloadProbe.Run(args[1..]) : Probe.Run(args);
 
 internal static unsafe class Probe
 {

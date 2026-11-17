@@ -8,6 +8,7 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
+#include "Online/ScctContentDownloads.h"
 #include "Online/ScctMapFolders.h"
 #include "OpenSCCT.h"
 #include "Play/ScctPlayerController.h"
@@ -174,6 +175,8 @@ void UScctOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	RegisterOnlineSettings();
 	SettingsChangedHandle = FScctSettings::OnChanged().AddUObject(this, &UScctOnlineSubsystem::HandleSettingChanged);
+	// Missing-map downloads: -ScctAutoDownload and the log of maps that come in (Online/ScctContentDownloads.h).
+	ScctContentDownloads::Start(this);
 
 	LastTickSeconds = FPlatformTime::Seconds();
 	TickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &UScctOnlineSubsystem::TickFromTicker));
