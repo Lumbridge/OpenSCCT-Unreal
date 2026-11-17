@@ -1,6 +1,7 @@
 #include "Hud/ScctHudElements.h"
 
 #include "Hud/ScctHudStyle.h"
+#include "Hud/ScctVisorEffects.h"
 
 // The blocks about the player: status, equipment, prompt, crosshair, scope and the washes over the picture.
 
@@ -58,7 +59,8 @@ bool ScctHudElements::ShowsPlayerHud(const FScctHudModel& Model)
 {
 	return Model.bHasState
 		&& (Model.State.Flags & EScctHudFlags::HasPawn) != 0
-		&& (Model.State.Flags & (EScctHudFlags::HideHud | EScctHudFlags::Spectating | EScctHudFlags::GameEnded)) == 0;
+		&& (Model.State.Flags & (EScctHudFlags::HideHud | EScctHudFlags::Spectating | EScctHudFlags::GameEnded)) == 0
+		&& !ScctVisorEffects::IsHudShutDown(Model); // an EMP keeps the merc's HUD down for 12 s
 }
 
 FString ScctHudElements::LivesText(const FScctHudModel& Model, int32 Lives, int32 InfiniteFrom)
@@ -124,6 +126,9 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 			break;
 		}
 	}
+
+	// The merc's visor: EMP shutdown, perturbation, foam, droplets, the sticky shocker's arcs.
+	ScctVisorEffects::Paint(Painter, Model);
 
 	if ((State.EffectFlags & EScctHudEffectFlags::SleepScreen) != 0 && State.SleepingTextId != 0)
 	{

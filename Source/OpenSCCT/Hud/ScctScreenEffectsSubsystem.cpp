@@ -102,6 +102,7 @@ void UScctScreenEffectsSubsystem::Initialize(FSubsystemCollectionBase& Collectio
 	{
 		ForcedCrossEye = FMath::Clamp(CrossEye, 0.0f, 1.0f);
 	}
+	ScctVisorEffects::ParseCommandLine(Visor);
 }
 
 void UScctScreenEffectsSubsystem::Deinitialize()
@@ -259,6 +260,8 @@ void UScctScreenEffectsSubsystem::Present(FScctHudModel& Model, float DeltaSecon
 	{
 		Model.State.CrossEyedFactor = FMath::Max(Model.State.CrossEyedFactor, ForcedCrossEye);
 	}
+	ScctVisorEffects::Update(Visor, Model, DeltaSeconds);
+	Model.Visor = &Visor;
 
 	const FScctHudState& State = Model.State;
 	PresentDoubleVision(Model.bHasState ? CrossEyeFactor(State) : 0.0f);
@@ -305,6 +308,7 @@ void UScctScreenEffectsSubsystem::Clear()
 	bHeld = false;
 	bWhiteOut = false;
 	LastCaptures = INDEX_NONE;
+	ScctVisorEffects::Reset(Visor);
 	PresentDoubleVision(0.0f);
 }
 

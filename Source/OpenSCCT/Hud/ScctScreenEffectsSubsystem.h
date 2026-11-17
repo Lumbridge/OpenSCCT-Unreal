@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Hud/ScctVisorEffects.h"
 #include "Styling/SlateBrush.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctScreenEffectsSubsystem.generated.h"
@@ -30,6 +31,9 @@ struct FScctHudState;
  * is made the first time the view doubles, so a match without gas has no extra blendable at all.
  *
  * -ScctForceCrossEye=<0..1> holds CrossEyedFactor at that value from the start, so the doubling can be shot unattended.
+ *
+ * The merc's visor effects (EMP shutdown, perturbation, foam, droplets, sticky shock; Hud/ScctVisorEffects) keep their
+ * latches here: Present moves them on and points the model at them.
  */
 UCLASS()
 class OPENSCCT_API UScctScreenEffectsSubsystem : public UWorldSubsystem
@@ -109,4 +113,6 @@ private:
 
 	float ForceDelay = -1.0f;
 	float ForcedAt = -1.0f;
+
+	FScctVisorState Visor;
 };

@@ -113,6 +113,9 @@ public:
 	const struct FSlateBrush* AfterImage = nullptr;
 	float AfterImageAlpha = 0.0f;
 
+	/** The merc visor effects' latches (UScctScreenEffectsSubsystem owns them; Hud/ScctVisorEffects reads them). */
+	const struct FScctVisorState* Visor = nullptr;
+
 	/** Unattended look check only (-ScctHudCommands "PreviewEnd"): shows the end banner as if this team had won; -1 when off. */
 	int32 PreviewWinner = -1;
 
