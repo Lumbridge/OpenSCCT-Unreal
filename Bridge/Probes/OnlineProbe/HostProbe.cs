@@ -181,7 +181,7 @@ internal static unsafe class HostProbe
 
     private static bool Moderation(int port, OnlineBridge guest)
     {
-        int expected = 8 + 4 * sizeof(void*);
+        int expected = 8 + 11 * sizeof(void*);
         LobbyApi lobby = default;
         int version = ((delegate* unmanaged<LobbyApi*, int>)&LobbyExports.GetApi)(&lobby);
         Console.WriteLine($"layout: LobbyApi {sizeof(LobbyApi)} bytes{(sizeof(LobbyApi) == expected ? string.Empty : $" BUT THE HEADER ASSERTS {expected}")}, version {version}");
@@ -191,6 +191,17 @@ internal static unsafe class HostProbe
         string rank = LobbyExports.RankOf(41 | (2 << 8));
         Console.WriteLine($"rank text of a packed P2 41: '{rank}', of none: '{LobbyExports.RankOf(0)}'");
         ok &= rank == "P2 41" && LobbyExports.RankOf(0).Length == 0;
+
+        // The lobby rows' badge, its words and its emblem colour (version 2, RankIcons).
+        int packed = 41 | (2 << 8);
+        string tag = OpenScct.UnrealBridge.Online.LobbyExtras.RankTag(packed);
+        string words = OpenScct.UnrealBridge.Online.LobbyExtras.RankDescribe(packed);
+        int colour = lobby.RankColour(packed);
+        Console.WriteLine($"rank badge '{tag}', words '{words}', colour #{colour:x6}; level 7: '{OpenScct.UnrealBridge.Online.LobbyExtras.RankTag(7)}' #{lobby.RankColour(7):x6}");
+        ok &= tag == "P2 · 41" && words.StartsWith("Prestige 2, level 41", StringComparison.Ordinal) && colour == 0xe6862b && lobby.RankColour(7) == 0x93b38c;
+
+        // No round played yet: no last scoreboard.
+        ok &= lobby.GetLastScoreboard(null) == 0;
 
         int guestId = guest.Client!.Lobby.LocalId;
         ok &= lobby.SetVoiceBanned(guestId, 1) == 1;
