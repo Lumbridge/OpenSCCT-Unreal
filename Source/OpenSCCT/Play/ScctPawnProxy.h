@@ -5,12 +5,13 @@
 #include "Runtime/ScctBridgeApi.h"
 #include "ScctPawnProxy.generated.h"
 
+class UPoseableMeshComponent;
 class UStaticMeshComponent;
 
 /**
- * The Unreal body of one simulated pawn. The simulation owns where it is and what it does; this actor only
- * draws it. For now it is a stand-in shape sized to the pawn's collision cylinder; the character model and the
- * simulation's animation channels replace it.
+ * The Unreal body of one simulated pawn. The simulation owns where it is and what it does, and the bridge
+ * computes its bone pose from the simulation's animation channels; this actor only draws it. Without the
+ * imported character models it falls back to a shape the size of the pawn's collision cylinder.
  */
 UCLASS()
 class OPENSCCT_API AScctPawnProxy : public AActor
@@ -20,10 +21,27 @@ class OPENSCCT_API AScctPawnProxy : public AActor
 public:
 	AScctPawnProxy();
 
-	/** Places the body for this frame. bHideBody is set for the local player seen through their own eyes. */
-	void Present(const FScctBridgePawn& Pawn, bool bHideBody);
+	/**
+	 * Places and poses the body for this frame. Skeleton is the bridge's bone list for the pawn's kind and Pose
+	 * its bones this frame (empty before the pawn has one). bHideBody is set for the local player seen through
+	 * their own eyes.
+	 */
+	void Present(const FScctBridgePawn& Pawn, TConstArrayView<FScctBridgeBoneInfo> Skeleton, TConstArrayView<FScctBridgeBone> Pose, bool bHideBody);
 
 private:
+	void SetKind(int32 NewKind, TConstArrayView<FScctBridgeBoneInfo> Skeleton);
+
 	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<UStaticMeshComponent> Body;
+	TObjectPtr<USceneComponent> Root;
+
+	UPROPERTY(VisibleAnywhere)
+	TObjectPtr<UPoseableMeshComponent> Body;
+
+	UPROPERTY(VisibleAnywhere)
+	TObjectPtr<UStaticMeshComponent> StandIn;
+
+	/** For each bone of the bridge's skeleton, the bone of the Unreal mesh, or INDEX_NONE. */
+	TArray<int32> BoneMap;
+	int32 Kind = INDEX_NONE;
+	bool bHasModel = false;
 };

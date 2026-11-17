@@ -48,6 +48,12 @@ def sanitize(name):
     return re.sub(r"[^A-Za-z0-9_]", "_", name)
 
 
+def key(name):
+    """A name reduced to letters and digits. The engine's importer keeps some punctuation (a hyphen) and
+    replaces other (a dot, a hash), so imported assets are matched to the map's names through this."""
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
 def read_glb_json(path):
     with open(path, "rb") as f:
         f.read(12)
@@ -170,9 +176,17 @@ def surface_look(name):
 
 def build_materials(parent, material_doc):
     """One material instance per glTF material. Returns {imported material asset name: instance}."""
-    additive = {sanitize(entry["key"]) for entry in material_doc.get("additive", []) if "key" in entry}
-    additive |= {entry["name"] for entry in material_doc.get("additive", []) if "name" in entry}
+    additive = {key(entry["key"]) for entry in material_doc.get("additive", []) if "key" in entry}
+    additive |= {key(entry["name"]) for entry in material_doc.get("additive", []) if "name" in entry}
 
+    def by_key(folder_path):
+        found = {}
+        for asset_path in editor_assets.list_assets(folder_path):
+            found[key(asset_path.rsplit("/", 1)[1].split(".")[0])] = asset_path
+        return found
+
+    textures = by_key(DEST + "/world/Textures")
+    normal_maps = by_key(DEST + "/Normals")
     instances = {}
     folder = DEST + "/Materials"
     for key, record in material_doc["materials"].items():
@@ -189,10 +203,10 @@ def build_materials(parent, material_doc):
         texture_file = flags.get("texture")
         if texture_file:
             stem = os.path.splitext(os.path.basename(texture_file))[0]
-            texture = unreal.load_asset(DEST + "/world/Textures/" + sanitize(stem))
+            texture = unreal.load_asset(textures[key(stem)]) if key(stem) in textures else None
             if texture:
                 materials_lib.set_material_instance_texture_parameter_value(instance, "BaseColor", texture)
-            normal = unreal.load_asset(DEST + "/Normals/" + sanitize(stem) + "_N")
+            normal = unreal.load_asset(normal_maps[key(stem + "_N")]) if key(stem + "_N") in normal_maps else None
             if normal:
                 materials_lib.set_material_instance_texture_parameter_value(instance, "Normal", normal)
 
@@ -201,7 +215,7 @@ def build_materials(parent, material_doc):
         materials_lib.set_material_instance_scalar_parameter_value(instance, "RoughnessBright", bright)
         materials_lib.set_material_instance_scalar_parameter_value(instance, "Metallic", metallic)
 
-        is_additive = imported in additive
+        is_additive = key(imported) in additive
         unlit = bool(flags.get("unlit")) or is_additive
         materials_lib.set_material_instance_scalar_parameter_value(instance, "Emissive", EMISSIVE_UNLIT if unlit else 0.0)
 
@@ -221,7 +235,7 @@ def build_materials(parent, material_doc):
         instance.set_editor_property("base_property_overrides", overrides)
 
         materials_lib.update_material_instance(instance)
-        instances[imported] = instance
+        instances[key(imported)] = instance
     return instances
 
 
@@ -257,11 +271,11 @@ def main():
         mesh = unreal.load_asset(path)
         if not isinstance(mesh, unreal.StaticMesh):
             continue
-        meshes[str(mesh.get_name())] = mesh
+        meshes[key(str(mesh.get_name()))] = mesh
         translucent = False
         for index, slot in enumerate(mesh.static_materials):
             current = slot.material_interface
-            replacement = instances.get(str(current.get_name())) if current else None
+            replacement = instances.get(key(str(current.get_name()))) if current else None
             if replacement:
                 mesh.set_material(index, replacement)
                 if replacement.get_blend_mode() in (unreal.BlendMode.BLEND_TRANSLUCENT, unreal.BlendMode.BLEND_ADDITIVE):
@@ -304,7 +318,7 @@ def main():
     for node in gltf["nodes"]:
         role = node.get("extras", {}).get("svmap", {})
         if role.get("role") == "bsp" and not role.get("sky"):
-            mesh = meshes.get(sanitize(node["name"]))
+            mesh = meshes.get(key(node["name"]))
             if mesh:
                 place_mesh(mesh, node["name"], unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0), unreal.Vector(1, 1, 1), "Geometry/World")
 
@@ -312,7 +326,7 @@ def main():
     for instance in gltf["extras"]["svmap"]["instances"]:
         if instance.get("hidden") or instance.get("skyZone"):
             continue
-        mesh = meshes.get(sanitize(instance["mesh"]))
+        mesh = meshes.get(key(instance["mesh"]))
         if not mesh:
             missing += 1
             continue

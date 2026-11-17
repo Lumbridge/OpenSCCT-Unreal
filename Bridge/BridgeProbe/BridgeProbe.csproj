@@ -6,6 +6,7 @@
     <LangVersion>14</LangVersion>
     <Nullable>enable</Nullable>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpenScct.UnrealBridge\OpenScct.UnrealBridge.csproj" />

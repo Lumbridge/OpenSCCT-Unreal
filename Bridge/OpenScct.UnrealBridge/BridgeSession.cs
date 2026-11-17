@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using OpenScct.Core;
 using OpenScct.Core.Engine;
 using OpenScct.Game.SBase;
 using OpenScct.Net;
 using OpenScct.Server;
+using OpenScct.UnrealBridge.Pose;
 using OpenScctGame.Play.Session;
 
 namespace OpenScct.UnrealBridge;
@@ -17,7 +19,7 @@ namespace OpenScct.UnrealBridge;
 /// </summary>
 public sealed class BridgeSession : IDisposable
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     /// <summary>A view jump longer than this is drawn as a cut, not blended (as the Godot client).</summary>
     private const float ViewCutDistance = 128f;
@@ -29,11 +31,16 @@ public sealed class BridgeSession : IDisposable
     private readonly Dictionary<int, PawnSample> _previous = new();
     private readonly Dictionary<int, PawnSample> _current = new();
     private readonly List<int> _order = new();
+    private readonly Dictionary<int, PawnPoser> _posers = new();
+    private readonly List<int> _gone = new();
 
     private BridgeSession(PlaySession session)
     {
         _session = session;
         _session.AfterClientTick = (_, _) => Snapshot();
+        // The character files are read while the map load is still blocking, not on the first drawn frame.
+        Character(0);
+        Character(1);
     }
 
     /// <summary>Sets the converted content folder (the one holding <c>svmap</c> and <c>shared</c>).</summary>
@@ -118,11 +125,68 @@ public sealed class BridgeSession : IDisposable
                 Yaw = LerpAngle(from.Yaw, now.Yaw, alpha),
                 CollisionRadius = now.Radius,
                 CollisionHeight = now.Height,
+                AimYaw = from.AimYaw + ((now.AimYaw - from.AimYaw) * alpha),
+                AimPitch = from.AimPitch + ((now.AimPitch - from.AimPitch) * alpha),
             };
         }
 
         return count;
     }
+
+    /// <summary>
+    /// The character file of a pawn kind (0 spy <c>SPerso.ATT_01</c>, 1 merc <c>SPerso.DEF_01</c>: the teams' stock
+    /// meshes, as the Godot client's PawnOutfits.StockAsset) from the shared content of the session's map, or null
+    /// when the content does not have it.
+    /// </summary>
+    public GlbCharacter? Character(int kind) => CharacterOf(kind, SharedContent.FindRoot(_session.MapFolder));
+
+    /// <summary>The same for the configured content, for a caller with no session yet.</summary>
+    public static GlbCharacter? ConfiguredCharacter(int kind) => CharacterOf(kind, ContentPaths.Shared);
+
+    private static GlbCharacter? CharacterOf(int kind, string? sharedRoot)
+    {
+        if (sharedRoot is null || kind is < 0 or > 1)
+        {
+            return null;
+        }
+
+        string path = Path.Combine(sharedRoot, "chars", "SPerso", kind == 1 ? "DEF_01.glb" : "ATT_01.glb");
+        return File.Exists(path) ? GlbCharacter.Load(path) : null;
+    }
+
+    /// <summary>
+    /// Writes the bones of a character's skeleton, in the order <see cref="GetPawnPose"/> writes poses. Returns the
+    /// bone count; bones past the end of <paramref name="bones"/> are not written.
+    /// </summary>
+    public static unsafe int GetSkeleton(GlbCharacter character, Span<BridgeBoneInfo> bones)
+    {
+        int count = Math.Min(bones.Length, character.BoneCount);
+        for (int b = 0; b < count; b++)
+        {
+            ref BridgeBoneInfo bone = ref bones[b];
+            bone.Parent = character.Parents[b];
+            string name = character.BoneNames[b];
+            int length = Math.Min(name.Length, BridgeBoneInfo.NameCapacity - 1);
+            fixed (char* target = bone.Name)
+            {
+                name.AsSpan(0, length).CopyTo(new Span<char>(target, length));
+                new Span<char>(target + length, BridgeBoneInfo.NameCapacity - length).Clear();
+            }
+        }
+
+        return character.BoneCount;
+    }
+
+    /// <summary>
+    /// Writes a pawn's pose as drawn this frame (the same <see cref="Alpha"/> as <see cref="GetPawns"/>). Returns the
+    /// bone count, or 0 when the pawn has no pose (unknown, not ticked yet, or its character file is missing); bones
+    /// past the end of <paramref name="bones"/> are not written.
+    /// </summary>
+    public int GetPawnPose(int actorId, Span<BridgeBone> bones) =>
+        _posers.TryGetValue(actorId, out PawnPoser? poser) ? poser.Pose(Alpha, bones) : 0;
+
+    /// <summary>The poser of a pawn (for the probe), or null.</summary>
+    public PawnPoser? PoserOf(int actorId) => _posers.TryGetValue(actorId, out PawnPoser? poser) ? poser : null;
 
     public BridgeView GetView()
     {
@@ -189,10 +253,49 @@ public sealed class BridgeSession : IDisposable
                 Local = ReferenceEquals(pawn, local),
                 Radius = pawn.CollisionRadius,
                 Height = pawn.CollisionHeight,
+                AimYaw = pawn.PawnAnim.Aim.FullYaw * RadiansToDegrees,
+                AimPitch = pawn.PawnAnim.Aim.FullPitch * RadiansToDegrees,
             };
             _order.Add(pawn.ActorId);
+            PoserFor(pawn)?.OnTick();
         }
+
+        foreach (int id in _posers.Keys)
+        {
+            if (!_current.ContainsKey(id))
+            {
+                _gone.Add(id);
+            }
+        }
+
+        foreach (int id in _gone)
+        {
+            _posers.Remove(id);
+        }
+
+        _gone.Clear();
     }
+
+    /// <summary>The pawn's poser, made on its first tick (a respawn is a new pawn and starts a new pose).</summary>
+    private PawnPoser? PoserFor(SBasePawn pawn)
+    {
+        if (_posers.TryGetValue(pawn.ActorId, out PawnPoser? poser) && ReferenceEquals(poser.Pawn, pawn))
+        {
+            return poser;
+        }
+
+        if (Character(pawn is SPAWNDEFENSE ? 1 : 0) is not { } character)
+        {
+            _posers.Remove(pawn.ActorId);
+            return null;
+        }
+
+        poser = new PawnPoser(pawn, character);
+        _posers[pawn.ActorId] = poser;
+        return poser;
+    }
+
+    private const float RadiansToDegrees = 180f / MathF.PI;
 
     private static float Degrees(int rotatorUnits) => rotatorUnits * (360f / 65536f);
 
@@ -223,7 +326,7 @@ public sealed class BridgeSession : IDisposable
     private struct PawnSample
     {
         public FVector Location, PrePivot;
-        public float Yaw, Radius, Height;
+        public float Yaw, Radius, Height, AimYaw, AimPitch;
         public uint ResetId;
         public bool Merc, Visible, Local;
         public int Team, Health;

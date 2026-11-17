@@ -12,6 +12,7 @@
 namespace
 {
 	constexpr int32 MaxPawns = 64;
+	constexpr int32 MaxBones = 128;
 }
 
 bool UScctSessionSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
@@ -45,6 +46,13 @@ bool UScctSessionSubsystem::StartLocalMatch(const FString& Map, const FString& M
 	}
 
 	PawnBuffer.SetNumUninitialized(MaxPawns);
+	PoseBuffer.SetNumUninitialized(MaxBones);
+	for (int32 Kind = 0; Kind < UE_ARRAY_COUNT(Skeletons); ++Kind)
+	{
+		Skeletons[Kind].SetNumUninitialized(MaxBones);
+		const int32 Count = Api->GetSkeleton(Kind, Skeletons[Kind].GetData(), MaxBones);
+		Skeletons[Kind].SetNum(FMath::Clamp(Count, 0, MaxBones));
+	}
 	bPlaying = true;
 	return true;
 }
@@ -107,6 +115,7 @@ void UScctSessionSubsystem::Tick(float DeltaTime)
 	}
 
 	Api->GetView(&View);
+	ApplyTourCamera();
 	UpdatePawns();
 }
 
@@ -134,7 +143,11 @@ void UScctSessionSubsystem::UpdatePawns()
 			// The local player's own body is drawn only when the camera is outside it.
 			const bool bLocal = (Pawn.Flags & EScctPawnFlags::Local) != 0;
 			const bool bFirstPerson = bLocal && (Pawn.Kind == 1 || View.SpyFirstPerson != 0);
-			Proxy->Present(Pawn, bFirstPerson);
+			const int32 Bones = FMath::Clamp(Api->GetPawnPose(Pawn.ActorId, PoseBuffer.GetData(), PoseBuffer.Num()), 0, PoseBuffer.Num());
+			const TConstArrayView<FScctBridgeBoneInfo> Skeleton = Pawn.Kind >= 0 && Pawn.Kind < UE_ARRAY_COUNT(Skeletons)
+				? TConstArrayView<FScctBridgeBoneInfo>(Skeletons[Pawn.Kind])
+				: TConstArrayView<FScctBridgeBoneInfo>();
+			Proxy->Present(Pawn, Skeleton, TConstArrayView<FScctBridgeBone>(PoseBuffer.GetData(), Bones), bFirstPerson);
 		}
 	}
 
@@ -168,6 +181,25 @@ void UScctSessionSubsystem::TickAutoShots(float DeltaTime)
 		float Every = 5.0f;
 		FParse::Value(FCommandLine::Get(), TEXT("ScctShotEvery="), Every);
 		ShotTimer = Every;
+
+		FString Cameras;
+		if (FParse::Value(FCommandLine::Get(), TEXT("ScctCams="), Cameras, false))
+		{
+			TArray<FString> Entries;
+			Cameras.ParseIntoArray(Entries, TEXT(";"));
+			for (const FString& Entry : Entries)
+			{
+				TArray<FString> Numbers;
+				Entry.ParseIntoArray(Numbers, TEXT(","));
+				if (Numbers.Num() >= 5)
+				{
+					const FVector Location(FCString::Atof(*Numbers[0]), FCString::Atof(*Numbers[1]), FCString::Atof(*Numbers[2]));
+					const FRotator Rotation(FCString::Atof(*Numbers[4]), FCString::Atof(*Numbers[3]), 0.0);
+					TourCameras.Add(FTransform(Rotation, Location));
+				}
+			}
+			bTourView = TourCameras.Num() > 0;
+		}
 	}
 
 	if (QuitTimer >= 0.0f)
@@ -204,4 +236,25 @@ void UScctSessionSubsystem::TickAutoShots(float DeltaTime)
 		// Leave the last request time to be written.
 		QuitTimer = 2.0f;
 	}
+}
+
+void UScctSessionSubsystem::ApplyTourCamera()
+{
+	if (!bTourView || !TourCameras.IsValidIndex(ShotIndex))
+	{
+		return;
+	}
+
+	// The camera sits at the next shot's point for the whole wait, so lighting and exposure settle there.
+	const FTransform& Camera = TourCameras[ShotIndex];
+	const FRotator Rotation = Camera.Rotator();
+	View.X = Camera.GetLocation().X;
+	View.Y = Camera.GetLocation().Y;
+	View.Z = Camera.GetLocation().Z;
+	View.Pitch = Rotation.Pitch;
+	View.Yaw = Rotation.Yaw;
+	View.Roll = 0.0f;
+	View.Fov = 75.0f;
+	View.Valid = 1;
+	View.SpyFirstPerson = 0;
 }

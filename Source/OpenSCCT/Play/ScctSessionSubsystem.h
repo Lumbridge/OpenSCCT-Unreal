@@ -57,6 +57,12 @@ private:
 	 */
 	void TickAutoShots(float DeltaTime);
 
+	/** Moves the camera to the tour point of the next screenshot, if -ScctCams= gave one. */
+	void ApplyTourCamera();
+
+	/** -ScctCams="x,y,z,yaw,pitch;...": where each screenshot is taken from, instead of the player's view. */
+	TArray<FTransform> TourCameras;
+	bool bTourView = false;
 	int32 ShotsLeft = -1;
 	int32 ShotIndex = 0;
 	float ShotTimer = 0.0f;
@@ -68,6 +74,10 @@ private:
 	FString Failure;
 	FScctBridgeView View = {};
 	TArray<FScctBridgePawn> PawnBuffer;
+	TArray<FScctBridgeBone> PoseBuffer;
+
+	/** The bridge's bone lists by pawn kind (0 spy, 1 merc), read once per match. */
+	TArray<FScctBridgeBoneInfo> Skeletons[2];
 
 	UPROPERTY(Transient)
 	TMap<int32, TObjectPtr<AScctPawnProxy>> Proxies;

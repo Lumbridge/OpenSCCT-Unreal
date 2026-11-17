@@ -27,12 +27,47 @@ public struct BridgePawn
     public float Yaw;
 
     public float CollisionRadius, CollisionHeight;
+
+    /// <summary>
+    /// The upper-body aim the pose turns "B Spine2" by (the mesh's AAFULL pair), in degrees: yaw from the body's
+    /// facing, pitch up. Already in the pose of <c>GetPawnPose</c>; here for whatever else follows the aim.
+    /// </summary>
+    public float AimYaw, AimPitch;
 }
 
 public static class BridgePawnFlags
 {
     public const int Visible = 1;
     public const int Local = 2;
+}
+
+/// <summary>One bone of a character's skeleton (<c>GetSkeleton</c>), in the order of the character file's skin joints.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct BridgeBoneInfo
+{
+    public const int NameCapacity = 64;
+
+    /// <summary>Index of the parent bone, -1 for a root.</summary>
+    public int Parent;
+
+    /// <summary>UTF-16, zero terminated.</summary>
+    public fixed char Name[NameCapacity];
+}
+
+/// <summary>
+/// One bone of a drawn pose (<c>GetPawnPose</c>): its transform relative to its parent, in the character file's own
+/// space (metres, Y up, right-handed, as the glb stores its nodes). A bone's transform in the skeleton is its
+/// parent's times its own, on column vectors: scale, then rotation, then translation.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct BridgeBone
+{
+    public float Px, Py, Pz;
+
+    /// <summary>Unit quaternion.</summary>
+    public float Qx, Qy, Qz, Qw;
+
+    public float Sx, Sy, Sz;
 }
 
 /// <summary>The local player's camera this frame.</summary>

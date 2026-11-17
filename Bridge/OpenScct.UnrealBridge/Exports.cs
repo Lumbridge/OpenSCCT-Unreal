@@ -23,11 +23,21 @@ public unsafe struct BridgeApi
     public delegate* unmanaged[Cdecl]<BridgePawn*, int, int> GetPawns;
     public delegate* unmanaged[Cdecl]<BridgeView*, int> GetView;
     public delegate* unmanaged[Cdecl]<char*, int, int> LastError;
+
+    // Version 2. New entries are added at the end, so the ones above keep their places.
+    public delegate* unmanaged[Cdecl]<int, BridgeBoneInfo*, int, int> GetSkeleton;
+    public delegate* unmanaged[Cdecl]<int, BridgeBone*, int, int> GetPawnPose;
 }
 
 public static unsafe class Exports
 {
     private static BridgeSession? s_session;
+
+    /// <summary>The running session, for the feature entry points kept in their own files; null when none runs.</summary>
+    internal static BridgeSession? Current => s_failed ? null : s_session;
+
+    /// <summary>Stops the session with <paramref name="message"/> as the error Unreal reads.</summary>
+    internal static void ReportFailure(string message) => Fail(message);
     private static string s_lastError = "";
     private static bool s_failed;
 
@@ -46,6 +56,8 @@ public static unsafe class Exports
         api->GetPawns = &GetPawns;
         api->GetView = &GetView;
         api->LastError = &LastError;
+        api->GetSkeleton = &GetSkeleton;
+        api->GetPawnPose = &GetPawnPose;
         return BridgeSession.ApiVersion;
     }
 
@@ -152,6 +164,56 @@ public static unsafe class Exports
         {
             *view = session.GetView();
             return view->Valid;
+        }
+        catch (Exception e)
+        {
+            Fail(e.ToString());
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Writes the skeleton of a pawn kind (0 spy, 1 merc), in the order of the character file's skin joints. Returns
+    /// the bone count (which can be more than <paramref name="capacity"/>: only that many are written), 0 when the
+    /// content has no such character. Works before a session starts, once the content is configured.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetSkeleton(int kind, BridgeBoneInfo* bones, int capacity)
+    {
+        if (s_failed)
+        {
+            return 0;
+        }
+
+        try
+        {
+            Pose.GlbCharacter? character = s_session is { } session ? session.Character(kind) : BridgeSession.ConfiguredCharacter(kind);
+            return character is null
+                ? 0
+                : BridgeSession.GetSkeleton(character, bones == null || capacity <= 0 ? default : new Span<BridgeBoneInfo>(bones, capacity));
+        }
+        catch (Exception e)
+        {
+            Fail(e.ToString());
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Writes a pawn's pose for the frame being drawn: each bone relative to its parent, in <c>GetSkeleton</c>'s
+    /// order. Returns the bone count (only <paramref name="capacity"/> are written), 0 when the pawn has no pose yet.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetPawnPose(int actorId, BridgeBone* bones, int capacity)
+    {
+        if (s_session is not { } session || s_failed)
+        {
+            return 0;
+        }
+
+        try
+        {
+            return session.GetPawnPose(actorId, bones == null || capacity <= 0 ? default : new Span<BridgeBone>(bones, capacity));
         }
         catch (Exception e)
         {
