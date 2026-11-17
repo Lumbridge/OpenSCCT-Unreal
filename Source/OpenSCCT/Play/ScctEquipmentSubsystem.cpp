@@ -5,6 +5,7 @@
 #include "Components/PoseableMeshComponent.h"
 #include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
@@ -27,9 +28,16 @@ namespace
 	constexpr int32 MaxAttachmentBones = 160;
 
 	// How far first-person primitives are pulled towards the camera. The muzzle is up to 76 cm from the eye and
-	// a wall can be as near as the pawn's collision radius; at this scale the whole model stays nearer than that
-	// and still clears the near clipping plane.
+	// a wall can be as near as the pawn's collision radius; at this scale the whole model stays nearer than that.
 	constexpr float FirstPersonScale = 0.42f;
+
+	// The near clipping plane cuts the pulled-in model too: a plane N cm from the eye takes away everything of
+	// the view model within N / scale cm of it. With the engine's 10 cm plane that was the 24 cm nearest the eye:
+	// the hands' wrists at most with the original guns, but the whole rear half of a gun whose receiver and stock
+	// run back beside the face (the merc's new rifle showed only its barrel and rail, cut open and see-through
+	// behind them). While a view model is drawn the plane is held no further out than this many centimetres of
+	// the model as it is held, so what is cut is only what touches the eye.
+	constexpr float ViewModelNearCut = 7.5f;
 
 	// The torch. The original's brightness (304) is a number for its baked, unshadowed projector; as a physical
 	// spot light under Lumen this many candelas per unit gives a beam that owns a dark room without washing out
@@ -252,6 +260,16 @@ bool UScctEquipmentSubsystem::DrawsLocalMuzzleFlash() const
 	return IsValid(FirstPersonView) && FirstPersonView->IsShown();
 }
 
+FScctWeaponMotion UScctEquipmentSubsystem::MotionOf(const FScctEquipment& Pawn)
+{
+	FScctWeaponMotion Motion;
+	Motion.ShotCount = Pawn.ShotCount;
+	Motion.RateOfFire = Pawn.RateOfFire;
+	Motion.bFiring = (Pawn.Flags & EScctEquipmentFlags::Firing) != 0;
+	Motion.bReloading = (Pawn.Flags & EScctEquipmentFlags::Reloading) != 0;
+	return Motion;
+}
+
 FTransform UScctEquipmentSubsystem::GetCamera() const
 {
 	const FScctBridgeView& View = Session->GetView();
@@ -272,6 +290,8 @@ void UScctEquipmentSubsystem::OnFrame(float DeltaSeconds)
 		}
 		return;
 	}
+
+	FrameSeconds = DeltaSeconds;
 
 	// The order the bridge asks for: equipment, attachments (before any attachment pose), first person.
 	EquipmentCount = FMath::Clamp(Api->GetEquipment(Equipment.GetData(), Equipment.Num()), 0, Equipment.Num());
@@ -440,6 +460,16 @@ void UScctEquipmentSubsystem::UpdateAttachment(const FScctEquipmentApi& Api, FPa
 	Slot.bAnimated = bAnimated;
 	if (Attachment.Slot == EScctAttachmentSlot::Weapon)
 	{
+		// A model drawn in place of the original: its own parts move with the simulation, and while the gun is
+		// in the hands the body's left hand closes on its grip.
+		if (const FScctEquipment* Pawn = Slot.View.HasReplacement() ? FindEquipment(Attachment.ActorId) : nullptr)
+		{
+			Slot.View.Animate(MotionOf(*Pawn), FrameSeconds);
+			if ((Pawn->Flags & EScctEquipmentFlags::WeaponInHand) != 0)
+			{
+				Slot.View.HoldWithLeftHand(*Proxy.GetBodyMesh());
+			}
+		}
 		Slot.View.LogProbe(Proxy.GetBodyMesh());
 	}
 
@@ -691,12 +721,28 @@ void UScctEquipmentSubsystem::UpdateFirstPerson(const FScctEquipmentApi& Api, fl
 	const APawn* ViewPawn = Player != nullptr ? Player->GetPawn() : nullptr;
 	if (UCameraComponent* Camera = ViewPawn != nullptr ? ViewPawn->FindComponentByClass<UCameraComponent>() : nullptr)
 	{
+		const float Scale = FMath::Clamp(CVarFirstPersonScale.GetValueOnGameThread(), 0.05f, 1.0f);
 		Camera->SetEnableFirstPersonScale(true);
-		Camera->SetFirstPersonScale(FMath::Clamp(CVarFirstPersonScale.GetValueOnGameThread(), 0.05f, 1.0f));
+		Camera->SetFirstPersonScale(Scale);
+
+		const float NearPlane = ViewModelNearCut * Scale;
+		if (GNearClippingPlane > NearPlane + 0.01f && GEngine != nullptr)
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("First person: near clipping plane %.2f cm brought in to %.2f cm (it cuts the view model %.1f cm from the eye at first-person scale %.2f)"),
+				GNearClippingPlane, NearPlane, GNearClippingPlane / Scale, Scale);
+			// The engine's own command: it moves the plane for the game and the render thread together.
+			GEngine->Exec(GetWorld(), *FString::Printf(TEXT("r.SetNearClipPlane %.3f"), NearPlane));
+		}
+	}
+
+	FScctWeaponMotion Motion;
+	if (const FScctEquipment* Own = FindEquipment(FirstPerson.ActorId))
+	{
+		Motion = MotionOf(*Own);
 	}
 
 	const float Cloak = ForcedCloak >= 0.0f ? ForcedCloak : FirstPerson.Cloak;
-	FirstPersonView->Present(Api, Models, Weapons, FirstPerson, GetCamera(), Cloak, DeltaSeconds);
+	FirstPersonView->Present(Api, Models, Weapons, FirstPerson, GetCamera(), Cloak, Motion, DeltaSeconds);
 
 	if (FirstPerson.ActorId != FirstPersonActor)
 	{

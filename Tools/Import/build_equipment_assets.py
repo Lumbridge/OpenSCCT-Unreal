@@ -255,7 +255,38 @@ def build_weapon_set():
         entry.set_editor_property("first_person", first_person)
         if replacement:
             entry.set_editor_property("attach_offset", rifle_offset(first_person))
+            rifle_left_hand(entry, first_person)
         return entry
+
+    def rifle_left_hand(entry, first_person):
+        """Where the left hand holds the new rifle (the row's "Left hand" values; FScctEquipmentView bends the
+        arm to put it there). The numbers are those -ScctWeaponProbe logs.
+
+        On a body the original animations lay the left hand palm up under the original's pump: its wrist is at
+        (33.5, -9.7, 0.4) from the gun bone, 12 cm ahead of the new rifle's short vertical fore grip, and a hand
+        held palm up cannot close on a vertical grip. So the hand is put on the fore grip itself: reaching across
+        from the left with the fingers pointing to the right, the palm on the grip's front and facing the shooter,
+        the thumb up (the hand bones' X runs to the fingers, -Y out of the palm, -Z to the thumb). The wrist is
+        8.5 cm to the left of the grip's middle, 3 cm in front of it and 3.5 cm under the socket.
+
+        In the merc's own view the fore grip is out of the picture (it is 40 degrees under the eye) and the view
+        model's hand is one rigid piece with open fingers. The hand that is seen is the left one under the light
+        module (rifle_offset): the animation has its wrist at (-10.5, -4.3, -4.0) from the module's lens socket,
+        the fingers up the module's left side but held off it. It keeps its turn and is brought 1.5 cm forward,
+        1.1 cm in and 1.5 cm up, so the palm and fingers lie against the module and the handguard above it."""
+        arm = ("Bip01-L-UpperArm", "Bip01-L-Forearm", "Bip01-L-Hand") if first_person else ("B-L-UpperArm", "B-L-ForeArm", "B-L-Hand")
+        for name, bone in zip(("left_upper_arm_bone", "left_forearm_bone", "left_hand_bone"), arm):
+            entry.set_editor_property(name, bone)
+        if first_person:
+            entry.set_editor_property("original_left_hand", unreal.Vector(-32.5, 3.6, -6.2))
+            entry.set_editor_property("left_hand_socket", "LightModule")
+            entry.set_editor_property("left_hand_keeps_turn", True)
+            entry.set_editor_property("left_hand_in_socket", unreal.Transform(
+                unreal.Vector(-9.0, -3.2, -2.5), unreal.Rotator(0.0, 0.0, 0.0), unreal.Vector(1.0, 1.0, 1.0)))
+        else:
+            entry.set_editor_property("original_left_hand", unreal.Vector(33.5, -9.7, 0.4))
+            entry.set_editor_property("left_hand_in_socket", unreal.Transform(
+                unreal.Vector(3.0, -8.5, -3.5), unreal.Rotator(roll=180.0, pitch=0.0, yaw=90.0), unreal.Vector(1.0, 1.0, 1.0)))
 
     def rifle_offset(first_person):
         """Where the new rifle sits on the original gun's bone. Worked out from the bones as a run logs them

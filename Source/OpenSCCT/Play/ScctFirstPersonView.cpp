@@ -4,6 +4,7 @@
 #include "Components/PoseableMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -22,8 +23,15 @@ namespace
 	constexpr float FlashSeconds = 0.05f;
 	constexpr float FlashLightSeconds = 0.085f;
 	// In a moderately lit room; scaled by the picture's exposure when it fires (Play/ScctExposure.h), so the
-	// flash does not white out the screen when the eye is open for the dark.
-	constexpr float FlashLightCandelas = 26.0f;
+	// flash does not white out the screen when the eye is open for the dark. At 26 cd a shot lit nothing: in
+	// a lamp-lit room of the maps the exposure is at its dark end and the scale at its least (0.04), which left
+	// one candela. Looked at with the flash held in such a room (AquaE's Pirates' Room): 500 still shows nothing,
+	// 800 warms the floor, the posts and the ceiling beams around the gun, 1250 is a strong glare and 3000 burns
+	// the floor white.
+	constexpr float FlashLightCandelas = 800.0f;
+
+	TAutoConsoleVariable<float> CVarFlashCandelas(TEXT("scct.Flash.Candelas"), FlashLightCandelas,
+		TEXT("Candelas of the light of the local player's muzzle flash in a moderately lit room (it is scaled by the picture's exposure)."));
 
 	struct FFlashShape
 	{
@@ -94,7 +102,7 @@ void AScctFirstPersonView::AddReferencedObjects(UObject* InThis, FReferenceColle
 }
 
 void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentModels& Models, const UScctWeaponSet* Weapons,
-	const FScctFirstPerson& View, const FTransform& Camera, float Cloak, float DeltaSeconds)
+	const FScctFirstPerson& View, const FTransform& Camera, float Cloak, const FScctWeaponMotion& Motion, float DeltaSeconds)
 {
 	SetActorTransform(Camera);
 	LastCamera = Camera;
@@ -144,14 +152,46 @@ void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentM
 		}
 
 		UPoseableMeshComponent* Body = Drawn.GetBody();
-		Body->SetRelativeTransform(FScctPose::ToUnreal(Part.ModelToCamera));
+		// A model can come with a scale of its own above its skeleton (OpenSCCT's pistols are authored a hundred
+		// times too large under a frame scaled 0.01). On the component that scale also shrinks the mesh's bounds
+		// to a speck, and Unreal then does not draw the mesh at all. It is moved onto the skeleton's root bones,
+		// which puts every bone in the same place with the same size and leaves the bounds as the mesh has them.
+		FTransform ModelToCamera = FScctPose::ToUnreal(Part.ModelToCamera);
+		const float ModelScale = static_cast<float>(ModelToCamera.GetScale3D().X);
+		const bool bModelScaled = ModelScale > UE_SMALL_NUMBER && !FMath::IsNearlyEqual(ModelScale, 1.0f, 0.001f) && ModelToCamera.GetScale3D().IsUniform(0.001);
+		if (bModelScaled)
+		{
+			ModelToCamera.SetScale3D(FVector::OneVector);
+		}
+		Body->SetRelativeTransform(ModelToCamera);
 		if (!Body->IsVisible())
 		{
 			Body->SetVisibility(true, true);
 		}
 		const int32 Bones = FMath::Clamp(Api.GetFirstPersonPose(Index, PoseBuffer.GetData(), PoseBuffer.Num()), 0, PoseBuffer.Num());
+		if (bModelScaled && Drawn.GetModel() != nullptr)
+		{
+			const TArray<FScctBridgeBoneInfo>& Skeleton = Drawn.GetModel()->Skeleton;
+			for (int32 Bone = 0; Bone < Bones && Bone < Skeleton.Num(); ++Bone)
+			{
+				if (Skeleton[Bone].Parent < 0)
+				{
+					FScctBridgeBone& Top = PoseBuffer[Bone];
+					Top.Px *= ModelScale; Top.Py *= ModelScale; Top.Pz *= ModelScale;
+					Top.Sx *= ModelScale; Top.Sy *= ModelScale; Top.Sz *= ModelScale;
+				}
+			}
+		}
 		Drawn.ApplyPose(TConstArrayView<FScctBridgeBone>(PoseBuffer.GetData(), Bones));
+		if (Index == WeaponPart && Drawn.HasReplacement())
+		{
+			// A model drawn in place of the original gun: its parts move with the simulation and the left hand
+			// of the arms (this same model) closes on its grip.
+			Drawn.Animate(Motion, DeltaSeconds);
+			Drawn.HoldWithLeftHand(*Body);
+		}
 		Drawn.LogProbe();
+		LogViewProbe(Index, *Body, Camera);
 		Drawn.ForEachMesh([this, Cloak](UMeshComponent& Mesh) { CloakLook.Apply(Mesh, Cloak); });
 		bShown = true;
 
@@ -203,6 +243,33 @@ void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentM
 	}
 	CloakLook.Trim();
 	TickFlash(DeltaSeconds);
+}
+
+void AScctFirstPersonView::LogViewProbe(int32 Index, UPoseableMeshComponent& Body, const FTransform& Camera)
+{
+	// -ScctWeaponProbe: where the view model's bones are from the eye (X ahead, Y right, Z up), every few seconds.
+	static const bool bProbe = FParse::Param(FCommandLine::Get(), TEXT("ScctWeaponProbe"));
+	if (!bProbe || FPlatformTime::Seconds() < NextViewProbe[Index])
+	{
+		return;
+	}
+	NextViewProbe[Index] = FPlatformTime::Seconds() + 4.0;
+
+	const FTransform Model = Body.GetRelativeTransform();
+	const FVector Centre = Camera.InverseTransformPosition(Body.Bounds.Origin);
+	UE_LOG(LogOpenSCCT, Log, TEXT("First person probe: part %d %s sits at (%.1f %.1f %.1f) rotation (pitch %.1f yaw %.1f roll %.1f) scale (%.2f %.2f %.2f) from the eye; bounds centre (%.1f %.1f %.1f) radius %.1f; %d bones, from the eye:"),
+		Index, *GetNameSafe(Body.GetSkinnedAsset()), Model.GetLocation().X, Model.GetLocation().Y, Model.GetLocation().Z,
+		Model.Rotator().Pitch, Model.Rotator().Yaw, Model.Rotator().Roll, Model.GetScale3D().X, Model.GetScale3D().Y, Model.GetScale3D().Z,
+		Centre.X, Centre.Y, Centre.Z, Body.Bounds.SphereRadius, Body.GetNumBones());
+	for (int32 Bone = 0; Bone < Body.GetNumBones(); ++Bone)
+	{
+		const FTransform World = Body.GetBoneTransform(Bone);
+		const FVector At = Camera.InverseTransformPosition(World.GetLocation());
+		const FTransform Rest = Body.GetSkinnedAsset() != nullptr && Body.GetSkinnedAsset()->GetRefSkeleton().GetRefBonePose().IsValidIndex(Bone)
+			? Body.GetSkinnedAsset()->GetRefSkeleton().GetRefBonePose()[Bone] : FTransform::Identity;
+		UE_LOG(LogOpenSCCT, Log, TEXT("First person probe:   bone %2d '%s' at (%.1f %.1f %.1f) scale (%.2f %.2f %.2f); at rest (%.1f %.1f %.1f) scale %.3f from its parent"), Bone, *Body.GetBoneName(Bone).ToString(),
+			At.X, At.Y, At.Z, World.GetScale3D().X, World.GetScale3D().Y, World.GetScale3D().Z, Rest.GetLocation().X, Rest.GetLocation().Y, Rest.GetLocation().Z, Rest.GetScale3D().X);
+	}
 }
 
 void AScctFirstPersonView::Hide(float DeltaSeconds)
@@ -278,8 +345,9 @@ void AScctFirstPersonView::PlayMuzzleFlash()
 	FlashAge = 0.0f;
 	FlashExposureScale = FScctExposure::FlashScale();
 	++FlashesPlayed;
-	UE_LOG(LogOpenSCCT, Log, TEXT("First person: muzzle flash %d at (%.0f %.0f %.0f), %.1f cm from the eye"), FlashesPlayed,
-		Muzzle.GetLocation().X, Muzzle.GetLocation().Y, Muzzle.GetLocation().Z, FVector::Dist(Muzzle.GetLocation(), LastCamera.GetLocation()));
+	UE_LOG(LogOpenSCCT, Log, TEXT("First person: muzzle flash %d at (%.0f %.0f %.0f), %.1f cm from the eye, its light %.0f cd (exposure scale %.2f)"), FlashesPlayed,
+		Muzzle.GetLocation().X, Muzzle.GetLocation().Y, Muzzle.GetLocation().Z, FVector::Dist(Muzzle.GetLocation(), LastCamera.GetLocation()),
+		CVarFlashCandelas.GetValueOnGameThread() * FlashExposureScale, FlashExposureScale);
 	TickFlash(0.0f);
 }
 
@@ -322,7 +390,7 @@ void AScctFirstPersonView::TickFlash(float DeltaSeconds)
 	}
 
 	const float LightFade = bGunShown ? 1.0f - FMath::Clamp(Age / FlashLightSeconds, 0.0f, 1.0f) : 0.0f;
-	FlashLight->SetIntensity(FlashLightCandelas * FlashExposureScale * LightFade);
+	FlashLight->SetIntensity(CVarFlashCandelas.GetValueOnGameThread() * FlashExposureScale * LightFade);
 	if (LightFade <= 0.0f)
 	{
 		FlashLight->SetVisibility(false);
