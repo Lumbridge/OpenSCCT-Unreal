@@ -22,6 +22,7 @@ class UScctMatchMenuWidget;
  *   ?Practice=1         practice rules: no time limit, unlimited lives, 5 s respawn
  *   ?ResponsiveSmoke=1  smoke grenades fill the shared simulated cloud (Play/ScctEffectsSmokeVolume.cpp draws it)
  *   ?UnlimitedGear=1    Visit a Map practice: unlimited gear, instant gear changes, Switch Team in the menu
+ *   ?MatchPlayers=N     the player count (2 to 24) the map's match-size rules lay the match out for; absent: bots + 1
  *   ?Name=Sam           the local player's name (Unreal's own player-name option; default "Player")
  *   ?TimeLimit=10       the player's own rules over the map's: minutes (0 for none), ?SpyLives=3 and ?MercLives=3
  *                       (0 for unlimited), ?Respawn=5 seconds

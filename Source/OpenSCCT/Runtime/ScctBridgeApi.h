@@ -150,6 +150,9 @@ struct FScctBridgeStartOptions
 	int32 SpyLivesPlusOne;  // not used in Merc Deathmatch
 	int32 MercLivesPlusOne;
 	int32 RespawnPlusOne;   // seconds
+
+	// The player count the map's match-size rules lay the match out for; 0 for the bots and the local player.
+	int32 MatchPlayers;
 };
 
 struct FScctBridgeApi
@@ -201,7 +204,7 @@ static_assert(sizeof(FScctBridgeBone) == 40, "FScctBridgeBone must match BridgeB
 static_assert(sizeof(FScctBridgeView) == 40, "FScctBridgeView must match BridgeView");
 static_assert(sizeof(FScctBridgeInput) == 32, "FScctBridgeInput must match BridgeInput");
 static_assert(sizeof(FScctBridgeSessionInfo) == 80, "FScctBridgeSessionInfo must match BridgeSessionInfo");
-static_assert(sizeof(FScctBridgeStartOptions) == 260, "FScctBridgeStartOptions must match BridgeStartOptions");
+static_assert(sizeof(FScctBridgeStartOptions) == 264, "FScctBridgeStartOptions must match BridgeStartOptions");
 static_assert(sizeof(FScctBridgeApi) == 8 + 17 * sizeof(void*), "FScctBridgeApi must match BridgeApi (64-bit)");
 static_assert(sizeof(TCHAR) == 2, "the bridge's strings are UTF-16");
 

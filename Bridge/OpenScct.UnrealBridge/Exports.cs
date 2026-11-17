@@ -335,6 +335,7 @@ public static unsafe class Exports
             SpyLives = o.SpyLivesPlusOne - 1,
             MercLives = o.MercLivesPlusOne - 1,
             RespawnSeconds = o.RespawnPlusOne - 1,
+            MatchPlayers = o.MatchPlayers,
         });
     }
 
