@@ -126,7 +126,8 @@ void UScctTeamPingSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 
 	FString Debug;
-	if (FParse::Value(FCommandLine::Get(), TEXT("ScctTeamPing="), Debug))
+	// Not stopping at the comma: the value is kind[,At].
+	if (FParse::Value(FCommandLine::Get(), TEXT("ScctTeamPing="), Debug, /*bShouldStopOnSeparator*/ false))
 	{
 		FString KindText = Debug, AtText;
 		Debug.Split(TEXT(","), &KindText, &AtText);

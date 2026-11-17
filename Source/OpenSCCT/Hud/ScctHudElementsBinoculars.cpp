@@ -33,7 +33,7 @@ namespace
 	const TCHAR* const MarkerPackage = TEXT("SHudTextures");
 
 	/** A colour of the content (sRGB 0..1 channels, alpha as is) as Slate takes it. */
-	FLinearColor ContentColour(float R, float G, float B, float A)
+	FLinearColor BinocularContentColour(float R, float G, float B, float A)
 	{
 		return FLinearColor::FromSRGBColor(FColor(
 			static_cast<uint8>(FMath::Clamp(R, 0.0f, 1.0f) * 255.0f + 0.5f),
@@ -44,7 +44,7 @@ namespace
 	/** The canvas colour of the original's markers: the bytes given are doubled by the canvas (spec/hud/screen-effects.md rule 0). */
 	FLinearColor CanvasColour(int32 R, int32 G, int32 B)
 	{
-		return ContentColour(FMath::Min(255, 2 * R) / 255.0f, FMath::Min(255, 2 * G) / 255.0f, FMath::Min(255, 2 * B) / 255.0f, 1.0f);
+		return BinocularContentColour(FMath::Min(255, 2 * R) / 255.0f, FMath::Min(255, 2 * G) / 255.0f, FMath::Min(255, 2 * B) / 255.0f, 1.0f);
 	}
 
 	/** The marker atlas tile of a target kind (FScctHudObjective::Kind), as HudMarkers.IconTile; false for one without. */
@@ -75,7 +75,7 @@ namespace
 	/** Draws one layer of the page; K is screen units per page unit. */
 	void PaintLayer(FScctHudPainter& Painter, const FScctHudPageLayer& Layer, const FVector2f& K)
 	{
-		const FLinearColor Colour = ContentColour(Layer.Red, Layer.Green, Layer.Blue, Layer.Alpha);
+		const FLinearColor Colour = BinocularContentColour(Layer.Red, Layer.Green, Layer.Blue, Layer.Alpha);
 		if (Layer.Kind == 1)
 		{
 			const FString Words(Layer.Text);
@@ -87,7 +87,7 @@ namespace
 			if (Layer.ShadowAlpha > 0.0f)
 			{
 				Painter.Text(At + FVector2f(Layer.ShadowX * K.X, Layer.ShadowY * K.Y), Words, LayerFont,
-					ContentColour(Layer.ShadowRed, Layer.ShadowGreen, Layer.ShadowBlue, Layer.ShadowAlpha), Align, false);
+					BinocularContentColour(Layer.ShadowRed, Layer.ShadowGreen, Layer.ShadowBlue, Layer.ShadowAlpha), Align, false);
 			}
 			Painter.Text(At, Words, LayerFont, Colour, Align, false);
 			return;

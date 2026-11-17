@@ -18,14 +18,14 @@ namespace
 	/** The equipment block's width (ScctHudElementsPlayer.cpp): the panels sit to its left. */
 	constexpr float EquipmentWidth = 252.0f;
 
-	constexpr float PanelWidth = 118.0f;
-	constexpr float PanelHeight = 150.0f;
+	constexpr float BackpackPanelWidth = 118.0f;
+	constexpr float BackpackPanelHeight = 150.0f;
 	constexpr float PanelGap = 8.0f;
-	constexpr float TitleHeight = 36.0f;
+	constexpr float BackpackTitleHeight = 36.0f;
 
 	/** The icons: this many units square, their centres this far from the diamond's centre. */
 	constexpr float IconSize = 34.0f;
-	constexpr float Spread = 30.0f;
+	constexpr float BackpackRowSpread = 30.0f;
 
 	/** Ico1..Ico4 of the original: top, left, right, bottom. */
 	const FVector2f RowOffsets[4] = { FVector2f(0.0f, -1.0f), FVector2f(-1.0f, 0.0f), FVector2f(1.0f, 0.0f), FVector2f(0.0f, 1.0f) };
@@ -43,14 +43,14 @@ namespace
 		{
 			FString Shown = Name;
 			const FSlateFontInfo NameFont = Font(EWeight::Regular, 9.5f);
-			while (Shown.Len() > 3 && Painter.Measure(Shown, NameFont).X > PanelWidth - 16.0f)
+			while (Shown.Len() > 3 && Painter.Measure(Shown, NameFont).X > BackpackPanelWidth - 16.0f)
 			{
 				Shown = Shown.LeftChop(1);
 			}
 			Painter.Text(FVector2f(CentreX, Box.Min.Y + 20.0f), Shown, NameFont, Fade(Accent, 0.95f), EAlign::Centre);
 		}
 
-		const FVector2f Centre(CentreX, Box.Min.Y + TitleHeight + (PanelHeight - TitleHeight) * 0.5f);
+		const FVector2f Centre(CentreX, Box.Min.Y + BackpackTitleHeight + (BackpackPanelHeight - BackpackTitleHeight) * 0.5f);
 		const FSlateFontInfo CountFont = Font(EWeight::Bold, 12.0f);
 		for (const FScctHudBackpackRow& Row : Model.BackpackRows)
 		{
@@ -58,7 +58,7 @@ namespace
 			{
 				continue;
 			}
-			const FVector2f At = Centre + RowOffsets[Row.Row] * Spread;
+			const FVector2f At = Centre + RowOffsets[Row.Row] * BackpackRowSpread;
 			const FBox2f Icon(At - FVector2f(IconSize * 0.5f), At + FVector2f(IconSize * 0.5f));
 			if (const UScctHudTextures::FEntry* Texture = Row.Texture[0] != 0 ? UScctHudTextures::Find(Row.Package, Row.Texture) : nullptr)
 			{
@@ -111,11 +111,11 @@ void ScctHudElements::PaintBackpack(FScctHudPainter& Painter, const FScctHudMode
 
 	const FVector2f Size = Painter.Size();
 	const float Right = Size.X - Margin - EquipmentWidth - 14.0f;
-	const float Top = Size.Y - Margin - PanelHeight;
-	float X = Right - Shown.Num() * PanelWidth - (Shown.Num() - 1) * PanelGap;
+	const float Top = Size.Y - Margin - BackpackPanelHeight;
+	float X = Right - Shown.Num() * BackpackPanelWidth - (Shown.Num() - 1) * PanelGap;
 	for (const FShown& Panel : Shown)
 	{
-		PaintPanel(Painter, Model, HudBox(X, Top, PanelWidth, PanelHeight), Panel.Panel, Panel.Title, Panel.Name);
-		X += PanelWidth + PanelGap;
+		PaintPanel(Painter, Model, HudBox(X, Top, BackpackPanelWidth, BackpackPanelHeight), Panel.Panel, Panel.Title, Panel.Name);
+		X += BackpackPanelWidth + PanelGap;
 	}
 }
