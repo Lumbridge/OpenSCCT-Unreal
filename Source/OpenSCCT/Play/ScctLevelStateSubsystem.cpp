@@ -1,6 +1,7 @@
 #include "Play/ScctLevelStateSubsystem.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "Animation/SkeletalMeshActor.h"
 #include "Components/LightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Light.h"
@@ -26,6 +27,21 @@ namespace
 	const TCHAR* const LevelTagPrefix = TEXT("Scct:");
 	const TCHAR* const LevelEffectMeshFolder = TEXT("/Game/Imported/Fx");
 	const FName LevelEmissiveParameter(TEXT("Emissive"));
+
+	// What the importer's map effects (Tools/Import/scct_fx.py, scct_effects.py) are found by.
+	const TCHAR* const LevelCoronaTagPrefix = TEXT("ScctCoronaOf:");
+	const TCHAR* const LevelLightTypeTagPrefix = TEXT("ScctLightType:");
+	const FName LevelLightTypeParameter(TEXT("LightType"));
+	const FName LevelCardBrightnessParameter(TEXT("Brightness"));
+	const FName LevelCardEdgeParameter(TEXT("EdgeFade")); // only the glow card material has it
+	constexpr int32 LevelCoronaColourSlot = 0;            // custom primitive data 0..2: the corona's colour
+	constexpr float LevelSteadyLightType = 1.0f;
+
+	/** The original's light types whose brightness moves by itself: pulse, blink, flicker, strobe, subtle pulse. */
+	bool IsAnimatedLightType(int32 Type)
+	{
+		return Type == 2 || Type == 3 || Type == 4 || Type == 5 || Type == 7;
+	}
 
 	// A switched lamp comes up and goes down over about this long, like a filament, instead of popping.
 	constexpr float LampFadeOnSeconds = 0.22f;
@@ -194,6 +210,7 @@ void UScctLevelStateSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	bBound = false;
 	NumLevelActors = NumStandIns = NumNothingToDraw = NumHiddenAtStart = 0;
 	NumLightsOffAtStart = NumLightsFound = NumMobilityChanged = 0;
+	NumCoronasBound = NumRhythmsHeld = NumGlowCards = 0;
 	PlacementError = PlacementTurnError = 0.0f;
 	PlacementChecked = 0;
 	FMemory::Memzero(NumEvents);
@@ -240,7 +257,13 @@ void UScctLevelStateSubsystem::IndexLevel()
 	{
 		for (const FName& Tag : It->Tags)
 		{
-			if (!Tag.ToString().StartsWith(LevelTagPrefix))
+			const FString TagText = Tag.ToString();
+			if (TagText.StartsWith(LevelCoronaTagPrefix))
+			{
+				TaggedCoronas.Add(FScctWorld::LevelTag(*TagText.RightChop(FCString::Strlen(LevelCoronaTagPrefix))), *It);
+				continue;
+			}
+			if (!TagText.StartsWith(LevelTagPrefix))
 			{
 				continue;
 			}
@@ -249,6 +272,14 @@ void UScctLevelStateSubsystem::IndexLevel()
 			{
 				TaggedLights.Add(Tag, *It);
 				++NumLights;
+				continue;
+			}
+			// Only meshes stand for a followed actor. The importer's other effect actors carry the same kind of tag
+			// (the sprite emitters of one Emitter actor share one, rain volumes, caustic lights): they are not
+			// moved, hidden or re-skinned from here.
+			if (!It->IsA<AStaticMeshActor>() && !It->IsA<ASkeletalMeshActor>())
+			{
+				++NumEffectActors;
 				continue;
 			}
 			TaggedActors.Add(Tag, *It);
@@ -308,8 +339,8 @@ void UScctLevelStateSubsystem::IndexLevel()
 		}
 	}
 
-	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: the level has %d tagged actors (%d movable meshes, %d lights); %d imported meshes and %d materials can be swapped in (%s)"),
-		TaggedActors.Num() + TaggedLights.Num(), MovableTags.Num(), NumLights, MeshAssets.Num(), MaterialAssets.Num(), *MapFolder);
+	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: the level has %d tagged actors (%d movable meshes, %d lights), %d corona cards and %d tagged effect actors that are left alone; %d imported meshes and %d materials can be swapped in (%s)"),
+		TaggedActors.Num() + TaggedLights.Num(), MovableTags.Num(), NumLights, TaggedCoronas.Num(), NumEffectActors, MeshAssets.Num(), MaterialAssets.Num(), *MapFolder);
 	if (NumNaniteAvoided > 0)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: %d level meshes with glass or glowing materials were imported as Nanite meshes, which cannot draw those; they are drawn the ordinary way"), NumNaniteAvoided);
@@ -333,10 +364,27 @@ void UScctLevelStateSubsystem::RestoreLevel()
 			Light->SetIntensity(State.OriginalIntensity);
 			Light->SetLightColor(State.OriginalColor);
 			Light->SetVisibility(State.bOriginalVisible);
+			if (State.bLightFunctionHeld)
+			{
+				// The importer's own rhythm again, for the level without a match.
+				Light->SetLightFunctionMaterial(State.OriginalLightFunction.Get());
+			}
 			if (State.bMoved && State.Actor.IsValid())
 			{
 				State.Actor->SetActorTransform(State.OriginalTransform);
 			}
+		}
+		for (const FCorona& Corona : State.Coronas)
+		{
+			AActor* Actor = Corona.Actor.Get();
+			UStaticMeshComponent* Card = Corona.Card.Get();
+			if (Actor == nullptr || Card == nullptr)
+			{
+				continue;
+			}
+			Actor->SetActorHiddenInGame(Corona.bOriginalHidden);
+			Actor->SetActorLocation(Corona.OriginalLocation);
+			Card->SetCustomPrimitiveDataVector3(LevelCoronaColourSlot, FVector(Corona.OriginalColor.R, Corona.OriginalColor.G, Corona.OriginalColor.B));
 		}
 		for (const FFixture& Fixture : State.Fixtures)
 		{
@@ -615,7 +663,7 @@ void UScctLevelStateSubsystem::UpdateActors()
 
 		// An actor that never left its map placement keeps the importer's transform; one spawned here has no
 		// other placement than the table's.
-		const bool bPlace = (Record.Flags & EScctWorldActorFlags::Moved) != 0 || !State.bLevelActor;
+		const bool bPlace = ((Record.Flags & EScctWorldActorFlags::Moved) != 0 || !State.bLevelActor) && !State.bVisibilityOnly;
 		if (bPlace && (!Location.Equals(State.Location, 0.005) || !Rotation.Equals(State.Rotation, 0.005)))
 		{
 			State.Location = Location;
@@ -669,6 +717,9 @@ void UScctLevelStateSubsystem::FirstSight(FActorState& State, const FScctWorldAc
 
 	State.Actor = Found;
 	State.bLevelActor = true;
+	// A skeletal prop is placed by the importer with its mesh's own rotation origin, which the table's place does
+	// not have: it is shown and hidden from here and stays where it was imported.
+	State.bVisibilityOnly = Found->IsA<ASkeletalMeshActor>();
 	State.Mesh = Found->FindComponentByClass<UStaticMeshComponent>();
 	State.OriginalTransform = Found->GetActorTransform();
 	State.bOriginalHidden = Found->IsHidden();
@@ -682,7 +733,7 @@ void UScctLevelStateSubsystem::FirstSight(FActorState& State, const FScctWorldAc
 
 	// The importer makes movers and gameplay meshes movable; anything else the simulation follows is made so here.
 	USceneComponent* Root = Found->GetRootComponent();
-	if (Root != nullptr && Root->Mobility != EComponentMobility::Movable)
+	if (Root != nullptr && Root->Mobility != EComponentMobility::Movable && !State.bVisibilityOnly)
 	{
 		Root->SetMobility(EComponentMobility::Movable);
 		State.bMobilityChanged = true;
@@ -690,7 +741,7 @@ void UScctLevelStateSubsystem::FirstSight(FActorState& State, const FScctWorldAc
 	}
 
 	// Evidence that the table's placement and the importer's are the same.
-	if ((Record.Flags & (EScctWorldActorFlags::Moved | EScctWorldActorFlags::Attached)) == 0)
+	if ((Record.Flags & (EScctWorldActorFlags::Moved | EScctWorldActorFlags::Attached)) == 0 && !State.bVisibilityOnly)
 	{
 		++PlacementChecked;
 		PlacementError = FMath::Max(PlacementError, static_cast<float>(FVector::Dist(State.Location, State.FirstLocation)));
@@ -892,7 +943,7 @@ void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 				}
 			}
 
-			if (!bTriggered || bBreaking || (State.bShotOut && !bOn))
+			if (!bTriggered || bBreaking || (State.bShotOut && !bOn) || (bOn && IsAnimatedLightType(Record.LightType)))
 			{
 				// Pulses and flickers are the simulation's own curve; a shot-out lamp is dark at once.
 				State.Shown = Level;
@@ -944,8 +995,44 @@ void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 			}
 		}
 
-		// The lamp mesh glows as bright as its light, up to what it was imported with.
+		// The corona goes with its light, whether or not the level has a light for it: as bright, in the same
+		// place, and gone when the simulation says a switched light draws none.
 		const float Glow = FMath::Clamp(State.Shown, 0.0f, 1.0f);
+		if (State.Coronas.Num() > 0)
+		{
+			const bool bCorona = Glow > 0.0f && (!bTriggered || (Record.Flags & EScctWorldLightFlags::Corona) != 0);
+			const bool bFollow = (Record.Flags & EScctWorldLightFlags::Moved) != 0 && (Record.Flags & EScctWorldLightFlags::OnBone) == 0;
+			const bool bChanged = bCorona != State.bCoronaShown || !FMath::IsNearlyEqual(Glow, State.AppliedCorona, 0.01f);
+			if (bChanged || bFollow)
+			{
+				State.bCoronaShown = bCorona;
+				State.AppliedCorona = Glow;
+				for (const FCorona& Corona : State.Coronas)
+				{
+					AActor* Actor = Corona.Actor.Get();
+					UStaticMeshComponent* Card = Corona.Card.Get();
+					if (Actor == nullptr || Card == nullptr)
+					{
+						continue;
+					}
+					if (bChanged)
+					{
+						Actor->SetActorHiddenInGame(!bCorona);
+						Card->SetCustomPrimitiveDataVector3(LevelCoronaColourSlot, FVector(Corona.OriginalColor.R, Corona.OriginalColor.G, Corona.OriginalColor.B) * Glow);
+					}
+					if (bFollow)
+					{
+						const FVector Location(Record.X, Record.Y, Record.Z);
+						if (!Location.Equals(Actor->GetActorLocation(), 0.005))
+						{
+							Actor->SetActorLocation(Location);
+						}
+					}
+				}
+			}
+		}
+
+		// The lamp mesh glows as bright as its light, up to what it was imported with.
 		if (State.Fixtures.Num() > 0 && !FMath::IsNearlyEqual(Glow, State.AppliedFixture, 0.01f))
 		{
 			State.AppliedFixture = Glow;
@@ -953,7 +1040,7 @@ void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 			{
 				if (UMaterialInstanceDynamic* Material = Fixture.Material.Get())
 				{
-					Material->SetScalarParameterValue(LevelEmissiveParameter, Fixture.Emissive * Glow);
+					Material->SetScalarParameterValue(Fixture.Parameter, Fixture.Emissive * Glow);
 				}
 			}
 		}
@@ -964,6 +1051,31 @@ void UScctLevelStateSubsystem::BindLight(FLightState& State, const FScctWorldLig
 {
 	State.FirstColor = State.AppliedColor = FLinearColor(Record.R, Record.G, Record.B);
 	const FString& Name = GetName(Record.NameId);
+
+	// The corona cards first: many of the original's coronas sit on lights the level has no light for.
+	TArray<TWeakObjectPtr<AActor>> Cards;
+	TaggedCoronas.MultiFind(FScctWorld::LevelTag(*Name), Cards);
+	for (const TWeakObjectPtr<AActor>& Each : Cards)
+	{
+		const AStaticMeshActor* CardActor = Cast<AStaticMeshActor>(Each.Get());
+		UStaticMeshComponent* Card = CardActor != nullptr ? CardActor->GetStaticMeshComponent() : nullptr;
+		if (Card == nullptr)
+		{
+			continue;
+		}
+		FCorona& Corona = State.Coronas.AddDefaulted_GetRef();
+		Corona.Actor = Each;
+		Corona.Card = Card;
+		Corona.OriginalLocation = CardActor->GetActorLocation();
+		Corona.bOriginalHidden = CardActor->IsHidden();
+		const TArray<float>& Data = Card->GetCustomPrimitiveData().Data.Num() > LevelCoronaColourSlot + 2 ? Card->GetCustomPrimitiveData().Data : Card->GetDefaultCustomPrimitiveData().Data;
+		if (Data.Num() > LevelCoronaColourSlot + 2)
+		{
+			Corona.OriginalColor = FLinearColor(Data[LevelCoronaColourSlot], Data[LevelCoronaColourSlot + 1], Data[LevelCoronaColourSlot + 2]);
+		}
+		++NumCoronasBound;
+	}
+
 	ALight* Actor = Cast<ALight>(TaggedLights.FindRef(FScctWorld::LevelTag(*Name)).Get());
 	ULightComponent* Light = Actor != nullptr ? Actor->GetLightComponent() : nullptr;
 	if (Light == nullptr)
@@ -980,6 +1092,20 @@ void UScctLevelStateSubsystem::BindLight(FLightState& State, const FScctWorldLig
 	State.OriginalColor = Light->GetLightColor();
 	State.bOriginalVisible = Light->IsVisible();
 	++NumLightsFound;
+
+	// One owner for the rhythm: the importer's light function animates this light by itself; while a match plays
+	// the simulation's value is applied instead, so the function is held steady (its picture and shape stay).
+	const bool bImporterAnimates = Actor->Tags.ContainsByPredicate([](const FName& Tag) { return Tag.ToString().StartsWith(LevelLightTypeTagPrefix); });
+	if (bImporterAnimates && Light->LightFunctionMaterial != nullptr)
+	{
+		State.OriginalLightFunction = Light->LightFunctionMaterial;
+		UMaterialInstanceDynamic* Steady = UMaterialInstanceDynamic::Create(Light->LightFunctionMaterial, Light);
+		Steady->SetScalarParameterValue(LevelLightTypeParameter, LevelSteadyLightType);
+		Light->SetLightFunctionMaterial(Steady);
+		State.bLightFunctionHeld = true;
+		++NumRhythmsHeld;
+	}
+
 	if ((Record.Flags & EScctWorldLightFlags::Triggered) != 0)
 	{
 		BindFixtures(State);
@@ -1036,33 +1162,71 @@ void UScctLevelStateSubsystem::BindFixtures(FLightState& State)
 		}
 	}
 
+	// The beam and flare cards the original's artists laid on this lamp (the importer's glow cards) go dark with
+	// it as well. A card belongs to the light that stands in or right beside it; a beam is long, so no size limit.
+	TArray<UStaticMeshComponent*> Lit;
+	if (Best != nullptr)
+	{
+		Lit.Add(Best);
+	}
+	for (const TPair<FName, TWeakObjectPtr<AActor>>& Pair : TaggedActors)
+	{
+		const AStaticMeshActor* Actor = Cast<AStaticMeshActor>(Pair.Value.Get());
+		UStaticMeshComponent* Component = Actor != nullptr ? Actor->GetStaticMeshComponent() : nullptr;
+		if (Component == nullptr || Component == Best || Component->Bounds.GetBox().ComputeSquaredDistanceToPoint(At) > FMath::Square(FixtureReach))
+		{
+			continue;
+		}
+		for (int32 Slot = 0; Slot < Component->GetNumMaterials(); ++Slot)
+		{
+			float Edge = 0.0f;
+			const UMaterialInterface* Material = Component->GetMaterial(Slot);
+			if (Material != nullptr && !Material->IsA<UMaterialInstanceDynamic>() && Material->GetScalarParameterValue(FHashedMaterialParameterInfo(LevelCardEdgeParameter), Edge))
+			{
+				Lit.Add(Component);
+				++NumGlowCards;
+				break;
+			}
+		}
+	}
+
 	if (bLog)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: switched light '%s': %s"), *GetName(State.NameId),
 			Best == nullptr ? TEXT("no glowing lamp mesh beside it") : *FString::Printf(TEXT("its lamp is mesh '%s', %.0f cm away"), *Best->GetOwner()->GetActorNameOrLabel(), FMath::Sqrt(BestDistance)));
 	}
-	if (Best == nullptr)
+	for (UStaticMeshComponent* Mesh : Lit)
 	{
-		return;
-	}
-
-	for (int32 Slot = 0; Slot < Best->GetNumMaterials(); ++Slot)
-	{
-		float Emissive = 0.0f;
-		UMaterialInterface* Material = Best->GetMaterial(Slot);
-		if (Material == nullptr || Material->IsA<UMaterialInstanceDynamic>() || !Material->GetScalarParameterValue(FHashedMaterialParameterInfo(LevelEmissiveParameter), Emissive) || Emissive <= 0.0f)
+		for (int32 Slot = 0; Slot < Mesh->GetNumMaterials(); ++Slot)
 		{
-			continue;
+			UMaterialInterface* Material = Mesh->GetMaterial(Slot);
+			if (Material == nullptr || Material->IsA<UMaterialInstanceDynamic>())
+			{
+				continue;
+			}
+			// A lamp glows by "Emissive"; a beam or flare card (the one material with "EdgeFade") by "Brightness".
+			float Glow = 0.0f;
+			float Edge = 0.0f;
+			FName Parameter = LevelEmissiveParameter;
+			if (Material->GetScalarParameterValue(FHashedMaterialParameterInfo(LevelCardEdgeParameter), Edge))
+			{
+				Parameter = LevelCardBrightnessParameter;
+			}
+			if (!Material->GetScalarParameterValue(FHashedMaterialParameterInfo(Parameter), Glow) || Glow <= 0.0f)
+			{
+				continue;
+			}
+			FFixture Fixture;
+			Fixture.Parameter = Parameter;
+			Fixture.Mesh = Mesh;
+			Fixture.Slot = Slot;
+			Fixture.Emissive = Glow;
+			Fixture.OriginalOverride = Mesh->OverrideMaterials.IsValidIndex(Slot) ? Mesh->OverrideMaterials[Slot].Get() : nullptr;
+			UMaterialInstanceDynamic* Dynamic = UMaterialInstanceDynamic::Create(Material, Mesh);
+			Mesh->SetMaterial(Slot, Dynamic);
+			Fixture.Material = Dynamic;
+			State.Fixtures.Add(Fixture);
 		}
-		FFixture Fixture;
-		Fixture.Mesh = Best;
-		Fixture.Slot = Slot;
-		Fixture.Emissive = Emissive;
-		Fixture.OriginalOverride = Best->OverrideMaterials.IsValidIndex(Slot) ? Best->OverrideMaterials[Slot].Get() : nullptr;
-		UMaterialInstanceDynamic* Dynamic = UMaterialInstanceDynamic::Create(Material, Best);
-		Best->SetMaterial(Slot, Dynamic);
-		Fixture.Material = Dynamic;
-		State.Fixtures.Add(Fixture);
 	}
 }
 
@@ -1202,6 +1366,8 @@ void UScctLevelStateSubsystem::LogBound()
 		"%d lights (%d found in the level, %d off at the start, %d switched, %d of those with a lamp mesh that glows with them)"),
 		NumFollowed, NumLevelActors, NumHiddenAtStart, NumMobilityChanged, NumMovers, LightStates.Num(), NumLightsFound, NumLightsOffAtStart, NumSwitched, NumFixtures);
 	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: %d level actors that have not moved stand within %.3f cm and %.3f degrees of where the table puts them"), PlacementChecked, PlacementError, PlacementTurnError);
+	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: map effects that go with their lights: %d corona cards of %d in the level are bound to a light of the table, %d beam or flare cards dim with a switched light, %d lights the importer animates take the simulation's rhythm instead for the match"),
+		NumCoronasBound, TaggedCoronas.Num(), NumGlowCards, NumRhythmsHeld);
 
 	if (bLog)
 	{

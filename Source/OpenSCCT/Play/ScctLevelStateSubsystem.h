@@ -27,6 +27,18 @@ struct FScctWorldDebugApi;
  *   - Lights follow their on/off state, brightness and colour. A switched light fades over a fifth of a second
  *     like a lamp, and the lamp mesh beside it glows or goes dark with it. A light that is shot out flickers as
  *     the simulation says, throws sparks and is dark at once.
+ *   - What the importer's map effects hang on a light goes with it. Its picture and shape (the light function
+ *     with the cookie) and its shaft in the fog (the light's own volumetric scattering) are part of the light
+ *     component, so they dim, go out and move with it by themselves. Its corona (the importer's card tagged
+ *     "ScctCoronaOf:" + the light's name, also for lights the level has no light for) and the beam and flare
+ *     cards beside a switched light (glow cards) are dimmed, hidden and moved here.
+ *   - One owner for a light's rhythm. The importer gives pulsing, blinking and flickering lights a light function
+ *     that animates them with no game code (tag "ScctLightType:<n>"), which is what a level opened without a
+ *     match shows. In a match the simulation computes the same rhythm, in step for every player and for the
+ *     corona; so while a match plays that light's function is held steady (a copy with LightType 1) and the
+ *     simulation's value is applied, never both.
+ *   - Skeletal map props (the importer's SkeletalMeshActors) are shown and hidden with the simulation; they are
+ *     not moved from here (the importer places them with the mesh's own rotation origin).
  *   - Destructibles swap to the mesh and the skins the simulation names; a mesh that was not imported is logged
  *     once and the old one stays.
  *   - A level mesh that was imported as a Nanite mesh but wears glass or a glowing material (Nanite cannot draw
@@ -91,14 +103,27 @@ private:
 
 		bool bSeen = false;         // listed by the table this session
 		bool bLevelActor = false;   // Actor is the level's own, not spawned here
+		bool bVisibilityOnly = false; // a skeletal prop: shown and hidden, never placed
 		bool bSpawnTried = false;   // a stand-in was looked for (it is looked for once)
 		bool bSkinned = false;      // a material was replaced on it
 		bool bMobilityChanged = false;
 	};
 
+	/** A corona card of a light, as the importer placed it. */
+	struct FCorona
+	{
+		TWeakObjectPtr<AActor> Actor;
+		TWeakObjectPtr<UStaticMeshComponent> Card;
+		FVector OriginalLocation = FVector::ZeroVector;
+		FLinearColor OriginalColor = FLinearColor::White;
+		bool bOriginalHidden = false;
+	};
+
 	/** A lamp mesh beside a switched light: one of its glowing materials. */
 	struct FFixture
 	{
+		/** The scalar that carries the glow: "Emissive" on a lamp, "Brightness" on a beam or flare card. */
+		FName Parameter;
 		TWeakObjectPtr<UStaticMeshComponent> Mesh;
 		/** What the slot's override was before the lamp took it (none on a level actor as imported). */
 		TWeakObjectPtr<UMaterialInterface> OriginalOverride;
@@ -114,6 +139,11 @@ private:
 		TWeakObjectPtr<AActor> Actor;
 		TWeakObjectPtr<ULightComponent> Light;
 		TArray<FFixture> Fixtures;
+		TArray<FCorona> Coronas;
+
+		/** The animating light function the importer gave it, while a steady copy stands in for the match. */
+		TWeakObjectPtr<UMaterialInterface> OriginalLightFunction;
+		bool bLightFunctionHeld = false;
 
 		// The light as it was imported.
 		FTransform OriginalTransform;
@@ -128,6 +158,8 @@ private:
 		float Shown = 0.0f;         // the brightness scale drawn now (follows the table's, with the fade)
 		float AppliedScale = -1.0f;
 		float AppliedFixture = -1.0f;
+		float AppliedCorona = -1.0f;
+		bool bCoronaShown = true;
 		float MinScale = 0.0f;
 		float MaxScale = 0.0f;
 		int32 Switches = 0;
@@ -202,6 +234,8 @@ private:
 	/** The level's tagged mesh actors and, apart from them, its tagged lights, by tag. Actors spawned here are added to the first. */
 	TMap<FName, TWeakObjectPtr<AActor>> TaggedActors;
 	TMap<FName, TWeakObjectPtr<AActor>> TaggedLights;
+	/** The importer's corona cards by the name of their light. */
+	TMultiMap<FName, TWeakObjectPtr<AActor>> TaggedCoronas;
 
 	/** The level's tagged mesh actors that can move (the importer makes movers and gameplay meshes movable). */
 	TSet<FName> MovableTags;
@@ -233,6 +267,10 @@ private:
 	int32 NumHiddenAtStart = 0;
 	int32 NumLightsOffAtStart = 0;
 	int32 NumLightsFound = 0;
+	int32 NumCoronasBound = 0;
+	int32 NumRhythmsHeld = 0;
+	int32 NumGlowCards = 0;
+	int32 NumEffectActors = 0;
 	int32 NumMobilityChanged = 0;
 	int32 NumEvents[9] = {};
 	float PlacementError = 0.0f;
