@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Play/ScctSoundData.h"
+#include "Runtime/ScctAcousticApi.h"
 #include "Runtime/ScctEventsApi.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctAudioSubsystem.generated.h"
@@ -29,7 +30,10 @@ class USoundAttenuation;
  *   - the ambient loops of the map play while they are in reach (3D sources), while the listener is in their
  *     zone (zone beds, one voice per sound) or by distance (other flat sources, the loudest of each sound);
  *   - the reverb is the EAX environment of the zone the listener stands in, read from the map's audio table
- *     (svmap/<Map>/audio/audio.json "zones"), or a small neutral room where the zone has none.
+ *     (svmap/<Map>/audio/audio.json "zones"), or a small neutral room where the zone has none;
+ *   - a 3D voice behind a wall is muffled by the wall's material and heard from the opening its sound comes through
+ *     (Play/ScctAudioAcoustics.cpp, the bridge's acoustic table), or, with the Audio page's "Sound through walls" set
+ *     to the original, only quieter by rule 18.
  *
  * Without an audio device (-nosound) everything still runs except the Unreal voices themselves, so the
  * bookkeeping can be checked in a log.
@@ -40,6 +44,12 @@ class USoundAttenuation;
  *   -ScctAudioMusic=Song[@S]  start Song as the round's music S seconds into the match (default 3), through the
  *                          bridge's PlayMusic path, so the music's volume can be checked on a map whose script
  *                          plays none early ("Amb_Aqua.Ambiances.aqua_musicA")
+ *   -ScctAudioOcclusion    log every 3D voice's acoustics once a second (as the console's scct.AudioOcclusion 1)
+ *   -ScctAudioWallSound=M  "Sound through walls" for this run without saving it: 0 material transmission, 1 the
+ *                          original's rule 18, 2 off
+ *   -ScctAudioProbe=x,y,z[;x,y,z...]  a looping test emitter at each place, started 2 s into the match (or
+ *                          -ScctAudioProbeAt=S), playing -ScctAudioProbeSound=Name (default Interface.Objectifs.Alarme);
+ *                          their acoustics are logged once a second whatever scct.AudioOcclusion says
  * Play/ScctAudioMix has the volume switches (-ScctAudioVolume, -ScctAudioPeaks).
  */
 UCLASS()
@@ -110,6 +120,17 @@ private:
 		uint8 Category = 0;
 		bool bSeen = false;     // ambient: listed and audible this frame
 		TWeakObjectPtr<UAudioComponent> Component;
+
+		// Sound through walls (Play/ScctAudioAcoustics.cpp): the voice's handle in the bridge's acoustic table, the
+		// volume multiplier and low-pass it gets this frame and how far the place it is heard from lies from its own.
+		int32 AcousticKey = 0;
+		int32 AcousticFlags = 0;
+		float AcousticScale = 1.0f;
+		float AcousticLowPass = 20000.0f;
+		float AppliedLowPass = 20000.0f;
+		FVector AcousticOffset = FVector::ZeroVector;
+		float AcousticLogIn = 0.0f;
+		bool bProbe = false;    // a -ScctAudioProbe emitter: always logged
 	};
 
 	/** A zone of the map's audio table that has a reverb. */
@@ -134,6 +155,25 @@ private:
 	void UpdateVoices(float DeltaSeconds);
 	void UpdateReverb();
 
+	/**
+	 * Sound through walls and openings (Play/ScctAudioAcoustics.cpp): every waiting or playing 3D voice is asked about
+	 * in one call to the bridge's acoustic table, and its volume, low-pass and the place it is heard from follow.
+	 */
+	void UpdateAcoustics(float DeltaSeconds);
+	/** Puts a voice's acoustics on its component (volume x scale, low-pass, place); Force applies even unchanged values. */
+	void ApplyAcoustics(FVoice& Voice, bool bForce);
+	/** Reads -ScctAudioOcclusion, -ScctAudioWallSound and the -ScctAudioProbe switches at the match's start. */
+	void ReadAcousticSwitches();
+	/** -ScctAudioProbe: starts the test emitters when their time comes. */
+	void UpdateAudioProbe(float DeltaSeconds);
+	void LogAcoustics(const FVoice& Voice, const FScctAcousticResult& Result) const;
+	void LogAcousticSummary() const;
+
+public:
+	/** Puts "Sound through walls" on the Audio page (called by Play/ScctAudioMix with the other audio options). */
+	static void RegisterAcousticSettings();
+
+private:
 	/** Starts a waiting voice whose file is decoded. False when it cannot play (the voice is then to be removed). */
 	bool StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm);
 
@@ -208,6 +248,21 @@ private:
 	/** The zone whose reverb is active: an index into Zones, INDEX_NONE for the default room, -2 before the first. */
 	int32 ActiveZone = -2;
 	int32 ListenerZone = INDEX_NONE;
+
+	// Sound through walls (Play/ScctAudioAcoustics.cpp).
+	const FScctAcousticApi* Acoustics = nullptr;
+	TArray<FScctAcousticSource> AcousticSources;
+	TArray<FScctAcousticResult> AcousticResults;
+	TArray<int32> AcousticVoiceIndices;
+	int32 NextAcousticKey = 0;
+	/** -ScctAudioWallSound: the mode forced for the run (INDEX_NONE: the player's option). */
+	int32 ForcedAcousticMode = INDEX_NONE;
+
+	/** -ScctAudioProbe: the places of the test emitters, the sound they play and the seconds until they start. */
+	TArray<FVector> ProbePlaces;
+	TArray<int32> ProbeCalls;
+	FString ProbeSound;
+	float ProbeIn = -1.0f;
 
 	/** -ScctAudioMusic: the song to start and the seconds into the match it starts at (negative: done). */
 	FString CheckSong;

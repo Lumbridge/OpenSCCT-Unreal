@@ -39,6 +39,8 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
     private readonly AmbientSounds? _ambient;
     private readonly EffectTracker _effects;
     private readonly BridgeSession _bridge;
+    private AcousticMap? _acoustics;
+    private AcousticVoices? _acousticVoices;
     private bool _ended;
     private long _lateTick = -1;
     private int _lateTaken;
@@ -51,7 +53,7 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
         if (sharedRoot is not null && System.IO.File.Exists(System.IO.Path.Combine(sharedRoot, "audio", "audio.json")))
         {
             _library = SoundLibrary.Load(sharedRoot, _session.MapFolder);
-            _resolver = new SoundResolver(_library, _session, _sounds);
+            _resolver = new SoundResolver(_library, _session, _sounds, ReachFactor);
             _ambient = new AmbientSounds(_session, _library, _resolver);
         }
 
@@ -71,6 +73,31 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
     /// <summary>Starts a song as the music now, for a check (AudioCheckExports). False when it cannot play.</summary>
     public bool PlayMusicForCheck(string song, float fadeIn) =>
         _resolver?.PlayMusicForCheck(_session.Client.World.TickCount, song, fadeIn) ?? false;
+
+    /// <summary>Plays a sound at a place, for a check (AudioCheckExports). The call's id, or 0 when it cannot play.</summary>
+    public int PlaySoundForCheck(string sound, FVector location, float radius) =>
+        _resolver?.PlaySoundForCheck(_session.Client.World.TickCount, sound, location, radius) ?? 0;
+
+    /// <summary>The map's openings, zone distances and occlusion traces (made on first use).</summary>
+    internal AcousticMap Acoustics => _acoustics ??= AcousticMap.Load(_session);
+
+    /// <summary>The acoustics of Unreal's 3D voices (AcousticExports).</summary>
+    internal AcousticVoices AcousticVoices => _acousticVoices ??= new AcousticVoices(Acoustics);
+
+    /// <summary>
+    /// HearSound's blocked reach (SoundResolver): 0.8 ^ (ZoneDist^2) between the ear's zone and the source's when the
+    /// occlusion line check is blocked and the actor's SoundOcclusion is not None, else 1.
+    /// </summary>
+    private float ReachFactor(FVector ear, FVector source, int actorId)
+    {
+        AcousticMap map = Acoustics;
+        if (map.SoundOcclusionOf(actorId) == AcousticRules.SoundOcclusionNone || !map.OcclusionBetween(ear, source, out _))
+        {
+            return 1f;
+        }
+
+        return AcousticRules.ZoneReachFactor(map.ZoneDistance(map.ZoneIndexAt(ear), map.ZoneIndexAt(source)));
+    }
 
     /// <summary>The feature of <paramref name="session"/>, started on first use. Events raised before that are not seen.</summary>
     public static EventsFeature Of(BridgeSession session) => session.Feature(static s => new EventsFeature(s));
@@ -104,6 +131,11 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
     public long SoundCallsOutOfReach => _resolver?.OutOfReach ?? 0;
 
     public long SoundCallsUnknown => _resolver?.UnknownCount ?? 0;
+
+    /// <summary>Attenuated calls whose reach a wall shrank, and the ones that it put out of reach.</summary>
+    public long SoundCallsReachShrunk => _resolver?.ReachShrunk ?? 0;
+
+    public long SoundCallsReachDropped => _resolver?.ReachDropped ?? 0;
 
     public long SoundStops => _resolver?.Stops ?? 0;
 

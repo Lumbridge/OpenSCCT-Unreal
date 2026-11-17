@@ -134,7 +134,8 @@ void UScctAudioSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	ZoneEffects.Reset();
 	ListenerZone = INDEX_NONE;
 	ActiveZone = -2;
-	NumStarted = NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
+	ProbeCalls.Reset();
+	NumStarted =NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
 }
 
 void UScctAudioSubsystem::HandleMatchStarted()
@@ -159,6 +160,11 @@ void UScctAudioSubsystem::HandleMatchStarted()
 
 	// Harmless when the bridge already started the feature with the session.
 	Events->Begin();
+
+	FString AcousticError;
+	Acoustics = ScctFeature<FScctAcousticApi>(&AcousticError);
+	UE_CLOG(Acoustics == nullptr, LogOpenSCCT, Warning, TEXT("Audio: walls do not change sound this match, the bridge's acoustic table is missing: %s"), *AcousticError);
+	ReadAcousticSwitches();
 
 	FString Song;
 	if (FParse::Value(FCommandLine::Get(), TEXT("ScctAudioMusic="), Song, false))
@@ -210,8 +216,10 @@ void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
 		}
 	}
 
+	UpdateAudioProbe(DeltaSeconds);
 	DrainSounds();
 	UpdateAmbient();
+	UpdateAcoustics(DeltaSeconds);
 	UpdateVoices(DeltaSeconds);
 	UpdateReverb();
 
@@ -365,6 +373,7 @@ void UScctAudioSubsystem::Play(const FScctSound& Record)
 	Voice.Category = static_cast<uint8>(bObjective ? EScctAudioCategory::Objective : EScctAudioCategory::World);
 	// A timed loop of a sequence ends by the clock; any other loop runs until it is stopped.
 	Voice.LifeLeft = Record.PlaySeconds > 0.0f ? Record.PlaySeconds : -1.0f;
+	Voice.bProbe = ProbeCalls.Contains(Record.CallId);
 	Voices.Add(Voice);
 
 	// Start the decode now, so a delayed entry of a sequence is ready when its time comes.
@@ -686,14 +695,11 @@ void UScctAudioSubsystem::UpdateVoices(float DeltaSeconds)
 			{
 				if (Voice.bPositional)
 				{
+					// Heard from where its sound reaches the listener (an opening when a wall is in the way).
 					Voice.Location = FindVoiceLocation(Voice);
-					Component->SetWorldLocation(Voice.Location);
+					Component->SetWorldLocation(Voice.Location + Voice.AcousticOffset);
 				}
-				if (Voice.AmbientId != 0 && !FMath::IsNearlyEqual(Voice.AppliedVolume, Voice.Volume, 0.005f))
-				{
-					Voice.AppliedVolume = Voice.Volume;
-					Component->SetVolumeMultiplier(Voice.Volume);
-				}
+				ApplyAcoustics(Voice, false);
 			}
 			else if (Voice.bPositional)
 			{
@@ -746,7 +752,7 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 		Voice.LifeLeft = Pcm->Seconds() / Voice.Pitch + 0.1f;
 	}
 	Voice.State = EVoiceState::Playing;
-	Voice.AppliedVolume = Voice.Volume;
+	Voice.AppliedVolume = Voice.Volume * Voice.AcousticScale;
 	++NumStarted;
 
 	if (bHasDevice)
@@ -762,9 +768,14 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 			Component->bIsMusic = Voice.bMusic;
 			// The category's class routes the voice to its submix, whose volume is the player's slider.
 			Component->SoundClassOverride = Mix != nullptr ? Mix->GetClass(static_cast<EScctAudioCategory>(Voice.Category)) : nullptr;
-			Component->SetVolumeMultiplier(Voice.Volume);
+			Component->SetVolumeMultiplier(Voice.AppliedVolume);
 			Component->SetPitchMultiplier(Voice.Pitch);
-			Component->SetWorldLocation(Voice.Location);
+			Component->SetWorldLocation(Voice.Location + Voice.AcousticOffset);
+			// A reused component keeps the filter of its last voice: every voice sets its own. Before Play the
+			// component's own properties are what the new engine voice starts with (the setters reach only a playing one).
+			Voice.AppliedLowPass = Voice.AcousticLowPass;
+			Component->bEnableLowPassFilter = Voice.AcousticLowPass < 19999.0f;
+			Component->LowPassFilterFrequency = Voice.AcousticLowPass;
 			if (Voice.FadeIn > 0.0f)
 			{
 				Component->FadeIn(Voice.FadeIn, 1.0f);
@@ -1146,6 +1157,7 @@ void UScctAudioSubsystem::LogSummary() const
 	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: %d voices now (%d playing, %d waiting, %d ambient, peak %d), %d Unreal components in use of %d made; since the match began %d started, %d stopped, %d out of reach, %d refused by the slot rule, %d replaced, %d objective jingles skipped; files: %d decoded (%.1f MB held), %d failed to decode, %d plays lost to them; listener at (%.0f, %.0f, %.0f)"),
 		Voices.Num(), Playing, Waiting, Ambient, PeakVoices, Sounding, Components.Num(), NumStarted, NumStopped, NumOutOfReach, NumRefused, NumStolen, NumObjectiveSkipped,
 		Cache.GetNumDecoded(), Cache.GetBytes() / (1024.0 * 1024.0), Cache.GetNumFailed(), NumFailedFiles, Listener.X, Listener.Y, Listener.Z);
+	LogAcousticSummary();
 
 	// The engine's own listener must be where this subsystem takes it to be (the camera), or every 3D voice is
 	// panned and attenuated from somewhere else: said in the log when the two are apart.

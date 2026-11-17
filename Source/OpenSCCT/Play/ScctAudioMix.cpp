@@ -10,6 +10,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Play/ScctAudioSubsystem.h"
 #include "Settings/ScctSettings.h"
 #include "Sound/AudioSettings.h"
 #include "Sound/SoundClass.h"
@@ -181,6 +182,9 @@ void UScctAudioMix::RegisterSettings()
 		}
 		FScctSettings::Register(Desc);
 	}
+
+	// Sound through walls belongs to the match's sound, which registers it itself.
+	UScctAudioSubsystem::RegisterAcousticSettings();
 }
 
 void UScctAudioMix::Initialize(FSubsystemCollectionBase& Collection)
