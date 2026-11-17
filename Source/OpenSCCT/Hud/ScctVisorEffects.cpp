@@ -526,7 +526,8 @@ void ScctVisorEffects::Update(FScctVisorState& Visor, FScctHudModel& Model, floa
 		{
 			Visor.bLatch = false;
 			Visor.bRebooting = false;
-			UE_LOG(LogOpenSCCT, Log, TEXT("Visor: shutdown end at t=%.2f, %.2f s after the reboot; the HUD is back"), Now, Now - Visor.RebootAt);		}
+			UE_LOG(LogOpenSCCT, Log, TEXT("Visor: shutdown end at t=%.2f, %.2f s after the reboot; the HUD is back"), Now, Now - Visor.RebootAt);
+		}
 	}
 
 	// The foam: every splash gets new clumps. Foam that is found already lying (the HUD opened on it) gets some too.
