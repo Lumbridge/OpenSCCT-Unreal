@@ -10,9 +10,40 @@
 
 FScctHudPainter::FScctHudPainter(FSlateWindowElementList& InElements, const FGeometry& InGeometry, int32 InLayer)
 	: Elements(InElements)
+	, BaseGeometry(InGeometry)
 	, Geometry(InGeometry)
 	, Layer(InLayer)
 {
+}
+
+void FScctHudPainter::BeginGroup(const FVector2f& Offset, float Scale, float InGroupOpacity)
+{
+	GroupScale = FMath::Max(Scale, 0.01f);
+	GroupOpacity = FMath::Clamp(InGroupOpacity, 0.0f, 1.0f);
+	// The group keeps the canvas's local size, so an element anchored to an edge from Size() still finds it; the layout
+	// transform carries it to its place on screen, and Slate scales its text, lines and blurs with it.
+	Geometry = BaseGeometry.MakeChild(BaseGeometry.GetLocalSize(), FSlateLayoutTransform(GroupScale, Offset));
+	TrackedBounds = FBox2f(ForceInit);
+	bInGroup = true;
+}
+
+FBox2f FScctHudPainter::EndGroup()
+{
+	const FBox2f Drawn = TrackedBounds;
+	Geometry = BaseGeometry;
+	GroupScale = 1.0f;
+	GroupOpacity = 1.0f;
+	bInGroup = false;
+	TrackedBounds = FBox2f(ForceInit);
+	return Drawn;
+}
+
+void FScctHudPainter::Track(const FBox2f& Box)
+{
+	if (bInGroup && Box.bIsValid)
+	{
+		TrackedBounds += FBox2f(Box.Min.ComponentMin(Box.Max), Box.Min.ComponentMax(Box.Max));
+	}
 }
 
 FPaintGeometry FScctHudPainter::BoxGeometry(const FBox2f& Box) const
@@ -22,7 +53,7 @@ FPaintGeometry FScctHudPainter::BoxGeometry(const FBox2f& Box) const
 
 void FScctHudPainter::Blur(const FBox2f& Box, float Strength, float Radius)
 {
-	Strength *= Opacity;
+	Strength *= Alpha();
 	if (Strength < 0.5f || Box.GetSize().GetMin() <= 0.0f)
 	{
 		return;
@@ -76,8 +107,9 @@ void FScctHudPainter::Fill(const FBox2f& Box, const FLinearColor& Colour, float 
 
 	// The draw element copies what it needs from the brush, so a brush on the stack is enough. The fill's colour
 	// is the element's tint (a brush's own tint is for widgets to apply); the outline's comes from the brush.
-	const FSlateRoundedBoxBrush Brush(FLinearColor::White, Radius, ScctHudStyle::Fade(Outline, Opacity), OutlineWidth);
-	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Box), &Brush, ESlateDrawEffect::None, ScctHudStyle::Fade(Colour, Opacity));
+	Track(Box);
+	const FSlateRoundedBoxBrush Brush(FLinearColor::White, Radius, ScctHudStyle::Fade(Outline, Alpha()), OutlineWidth);
+	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Box), &Brush, ESlateDrawEffect::None, ScctHudStyle::Fade(Colour, Alpha()));
 }
 
 void FScctHudPainter::Image(const FBox2f& Box, const FSlateBrush& Brush, const FLinearColor& Colour)
@@ -86,7 +118,8 @@ void FScctHudPainter::Image(const FBox2f& Box, const FSlateBrush& Brush, const F
 	{
 		return;
 	}
-	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Box), &Brush, ESlateDrawEffect::IgnoreTextureAlpha, ScctHudStyle::Fade(Colour, Opacity));
+	Track(Box);
+	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Box), &Brush, ESlateDrawEffect::IgnoreTextureAlpha, ScctHudStyle::Fade(Colour, Alpha()));
 }
 
 void FScctHudPainter::Gradient(const FBox2f& Box, const FLinearColor& From, const FLinearColor& To, bool bVertical, float Radius)
@@ -96,9 +129,10 @@ void FScctHudPainter::Gradient(const FBox2f& Box, const FLinearColor& From, cons
 		return;
 	}
 
+	Track(Box);
 	TArray<FSlateGradientStop> Stops;
-	Stops.Emplace(FVector2f::ZeroVector, ScctHudStyle::Fade(From, Opacity));
-	Stops.Emplace(Box.GetSize(), ScctHudStyle::Fade(To, Opacity));
+	Stops.Emplace(FVector2f::ZeroVector, ScctHudStyle::Fade(From, Alpha()));
+	Stops.Emplace(Box.GetSize(), ScctHudStyle::Fade(To, Alpha()));
 	FSlateDrawElement::MakeGradient(Elements, ++Layer, BoxGeometry(Box), MoveTemp(Stops), bVertical ? Orient_Horizontal : Orient_Vertical,
 		ESlateDrawEffect::None, FVector4f(Radius));
 }
@@ -136,7 +170,8 @@ FVector2f FScctHudPainter::Text(const FVector2f& Position, const FString& String
 	TopLeft.X = FMath::RoundToFloat(TopLeft.X);
 	TopLeft.Y = FMath::RoundToFloat(TopLeft.Y);
 
-	const FLinearColor Final = ScctHudStyle::Fade(Colour, Opacity);
+	const FLinearColor Final = ScctHudStyle::Fade(Colour, Alpha());
+	Track(FBox2f(TopLeft, TopLeft + TextSize));
 	if (bShadow)
 	{
 		// A soft dark copy underneath keeps text readable over a bright picture.
@@ -202,8 +237,12 @@ void FScctHudPainter::Polyline(TArray<FVector2f> Points, const FLinearColor& Col
 	{
 		return;
 	}
+	if (bInGroup)
+	{
+		Track(FBox2f(Points));
+	}
 	FSlateDrawElement::MakeLines(Elements, ++Layer, Geometry.ToPaintGeometry(), MoveTemp(Points), ESlateDrawEffect::None,
-		ScctHudStyle::Fade(Colour, Opacity), true, Thickness);
+		ScctHudStyle::Fade(Colour, Alpha()), true, Thickness);
 }
 
 void FScctHudPainter::Line(const FVector2f& From, const FVector2f& To, const FLinearColor& Colour, float Thickness)
@@ -233,13 +272,14 @@ void FScctHudPainter::Image(const FBox2f& Box, const FSlateBrush& Brush, const F
 		Swap(Drawn.Min.Y, Drawn.Max.Y);
 		Swap(Region.Min.Y, Region.Max.Y);
 	}
-	const FLinearColor Final = ScctHudStyle::Fade(Tint, Opacity);
+	const FLinearColor Final = ScctHudStyle::Fade(Tint, Alpha());
 	if (Drawn.GetSize().GetMin() <= 0.0f || Final.A <= 0.002f || Brush.GetResourceObject() == nullptr)
 	{
 		return;
 	}
 
 	// The draw element copies the brush, so a copy on the stack carries the region.
+	Track(Drawn);
 	FSlateBrush Part = Brush;
 	Part.SetUVRegion(Region);
 	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Drawn), &Part, ESlateDrawEffect::None, Final);
@@ -247,7 +287,7 @@ void FScctHudPainter::Image(const FBox2f& Box, const FSlateBrush& Brush, const F
 
 void FScctHudPainter::RotatedImage(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint, float Degrees)
 {
-	const FLinearColor Final = ScctHudStyle::Fade(Tint, Opacity);
+	const FLinearColor Final = ScctHudStyle::Fade(Tint, Alpha());
 	if (Box.GetSize().GetMin() <= 0.0f || Final.A <= 0.002f || Brush.GetResourceObject() == nullptr)
 	{
 		return;
@@ -255,6 +295,7 @@ void FScctHudPainter::RotatedImage(const FBox2f& Box, const FSlateBrush& Brush, 
 
 	// Slate turns the element about its own centre when no point is given; its angle is in radians, clockwise on
 	// screen (Slate's y runs down).
+	Track(Box);
 	FSlateBrush Part = Brush;
 	Part.SetUVRegion(UV);
 	FSlateDrawElement::MakeRotatedBox(Elements, ++Layer, BoxGeometry(Box), &Part, ESlateDrawEffect::None,

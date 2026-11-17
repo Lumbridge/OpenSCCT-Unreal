@@ -718,6 +718,7 @@ TSharedRef<SWidget> SScctMatchMenu::BuildPause()
 		case 100: Sub = TEXT("Close OpenSCCT"); Description = TEXT("Leave the match and close the game."); break;
 		case 101: Sub = FString::Printf(TEXT("Play this map as a %s"), *Other.ToLower()); Description = TEXT("Start this match again on the other side, with the same map, mode, bots and rules."); break;
 		case 102: Sub = TEXT("The same match from the start"); Description = TEXT("Start this match again with the same side, map, mode, bots and rules."); break;
+		case 103: Sub = TEXT("Move, size and fade the HUD"); Description = TEXT("Arrange the HUD of the side you play over the match: drag a part to move it, the wheel sizes it. Esc saves."); break;
 		default: break;
 		}
 		const TSharedRef<SScctButton> Made = Entry(EntryCaption(Id), Sub, Description, [this, Id] { Act(Id); });
