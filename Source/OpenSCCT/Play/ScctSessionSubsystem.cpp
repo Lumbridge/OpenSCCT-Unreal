@@ -422,6 +422,7 @@ void UScctSessionSubsystem::LogFeatureTables() const
 	LogFeatureTable<FScctWorldApi>(TEXT("level state"));
 	LogFeatureTable<FScctEquipmentApi>(TEXT("equipment"));
 	LogFeatureTable<FScctOnlineApi>(TEXT("online"));
+	LogFeatureTable<FScctProjectionsApi>(TEXT("projections"));
 }
 
 void UScctSessionSubsystem::TickAutoShots(float DeltaTime)

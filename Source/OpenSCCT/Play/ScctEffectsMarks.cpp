@@ -1,4 +1,5 @@
-// Impact marks that ride the actor they hit: UScctEffectsSubsystem::AttachMark and FollowMarkSurface.
+// Decals that ride the actor they lie on: UScctEffectsSubsystem::AttachToSurface and FollowSurface, for impact
+// marks (AttachMark, FollowMarkSurface) and abandoned projections alike.
 
 #include "Components/DecalComponent.h"
 #include "Engine/World.h"
@@ -27,10 +28,19 @@ namespace
 
 void UScctEffectsSubsystem::AttachMark(int32 Slot, const FScctImpactMark& Mark, UDecalComponent& Decal)
 {
-	FMarkSurface& Surface = MarkSurfaces[Slot];
+	AttachToSurface(MarkSurfaces[Slot], Mark.SurfaceActorId, Decal, TEXT("mark slot"), Slot);
+}
+
+bool UScctEffectsSubsystem::FollowMarkSurface(int32 Slot, UDecalComponent& Decal)
+{
+	return FollowSurface(MarkSurfaces[Slot], Decal, TEXT("mark slot"), Slot);
+}
+
+void UScctEffectsSubsystem::AttachToSurface(FMarkSurface& Surface, int32 SurfaceActorId, UDecalComponent& Decal, const TCHAR* What, int32 Index)
+{
 	Surface = FMarkSurface();
-	Surface.ActorId = Mark.SurfaceActorId;
-	if (Mark.SurfaceActorId == 0)
+	Surface.ActorId = SurfaceActorId;
+	if (SurfaceActorId == 0)
 	{
 		// The level's own geometry never moves: the decal stays where it landed.
 		return;
@@ -50,7 +60,7 @@ void UScctEffectsSubsystem::AttachMark(int32 Slot, const FScctImpactMark& Mark, 
 	}
 
 	FScctMarkSurface Info = {};
-	const int32 Flags = Api->GetSurface(Mark.SurfaceActorId, &Info);
+	const int32 Flags = Api->GetSurface(SurfaceActorId, &Info);
 	if ((Flags & EScctMarkSurfaceFlags::Exists) == 0)
 	{
 		// The actor went in the moment between the hit and now; the mark's own flags hide its decal.
@@ -71,15 +81,14 @@ void UScctEffectsSubsystem::AttachMark(int32 Slot, const FScctImpactMark& Mark, 
 	if (bLog)
 	{
 		const FVector At = Surface.Local.GetLocation();
-		UE_LOG(LogOpenSCCT, Log, TEXT("Effects: mark slot %d attached to %s (surface #%d%s), at (%.0f, %.0f, %.0f) in its frame"), Slot,
-			Name.IsEmpty() ? TEXT("an actor the level state does not follow") : *Name, Mark.SurfaceActorId,
+		UE_LOG(LogOpenSCCT, Log, TEXT("Effects: %s %d attached to %s (surface #%d%s), at (%.0f, %.0f, %.0f) in its frame"), What, Index,
+			Name.IsEmpty() ? TEXT("an actor the level state does not follow") : *Name, SurfaceActorId,
 			Actor != nullptr ? TEXT(", its level actor") : TEXT(", by the simulation's pose: no level actor"), At.X, At.Y, At.Z);
 	}
 }
 
-bool UScctEffectsSubsystem::FollowMarkSurface(int32 Slot, UDecalComponent& Decal)
+bool UScctEffectsSubsystem::FollowSurface(FMarkSurface& Surface, UDecalComponent& Decal, const TCHAR* What, int32 Index)
 {
-	FMarkSurface& Surface = MarkSurfaces[Slot];
 	if (!Surface.bAttached)
 	{
 		return true;
@@ -94,7 +103,7 @@ bool UScctEffectsSubsystem::FollowMarkSurface(int32 Slot, UDecalComponent& Decal
 	const bool bDrawn = (Flags & EScctMarkSurfaceFlags::Exists) != 0 && (Flags & EScctMarkSurfaceFlags::Drawn) != 0 && !bLevelActorGone;
 	if (bLog && bDrawn == Surface.bHiddenWithSurface)
 	{
-		UE_LOG(LogOpenSCCT, Log, TEXT("Effects: mark slot %d %s with its surface #%d"), Slot, bDrawn ? TEXT("shown again") : TEXT("hidden"), Surface.ActorId);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Effects: %s %d %s with its surface #%d"), What, Index, bDrawn ? TEXT("shown again") : TEXT("hidden"), Surface.ActorId);
 	}
 	Surface.bHiddenWithSurface = !bDrawn;
 	if (!bDrawn)

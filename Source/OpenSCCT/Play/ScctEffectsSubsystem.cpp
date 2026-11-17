@@ -178,6 +178,7 @@ void UScctEffectsSubsystem::ResetMatch()
 	{
 		Surface = FMarkSurface();
 	}
+	ResetProjections();
 	Sprites.Clear();
 	MatchSeconds = 0.0f;
 	bFireHeld = bAltFireHeld = false;
@@ -325,6 +326,7 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 	DrainShots();
 	UpdateTracers(FxSeconds);
 	UpdateImpactMarks();
+	UpdateProjections();
 	UpdateEffectActors(FxSeconds);
 	UpdateLights(FxSeconds);
 	UpdateBodyFill();
