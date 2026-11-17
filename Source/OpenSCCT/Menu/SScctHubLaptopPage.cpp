@@ -283,8 +283,9 @@ void SScctHubLaptopPage::RebuildMaps()
 	{
 		const FString Id = Fixed(Map.Id, UE_ARRAY_COUNT(Map.Id));
 		const bool bSelected = (Map.Flags & EScctHubPadsFlags::Selected) != 0;
-		// The match is played in this game's imported level of the map; without one the online visit refuses it.
-		const bool bDrawable = FPackageName::DoesPackageExist(UScctOnlineSubsystem::LevelOf(Id));
+		// The match is played in this game's imported level of the map, or the runtime level built from its render
+		// files; without either the online visit refuses it.
+		const bool bDrawable = UScctOnlineSubsystem::IsPlayable(Id);
 		const FSlateBrush* Brush = PictureBrush(Fixed(Map.Picture, UE_ARRAY_COUNT(Map.Picture)));
 		const FLinearColor Edge = bSelected ? LaptopUi::Accent() : FLinearColor(1.0f, 1.0f, 1.0f, 0.08f);
 		MapBox->AddSlot()
