@@ -6,6 +6,7 @@
 #include "Menu/SScctConfirm.h"
 #include "Menu/SScctGearPage.h"
 #include "Menu/SScctOptionsPage.h"
+#include "Menu/SScctStrategicMapPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "Widgets/Input/SButton.h"
@@ -75,7 +76,7 @@ public:
 			[
 				SNew(SBox)
 				.WidthOverride(320.0f)
-				.Visibility(TAttribute<EVisibility>::CreateLambda([this] { return bMenuOpen && !Options.IsValid() && !bGearOnly ? EVisibility::Visible : EVisibility::Collapsed; }))
+				.Visibility(TAttribute<EVisibility>::CreateLambda([this] { return bMenuOpen && !Options.IsValid() && !bGearOnly && !bMapOnly ? EVisibility::Visible : EVisibility::Collapsed; }))
 				[
 					Ui::Glass(
 						SNew(SVerticalBox)
@@ -87,6 +88,10 @@ public:
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
 						[
 							Ui::Button(Ui::ToText(TEXT("CHANGE GEAR")), FOnClicked::CreateLambda([this] { ShowGear(-1, false); return FReply::Handled(); }))
+							]
+							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
+							[
+								Ui::Button(Ui::ToText(TEXT("STRATEGIC MAP")), FOnClicked::CreateLambda([this] { ShowStrategicMap(false); return FReply::Handled(); }))
 							]
 							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
 							[
@@ -149,6 +154,33 @@ public:
 		bGearOnly = false;
 	}
 
+	/**
+	 * The strategic map over the menu. Opened by the DisplayStrategicMap binding (bOnly) its closing goes back to the
+	 * game; from the menu's STRATEGIC MAP it goes back to the menu.
+	 */
+	TSharedPtr<SScctStrategicMapPage> ShowStrategicMap(bool bOnly)
+	{
+		bMapOnly = bOnly;
+		const TSharedPtr<SScctStrategicMapPage> Page = SScctStrategicMapPage::Open(Root.ToSharedRef(), EScctMapContext::Match, FString(), false,
+			FSimpleDelegate::CreateLambda([this] { if (bMapOnly && bMenuOpen) { OnResume.ExecuteIfBound(); } bMapOnly = false; }));
+		if (!Page.IsValid())
+		{
+			bMapOnly = false;
+		}
+		return Page;
+	}
+
+	TSharedPtr<SScctStrategicMapPage> GetStrategicMap() const { return SScctStrategicMapPage::FindOpen(Root.ToSharedRef()); }
+
+	void CloseStrategicMap()
+	{
+		if (const TSharedPtr<SScctStrategicMapPage> Map = GetStrategicMap())
+		{
+			Map->Close();
+		}
+		bMapOnly = false;
+	}
+
 	/** The menu's last button asks first: leaving a match cannot be taken back. */
 	void AskLeave()
 	{
@@ -167,6 +199,11 @@ public:
 		if (const TSharedPtr<SScctGearPage> Gear = GetGear())
 		{
 			Gear->RequestBack();
+			return true;
+		}
+		if (const TSharedPtr<SScctStrategicMapPage> Map = GetStrategicMap())
+		{
+			Map->Close();
 			return true;
 		}
 		if (Options.IsValid())
@@ -198,6 +235,9 @@ public:
 
 	/** The Equipment page was opened on its own (the ChangeGear binding), not from the menu. */
 	bool bGearOnly = false;
+
+	/** The strategic map was opened on its own (the DisplayStrategicMap binding), not from the menu. */
+	bool bMapOnly = false;
 
 private:
 	EVisibility GetBannerVisibility() const
@@ -341,6 +381,7 @@ void UScctMatchMenuWidget::SetMenuOpen(bool bOpen)
 		// Closed from outside (the game mode): what the Options screen had not applied is dropped with it.
 		Overlay->CloseOptions();
 		Overlay->CloseGear();
+		Overlay->CloseStrategicMap();
 		if (const TSharedPtr<SScctConfirm> Open = SScctConfirm::FindOpen(Overlay->GetRoot()))
 		{
 			Open->AnswerNo();
@@ -390,6 +431,36 @@ bool UScctMatchMenuWidget::ShowGear(int32 Side)
 		return false;
 	}
 	return Overlay->ShowGear(Side, !bWasOpen).IsValid();
+}
+
+bool UScctMatchMenuWidget::ShowStrategicMap()
+{
+	if (!Overlay.IsValid())
+	{
+		return false;
+	}
+	const bool bWasOpen = bMenuOpen;
+	if (!bWasOpen)
+	{
+		OnOpenRequested.ExecuteIfBound();
+	}
+	if (!bMenuOpen)
+	{
+		return false;
+	}
+	const bool bOpened = Overlay->ShowStrategicMap(!bWasOpen).IsValid();
+	if (!bOpened && !bWasOpen)
+	{
+		// Nothing to show: the menu that was opened for it closes again.
+		Overlay->bMapOnly = false;
+		OnResumed.ExecuteIfBound();
+	}
+	return bOpened;
+}
+
+TSharedPtr<SScctStrategicMapPage> UScctMatchMenuWidget::GetStrategicMapPage() const
+{
+	return Overlay.IsValid() ? Overlay->GetStrategicMap() : nullptr;
 }
 
 TSharedPtr<SScctGearPage> UScctMatchMenuWidget::GetGearPage() const

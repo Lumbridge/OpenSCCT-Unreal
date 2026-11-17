@@ -55,6 +55,9 @@ public:
 	 */
 	TSharedPtr<class SScctGearPage> ShowGear(int32 Side = -1);
 
+	/** STRATEGIC MAP: the map's floors and legend over the front end (Menu/SScctStrategicMapPage.h); Map empty is the lobby's map. */
+	TSharedPtr<class SScctStrategicMapPage> ShowStrategicMap(const FString& Map = FString());
+
 private:
 	enum class EPage : uint8
 	{

@@ -6,6 +6,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Menu/SScctGearPage.h"
+#include "Menu/SScctStrategicMapPage.h"
 #include "Menu/ScctFrontEndWidget.h"
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
@@ -144,6 +145,17 @@ void AScctFrontEndGameMode::ShowMenu()
 		if (const TSharedPtr<SScctGearPage> Gear = Menu->ShowGear(Side); Gear.IsValid() && bGearApply)
 		{
 			Gear->RunScript(GearScript);
+		}
+	}
+	// -ScctStrategicMap=<Map> opens a map's strategic map as the lobby's STRATEGIC MAP does (the lobby's own map
+	// needs a server); with -ScctStrategicMapUp its UP is pressed at once.
+	FString StrategicMap;
+	if (FParse::Value(FCommandLine::Get(), TEXT("ScctStrategicMap="), StrategicMap))
+	{
+		if (const TSharedPtr<SScctStrategicMapPage> MapPage = Menu->ShowStrategicMap(StrategicMap);
+			MapPage.IsValid() && FParse::Param(FCommandLine::Get(), TEXT("ScctStrategicMapUp")))
+		{
+			MapPage->FloorUp();
 		}
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: front end shown"));

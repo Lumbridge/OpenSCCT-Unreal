@@ -7,6 +7,7 @@
 #include "HAL/PlatformMisc.h"
 #include "Menu/SScctConfirm.h"
 #include "Menu/SScctGearPage.h"
+#include "Menu/SScctStrategicMapPage.h"
 #include "Menu/SScctOptionsPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/ConfigCacheIni.h"
@@ -231,6 +232,11 @@ TSharedPtr<SScctGearPage> SScctFrontEnd::ShowGear(int32 Side)
 		Side = bLobby ? (Team == 0 || Team == 1 ? Team : -1) : SideIndex;
 	}
 	return SScctGearPage::Open(Root.ToSharedRef(), Side, bLobby ? EScctGearMenuContext::Lobby : EScctGearMenuContext::Menus, true);
+}
+
+TSharedPtr<SScctStrategicMapPage> SScctFrontEnd::ShowStrategicMap(const FString& Map)
+{
+	return SScctStrategicMapPage::Open(Root.ToSharedRef(), EScctMapContext::Lobby, Map, true);
 }
 
 void SScctFrontEnd::AskQuit()
@@ -860,6 +866,10 @@ TSharedRef<SWidget> SScctFrontEnd::BuildLobby()
 			]
 		]
 		+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right).Padding(0.0f, 0.0f, 6.0f, 0.0f)
+		[
+			Ui::Button(Ui::ToText(TEXT("STRATEGIC MAP")), FOnClicked::CreateLambda([this] { ShowStrategicMap(); return FReply::Handled(); }))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
 		[
 			Ui::Button(Ui::ToText(TEXT("EQUIPMENT")), FOnClicked::CreateLambda([this] { ShowGear(); return FReply::Handled(); }))
 		]

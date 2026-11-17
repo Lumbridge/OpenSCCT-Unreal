@@ -2,6 +2,7 @@
 
 #include "Menu/SScctFrontEnd.h"
 #include "Menu/SScctGearPage.h"
+#include "Menu/SScctStrategicMapPage.h"
 #include "Online/ScctOnlineSubsystem.h"
 
 TSharedRef<SWidget> UScctFrontEndWidget::RebuildWidget()
@@ -36,6 +37,11 @@ void UScctFrontEndWidget::ShowOptions(FName Page)
 TSharedPtr<SScctGearPage> UScctFrontEndWidget::ShowGear(int32 Side)
 {
 	return FrontEnd.IsValid() ? FrontEnd->ShowGear(Side) : nullptr;
+}
+
+TSharedPtr<SScctStrategicMapPage> UScctFrontEndWidget::ShowStrategicMap(const FString& Map)
+{
+	return FrontEnd.IsValid() ? FrontEnd->ShowStrategicMap(Map) : nullptr;
 }
 
 void UScctFrontEndWidget::AskQuit()

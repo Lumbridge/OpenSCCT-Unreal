@@ -2,7 +2,9 @@
 
 #include "Blueprint/UserWidget.h"
 #include "Engine/World.h"
+#include "GameFramework/Pawn.h"
 #include "Menu/SScctGearPage.h"
+#include "Menu/SScctStrategicMapPage.h"
 #include "Menu/ScctMatchMenuWidget.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -22,6 +24,9 @@ namespace
 
 	/** -ScctGear / -ScctGearApply acted on in a match of this run. */
 	bool bGearDoneThisRun = false;
+
+	/** -ScctStrategicMap acted on in a match of this run. */
+	bool bMapDoneThisRun = false;
 }
 
 bool UScctMenuSubsystem::ShouldCreateSubsystem(UObject* Outer) const
@@ -61,6 +66,15 @@ void UScctMenuSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		}
 		FParse::Value(FCommandLine::Get(), TEXT("ScctGearAt="), GearDelay);
 	}
+	if (!bMapDoneThisRun)
+	{
+		if (FParse::Value(FCommandLine::Get(), TEXT("ScctStrategicMap="), MapOpenAt) || FParse::Param(FCommandLine::Get(), TEXT("ScctStrategicMap")))
+		{
+			MapOpenAt = MapOpenAt >= 0.0f ? MapOpenAt : 3.0f;
+		}
+		FParse::Value(FCommandLine::Get(), TEXT("ScctStrategicMapFloorAt="), MapFloorAt);
+		FParse::Value(FCommandLine::Get(), TEXT("ScctStrategicMapCloseAt="), MapCloseAt);
+	}
 }
 
 void UScctMenuSubsystem::Deinitialize()
@@ -89,6 +103,8 @@ void UScctMenuSubsystem::OnFrame(float DeltaSeconds)
 		CommandSource = Player;
 		CommandHandle = Player->OnLocalCommand.AddUObject(this, &UScctMenuSubsystem::HandleLocalCommand);
 	}
+
+	TickStrategicMap(Player, DeltaSeconds);
 
 	if (!bGearPending)
 	{
@@ -147,17 +163,130 @@ void UScctMenuSubsystem::HandleLocalCommand(FName Name, int32 Arg, bool bPressed
 		UE_LOG(LogOpenSCCT, Log, TEXT("ScctGear: ChangeGear pressed"));
 		OpenGear(-1);
 	}
+	else if (bPressed && Name == TEXT("DisplayStrategicMap"))
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctStrategicMap: DisplayStrategicMap pressed"));
+		OpenStrategicMap();
+	}
 }
 
-bool UScctMenuSubsystem::OpenGear(int32 Side)
+UScctMatchMenuWidget* UScctMenuSubsystem::FindMatchMenu() const
 {
 	// The in-match menu is the game mode's widget in this world's viewport.
 	for (TObjectIterator<UScctMatchMenuWidget> It; It; ++It)
 	{
 		if (It->GetWorld() == GetWorld() && It->IsInViewport())
 		{
-			return It->ShowGear(Side);
+			return *It;
 		}
 	}
-	return false;
+	return nullptr;
+}
+
+bool UScctMenuSubsystem::OpenGear(int32 Side)
+{
+	UScctMatchMenuWidget* Menu = FindMatchMenu();
+	return Menu != nullptr && Menu->ShowGear(Side);
+}
+
+bool UScctMenuSubsystem::OpenStrategicMap()
+{
+	// SPlayerController.DisplayStrategicMap: not on a tutorial map, not while working an object.
+	const FScctMapApi* Api = ScctFeature<FScctMapApi>();
+	if (Api == nullptr || Api->CanDisplay() == 0)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctStrategicMap: the strategic map cannot open now (%s)"),
+			Api == nullptr ? TEXT("the bridge has no map table") : TEXT("the player's state does not allow it"));
+		return false;
+	}
+	UScctMatchMenuWidget* Menu = FindMatchMenu();
+	return Menu != nullptr && Menu->ShowStrategicMap();
+}
+
+void UScctMenuSubsystem::TickStrategicMap(AScctPlayerController* Player, float DeltaSeconds)
+{
+	UScctMatchMenuWidget* Menu = FindMatchMenu();
+	const TSharedPtr<SScctStrategicMapPage> Page = Menu != nullptr ? Menu->GetStrategicMapPage() : nullptr;
+	const FScctMapApi* Api = ScctFeature<FScctMapApi>();
+
+	// -ScctStrategicMap: once the key may open it, wait the time asked for, then raise the command as the binding does.
+	if (MapOpenAt >= 0.0f && Player != nullptr && Api != nullptr)
+	{
+		MapAllowedSeconds = Api->CanDisplay() != 0 ? MapAllowedSeconds + DeltaSeconds : 0.0f;
+		if (MapAllowedSeconds >= MapOpenAt)
+		{
+			MapOpenAt = -1.0f;
+			bMapDoneThisRun = true;
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctStrategicMap: -ScctStrategicMap raises the DisplayStrategicMap command"));
+			Player->OnLocalCommand.Broadcast(TEXT("DisplayStrategicMap"), 0, true);
+			Player->OnLocalCommand.Broadcast(TEXT("DisplayStrategicMap"), 0, false);
+		}
+	}
+
+	if (!Page.IsValid())
+	{
+		bMapWasOpen = false;
+		return;
+	}
+	if (!bMapWasOpen)
+	{
+		// Just opened: the press that opened it must be let go before the same key closes it.
+		bMapWasOpen = true;
+		bMapKeysArmed = false;
+		MapOpenSeconds = 0.0f;
+		MapLogTimer = 0.0f;
+		MapKeys = Player != nullptr ? Player->FindKeysBoundTo(TEXT("DisplayStrategicMap")) : TArray<FKey>();
+	}
+	MapOpenSeconds += DeltaSeconds;
+
+	// StrategicMap_InGame: its exit key is the key that opened it.
+	bool bAnyDown = false;
+	bool bAnyPressed = false;
+	for (const FKey& Key : MapKeys)
+	{
+		bAnyDown |= Player != nullptr && Player->IsInputKeyDown(Key);
+		bAnyPressed |= Player != nullptr && Player->WasInputKeyJustPressed(Key);
+	}
+	const bool bCloseAsked = MapCloseAt >= 0.0f && MapOpenSeconds >= MapCloseAt;
+	if ((bMapKeysArmed && bAnyPressed) || bCloseAsked)
+	{
+		if (bCloseAsked)
+		{
+			MapCloseAt = -1.0f;
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctStrategicMap: -ScctStrategicMapCloseAt closes it as its key does"));
+		}
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctStrategicMap: its key closes it"));
+		Page->Close();
+		return;
+	}
+	if (!bAnyDown && !bAnyPressed)
+	{
+		bMapKeysArmed = true;
+	}
+
+	if (MapFloorAt >= 0.0f && MapOpenSeconds >= MapFloorAt)
+	{
+		MapFloorAt = -1.0f;
+		const FScctMapState& State = Page->GetState();
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctStrategicMap: -ScctStrategicMapFloorAt presses %s"), State.Floor < State.FloorCount - 1 ? TEXT("UP") : TEXT("DOWN"));
+		if (State.Floor < State.FloorCount - 1)
+		{
+			Page->FloorUp();
+		}
+		else
+		{
+			Page->FloorDown();
+		}
+	}
+
+	// The marker against where the player stands, every 2 s while it is open.
+	MapLogTimer -= DeltaSeconds;
+	if (MapLogTimer <= 0.0f)
+	{
+		MapLogTimer = 2.0f;
+		const APawn* Pawn = Player != nullptr ? Player->GetPawn() : nullptr;
+		const FVector At = Pawn != nullptr ? Pawn->GetActorLocation() : FVector::ZeroVector;
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctStrategicMap: %s; Unreal pawn at (%.0f, %.0f, %.0f)%s"), *Page->Describe(), At.X, At.Y, At.Z,
+			Pawn != nullptr ? TEXT("") : TEXT(" (no pawn)"));
+	}
 }

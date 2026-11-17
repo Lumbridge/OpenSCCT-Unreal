@@ -7,7 +7,7 @@
 class SScctMatchOverlay;
 
 /**
- * What a match level shows over the HUD: the in-match menu (resume, change gear, options, leave the server or go back to the
+ * What a match level shows over the HUD: the in-match menu (resume, change gear, strategic map, options, leave the server or go back to the
  * main menu, after asking) and, in an online round, what the visit is waiting for and the round's results. Built in
  * code; the widgets are in the .cpp. AScctGameMode owns it and opens the menu on the player's ShowMenu binding.
  *
@@ -39,6 +39,15 @@ public:
 
 	/** The Equipment page open over the match, if any. */
 	TSharedPtr<class SScctGearPage> GetGearPage() const;
+
+	/**
+	 * Opens the strategic map (Menu/SScctStrategicMapPage.h) of the round. When the menu is closed it is opened first
+	 * through OnOpenRequested, and closing the map then goes back to the game. False when it could not open.
+	 */
+	bool ShowStrategicMap();
+
+	/** The strategic map open over the match, if any. */
+	TSharedPtr<class SScctStrategicMapPage> GetStrategicMapPage() const;
 
 	/** Asked to open the menu (the game mode binds it to its own SetMenuOpen, which hands the keys and the mouse over). */
 	FSimpleDelegate OnOpenRequested;

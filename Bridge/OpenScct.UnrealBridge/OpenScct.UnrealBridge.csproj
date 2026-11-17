@@ -26,5 +26,7 @@
   <!-- The play session lives in the Godot project but has no Godot in it; it is linked, as OpenSCCT's map sweep does. -->
   <ItemGroup>
     <Compile Include="$(OpenScctRoot)game\Scripts\Play\Session\*.cs" Link="Linked\PlaySession\%(Filename)%(Extension)" />
+    <!-- The strategic map's data and page state (floors, snapshot camera, markers), Godot-free like the session. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\UI\StrategicMapModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>
