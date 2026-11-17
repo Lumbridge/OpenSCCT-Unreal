@@ -80,6 +80,18 @@ public sealed class EquipmentFeature
     /// <summary>The view model channels of the merc's weapon as the last frame blended them (for the probe).</summary>
     public ReadOnlySpan<ChannelPose> FirstPersonChannels => _merc.Pose.Channels;
 
+    /// <summary>The merc's view model pose of the last frame (its clips' frame rates, for Pose/PoseAimExports.cs).</summary>
+    internal ViewModelPose FirstPersonPose => _merc.Pose;
+
+    /// <summary>
+    /// The sockets of this frame's spy eye view with a wall between them and the eye (1 the muzzle "FX", 2 the laser
+    /// "Laser"); 0 when none is or the eye view is not drawn.
+    /// </summary>
+    public int FirstPersonSocketsHidden { get; private set; }
+
+    /// <summary>How far the eye view's muzzle socket is from the eye this frame, in units (0 when not drawn).</summary>
+    public float FirstPersonMuzzleDistance { get; private set; }
+
     /// <summary>
     /// How far the spy's support wrist ended from the stock stance's place when his eye-view grip was fitted, in
     /// metres; -1 before the eye view was first drawn or when its models are missing (for the probe).
@@ -158,6 +170,8 @@ public sealed class EquipmentFeature
     {
         _firstPerson = default;
         _eyePawn = null;
+        FirstPersonSocketsHidden = 0;
+        FirstPersonMuzzleDistance = 0f;
         PlaySession play = _session.Session;
         SPlayerController? pc = play.LocalController;
         SBasePawn? local = play.LocalPawn;
@@ -173,7 +187,13 @@ public sealed class EquipmentFeature
         bool shown = _merc.Draw(pc, _frameDt, alpha, ref _firstPerson);
         if (!shown && play.View.SpyFirstPerson && pc is { SpyFirstPersonActive: true, FreeCameraFlying: 0 } && local is SPawnAttaque spy)
         {
-            shown = _spy.Draw(pc, spy, alpha, ref _firstPerson);
+            // The eye of the frame is the camera the controls handed Unreal (its sockets are traced from it).
+            shown = _spy.Draw(pc, spy, alpha, ref _firstPerson, Controls.ControlsFeature.Of(_session).DrawnCamera);
+            if (shown)
+            {
+                FirstPersonSocketsHidden = (_spy.MuzzleHidden ? 1 : 0) | (_spy.LaserHidden ? 2 : 0);
+                FirstPersonMuzzleDistance = _spy.MuzzleDistance;
+            }
         }
 
         if (!shown)

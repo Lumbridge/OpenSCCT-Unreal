@@ -17,8 +17,9 @@ namespace OpenScct.UnrealBridge.Pose;
 /// direction controllers. It reads the simulation and never writes it.
 /// <para>A port of the posing half of OpenSCCT's game/Scripts/Views/SimPawnView.cs (OnTick, SetAim, SetDirections,
 /// Pose, RootLockOf, Interpolated, ApplyOverlay), with the hub's emote overlay (<see cref="Overlay"/>). A map
-/// outfit's model is posed with its team's stock clips (see the constructor). Not ported: the local player's
-/// look-ahead aim (DrawnView, which needs the camera of the frame) and replacement clips of an animation project.</para>
+/// outfit's model is posed with its team's stock clips (see the constructor). The local spy's look-ahead aim
+/// (<see cref="DrawnView"/>) is handed over by Unreal each frame through Pose/PoseAimExports.cs. Not ported:
+/// replacement clips of an animation project.</para>
 /// </summary>
 public sealed class PawnPoser
 {
@@ -42,6 +43,8 @@ public sealed class PawnPoser
     private long _tick;
     private long _posedTick = -1;
     private float _posedAlpha;
+    private FRotator? _posedView;
+    private Vector2 _posedAim, _tickAim;
     private readonly List<PoseTurn> _overlayTurns = new();
 
     /// <summary>Extra posing laid over every posed pawn (the hub's emotes while a visit is drawn), or null.</summary>
@@ -78,6 +81,26 @@ public sealed class PawnPoser
 
     /// <summary>The upper-body aim (the AAFULL pair: yaw, pitch) in radians, <paramref name="alpha"/> of the way between the last two ticks.</summary>
     public Vector2 Aim(float alpha) => Vector2.Lerp(_prevAim, _aim, Math.Clamp(alpha, 0f, 1f));
+
+    /// <summary>
+    /// The local spy's view as drawn this frame (the controller's rotation plus the mouse turn not yet simulated), or
+    /// null: the upper body aims at it (MeshAimIK.DrawnFullPair) and the corner firing arm too (ArmAim.DrawnRotation)
+    /// instead of the step between the last two ticks, so the drawn arm and pistol keep up with the camera. Set before
+    /// each pose (SimPawnView.DrawnView of the Godot client).
+    /// </summary>
+    public FRotator? DrawnView { get; set; }
+
+    /// <summary>The AAFULL pair (yaw, pitch, radians) the last pose drew.</summary>
+    public Vector2 PosedAim => _posedAim;
+
+    /// <summary>The AAFULL pair the last pose would have drawn from the ticks alone (no <see cref="DrawnView"/>).</summary>
+    public Vector2 TickAim => _tickAim;
+
+    /// <summary>The body's yaw (rotator units) the last pose drew.</summary>
+    public int DrawnYaw => _drawYaw;
+
+    /// <summary>True when the last pose aimed at a <see cref="DrawnView"/>.</summary>
+    public bool PosedFromView => _posedView is not null;
 
     /// <summary>Takes the pawn's state after a simulation tick (yaw, aim, bone directions and channel frames for the interpolation).</summary>
     public void OnTick()
@@ -139,10 +162,12 @@ public sealed class PawnPoser
         alpha = Math.Clamp(alpha, 0f, 1f);
         // The blend keeps state from draw to draw (a tween moves on from the pose of the draw before), so a second
         // read of the same frame must not blend again.
-        if (_posedTick != _tick || _posedAlpha != alpha)
+        // A new drawn view is a new frame too (it is handed over once a frame, before the pose).
+        if (_posedTick != _tick || _posedAlpha != alpha || _posedView != DrawnView)
         {
             _posedTick = _tick;
             _posedAlpha = alpha;
+            _posedView = DrawnView;
             _drawYaw = _prevYaw + (int)(FRotator.NormalizeAxis(_yaw - _prevYaw) * alpha);
             SetAim(alpha);
             SetDirections(alpha);
@@ -184,6 +209,16 @@ public sealed class PawnPoser
     private void SetAim(float alpha)
     {
         Vector2 drawn = Vector2.Lerp(_prevAim, _aim, alpha);
+        _tickAim = drawn;
+        if (DrawnView is { } view)
+        {
+            SBasePawn pawn = Pawn;
+            (float fullYaw, float fullPitch) = pawn.PawnAnim.Aim.DrawnFullPair(view.Vector(),
+                new FRotator(pawn.Rotation.Pitch, _drawYaw, pawn.Rotation.Roll).Vector());
+            drawn = new Vector2(fullYaw, fullPitch);
+        }
+
+        _posedAim = drawn;
         if (drawn.X == 0f && drawn.Y == 0f)
         {
             _applier.AimBone = -1;
@@ -218,7 +253,12 @@ public sealed class PawnPoser
             }
 
             FRotator drawn = d.Rotation;
-            if (_prevDirections.TryGetValue(d.Bone, out BoneDirection previous))
+            if (DrawnView is { } view)
+            {
+                // The local corner firing arm takes the same pending mouse turn as the camera.
+                drawn = ArmAim.DrawnRotation(Pawn, d, view);
+            }
+            else if (_prevDirections.TryGetValue(d.Bone, out BoneDirection previous))
             {
                 FRotator before = previous.Rotation;
                 drawn = new FRotator(before.Pitch + (int)(FRotator.NormalizeAxis(drawn.Pitch - before.Pitch) * alpha),

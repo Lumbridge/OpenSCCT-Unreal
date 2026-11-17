@@ -13,8 +13,10 @@ namespace OpenScct.UnrealBridge.Equipment;
 /// A one-shot's time left is sampled after every client tick (<see cref="OnTick"/>) and drawn between the last two
 /// samples by the frame's interpolation alpha, as the camera is, so the arms move every frame instead of holding
 /// each pose for a 60 Hz tick. It reads the simulation and never writes it.
-/// <para>A port of OpenSCCT's game/Scripts/Views/ViewModelPose.cs and OneShotClock.cs. Not ported: a clip's own frame
-/// rate from an animation project (AnimClip.NativeFrameRate); every clip runs at the view models' 15 fps.</para>
+/// <para>A port of OpenSCCT's game/Scripts/Views/ViewModelPose.cs and OneShotClock.cs. Each clip's frame rate comes
+/// from <see cref="ViewModelClipRates"/> (an animation project's gameplay clip, else the view models' 15 fps), as
+/// AnimClip.NativeFrameRate does there. Not ported: the keys of an animation project's replacement clip (only its rate
+/// is used; the model's own keys play).</para>
 /// </summary>
 public sealed class ViewModelPose
 {
@@ -36,6 +38,7 @@ public sealed class ViewModelPose
     private readonly float[] _prevRemaining = new float[ViewModelAnim.ChannelCount];
     private readonly string?[] _clipName = new string?[ViewModelAnim.ChannelCount];
     private readonly Name[] _clipNameOf = new Name[ViewModelAnim.ChannelCount];
+    private readonly bool[] _rateFromProject = new bool[ViewModelAnim.ChannelCount];
     private ViewModelAnim? _tickAnim;
     private int _samples;
     private float _landingBlendLeft;
@@ -79,17 +82,21 @@ public sealed class ViewModelPose
     /// <summary>The channels of the last <see cref="Update"/> (for the probe).</summary>
     public ReadOnlySpan<ChannelPose> Channels => _channels;
 
+    /// <summary>Whether channel <paramref name="channel"/>'s clip in the last draw ran at an animation project's frame rate.</summary>
+    public bool RateFromProject(int channel) => _rateFromProject[channel];
+
     /// <summary>
     /// The channels for this draw, from <paramref name="anim"/>, sampled from <paramref name="character"/>'s clips;
     /// <paramref name="dt"/> is the time since the last draw and <paramref name="tickAlpha"/> how far the clock is
     /// into the next tick (1 draws the last tick's state).
     /// </summary>
     public ReadOnlySpan<ChannelPose> Update(ViewModelAnim anim, GlbCharacter character, float dt, float tickAlpha = 1f,
-        bool exclusiveAction = false, bool blendLandingRecovery = true, bool blendLocomotion = false)
+        bool exclusiveAction = false, bool blendLandingRecovery = true, bool blendLocomotion = false, ViewModelClipRates? rates = null)
     {
         ArgumentNullException.ThrowIfNull(anim);
         ArgumentNullException.ThrowIfNull(character);
         Array.Clear(_channels);
+        Array.Clear(_rateFromProject);
         for (int c = 0; c < ViewModelAnim.ChannelCount; c++)
         {
             Name sequence = anim.Sequence(c);
@@ -147,7 +154,9 @@ public sealed class ViewModelPose
                 continue;
             }
 
-            const float fps = DefaultFps;
+            bool projectRate = false;
+            float fps = rates?.RateOf(clipName, out projectRate) ?? DefaultFps;
+            _rateFromProject[c] = projectRate;
             int frames = Math.Max(1, (int)MathF.Round(clip.Length * fps) + 1);
             float last = (frames - 1f) / frames;
             bool loop = anim.IsAnimating(c) && remaining <= 0f;

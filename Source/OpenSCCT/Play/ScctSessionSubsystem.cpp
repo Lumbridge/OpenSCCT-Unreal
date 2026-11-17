@@ -12,6 +12,7 @@
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
 #include "Play/ScctPawnProxy.h"
+#include "Play/ScctPoseAim.h"
 #include "Play/ScctViewPawn.h"
 #include "Runtime/ScctFeatures.h"
 #include "UnrealClient.h"
@@ -357,6 +358,18 @@ void UScctSessionSubsystem::UpdatePawns()
 		}
 	}
 
+	// The local spy's body aims at the view this frame draws (the mouse turn not yet simulated included), handed over
+	// before any pose is read.
+	int32 AimingActorId = 0;
+	for (int32 Index = 0; Index < PawnCount; ++Index)
+	{
+		if ((PawnBuffer[Index].Flags & EScctPawnFlags::Local) != 0)
+		{
+			AimingActorId = PawnBuffer[Index].ActorId;
+		}
+	}
+	ScctPoseAim::FeedDrawnView(*GetWorld(), AimingActorId);
+
 	TSet<int32, DefaultKeyFuncs<int32>, TInlineSetAllocator<MaxPawns>> Seen;
 	for (int32 Index = 0; Index < PawnCount; ++Index)
 	{
@@ -381,6 +394,7 @@ void UScctSessionSubsystem::UpdatePawns()
 			Proxy->Present(Pawn, GetSkeleton(Pawn.Kind), TConstArrayView<FScctBridgeBone>(PoseBuffer.GetData(), Bones));
 		}
 	}
+	ScctPoseAim::LogAimProbe(*GetWorld(), AimingActorId, GetWorld()->GetDeltaSeconds());
 
 	for (auto It = Proxies.CreateIterator(); It; ++It)
 	{

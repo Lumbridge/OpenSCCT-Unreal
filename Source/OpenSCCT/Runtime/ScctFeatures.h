@@ -21,6 +21,7 @@
 #include "Runtime/ScctMarkSurfaceApi.h"
 #include "Runtime/ScctOnlineApi.h"
 #include "Runtime/ScctPawnLookApi.h"
+#include "Runtime/ScctPoseAimApi.h"
 #include "Runtime/ScctSocialApi.h"
 #include "Runtime/ScctPlayApi.h"
 #include "Runtime/ScctProjectionsApi.h"
@@ -71,6 +72,7 @@ SCCT_FEATURE_TABLE(FScctMenuApi, "MenuExports", ScctMenuApiVersion);
 SCCT_FEATURE_TABLE(FScctMarkSurfaceApi, "MarkSurfaceExports", ScctMarkSurfaceApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
 SCCT_FEATURE_TABLE(FScctPawnLookApi, "PawnLookExports", ScctPawnLookApiVersion);
+SCCT_FEATURE_TABLE(FScctPoseAimApi, "PoseAimExports", ScctPoseAimApiVersion);
 SCCT_FEATURE_TABLE(FScctSocialApi, "SocialExports", ScctSocialApiVersion);
 SCCT_FEATURE_TABLE(FScctPlayApi, "PlayExports", ScctPlayApiVersion);
 SCCT_FEATURE_TABLE(FScctProjectionsApi, "ProjectionExports", ScctProjectionsApiVersion);

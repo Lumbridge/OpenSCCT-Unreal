@@ -79,6 +79,13 @@ private:
 
 	bool bHasMuzzle = false;
 	bool bHasLaser = false;
+	/**
+	 * The spy eye view's muzzle and laser socket have a wall between them and the eye this frame (the bridge's trace,
+	 * Runtime/ScctPoseAimApi.h): the pistol stays drawn, but no flash or laser starts at a hidden socket.
+	 */
+	bool bMuzzleHidden = false;
+	bool bLaserHidden = false;
+	int32 LoggedHiddenSockets = 0;
 	FTransform Muzzle;
 	FTransform Laser;
 	FTransform LastCamera;

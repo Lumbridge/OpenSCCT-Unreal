@@ -11,6 +11,8 @@
 #include "Play/ScctEquipmentData.h"
 #include "Play/ScctEquipmentModels.h"
 #include "Play/ScctExposure.h"
+#include "Play/ScctPoseAim.h"
+#include "Runtime/ScctPoseAimApi.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -227,6 +229,25 @@ void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentM
 		}
 	}
 
+	// A wall between the eye and the spy pistol's sockets: the pistol stays where it is drawn, but its flash and laser
+	// do not start inside or beyond the wall (SpyFirstPersonView.TryGetSocket of the Godot client).
+	const int32 Hidden = bShown && View.Kind == EScctFirstPersonKind::Spy ? ScctPoseAim::ReadHiddenSockets() : 0;
+	bMuzzleHidden = (Hidden & EScctHiddenSocket::Muzzle) != 0;
+	bLaserHidden = (Hidden & EScctHiddenSocket::Laser) != 0;
+	if (Hidden != LoggedHiddenSockets)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("First person: %s (muzzle socket %.1f cm from the eye)"),
+			Hidden == 0 ? TEXT("the pistol's sockets are clear of walls again")
+				: Hidden == (EScctHiddenSocket::Muzzle | EScctHiddenSocket::Laser) ? TEXT("muzzle and laser sockets hidden behind a wall")
+				: (Hidden & EScctHiddenSocket::Muzzle) != 0 ? TEXT("muzzle socket hidden behind a wall") : TEXT("laser socket hidden behind a wall"),
+			ScctPoseAim::LastMuzzleDistance());
+		LoggedHiddenSockets = Hidden;
+	}
+	if (bShown && View.Kind == EScctFirstPersonKind::Merc)
+	{
+		ScctPoseAim::LogViewModelClipRates();
+	}
+
 	if (bShown != bWasShown)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("First person: view model %s (kind %d, %d parts); muzzle %.1f cm from the eye"),
@@ -272,6 +293,8 @@ void AScctFirstPersonView::Hide(float DeltaSeconds)
 	bShown = false;
 	bHasMuzzle = false;
 	bHasLaser = false;
+	bMuzzleHidden = false;
+	bLaserHidden = false;
 	for (FScctEquipmentView& Drawn : Parts)
 	{
 		if (Drawn.IsShown() && Drawn.GetBody()->IsVisible())
@@ -285,7 +308,7 @@ void AScctFirstPersonView::Hide(float DeltaSeconds)
 bool AScctFirstPersonView::FindMuzzle(FTransform& OutWorld) const
 {
 	OutWorld = Muzzle;
-	return bShown && bHasMuzzle;
+	return bShown && bHasMuzzle && !bMuzzleHidden;
 }
 
 bool AScctFirstPersonView::FindCasingPort(FTransform& OutWorld) const
@@ -308,13 +331,16 @@ bool AScctFirstPersonView::FindCasingPort(FTransform& OutWorld) const
 
 bool AScctFirstPersonView::FindLaserStart(FTransform& OutWorld) const
 {
-	OutWorld = bHasLaser ? Laser : Muzzle;
-	return bShown && (bHasLaser || bHasMuzzle);
+	// A socket a wall hides from the eye is not a start: the laser then starts where the simulation puts it.
+	const bool bLaserClear = bHasLaser && !bLaserHidden;
+	const bool bMuzzleClear = bHasMuzzle && !bMuzzleHidden;
+	OutWorld = bLaserClear ? Laser : Muzzle;
+	return bShown && (bLaserClear || bMuzzleClear);
 }
 
 void AScctFirstPersonView::PlayMuzzleFlash()
 {
-	if (!bShown || !bHasMuzzle)
+	if (!bShown || !bHasMuzzle || bMuzzleHidden)
 	{
 		return;
 	}
@@ -376,7 +402,7 @@ void AScctFirstPersonView::TickFlash(float DeltaSeconds)
 		return FMath::Max(Seconds, 0.0f);
 	}();
 	const float Age = FMath::Max(FlashAge - Hold, 0.0f);
-	const bool bGunShown = bShown && bHasMuzzle;
+	const bool bGunShown = bShown && bHasMuzzle && !bMuzzleHidden;
 	const float Fade = bGunShown ? 1.0f - FMath::Square(FMath::Clamp(Age / FlashSeconds, 0.0f, 1.0f)) : 0.0f;
 	if (bGunShown)
 	{
