@@ -233,3 +233,5 @@ function Write-Pack([string]$label, $pack) {
 }
 Write-Pack $sharedId $shared
 foreach ($pack in $mapPacks) { Write-Pack $pack.code $pack }
+Write-Host ''
+Write-Host "Next, in OpenSCCT-Unreal-Content: python tools/ouc.py pack --cook ""$cookOut"" --content <the OpenSCCT-Content install the maps were imported from>"
