@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Play/ScctSoundData.h"
 #include "Runtime/ScctAcousticApi.h"
+#include "Runtime/ScctAudioViewApi.h"
 #include "Runtime/ScctEventsApi.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctAudioSubsystem.generated.h"
@@ -54,7 +55,14 @@ class USoundAttenuation;
  *   -ScctAudioProbe=x,y,z[;x,y,z...]  a looping test emitter at each place, started 2 s into the match (or
  *                          -ScctAudioProbeAt=S), playing -ScctAudioProbeSound=Name (default Interface.Objectifs.Alarme);
  *                          their acoustics are logged once a second whatever scct.AudioOcclusion says
+ *   -ScctAudioZoom=F       force the scope's audio zoom factor F for the run (the scope's steps are 0.33, 0.66 and 1)
+ *                          and log every 3D voice's zoom gain once a second
+ *   -ScctAudioDoppler      log the Doppler pitch of moving 3D voices, and the pitch 1 of the listener-bound ones
  * Play/ScctAudioMix has the volume switches (-ScctAudioVolume, -ScctAudioPeaks).
+ *
+ * The listener's view (Play/ScctAudioView.cpp): through a scope or binoculars every 3D voice near the aim line gets
+ * louder and the rest quieter (the original's SetAudioZoom), and every 3D voice's pitch carries the Doppler shift of
+ * its own and the listener's movement along the line between them (the Godot client's rule 17).
  */
 UCLASS()
 class OPENSCCT_API UScctAudioSubsystem : public UWorldSubsystem
@@ -135,6 +143,17 @@ private:
 		FVector AcousticOffset = FVector::ZeroVector;
 		float AcousticLogIn = 0.0f;
 		bool bProbe = false;    // a -ScctAudioProbe emitter: always logged
+
+		// The listener's view (Play/ScctAudioView.cpp): the scope's or binoculars' audio zoom gain on its volume and
+		// the Doppler factor on its pitch this frame, from its place last frame and the pitch its component has.
+		float ZoomGain = 1.0f;
+		float DopplerPitch = 1.0f;
+		float AppliedPitch = -1.0f;
+		FVector LastLocation = FVector::ZeroVector;
+		bool bHasLastLocation = false;
+		bool bViewLogged = false;
+		float ZoomLogIn = 0.0f;
+		float DopplerLogIn = 0.0f;
 	};
 
 	/** A zone of the map's audio table that has a reverb. */
@@ -174,6 +193,21 @@ private:
 	void UpdateAudioProbe(float DeltaSeconds);
 	void LogAcoustics(const FVoice& Voice, const FScctAcousticResult& Result) const;
 	void LogAcousticSummary() const;
+
+	/**
+	 * The listener's view (Play/ScctAudioView.cpp): reads the bridge's audio view table (the scope's or binoculars'
+	 * audio zoom, the FOV, the view actor and the local pawn) and the listener's velocity from its movement this frame.
+	 */
+	void UpdateAudioView(float DeltaSeconds);
+	/** A voice's audio zoom gain and Doppler pitch this frame, from its movement since the last (as the Godot client's rule 17). */
+	void UpdateZoomAndDoppler(FVoice& Voice, float DeltaSeconds);
+	/** True for a voice that moves with the listener: the local pawn's own 3D sounds and the view actor's ambient loop. */
+	bool IsListenerBound(const FVoice& Voice) const;
+	/** The volume a voice's component gets: its volume (raised by the audio zoom, never above full) x its kind's gain x the wall's scale. */
+	float HeardVolumeOf(const FVoice& Voice) const;
+	/** Reads -ScctAudioZoom and -ScctAudioDoppler and fetches the audio view table at the match's start. */
+	void ReadAudioViewSwitches();
+	void LogAudioViewSummary() const;
 
 public:
 	/** Puts "Sound through walls" on the Audio page (called by Play/ScctAudioMix with the other audio options). */
@@ -275,6 +309,26 @@ private:
 	TArray<int32> ProbeCalls;
 	FString ProbeSound;
 	float ProbeIn = -1.0f;
+
+	// The listener's view (Play/ScctAudioView.cpp).
+	const FScctAudioViewApi* AudioViewApi = nullptr;
+	float AudioZoom = 0.0f;
+	float AudioZoomFov = 90.0f;
+	int32 ViewActorId = 0;
+	int32 LocalPawnId = 0;
+	FRotator ListenerRotation = FRotator::ZeroRotator;
+	FVector ListenerVelocity = FVector::ZeroVector;
+	FVector LastListener = FVector::ZeroVector;
+	bool bLastListenerSet = false;
+	/** -ScctAudioZoom=F: the audio zoom forced for the run (negative: the player's scope or binoculars); it also logs every 3D voice's zoom gain. */
+	float ForcedAudioZoom = -1.0f;
+	/** -ScctAudioDoppler: log the Doppler pitch of moving 3D voices and the pitch 1 of the listener-bound ones. */
+	bool bLogDoppler = false;
+	/** The zoom last said in the log, so a change of scope step is said once. */
+	float LoggedAudioZoom = -1.0f;
+	int32 NumDopplerShifted = 0;
+	float PeakDopplerPitch = 1.0f;
+	float LowDopplerPitch = 1.0f;
 
 	/** -ScctAudioMusic: the song to start and the seconds into the match it starts at (negative: done). */
 	FString CheckSong;

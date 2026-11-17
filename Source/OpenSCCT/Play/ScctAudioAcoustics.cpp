@@ -204,12 +204,21 @@ void UScctAudioSubsystem::ApplyAcoustics(FVoice& Voice, bool bForce)
 		return;
 	}
 
-	// The map's volume of the voice, the player's volume of its kind (Menu/ScctUserSettings.h) and the wall's scale.
-	const float Volume = Voice.Volume * SettingsGainOf(Voice) * Voice.AcousticScale;
+	// The map's volume of the voice (raised or lowered by the scope's audio zoom), the player's volume of its kind
+	// (Menu/ScctUserSettings.h) and the wall's scale.
+	const float Volume = HeardVolumeOf(Voice);
 	if (bForce || !FMath::IsNearlyEqual(Voice.AppliedVolume, Volume, 0.005f))
 	{
 		Voice.AppliedVolume = Volume;
 		Component->SetVolumeMultiplier(Volume);
+	}
+
+	// Its pitch carries the Doppler shift of this frame (Play/ScctAudioView.cpp).
+	const float Pitch = Voice.Pitch * Voice.DopplerPitch;
+	if (bForce || !FMath::IsNearlyEqual(Voice.AppliedPitch, Pitch, 0.0005f))
+	{
+		Voice.AppliedPitch = Pitch;
+		Component->SetPitchMultiplier(Pitch);
 	}
 
 	const float LowPass = Voice.AcousticLowPass;

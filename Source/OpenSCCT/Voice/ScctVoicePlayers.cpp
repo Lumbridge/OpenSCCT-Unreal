@@ -24,7 +24,7 @@
 namespace
 {
 	/** Above the HUD and the match menu, so a player's line still takes the click while the menu is open. */
-	constexpr int32 OverlayZOrder = 60;
+	constexpr int32 VoicePlayersOverlayZOrder = 60;
 	constexpr float VolumeStep = 0.1f;
 
 	/** Godot's LobbyRoomModel.VolumeText: "name - volume n%". */
@@ -354,7 +354,7 @@ void UScctVoiceSubsystem::ShowOverlay(bool bShow)
 	Overlay = SNew(SScctVoiceOverlay)
 		.OnToggleMute(FScctVoiceOverlayMute::CreateUObject(this, &UScctVoiceSubsystem::ToggleOverlayMute))
 		.OnAdjustVolume(FScctVoiceOverlayVolume::CreateUObject(this, &UScctVoiceSubsystem::AdjustOverlayVolume));
-	Viewport->AddViewportWidgetContent(Overlay.ToSharedRef(), OverlayZOrder);
+	Viewport->AddViewportWidgetContent(Overlay.ToSharedRef(), VoicePlayersOverlayZOrder);
 	OverlayViewport = Viewport;
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: speaker overlay shown"));
 }

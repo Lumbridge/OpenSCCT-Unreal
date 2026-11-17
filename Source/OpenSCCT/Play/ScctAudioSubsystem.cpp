@@ -158,6 +158,7 @@ void UScctAudioSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	ListenerZone = INDEX_NONE;
 	ActiveZone = -2;
 	ProbeCalls.Reset();
+	bLastListenerSet = false;
 	NumStarted =NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
 }
 
@@ -188,6 +189,7 @@ void UScctAudioSubsystem::HandleMatchStarted()
 	Acoustics = ScctFeature<FScctAcousticApi>(&AcousticError);
 	UE_CLOG(Acoustics == nullptr, LogOpenSCCT, Warning, TEXT("Audio: walls do not change sound this match, the bridge's acoustic table is missing: %s"), *AcousticError);
 	ReadAcousticSwitches();
+	ReadAudioViewSwitches();
 
 	FString Song;
 	if (FParse::Value(FCommandLine::Get(), TEXT("ScctAudioMusic="), Song, false))
@@ -226,6 +228,8 @@ void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
 	const FScctBridgeView& View = Session->GetView();
 	bListenerValid = View.Valid != 0;
 	Listener = FVector(View.X, View.Y, View.Z);
+	// The scope's audio zoom and the listener's velocity (Play/ScctAudioView.cpp).
+	UpdateAudioView(DeltaSeconds);
 
 	if (CheckSongIn >= 0.0f)
 	{
@@ -714,21 +718,23 @@ void UScctAudioSubsystem::UpdateVoices(float DeltaSeconds)
 					break;
 				}
 			}
+			if (Voice.bPositional)
+			{
+				Voice.Location = FindVoiceLocation(Voice);
+			}
+			// The scope's audio zoom on its volume and the Doppler shift on its pitch (Play/ScctAudioView.cpp).
+			UpdateZoomAndDoppler(Voice, DeltaSeconds);
 			if (UAudioComponent* Component = Voice.Component.Get())
 			{
 				if (Voice.bPositional)
 				{
 					// Heard from where its sound reaches the listener (an opening when a wall is in the way).
-					Voice.Location = FindVoiceLocation(Voice);
 					Component->SetWorldLocation(Voice.Location + Voice.AcousticOffset);
 				}
-				// The ambience follows the map's volumes, every voice the settings' volume of its kind (SettingsGainOf)
-				// and a 3D voice its sound through walls: ApplyAcoustics sets the product of the three.
+				// The ambience follows the map's volumes, every voice the settings' volume of its kind (SettingsGainOf),
+				// a 3D voice its sound through walls and the audio zoom, and its pitch the Doppler shift: ApplyAcoustics
+				// sets them.
 				ApplyAcoustics(Voice, false);
-			}
-			else if (Voice.bPositional)
-			{
-				Voice.Location = FindVoiceLocation(Voice);
 			}
 			break;
 
@@ -777,7 +783,11 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 		Voice.LifeLeft = Pcm->Seconds() / Voice.Pitch + 0.1f;
 	}
 	Voice.State = EVoiceState::Playing;
-	Voice.AppliedVolume = Voice.Volume * SettingsGainOf(Voice) * Voice.AcousticScale;
+	// Its first frame has no movement yet: only the listener's own counts toward the Doppler shift.
+	Voice.bHasLastLocation = false;
+	UpdateZoomAndDoppler(Voice, 0.0f);
+	Voice.AppliedVolume = HeardVolumeOf(Voice);
+	Voice.AppliedPitch = Voice.Pitch * Voice.DopplerPitch;
 	++NumStarted;
 
 	if (bHasDevice)
@@ -798,7 +808,7 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 			// kind is in AppliedVolume (Menu/ScctUserSettings.h), so the submix itself is not turned down again.
 			Component->SoundClassOverride = Mix != nullptr ? Mix->GetClass(static_cast<EScctAudioCategory>(Voice.Category)) : nullptr;
 			Component->SetVolumeMultiplier(Voice.AppliedVolume);
-			Component->SetPitchMultiplier(Voice.Pitch);
+			Component->SetPitchMultiplier(Voice.AppliedPitch);
 			Component->SetWorldLocation(Voice.Location + Voice.AcousticOffset);
 			// A reused component keeps the filter of its last voice: every voice sets its own. Before Play the
 			// component's own properties are what the new engine voice starts with (the setters reach only a playing one).
@@ -1213,6 +1223,7 @@ void UScctAudioSubsystem::LogSummary() const
 		Voices.Num(), Playing, Waiting, Ambient, PeakVoices, Sounding, Components.Num(), NumStarted, NumStopped, NumOutOfReach, NumRefused, NumStolen, NumObjectiveSkipped,
 		Cache.GetNumDecoded(), Cache.GetBytes() / (1024.0 * 1024.0), Cache.GetNumFailed(), NumFailedFiles, Listener.X, Listener.Y, Listener.Z);
 	LogAcousticSummary();
+	LogAudioViewSummary();
 
 	// The engine's own listener must be where this subsystem takes it to be (the camera), or every 3D voice is
 	// panned and attenuated from somewhere else: said in the log when the two are apart.
