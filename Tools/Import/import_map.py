@@ -21,6 +21,7 @@ DEST = "/Game/Imported/Maps/" + MAP
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import scct_materials  # noqa: E402  pylint: disable=wrong-import-position
+import scct_fx  # noqa: E402  pylint: disable=wrong-import-position
 
 # Light conversion. The original's lights are not physical: a light fades as 1 - (d / R)^2 and is gone at its
 # radius R, and the artists placed them for that (a lamp sits a hand's width under its ceiling and still lights the
@@ -38,6 +39,10 @@ LIGHT_SATURATION = 0.7
 EMISSIVE_UNLIT = 1.2      # screens, lamps and signs that were unlit in the original
 EMISSIVE_ADDITIVE = 0.4   # flare and glow sprites: bloom does the rest
 EMISSIVE_SELF_ILLUM = 4.0  # the self-lit part of a lit surface whose class names no strength of its own
+# Additive materials that are painted light: beam and flare cards modelled into the level (French "rayon": ray).
+# They get the glow-card material (scct_effects.py) instead of the surface material, which draws them as solids.
+GLOW_CARDS = re.compile(r"beam|rayon|flare|lenseffect|dca_fx", re.IGNORECASE)
+GLOW_CARD_BRIGHTNESS = 0.2
 
 # What a detail set is scaled to before a surface class's amounts apply (see fetch_assets.measure_set): the
 # variation a set with real character has. A weaker set is brought up to it, at most this many times (beyond that
@@ -148,9 +153,10 @@ def build_materials(material_doc):
     # The level surfaces' lightmap page, by material (the converter makes one material per texture and page).
     lightmap_of = {key(entry["name"]): entry["lightmap"] for entry in material_doc.get("lightmapped", [])}
     parents = {name: unreal.load_asset(path) for name, path in
-               (("surface", scct_materials.SURFACE), ("glass", scct_materials.GLASS), ("water", scct_materials.WATER))}
+               (("surface", scct_materials.SURFACE), ("glass", scct_materials.GLASS), ("water", scct_materials.WATER),
+                ("card", scct_fx.scct_effects.GLOW_CARD))}
     if not all(parents.values()):
-        raise RuntimeError("master materials are missing: run Tools/Import/Import-Assets.ps1 first")
+        raise RuntimeError("master materials are missing: run Tools/Import/Import-Assets.ps1 and Import-Effects.ps1 first")
 
     def by_key(folder_path):
         found = {}
@@ -219,7 +225,15 @@ def build_materials(material_doc):
         texture_file = flags.get("texture")
         base = texture_of(texture_file) if texture_file else None
         blend = None
-        if kind == "glass":
+        if is_additive and not flags.get("flipbook") and GLOW_CARDS.search(material_name):
+            materials_lib.set_material_instance_parent(instance, parents["card"])
+            texture("BaseColor", base)
+            scalar("Brightness", GLOW_CARD_BRIGHTNESS)
+            pan_u, pan_v = pan_speed(flags.get("uv_anim"))
+            scalar("PanU", pan_u)
+            scalar("PanV", pan_v)
+            kind = "card"
+        elif kind == "glass":
             materials_lib.set_material_instance_parent(instance, parents["glass"])
             texture("BaseColor", base)
             scalar("Roughness", look["rough_dark"])
@@ -300,7 +314,7 @@ def build_materials(material_doc):
         overrides.set_editor_property("override_blend_mode", blend is not None)
         if blend is not None:
             overrides.set_editor_property("blend_mode", blend)
-        two_sided = bool(flags.get("two_sided")) and kind != "glass"   # the glass master is two-sided already
+        two_sided = bool(flags.get("two_sided")) and kind not in ("glass", "card")   # those masters are two-sided already
         overrides.set_editor_property("override_two_sided", two_sided)
         overrides.set_editor_property("two_sided", two_sided)
         instance.set_editor_property("base_property_overrides", overrides)
@@ -373,13 +387,13 @@ def main():
         transform = unreal.Transform(location, rotation, unreal.Vector(1, 1, 1))
         return unreal.ScctImportLibrary.spawn_actor_in_world(world, cls, transform)
 
-    def place_mesh(mesh, label, location, rotation, scale, folder, movable=False, baked_colours=False):
+    def place_mesh(mesh, label, location, rotation, scale, folder, movable=False, baked_colours=False, tags=None):
         actor = spawn(unreal.StaticMeshActor, location, rotation)
         actor.static_mesh_component.set_static_mesh(mesh)
         actor.set_actor_scale3d(scale)
         actor.set_actor_label(label)
         actor.set_folder_path(folder)
-        actor.tags = [unreal.Name("Scct:" + label)]
+        actor.tags = [unreal.Name("Scct:" + label)] + (tags or [])
         component = actor.static_mesh_component
         component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)  # the simulation owns collision
         if movable:
@@ -420,10 +434,33 @@ def main():
             location = location - unreal.MathLibrary.greater_greater_vector_rotator(offset, rotation)
         mover = instance.get("kind") == "mover"
         place_mesh(mesh, instance["actor"], location, rotation, scale, "Geometry/Movers" if mover else "Geometry/Meshes", movable=mover or bool(instance.get("gameplay")),
-                   baked_colours=bool(instance.get("vertexLit")))
+                   baked_colours=bool(instance.get("vertexLit")), tags=scct_fx.instance_tags(instance))
         placed += 1
     log("placed %d meshes, %d without a mesh asset" % (placed, missing))
 
+    # ---- effects ----------------------------------------------------------------------------------------------
+    # What the original drew besides surfaces and lights (scct_fx.py). Their textures are mostly not in the
+    # geometry file, so each is imported the first time something asks for it.
+    effect_textures = {}
+
+    def effect_texture(file):
+        stem = key(os.path.splitext(os.path.basename(file))[0])
+        if stem not in effect_textures:
+            found = None
+            for folder in (DEST + "/world/Textures", DEST + "/Extra"):
+                for asset_path in editor_assets.list_assets(folder):
+                    if key(asset_path.rsplit("/", 1)[1].split(".")[0]) == stem:
+                        found = asset_path
+            source = os.path.join(RENDER, file)
+            if not found and os.path.exists(source):
+                import_files([source], DEST + "/Extra")
+                found = DEST + "/Extra/" + sanitize(os.path.splitext(os.path.basename(file))[0])
+            effect_textures[stem] = unreal.load_asset(found) if found else None
+            if not effect_textures[stem]:
+                log("effect texture missing: " + file)
+        return effect_textures[stem]
+
+    effects = scct_fx.MapEffects(MAP, RENDER, DEST, spawn, effect_texture, import_files, log)
     # ---- lights -----------------------------------------------------------------------------------------------
     # Every light of the map is placed, also those the original used only for characters (apply_static false):
     # the lights its lightmaps were baked from are mostly not in the map file, and the character lights sit at the
@@ -465,8 +502,16 @@ def main():
         # LightType 0 is "none": a light that exists to be switched on by the simulation.
         if not light.get("initially_on", True) or light.get("ltype") == 0:
             component.set_visibility(False)
+        effects.dress_light(light, actor, LIGHT_PER_BRIGHTNESS)
         count += 1
-    log("lights: %d" % count)
+    log("lights: %d, %d with a beam" % (count, effects.beam_count))
+
+    effects.place_coronas(lighting)
+    effects.place_emitters(scct_fx.load(os.path.join(RENDER, "fx.json")))
+    effects.place_projectors(scct_fx.load(os.path.join(RENDER, "projectors.json")))
+    effects.place_rain(scct_fx.load(os.path.join(CONTENT_ROOT, "svmap", MAP, "sim", "rain.json")))
+    effects.place_props(scct_fx.load(os.path.join(CONTENT_ROOT, "svmap", MAP, "sim", "gameplay.json")))
+
 
     # ---- atmosphere ---------------------------------------------------------------------------------------------
     # The original's sky box is not imported (it is a 2005 backdrop). Each map gets a real sky instead: an HDRI
@@ -534,6 +579,7 @@ def main():
     fog.set_folder_path("Atmosphere")
     fog_component = fog.component
     fog_look = sky_look.get("fog", {"density": 0.006, "colour": [0.02, 0.03, 0.05]})
+    effects.place_zone_fog(lighting, whole_map_fog="fog" in sky_look)
     try_set(fog_component, "fog_density", fog_look["density"])
     try_set(fog_component, "fog_height_falloff", 0.02)
     try_set(fog_component, "fog_inscattering_luminance", unreal.LinearColor(fog_look["colour"][0], fog_look["colour"][1], fog_look["colour"][2], 1.0))

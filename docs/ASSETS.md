@@ -72,3 +72,21 @@ The scripts lean on two things that ship with Blender 5.2 and are not copied int
 | `studio.exr` (`datafiles/studiolights/world/`) | bundled with Blender | CC0 1.0 | the environment the beauty renders in `Art/Weapons/MercRifle/renders/` reflect; not used by the game |
 
 "Halvard Defense Systems", "HV-68 Warden", "HX-2 Holo" and the 6.8x43 calibre are invented for this game.
+
+## Effects (Tools/Import, Content/OpenSCCT/Effects)
+
+Nothing here was downloaded. `Content/OpenSCCT/Effects/` holds only things built by this repo's own scripts
+(`Tools/Import/Import-Effects.ps1`):
+
+| Asset | Made by | Used for |
+|---|---|---|
+| M_ScctParticleLit, M_ScctParticleGlow | `scct_effects.py` | sprite particles (smoke and steam lit by the room; sparks, flames, bubbles) |
+| M_ScctCorona | `scct_effects.py` | lamp halos (camera-facing cards that fade when the lamp is hidden) |
+| M_ScctLightFunction | `scct_effects.py` | projector-light rectangles and pictures, caustics, pulsing and flickering lights |
+| M_ScctProjector | `scct_effects.py` | projected signs, graffiti and rain splashes (decals) |
+| M_ScctGlowCard | `scct_effects.py` | the original's modelled beam and flare cards |
+| NS_ScctSprites | `scct_niagara.py` (through the engine's Niagara toolset) | every sprite emitter and rain volume; built from the engine's own Niagara modules |
+| T_RainStreak | `make_effect_textures.py` (drawn with numpy) | a raindrop streak |
+
+The textures the placed effects show (smoke, sparks, coronas, cookies) are original game content: they are
+imported per map into `Content/Imported/` and never committed.
