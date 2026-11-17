@@ -37,6 +37,11 @@ class UScctHudWidget;
  *        local match's server, as a gear change would; Backpack 1 selects it; Refill S holds the mate carrying the
  *        player's share in front of him for S seconds with one of his charges spent and the refill entry focused, as
  *        when the player opens the interaction menu next to him.
+ *        Summon 0/1 puts the nearest pawn of the other side (0) or of the player's side (1) a few metres in front of
+ *        the local pawn on the local match's server (the bots start across the map), so the merc's motion tracking has
+ *        a moving target to lock; AimMate S keeps the player's view and aim on his nearest teammate for S seconds (the
+ *        laser gadget's target, whose bracket gets the friend marks); Laser 1/0 switches the merc's laser gadget on
+ *        or off by the simulation's GadLaserSwitch (its default key also presses the roll button, so a key press would do more).
  *   -ScctHudTexture=Package.Name[,Package.Name...]
  *        loads those textures of the content as the session starts and logs their size ("ScctHudTextures: ...").
  *   -ScctHudLog=S
@@ -191,6 +196,15 @@ private:
 	FString LastLockCandidate;
 	bool bLastLockMarked = false;
 	bool bBinocularPageMissingLogged = false;
+
+	// The merc's motion tracking (ScctHudMotion.cpp): the view handed to the bridge's motion table each frame and its
+	// rows into the model, a log line when the locks change and with each snapshot line, and the timed command Summon.
+	void BuildMotion();
+	bool RunMotionCommand(const FString& Name, int32 Argument);
+	void LogMotion(bool bChange);
+	uint32 LastMotionSignature = 0;
+	float AimMateUntil = -1.0f;  // AimMate: the clock until which the view is kept on the nearest teammate
+	bool bMotionTableMissingLogged = false;
 
 	float GadgetKeysAge = 0.0f;
 	int32 LastGadgetView = 0;

@@ -63,6 +63,14 @@ if (args.Length > 5 && args[5].Equals("binoculars", StringComparison.OrdinalIgno
     return BinocularsRun(content, map, mode, merc, seconds);
 }
 
+Console.WriteLine($"sizes: HudMotionView {Unsafe.SizeOf<HudMotionView>()}, HudMotionState {Unsafe.SizeOf<HudMotionState>()}, HudMotionRow {Unsafe.SizeOf<HudMotionRow>()}, " +
+    $"HudMotionLock {Unsafe.SizeOf<HudMotionLock>()}, HudMotionApi {Unsafe.SizeOf<HudMotionApi>()}");
+
+if (args.Length > 5 && args[5].Equals("motion", StringComparison.OrdinalIgnoreCase))
+{
+    return MotionRun(content, map, mode, merc, seconds);
+}
+
 BridgeSession.Configure(content);
 var load = Stopwatch.StartNew();
 using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
@@ -933,6 +941,166 @@ static unsafe int BinocularsRun(string content, string map, string mode, bool me
     }
 
     Console.WriteLine($"binocular summary: most targets {maxTargets}");
+    return 0;
+}
+
+// The merc's motion tracking: the first vision mode switched on at 1.5 s (SwitchHeadset 1, then 2 if that was not
+// motion), and each second the goggles' locks with the actors' speeds, then the draw built for a 1920 x 1080 view from the
+// merc's eye turned onto the first lock (so a moving pawn is in front of him), with its rows by kind and the boxes.
+static unsafe int MotionRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+    HudFeature hud = HudFeature.Of(session);
+    hud.SetViewport(1920, 1080);
+    var input = default(BridgeInput);
+    var rows = new HudMotionRow[256];
+    var run = Stopwatch.StartNew();
+    double nextReport = 1;
+    int switched = 0, summoned = 0, maxLocks = 0, maxDrawn = 0, framesWithRows = 0, cornersInFront = 0, maxFriends = 0, friendMarks = 0, holdFire = 0;
+    bool laserOn = false;
+    var lockedIds = new System.Collections.Generic.HashSet<int>();
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        hud.GetState(out HudState s);
+        if ((switched == 0 && t > 1.5) || (switched == 1 && t > 2.5 && s.VisionMode != 37))
+        {
+            switched++;
+            session.Command("SwitchHeadset", switched);
+            Console.WriteLine($"t={t:F1} SwitchHeadset {switched} (vision now {s.VisionMode})");
+        }
+
+        // An enemy, then a teammate put in front of the merc on the server (the bots start across the map), then the
+        // laser gadget on, so its target (the teammate in front) gets the HUD tracker's friend marks.
+        if (summoned < 2 && t > 3 + summoned * 0.4 && session.Session.Host is { } host && session.Session.LocalController?.PlayerReplicationInfo is { } pri)
+        {
+            bool mate = summoned == 1;
+            int id = pri.PlayerID;
+            summoned++;
+            void Run(OpenScct.Server.ServerHost running)
+            {
+                running.BeforeWorldTick -= Run;
+                Console.WriteLine($"   summon {(mate ? "teammate" : "enemy")} -> server actor {HudMotionExports.SummonOnServer(running, id, mate)}");
+            }
+
+            host.BeforeWorldTick += Run;
+        }
+
+        if (!laserOn && t > 4.5)
+        {
+            laserOn = true;
+            session.Command("GadLaserSwitch", 0);
+            Console.WriteLine($"t={t:F1} GadLaserSwitch");
+        }
+
+        var pc = session.Session.LocalController;
+
+        OpenScct.Game.SBase.SMotionTrackingVision? tracker = HudMotionDraw.TrackerOf(pc);
+        var view = new HudMotionView { Width = 1920, Height = 1080, FocalX = 960f / MathF.Tan(45f * MathF.PI / 180f), CentreX = 960, CentreY = 540, Page = 1 };
+        view.FocalY = view.FocalX;
+        if (pc?.Pawn is { } pawn)
+        {
+            view.X = pawn.Location.X;
+            view.Y = pawn.Location.Y;
+            view.Z = pawn.Location.Z + pawn.BaseEyeHeight;
+            view.Yaw = pc.Rotation.Yaw * 360f / 65536f;
+            view.Pitch = pc.Rotation.Pitch * 360f / 65536f;
+            // From 4.5 s to 9 s the merc aims at his nearest teammate (the laser's target, for the friend marks) and the
+            // view is his own; otherwise the view turns onto the first lock.
+            OpenScct.Game.SBase.SBasePawn? mate = null;
+            if (t is > 4.5 and < 9 && pc.XLevel is { } lv)
+            {
+                foreach (OpenScct.Game.SBase.SBasePawn p in lv.AllActors<OpenScct.Game.SBase.SBasePawn>())
+                {
+                    if (!p.bDeleteMe && !ReferenceEquals(p, pawn) && p is OpenScct.Game.SBase.SPAWNDEFENSE &&
+                        (mate is null || (p.Location - pawn.Location).SizeSquared() < (mate.Location - pawn.Location).SizeSquared()))
+                    {
+                        mate = p;
+                    }
+                }
+            }
+
+            if (mate is not null)
+            {
+                HudBinocularExports.Aim(pc, mate.Location);
+                view.Yaw = pc.Rotation.Yaw * 360f / 65536f;
+                view.Pitch = pc.Rotation.Pitch * 360f / 65536f;
+            }
+            else if (tracker is { LockedObjects.Count: > 0 } && tracker.LockedObjects[0].Actor is { } first)
+            {
+                float dx = first.Location.X - view.X, dy = first.Location.Y - view.Y, dz = first.Location.Z - view.Z;
+                view.Yaw = MathF.Atan2(dy, dx) * 180f / MathF.PI;
+                view.Pitch = MathF.Atan2(dz, MathF.Sqrt(dx * dx + dy * dy)) * 180f / MathF.PI;
+            }
+        }
+
+        int n = HudMotionDraw.Shared.Build(pc, view, hud.TargetNameRan, out HudMotionState ms, rows);
+        maxLocks = Math.Max(maxLocks, ms.Locks);
+        maxDrawn = Math.Max(maxDrawn, ms.Drawn);
+        maxFriends = Math.Max(maxFriends, ms.Friends);
+        framesWithRows += n > 0 ? 1 : 0;
+        foreach (HudMotionLock l in HudMotionDraw.Shared.Locks)
+        {
+            lockedIds.Add(l.ActorId);
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            cornersInFront += rows[i].Kind == 0 ? 1 : 0;
+            friendMarks += rows[i].Kind == 2 ? 1 : 0;
+            HudMotionRow copy = rows[i];
+            holdFire += copy.Kind == 3 && new string(copy.Text).Contains("Hold", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        }
+
+        if (t >= nextReport)
+        {
+            nextReport += 1;
+            int[] kinds = new int[4];
+            for (int i = 0; i < n; i++)
+            {
+                kinds[Math.Clamp(rows[i].Kind, 0, 3)]++;
+            }
+
+            string locks = string.Join(" ", HudMotionDraw.Shared.Locks.Select(l =>
+                $"[#{l.ActorId} side {l.Side} friend {l.Friend} laser {l.Laser} front {l.InFront} removing {l.Removing} speed {l.Speed:F0} box ({l.X1:F0},{l.Y1:F0})-({l.X2:F0},{l.Y2:F0})]"));
+            string movers = "";
+            if (pc?.XLevel is { } level && pc.Pawn is { } own)
+            {
+                foreach (OpenScct.Game.SBase.SBasePawn p in level.AllActors<OpenScct.Game.SBase.SBasePawn>())
+                {
+                    if (!p.bDeleteMe && !ReferenceEquals(p, own))
+                    {
+                        movers += $"#{p.ActorId}:{(p is OpenScct.Game.SBase.SPAWNDEFENSE ? "merc" : "spy")} v{p.Velocity.Size():F0} d{(p.Location - own.Location).Size():F0} ";
+                    }
+                }
+            }
+            Console.WriteLine($"t={t:F1} vision {s.VisionMode} tracking {ms.Tracking} locks {ms.Locks} laser {ms.LaserLocks} drawn {ms.Drawn} friends {ms.Friends} | rows {ms.Rows}/{ms.TotalRows} " +
+                $"(corners {kinds[0]}, sweeps {kinds[1]}, friend marks {kinds[2]}, texts {kinds[3]}) name {ms.NameRow} scale {ms.FrameScale:F2} | {locks} | pawns {movers}");
+            for (int i = 0; i < Math.Min(n, 6); i++)
+            {
+                HudMotionRow r = rows[i];
+                Console.WriteLine($"   row {i}: kind {r.Kind} at ({r.X:F0},{r.Y:F0}) size ({r.XL:F0},{r.YL:F0}) texels ({r.U},{r.V},{r.UL},{r.VL}) colour {r.R},{r.G},{r.B},{r.A}" +
+                    (r.Kind == 3 ? $" text '{new string(r.Text)}'" : ""));
+            }
+        }
+
+        Thread.Sleep(4);
+    }
+
+    Console.WriteLine($"motion summary: most locks {maxLocks}, most drawn {maxDrawn}, most friends {maxFriends}, frames with rows {framesWithRows}, corner rows {cornersInFront}, friend mark rows {friendMarks}, Hold Fire rows {holdFire}, actors locked [{string.Join(",", lockedIds)}]");
     return 0;
 }
 

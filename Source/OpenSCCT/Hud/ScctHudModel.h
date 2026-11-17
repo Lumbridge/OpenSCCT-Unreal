@@ -5,6 +5,7 @@
 #include "Runtime/ScctHudBackpackApi.h"
 #include "Runtime/ScctHudBinocularApi.h"
 #include "Runtime/ScctHudGadgetApi.h"
+#include "Runtime/ScctHudMotionApi.h"
 #include "Runtime/ScctHudRadarApi.h"
 #include "Runtime/ScctHudTextureApi.h"
 
@@ -143,6 +144,14 @@ public:
 	TArray<FScctHudMarker> BinocularMarkers;
 	TArray<FScctHudPageLayer> BinocularLayers;
 	FString BinocularUseKey;
+
+	/**
+	 * The merc's motion tracking for this frame's view (ScctHudMotion.cpp): the goggles' lock boxes around moving targets
+	 * and the laser target's bracket with its friend marks, as rows in the full-screen layer's units, and what the draw
+	 * counted. Empty when nothing is tracked or the bridge lacks the table.
+	 */
+	FScctHudMotionState Motion = {};
+	TArray<FScctHudMotionRow> MotionRows;
 
 	/** The team of the player at this machine (0 spies, 1 mercs), from the scoreboard, else the side played. */
 	int32 LocalTeam = 0;

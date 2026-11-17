@@ -33,6 +33,7 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 		PaintScope(Painter, *Model);
 		PaintSpyBinoculars(Painter, *Model);
 		PaintCameraPages(Painter, *Model);
+		PaintMotionTracking(Painter, *Model);
 		PaintCrosshair(Painter, *Model);
 	}
 	else

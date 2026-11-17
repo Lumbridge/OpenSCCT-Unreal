@@ -136,6 +136,9 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	LastLockCandidate.Reset();
 	bLastLockMarked = false;
 	bBinocularPageMissingLogged = false;
+	LastMotionSignature = 0;
+	bMotionTableMissingLogged = false;
+	AimMateUntil = -1.0f;
 	if (NewSessionId != 0 && Api == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Error, TEXT("HUD: the bridge has no HUD table (its reason is in the log above); the match plays without a HUD and without goggles"));
@@ -230,6 +233,7 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 		bSnapshotRead = true;
 	}
 	ProjectMarkers();
+	BuildMotion();
 	RunTimedCommands();
 	RunGadgetChecks(DeltaSeconds);
 	RunBinocularCheck();
@@ -363,7 +367,7 @@ void UScctHudSubsystem::RunTimedCommands()
 			Api->SetOption(EScctHudOption::SwitchEnhancedReality, 0);
 		}
 		else if (RunIconCommand(Command.Name, Command.Argument) || RunRadarCommand(Command.Name, Command.Argument)
-			|| RunBackpackCommand(Command.Name, Command.Argument))
+			|| RunBackpackCommand(Command.Name, Command.Argument) || RunMotionCommand(Command.Name, Command.Argument))
 		{
 		}
 		else if (AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController()))
@@ -412,6 +416,7 @@ void UScctHudSubsystem::LogSnapshot(float DeltaSeconds)
 	LogRadar();
 	LogBackpack();
 	LogBinoculars(false);
+	LogMotion(false);
 
 	// The scoreboard's rows while it is up (and once near the start), for the same check.
 	constexpr float FirstRows = 2.0f;

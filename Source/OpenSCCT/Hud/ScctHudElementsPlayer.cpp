@@ -205,9 +205,11 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 		Painter.Arc(Centre, 34.0f, 240.0f, 240.0f - 120.0f * FMath::Clamp(State.Ballistic, 0.0f, 1.0f), Accent, 2.0f, 1.0f);
 	}
 
-	// Who the laser sight holds, once the original would have typed the name.
+	// Who the laser sight holds, once the original would have typed the name; left out while the motion tracking writes
+	// the name over the target's bracket itself (ScctHudElementsMotion.cpp).
 	float TextY = Centre.Y + 40.0f;
-	if (State.TargetActorId != 0 && State.TargetNameId != 0 && State.TimeSeconds >= State.TargetLockTime + State.TargetNameDelay)
+	if (State.TargetActorId != 0 && State.TargetNameId != 0 && State.TimeSeconds >= State.TargetLockTime + State.TargetNameDelay
+		&& Model.Motion.NameRow == 0)
 	{
 		const bool bFriend = (State.Flags & EScctHudFlags::TargetFriend) != 0;
 		Painter.Text(FVector2f(Centre.X, TextY), Model.Text(State.TargetNameId), Font(EWeight::Regular, 11.0f), bFriend ? Accent : Danger(), EAlign::Centre);

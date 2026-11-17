@@ -18,6 +18,13 @@ namespace ScctHudElements
 	/** Objective markers in the world. */
 	void PaintMarkers(FScctHudPainter& Painter, const FScctHudModel& Model);
 
+	/**
+	 * The merc's motion tracking: the goggles' lock boxes around moving targets (corners zooming in, the sweep band, the
+	 * speed and distance of a friend) and the laser target's bracket with its typed name, friend marks and Hold Fire.
+	 * ScctHudElementsMotion.cpp.
+	 */
+	void PaintMotionTracking(FScctHudPainter& Painter, const FScctHudModel& Model);
+
 	/** The crosshair with its spread and hit confirmation, what the laser holds, noise and hit arcs around it. */
 	void PaintCrosshair(FScctHudPainter& Painter, const FScctHudModel& Model);
 
