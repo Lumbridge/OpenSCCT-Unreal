@@ -1,0 +1,212 @@
+#include "Play/ScctEffectsParticles.h"
+
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "GameFramework/Actor.h"
+#include "Materials/MaterialInterface.h"
+
+namespace
+{
+	// Sprites per layer. An explosion with its smoke uses about 150; a fire fight a few hundred.
+	constexpr int32 LayerCapacity[] = { 1536, 768 };
+
+	// The four floats each instance hands its material: colour and opacity.
+	constexpr int32 CustomFloats = 4;
+
+	// The engine's plane is 100 units across.
+	constexpr double QuadSize = 100.0;
+
+	const FTransform HiddenInstance(FQuat::Identity, FVector::ZeroVector, FVector::ZeroVector);
+
+	/** A quad at Center whose X and Y edges lie along AxisX and AxisY (unit, at right angles), SizeX by SizeY cm. */
+	FTransform QuadTransform(const FVector& Center, const FVector& AxisX, const FVector& AxisY, double SizeX, double SizeY)
+	{
+		const FMatrix Basis(AxisX, AxisY, FVector::CrossProduct(AxisX, AxisY), FVector::ZeroVector);
+		return FTransform(Basis.ToQuat(), Center, FVector(SizeX / QuadSize, SizeY / QuadSize, 1.0));
+	}
+
+	/** A quad along a line, as wide as Width and turned about the line to face the viewer. */
+	bool StreakTransform(const FVector& From, const FVector& To, double Width, const FVector& ViewLocation, FTransform& OutTransform)
+	{
+		const FVector Along = To - From;
+		const double Length = Along.Size();
+		if (Length < UE_KINDA_SMALL_NUMBER)
+		{
+			return false;
+		}
+		const FVector AxisX = Along / Length;
+		const FVector Center = (From + To) * 0.5;
+		FVector AxisY = FVector::CrossProduct(Center - ViewLocation, AxisX);
+		if (!AxisY.Normalize())
+		{
+			return false;
+		}
+		// The streak's glow is round at its ends, so the quad is a width longer than the line.
+		OutTransform = QuadTransform(Center, AxisX, AxisY, Length + Width, Width);
+		return true;
+	}
+}
+
+void FScctFxSprites::Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* GlowMaterial, UMaterialInterface* SmokeMaterial)
+{
+	UMaterialInterface* const Materials[] = { GlowMaterial, SmokeMaterial };
+	const TCHAR* const Names[] = { TEXT("FxGlow"), TEXT("FxSmoke") };
+	Streaks.Reserve(MaxStreaks);
+
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Layers); ++Index)
+	{
+		FLayer& Layer = Layers[Index];
+		// The glow layer's last instances are the streaks of the frame.
+		const int32 Instances = LayerCapacity[Index] + (Index == 0 ? MaxStreaks : 0);
+		Layer.Particles.SetNum(LayerCapacity[Index]);
+		Layer.Transforms.Init(HiddenInstance, Instances);
+		Layer.CustomData.SetNumZeroed(Instances * CustomFloats);
+		Layer.Next = 0;
+		Layer.Live = 0;
+		Layer.bDrawnEmpty = true;
+		Layer.Component = nullptr;
+		if (Host == nullptr || Quad == nullptr || Materials[Index] == nullptr)
+		{
+			continue;
+		}
+
+		UInstancedStaticMeshComponent* Component = NewObject<UInstancedStaticMeshComponent>(Host, Names[Index]);
+		Component->SetMobility(EComponentMobility::Movable);
+		Component->SetStaticMesh(Quad);
+		Component->SetMaterial(0, Materials[Index]);
+		Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Component->SetCastShadow(false);
+		Component->bAffectDynamicIndirectLighting = false;
+		Component->bAffectDistanceFieldLighting = false;
+		Component->bUseAsOccluder = false;
+		Component->bReceivesDecals = false;
+		Component->SetNumCustomDataFloats(CustomFloats);
+		Component->SetupAttachment(Host->GetRootComponent());
+		Component->RegisterComponent();
+		Component->AddInstances(Layer.Transforms, false, true, false);
+		Layer.Component = Component;
+	}
+}
+
+FScctFxParticle& FScctFxSprites::Spawn(EScctFxLayer LayerId)
+{
+	FLayer& Layer = Layers[static_cast<int32>(LayerId)];
+	FScctFxParticle& Particle = Layer.Particles[Layer.Next];
+	Layer.Next = (Layer.Next + 1) % Layer.Particles.Num();
+	Particle = FScctFxParticle();
+	return Particle;
+}
+
+void FScctFxSprites::DrawStreak(const FVector& From, const FVector& To, float Width, const FLinearColor& Color)
+{
+	if (Streaks.Num() < MaxStreaks)
+	{
+		Streaks.Add({ From, To, Width, Color });
+	}
+}
+
+void FScctFxSprites::Clear()
+{
+	for (FLayer& Layer : Layers)
+	{
+		for (FScctFxParticle& Particle : Layer.Particles)
+		{
+			Particle.Life = 0.0f;
+		}
+	}
+	Streaks.Reset();
+}
+
+void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const FQuat& ViewRotation)
+{
+	// A sprite faces the camera: its edges lie along the camera's right and up.
+	const FVector ViewRight = ViewRotation.GetRightVector();
+	const FVector ViewUp = ViewRotation.GetUpVector();
+	NumLive = 0;
+
+	for (int32 LayerIndex = 0; LayerIndex < UE_ARRAY_COUNT(Layers); ++LayerIndex)
+	{
+		FLayer& Layer = Layers[LayerIndex];
+		const int32 Capacity = Layer.Particles.Num();
+		Layer.Live = 0;
+
+		for (int32 Index = 0; Index < Capacity; ++Index)
+		{
+			FScctFxParticle& Particle = Layer.Particles[Index];
+			FTransform& Transform = Layer.Transforms[Index];
+			if (Particle.Age >= Particle.Life)
+			{
+				Transform = HiddenInstance;
+				continue;
+			}
+
+			Particle.Age += DeltaSeconds;
+			if (Particle.Age >= Particle.Life)
+			{
+				Transform = HiddenInstance;
+				continue;
+			}
+			Particle.Velocity.Z -= Particle.Gravity * DeltaSeconds;
+			Particle.Velocity *= FMath::Max(0.0f, 1.0f - Particle.Drag * DeltaSeconds);
+			Particle.Position += Particle.Velocity * DeltaSeconds;
+			Particle.Rotation += Particle.Spin * DeltaSeconds;
+			++Layer.Live;
+
+			const float Time = Particle.Age / Particle.Life;
+			const float Size = FMath::Lerp(Particle.SizeStart, Particle.SizeEnd, Time);
+			const float Fade = Time < Particle.FadeIn ? Time / Particle.FadeIn : 1.0f - (Time - Particle.FadeIn) / (1.0f - Particle.FadeIn);
+
+			bool bDrawn = true;
+			if (Particle.Stretch > 0.0f)
+			{
+				const FVector Tail = Particle.Position - Particle.Velocity * Particle.Stretch;
+				bDrawn = StreakTransform(Tail, Particle.Position, Size, ViewLocation, Transform);
+			}
+			else
+			{
+				float Sin, Cos;
+				FMath::SinCos(&Sin, &Cos, Particle.Rotation);
+				Transform = QuadTransform(Particle.Position, ViewRight * Cos + ViewUp * Sin, ViewUp * Cos - ViewRight * Sin, Size, Size);
+			}
+			if (!bDrawn)
+			{
+				Transform = HiddenInstance;
+			}
+
+			float* Custom = &Layer.CustomData[Index * CustomFloats];
+			Custom[0] = Particle.Color.R;
+			Custom[1] = Particle.Color.G;
+			Custom[2] = Particle.Color.B;
+			Custom[3] = Particle.Color.A * FMath::Clamp(Fade, 0.0f, 1.0f);
+		}
+
+		int32 Drawn = Layer.Live;
+		if (LayerIndex == 0)
+		{
+			for (int32 Index = 0; Index < MaxStreaks; ++Index)
+			{
+				FTransform& Transform = Layer.Transforms[Capacity + Index];
+				Transform = HiddenInstance;
+				if (Index < Streaks.Num() && StreakTransform(Streaks[Index].From, Streaks[Index].To, Streaks[Index].Width, ViewLocation, Transform))
+				{
+					float* Custom = &Layer.CustomData[(Capacity + Index) * CustomFloats];
+					Custom[0] = Streaks[Index].Color.R;
+					Custom[1] = Streaks[Index].Color.G;
+					Custom[2] = Streaks[Index].Color.B;
+					Custom[3] = Streaks[Index].Color.A;
+					++Drawn;
+				}
+			}
+			Streaks.Reset();
+		}
+		NumLive += Layer.Live;
+
+		// Nothing to show and the buffers already show nothing: the render thread is left alone.
+		if (Layer.Component != nullptr && !(Drawn == 0 && Layer.bDrawnEmpty))
+		{
+			Layer.Component->SetCustomData(0, Layer.Transforms.Num() - 1, Layer.CustomData, false);
+			Layer.Component->BatchUpdateInstancesTransforms(0, TArrayView<const FTransform>(Layer.Transforms), true, true, true);
+			Layer.bDrawnEmpty = Drawn == 0;
+		}
+	}
+}
