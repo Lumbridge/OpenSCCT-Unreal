@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Input/Reply.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Social/ScctSocialSubsystem.h"
 #include "Widgets/SCompoundWidget.h"
 
 class SBox;
@@ -21,6 +22,7 @@ class UScctOnlineSubsystem;
  *   Join      name, address, password, side
  *   Servers   the master's list, refresh, sign in
  *   Hub       the master's hubs, join by address, host a hub on this PC (SScctHubPage)
+ *   Password  a friend's or the website's join to a server with a password (SScctJoinPasswordPage)
  *   Visit     shown instead of the above while UScctOnlineSubsystem::IsVisiting
  */
 class SScctFrontEnd : public SCompoundWidget
@@ -46,6 +48,7 @@ private:
 		Servers,
 		Visit,
 		Hub,
+		JoinPassword,
 	};
 
 	/** What the visit page is showing; a change rebuilds it. */
@@ -71,6 +74,7 @@ private:
 	TSharedRef<SWidget> BuildVisit();
 	TSharedRef<SWidget> BuildLobby();
 	TSharedRef<SWidget> BuildHub();
+	TSharedRef<SWidget> BuildJoinPassword();
 
 	void RefillLobby();
 	void RefillServers();
@@ -111,4 +115,7 @@ private:
 	TSharedPtr<SScrollBox> ChatRows;
 	TSharedPtr<SEditableTextBox> ChatBox;
 	int32 ChatLinesShown = 0;
+
+	// Password page: the join that waits for it (UScctSocialSubsystem).
+	FScctSocialPasswordPrompt PasswordPrompt;
 };

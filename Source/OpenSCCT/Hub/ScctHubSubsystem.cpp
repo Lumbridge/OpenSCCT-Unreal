@@ -353,6 +353,41 @@ bool UScctHubSubsystem::JoinListed(int32 Index, int32 Team)
 	return bStarted;
 }
 
+bool UScctHubSubsystem::JoinListedId(const FString& Id, const FString& ListedName, bool bRequireAccount, int32 Team)
+{
+	// The listed join by id lives in the social table (it came with the website join).
+	const FScctSocialApi* Social = ScctFeature<FScctSocialApi>();
+	if (Connect() == nullptr || Social == nullptr)
+	{
+		return false;
+	}
+
+	UScctOnlineSubsystem* Online = GetGameInstance()->GetSubsystem<UScctOnlineSubsystem>();
+	if (Online != nullptr && Online->GetState() != EScctOnlineState::Idle)
+	{
+		Online->Leave();
+	}
+
+	Notice.Reset();
+	bWasPresented = false;
+	ReportedSessionId = 0;
+	CloseCover();
+	bCoverShown = false;
+	// A website join enters under the account the master's ticket is for.
+	const FString Name = Online != nullptr && !Online->GetAccountName().IsEmpty() ? Online->GetAccountName() : FindPlayerName();
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: joining the master's hub %s ('%s') as '%s' (%s)"), *Id, *ListedName, *Name, Team == 1 ? TEXT("merc") : TEXT("spy"));
+	const bool bStarted = Social->JoinHubListed(*Id, *ListedName, *Name, Team, bRequireAccount ? 1 : 0) != 0;
+	DrainLog();
+	if (!bStarted)
+	{
+		Notice = ReadText(EScctHubText::Error);
+		UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHub: the join by id did not start: %s"), *Notice);
+	}
+	Api->GetStatus(&Status);
+	Touch();
+	return bStarted;
+}
+
 void UScctHubSubsystem::RequestHubList()
 {
 	if (Connect() == nullptr)

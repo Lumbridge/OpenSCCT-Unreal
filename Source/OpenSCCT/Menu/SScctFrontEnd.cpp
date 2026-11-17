@@ -7,6 +7,7 @@
 #include "HAL/PlatformMisc.h"
 #include "Hub/ScctHubSubsystem.h"
 #include "Menu/SScctHubPage.h"
+#include "Menu/SScctJoinPasswordPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -119,6 +120,19 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 		return;
 	}
 
+	// A friend's Join or a website join asks for a server's password, or for the page where the player signs in.
+	if (UScctSocialSubsystem* Social = Visit->GetGameInstance()->GetSubsystem<UScctSocialSubsystem>())
+	{
+		if (Social->TakePasswordPrompt(PasswordPrompt))
+		{
+			ShowPage(EPage::JoinPassword);
+		}
+		if (const FString Open = Social->TakePageToOpen(); !Open.IsEmpty())
+		{
+			ShowPageNamed(Open);
+		}
+	}
+
 	// A visit takes the screen over, whichever page it was started from, and gives that page back at its end.
 	const bool bVisiting = Visit->IsVisiting();
 
@@ -211,6 +225,15 @@ void SScctFrontEnd::ShowPage(EPage NewPage)
 	{
 		Online->RequestServerList();
 	}
+	if (UScctSocialSubsystem* Social = Online.IsValid() ? Online->GetGameInstance()->GetSubsystem<UScctSocialSubsystem>() : nullptr)
+	{
+		// The Discord status names the page.
+		Social->SetFrontEndPage(Page == EPage::Servers ? EScctSocialPage::Servers
+			: Page == EPage::Join ? EScctSocialPage::JoinByAddress
+			: Page == EPage::Offline ? EScctSocialPage::OfflineSetup
+			: Page == EPage::Hub ? EScctSocialPage::Hub
+			: EScctSocialPage::Other);
+	}
 	Rebuild();
 }
 
@@ -232,6 +255,7 @@ void SScctFrontEnd::Rebuild()
 	case EPage::Servers: Content = BuildServers(); break;
 	case EPage::Visit: Content = BuildVisit(); break;
 	case EPage::Hub: Content = BuildHub(); break;
+	case EPage::JoinPassword: Content = BuildJoinPassword(); break;
 	}
 	PageBox->SetContent(Content);
 	SeenRevision = -1;
@@ -285,6 +309,15 @@ TSharedRef<SWidget> SScctFrontEnd::BuildHub()
 		.Hub(HubVisit)
 		.Online(Online)
 		.OnBack(FSimpleDelegate::CreateLambda([this] { ShowPage(EPage::Home); }));
+}
+
+TSharedRef<SWidget> SScctFrontEnd::BuildJoinPassword()
+{
+	UScctSocialSubsystem* Social = Online.IsValid() ? Online->GetGameInstance()->GetSubsystem<UScctSocialSubsystem>() : nullptr;
+	return SNew(SScctJoinPasswordPage)
+		.Social(Social)
+		.Prompt(PasswordPrompt)
+		.OnDone(FSimpleDelegate::CreateLambda([this] { ShowPage(EPage::Home); }));
 }
 
 FReply SScctFrontEnd::HandleShowPage(EPage Target)

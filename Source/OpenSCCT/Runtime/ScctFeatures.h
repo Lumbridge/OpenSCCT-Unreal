@@ -11,6 +11,7 @@
 #include "Runtime/ScctHubSocialApi.h"
 #include "Runtime/ScctHudApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Runtime/ScctSocialApi.h"
 #include "Runtime/ScctWorldApi.h"
 
 // The bridge's feature tables by their C++ type: which bridge class hands each one over and which version the
@@ -41,6 +42,7 @@ SCCT_FEATURE_TABLE(FScctHubPadsApi, "HubPadsExports", ScctHubPadsApiVersion);
 SCCT_FEATURE_TABLE(FScctHubActivityApi, "HubActivityExports", ScctHubActivityApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
+SCCT_FEATURE_TABLE(FScctSocialApi, "SocialExports", ScctSocialApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);
 
 #undef SCCT_FEATURE_TABLE

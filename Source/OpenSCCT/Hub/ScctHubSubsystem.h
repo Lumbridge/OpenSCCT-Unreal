@@ -102,6 +102,12 @@ public:
 	/** Joins the hub at Index of GetHubList through the master's join answer. False when it could not start (GetNotice says why). */
 	bool JoinListed(int32 Index, int32 Team = 0);
 
+	/**
+	 * Joins the hub the master lists as Id without the list (a website join): the same join answer, under the
+	 * signed-in account's name when there is one. bRequireAccount refuses the visit without the master's ticket.
+	 */
+	bool JoinListedId(const FString& Id, const FString& ListedName, bool bRequireAccount, int32 Team = 0);
+
 	/** Leaves the hub (and closes the hub this PC hosts), or dismisses a failure. The state is Idle afterwards. */
 	void Leave();
 
