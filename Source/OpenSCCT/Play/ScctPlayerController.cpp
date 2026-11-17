@@ -32,6 +32,18 @@ namespace
 	 * The horizontal angle of a 4:3 picture that is VerticalFov high, degrees. The view pawn's camera takes its
 	 * field of view in that form (the simulation's own) and keeps the vertical angle on any screen.
 	 */
+	/**
+	 * The radius of the sphere round the camera that holds its near plane at any rotation, plus one unit: the
+	 * distance from the eye to a corner of the near plane.
+	 */
+	float NearPlaneClearance(float VerticalFov, float Aspect)
+	{
+		const float Near = GNearClippingPlane;
+		const float HalfHeight = Near * FMath::Tan(FMath::DegreesToRadians((VerticalFov > 1.0f ? FMath::Min(VerticalFov, 150.0f) : 60.0f) * 0.5f));
+		const float HalfWidth = HalfHeight * (Aspect > 0.0f ? Aspect : 16.0f / 9.0f);
+		return FMath::Sqrt(Near * Near + HalfWidth * HalfWidth + HalfHeight * HalfHeight) + 1.0f;
+	}
+
 	float FourByThreeFov(float VerticalFov)
 	{
 		const float HalfVertical = FMath::DegreesToRadians(VerticalFov * 0.5f);
@@ -358,7 +370,12 @@ void AScctPlayerController::OverrideView(FScctBridgeView& View)
 	int32 SizeX = 0, SizeY = 0;
 	GetViewportSize(SizeX, SizeY);
 	const float Aspect = SizeY > 0 ? static_cast<float>(SizeX) / static_cast<float>(SizeY) : 0.0f;
-	if (Controls == nullptr || Controls->GetView(&LookView, Aspect, 0.0f) == 0 || LookView.Valid == 0)
+	// The sphere round the eye that holds the near plane's corners, as the Godot client hands it over
+	// (FaithfulView.CameraClearance): with it the spy's first-person eye is held far enough from a wall that the
+	// picture's corners do not cut through it. The field of view is the last frame's (the bridge needs the
+	// clearance before it has this frame's).
+	const float Clearance = NearPlaneClearance(Before.Valid != 0 ? Before.VerticalFov : 0.0f, Aspect);
+	if (Controls == nullptr || Controls->GetView(&LookView, Aspect, Clearance) == 0 || LookView.Valid == 0)
 	{
 		// No view of the controls' this frame (no pawn or camera yet): the bridge's own stays as it is.
 		LookView = {};

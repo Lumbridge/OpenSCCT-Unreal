@@ -25,6 +25,14 @@ namespace FScctExposure
 	OPENSCCT_API float Get();
 
 	/**
+	 * How bright the last picture was as a whole, before the tone curve: the scene's average luminance (the
+	 * engine's exposure histogram over the whole picture, its brightest and darkest tenths left out) times the
+	 * exposure. 0.18 is a picture the eye has settled on; less is one too dark for the exposure's range (a cellar
+	 * with the lamps shot out), more one too bright. 0 until a frame was measured.
+	 */
+	OPENSCCT_API float PictureLevel();
+
+	/**
 	 * What to multiply a flash light's strength by so it reads the same at any exposure. The strengths in the code
 	 * are those of a moderately lit room (ReferenceExposure); bounded both ways so a wrong reading cannot blind
 	 * or hide a flash.

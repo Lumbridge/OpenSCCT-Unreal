@@ -148,7 +148,28 @@ def build_goggle_glow():
     fade = scalar(material, "Fade", 1.0, -900, 200)
     masked = binary(material, unreal.MaterialExpressionMultiply, lens, lens, -700, -150, a_pin="RGB", b_pin="A")
     lit = binary(material, unreal.MaterialExpressionMultiply, masked, intensity, -550, -100)
-    out = binary(material, unreal.MaterialExpressionMultiply, lit, fade, -300, -50)
+    shown = binary(material, unreal.MaterialExpressionMultiply, lit, fade, -300, -50)
+    # Custom primitive data slot 2 (scct_materials.NEAR_FADE_SLOT): the body the lenses sit on thins out of the
+    # picture under this distance from the camera (the local player's); its lenses, which are light and would
+    # hang in the air where the head was, are out a little before the head starts to go.
+    near = materials_lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -700, 250)
+    near.set_editor_property("parameter_name", "NearFade")
+    near.set_editor_property("default_value", 0.0)
+    near.set_editor_property("use_custom_primitive_data", True)
+    near.set_editor_property("primitive_data_index", 2)
+    depth = materials_lib.create_material_expression(material, unreal.MaterialExpressionPixelDepth, -700, 400)
+    kept = materials_lib.create_material_expression(material, unreal.MaterialExpressionCustom, -400, 300)
+    kept.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+    pins = []
+    for name in ("Start", "Depth"):
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    kept.set_editor_property("inputs", pins)
+    kept.set_editor_property("code", "return Start > 0.0 ? smoothstep(Start * 0.9, Start * 1.2, Depth) : 1.0;")
+    materials_lib.connect_material_expressions(near, "", kept, "Start")
+    materials_lib.connect_material_expressions(depth, "", kept, "Depth")
+    out = binary(material, unreal.MaterialExpressionMultiply, shown, kept, -100, 0)
     materials_lib.connect_material_property(out, "", MP.MP_EMISSIVE_COLOR)
     finish(material)
 

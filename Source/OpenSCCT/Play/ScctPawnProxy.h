@@ -86,6 +86,19 @@ public:
 	 */
 	bool AttachToBone(USceneComponent* Component, const FString& BridgeBoneName, const FTransform& RelativeTransform = FTransform::Identity);
 
+	/**
+	 * Thins the body, and what is attached to it, out of the main view close to the camera: whole at Distance cm
+	 * from the camera and beyond, gone at half of it, in between a screen door the anti-aliasing blends into an
+	 * even transparency (the surface material's NearFade, custom primitive data slot NearFadeSlot;
+	 * Tools/Import/scct_materials.py). 0 switches it off. The shadow stays whole. Call it every frame it is on,
+	 * because attachments come and go.
+	 */
+	void SetNearFade(float Distance);
+	float GetNearFade() const { return NearFade; }
+
+	/** The custom primitive data slot of the near fade (NEAR_FADE_SLOT in Tools/Import/scct_materials.py). */
+	static constexpr int32 NearFadeSlot = 2;
+
 private:
 	void SetKind(int32 NewKind, TConstArrayView<FScctBridgeBoneInfo> Skeleton);
 
@@ -106,4 +119,5 @@ private:
 	TMap<FString, int32> MeshBonesByKey;
 	int32 Kind = INDEX_NONE;
 	bool bHasModel = false;
+	float NearFade = 0.0f;
 };

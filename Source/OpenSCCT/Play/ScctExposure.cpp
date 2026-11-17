@@ -14,6 +14,7 @@ namespace
 	constexpr float MostFlashScale = 2.0f;
 
 	std::atomic<float> LastExposure{ 0.0f };
+	std::atomic<float> LastLuminance{ 0.0f };
 
 	class FScctExposureProbe final : public FSceneViewExtensionBase
 	{
@@ -39,6 +40,11 @@ namespace
 			{
 				LastExposure.store(Exposure, std::memory_order_relaxed);
 			}
+			const float Luminance = InView.GetLastAverageSceneLuminance();
+			if (Luminance > 0.0f && FMath::IsFinite(Luminance))
+			{
+				LastLuminance.store(Luminance, std::memory_order_relaxed);
+			}
 		}
 	};
 
@@ -62,6 +68,13 @@ float FScctExposure::Get()
 {
 	const float Exposure = LastExposure.load(std::memory_order_relaxed);
 	return Exposure > 0.0f ? Exposure : 1.0f;
+}
+
+float FScctExposure::PictureLevel()
+{
+	const float Exposure = LastExposure.load(std::memory_order_relaxed);
+	const float Luminance = LastLuminance.load(std::memory_order_relaxed);
+	return Exposure > 0.0f && Luminance > 0.0f ? Exposure * Luminance : 0.0f;
 }
 
 float FScctExposure::FlashScale()

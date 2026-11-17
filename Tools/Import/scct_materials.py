@@ -25,6 +25,14 @@ LOCAL_DETAIL_SLOT = 0
 # Custom primitive data slot 1: 1 = this mesh's vertex colours are the original's baked light (see "baked light"
 # in build_surface). import_map.py sets it on the meshes the map lists as vertex lit.
 BAKED_VERTEX_SLOT = 1
+# Custom primitive data slot 2: the distance from the camera, in cm, under which the mesh thins out of the picture
+# (0: never). Its pixels are whole at that distance and gone at half of it, through a screen door that the temporal
+# anti-aliasing smooths. Only instances whose blend mode is masked have it (the bodies and what they carry,
+# Tools/Import/import_characters.py); the game sets it on the local player's body, so a camera pushed into his
+# shoulder looks through the part of him that is in the way and still shows his arm and gun
+# (AScctPawnProxy::SetNearFade).
+NEAR_FADE_SLOT = 2
+NEAR_FADE_GONE = 0.5
 
 asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
 editor_assets = unreal.EditorAssetLibrary
@@ -289,7 +297,26 @@ def build_surface():
 
     alpha = g.custom("return A * O;", FLOAT1, A=(base, "A"), O=g.scalar("Opacity", 1.0))
     g.output(alpha, unreal.MaterialProperty.MP_OPACITY)
-    g.output(alpha, unreal.MaterialProperty.MP_OPACITY_MASK)
+
+    # The mask: the texture's alpha (AlphaMask 0 ignores it: a body's texture keeps other things in its alpha),
+    # less the pixels of the near fade's screen door. The pattern moves every frame so the anti-aliasing blends
+    # it into an even transparency. Shadows and traced rays (reflections, bounce light) meet the whole shape.
+    near = g.node(unreal.MaterialExpressionScalarParameter, parameter_name="NearFade", default_value=0.0,
+                  use_custom_primitive_data=True, primitive_data_index=NEAR_FADE_SLOT)
+    whole = g.custom("return lerp(1.0, A, saturate(UseAlpha));", FLOAT1, A=alpha, UseAlpha=g.scalar("AlphaMask", 1.0))
+    mask = g.custom("float gone = 1.0 - smoothstep(Start * %f, Start, Depth);"
+                    " float2 p = P + 5.588238 * float(View.StateFrameIndexMod8);"
+                    " float n = frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));"
+                    " return (Start > 0.0 && n < gone) ? 0.0 : Kept;" % NEAR_FADE_GONE, FLOAT1,
+                    Kept=whole, Start=near, Depth=g.node(unreal.MaterialExpressionPixelDepth),
+                    P=(g.node(unreal.MaterialExpressionScreenPosition), "PixelPosition"))
+    in_shadow = g.node(unreal.MaterialExpressionShadowReplace)
+    g.link(mask, in_shadow, "Default")
+    g.link(whole, in_shadow, "Shadow")
+    traced = g.node(unreal.MaterialExpressionRayTracingQualitySwitch)
+    g.link(in_shadow, traced, "Normal")
+    g.link(whole, traced, "RayTraced")
+    g.output(traced, unreal.MaterialProperty.MP_OPACITY_MASK)
     return g.finish()
 
 

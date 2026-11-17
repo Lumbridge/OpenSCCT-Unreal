@@ -52,6 +52,14 @@ private:
 
 	/** How far the picture is into each mode, 0 to 1. */
 	float Amounts[ModeCount] = {};
+
+	/**
+	 * The night vision tube's gain (the material's Gain). A real tube turns itself down in a lit room; this one
+	 * follows the brightness of the whole picture as the engine's exposure measured it (FScctExposure::PictureLevel),
+	 * within bounds and eased over about half a second, so a lamp that comes into view does not make the picture
+	 * pump. 0 until the goggles are first on.
+	 */
+	float NightGain = 0.0f;
 	bool bTriedMaterials = false;
 	bool bCharactersMarked = false;
 	int32 LastMode = 0;

@@ -166,6 +166,28 @@ void AScctPawnProxy::Present(const FScctBridgePawn& NewPawn, TConstArrayView<FSc
 	}
 }
 
+void AScctPawnProxy::SetNearFade(float Distance)
+{
+	Distance = FMath::Max(Distance, 0.0f);
+	if (Distance <= 0.0f && NearFade <= 0.0f)
+	{
+		return;
+	}
+	NearFade = Distance;
+
+	// Setting a value that is already there costs nothing, so attachments made since the last call get theirs.
+	Body->SetCustomPrimitiveDataFloat(NearFadeSlot, Distance);
+	TArray<USceneComponent*> Attached;
+	Body->GetChildrenComponents(true, Attached);
+	for (USceneComponent* Child : Attached)
+	{
+		if (UPrimitiveComponent* Primitive = Cast<UPrimitiveComponent>(Child))
+		{
+			Primitive->SetCustomPrimitiveDataFloat(NearFadeSlot, Distance);
+		}
+	}
+}
+
 int32 AScctPawnProxy::FindMeshBone(const FString& BridgeBoneName) const
 {
 	const int32* Found = MeshBonesByKey.Find(BoneKey(BridgeBoneName));

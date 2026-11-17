@@ -96,6 +96,11 @@ WATER_GLOW = 0.22
 HAZE_GLOW = 0.3
 HAZE_SOFT_DEPTH = 220.0
 
+# The level's motion blur (the engine's own default is 0.5): how much of a frame's motion is smeared, and the most a
+# pixel is smeared by, in percent of the picture's width.
+MOTION_BLUR = 0.12
+MOTION_BLUR_MOST = 1.5
+
 asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
 editor_assets = unreal.EditorAssetLibrary
 materials_lib = unreal.MaterialEditingLibrary
@@ -761,7 +766,9 @@ def main():
         ("scene_fringe_intensity", 0.1),
         ("lens_flare_intensity", 0.4),
         ("ambient_occlusion_intensity", 0.6),
-        ("motion_blur_amount", 0.35),
+        # A trace of blur on a fast turn and nothing to see at a walk: at 0.35 the walls smeared while walking.
+        ("motion_blur_amount", MOTION_BLUR),
+        ("motion_blur_max", MOTION_BLUR_MOST),
         # Glass and water show the room in them, not only the sky.
         ("lumen_front_layer_translucency_reflections", True),
     ]:
