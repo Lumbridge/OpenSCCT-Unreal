@@ -327,6 +327,32 @@ public sealed class WorldState
         {
             m.OnTick(this, first);
         }
+
+        if (!first)
+        {
+            TriggeredEmitters(level);
+        }
+    }
+
+    /// <summary>
+    /// The map Emitters the event graph triggered this tick (their own notify, or the server's relayed to this
+    /// client), as the Godot client finds them (PlayRoot.TriggerMapEmitters): one event each, by the map name.
+    /// </summary>
+    private void TriggeredEmitters(Level level)
+    {
+        if (_loaded is not { } loaded)
+        {
+            return;
+        }
+
+        foreach (ref readonly SimEvent e in _session.Session.Client.World.Events.Current)
+        {
+            if (e.Kind == SimEventKind.Notify && e.What == Emitter.NAME_ReplicateTrigger &&
+                level.FindActor(e.ActorId) is Emitter actor && loaded.RecordOf(actor)?.Id is { } id)
+            {
+                Emit(BridgeWorldEventKind.EmitterTriggered, Intern(id), 0, 0, actor.Location);
+            }
+        }
     }
 
     /// <summary>

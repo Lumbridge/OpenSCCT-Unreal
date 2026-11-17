@@ -29,8 +29,8 @@ public unsafe struct WorldApi
 
 public static unsafe class WorldExports
 {
-    /// <summary>2: lights carry their place and bone, GetActorSkins added.</summary>
-    public const int ApiVersion = 2;
+    /// <summary>2: lights carry their place and bone, GetActorSkins added. 3: the EmitterTriggered event.</summary>
+    public const int ApiVersion = 3;
 
     /// <summary>Fills <paramref name="api"/>. Returns the API version.</summary>
     [UnmanagedCallersOnly]

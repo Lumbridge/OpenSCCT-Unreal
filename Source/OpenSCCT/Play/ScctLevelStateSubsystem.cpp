@@ -15,6 +15,8 @@
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
+#include "NiagaraActor.h"
+#include "NiagaraComponent.h"
 #include "OpenSCCT.h"
 #include "Play/ScctEffectsSubsystem.h"
 #include "Play/ScctLevelStateDebug.h"
@@ -30,6 +32,13 @@ namespace
 
 	// What the importer's map effects (Tools/Import/scct_fx.py, scct_effects.py) are found by.
 	const TCHAR* const LevelCoronaTagPrefix = TEXT("ScctCoronaOf:");
+	const TCHAR* const LevelWetTagPrefix = TEXT("ScctWetOf:");
+	const FName LevelEmitterBurstTag(TEXT("ScctEmitterBurst"));
+	// Custom primitive data slot 0 of the surface material (Tools/Import/scct_materials.py): 1 = the detail layer
+	// is sampled in the mesh's own space, so the grain travels with a thing that moves.
+	constexpr int32 LevelLocalDetailSlot = 0;
+	// The importer gives up part of a map light's colour toward white (LIGHT_SATURATION in Tools/Import/import_map.py).
+	constexpr float LevelLightSaturation = 0.7f;
 	const TCHAR* const LevelLightTypeTagPrefix = TEXT("ScctLightType:");
 	const FName LevelLightTypeParameter(TEXT("LightType"));
 	const FName LevelCardBrightnessParameter(TEXT("Brightness"));
@@ -82,10 +91,16 @@ namespace
 		return LevelKey(Path.Left(First)) + LevelKey(Path.Mid(Last + 1));
 	}
 
-	/** The map's light colours are display values (from hue and saturation); the importer turned them the same way. */
+	/**
+	 * The map's light colours are display values (from hue and saturation). The importer turned them the same way
+	 * (import_map.py, the lights): to linear, then part of the way to their own grey, so a lamp the simulation
+	 * recolours keeps the strength of colour of the lamps beside it.
+	 */
 	FLinearColor ToLightColor(const FLinearColor& Display)
 	{
-		return FLinearColor(FMath::Pow(FMath::Max(Display.R, 0.0f), 2.2f), FMath::Pow(FMath::Max(Display.G, 0.0f), 2.2f), FMath::Pow(FMath::Max(Display.B, 0.0f), 2.2f));
+		const FLinearColor Linear(FMath::Pow(FMath::Max(Display.R, 0.0f), 2.2f), FMath::Pow(FMath::Max(Display.G, 0.0f), 2.2f), FMath::Pow(FMath::Max(Display.B, 0.0f), 2.2f));
+		const float Grey = (Linear.R + Linear.G + Linear.B) / 3.0f;
+		return FLinearColor(Grey + (Linear.R - Grey) * LevelLightSaturation, Grey + (Linear.G - Grey) * LevelLightSaturation, Grey + (Linear.B - Grey) * LevelLightSaturation);
 	}
 
 	/**
@@ -214,6 +229,7 @@ void UScctLevelStateSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	PlacementError = PlacementTurnError = 0.0f;
 	PlacementChecked = 0;
 	FMemory::Memzero(NumEvents);
+	NumEmittersReached = 0;
 }
 
 void UScctLevelStateSubsystem::HandleMatchStarted()
@@ -263,6 +279,11 @@ void UScctLevelStateSubsystem::IndexLevel()
 				TaggedCoronas.Add(FScctWorld::LevelTag(*TagText.RightChop(FCString::Strlen(LevelCoronaTagPrefix))), *It);
 				continue;
 			}
+			if (TagText.StartsWith(LevelWetTagPrefix))
+			{
+				TaggedWetGround.Add(FScctWorld::LevelTag(*TagText.RightChop(FCString::Strlen(LevelWetTagPrefix))), *It);
+				continue;
+			}
 			if (!TagText.StartsWith(LevelTagPrefix))
 			{
 				continue;
@@ -280,6 +301,16 @@ void UScctLevelStateSubsystem::IndexLevel()
 			if (!It->IsA<AStaticMeshActor>() && !It->IsA<ASkeletalMeshActor>())
 			{
 				++NumEffectActors;
+				// The map's particle emitters and rain: started and stopped by the simulation's triggers.
+				const ANiagaraActor* Particles = Cast<ANiagaraActor>(*It);
+				if (UNiagaraComponent* Component = Particles != nullptr ? Particles->GetNiagaraComponent() : nullptr)
+				{
+					FLevelEmitter Emitter;
+					Emitter.Component = Component;
+					Emitter.bBurst = It->Tags.Contains(LevelEmitterBurstTag);
+					Emitter.bOriginalActive = Emitter.bOn = Component->bAutoActivate;
+					TaggedEmitters.Add(Tag, Emitter);
+				}
 				continue;
 			}
 			TaggedActors.Add(Tag, *It);
@@ -339,8 +370,8 @@ void UScctLevelStateSubsystem::IndexLevel()
 		}
 	}
 
-	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: the level has %d tagged actors (%d movable meshes, %d lights), %d corona cards and %d tagged effect actors that are left alone; %d imported meshes and %d materials can be swapped in (%s)"),
-		TaggedActors.Num() + TaggedLights.Num(), MovableTags.Num(), NumLights, TaggedCoronas.Num(), NumEffectActors, MeshAssets.Num(), MaterialAssets.Num(), *MapFolder);
+	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: the level has %d tagged actors (%d movable meshes, %d lights), %d corona cards, %d particle emitters that follow the simulation's triggers, %d wet-ground decals and %d tagged effect actors in all; %d imported meshes and %d materials can be swapped in (%s)"),
+		TaggedActors.Num() + TaggedLights.Num(), MovableTags.Num(), NumLights, TaggedCoronas.Num(), TaggedEmitters.Num(), TaggedWetGround.Num(), NumEffectActors, MeshAssets.Num(), MaterialAssets.Num(), *MapFolder);
 	if (NumNaniteAvoided > 0)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: %d level meshes with glass or glowing materials were imported as Nanite meshes, which cannot draw those; they are drawn the ordinary way"), NumNaniteAvoided);
@@ -433,6 +464,76 @@ void UScctLevelStateSubsystem::RestoreLevel()
 		}
 	}
 	Spawned.Reset();
+
+	// The map's emitters as imported: the running ones run, the waiting ones wait, the ground under the rain is wet.
+	for (TPair<FName, FLevelEmitter>& Pair : TaggedEmitters)
+	{
+		FLevelEmitter& Emitter = Pair.Value;
+		UNiagaraComponent* Component = Emitter.Component.Get();
+		if (Component == nullptr || bTearingDown || Emitter.bOn == Emitter.bOriginalActive)
+		{
+			continue;
+		}
+		Emitter.bOn = Emitter.bOriginalActive;
+		if (Emitter.bOn)
+		{
+			Component->Activate(true);
+		}
+		else
+		{
+			Component->DeactivateImmediate();
+		}
+	}
+	for (const TPair<FName, TWeakObjectPtr<AActor>>& Pair : TaggedWetGround)
+	{
+		if (AActor* Wet = Pair.Value.Get(); Wet != nullptr && !bTearingDown)
+		{
+			Wet->SetActorHiddenInGame(false);
+		}
+	}
+}
+
+int32 UScctLevelStateSubsystem::TriggerEmitters(const FString& Name)
+{
+	const FName Tag = FScctWorld::LevelTag(*Name);
+	int32 Reached = 0;
+	bool bAnyOn = false;
+	for (auto It = TaggedEmitters.CreateKeyIterator(Tag); It; ++It)
+	{
+		FLevelEmitter& Emitter = It.Value();
+		UNiagaraComponent* Component = Emitter.Component.Get();
+		if (Component == nullptr)
+		{
+			continue;
+		}
+		++Reached;
+		// The original's ParticleEmitter.Trigger: an emitter that a trigger disables is toggled; one that only
+		// spawns on its trigger fires again. A burst that has played itself out counts as off, so the next
+		// trigger plays it again.
+		const bool bRunning = Emitter.bOn && Component->IsActive();
+		if (Emitter.bBurst || !bRunning)
+		{
+			Component->Activate(true);
+			Emitter.bOn = true;
+		}
+		else
+		{
+			Component->Deactivate(); // no new particles; the live ones run out
+			Emitter.bOn = false;
+		}
+		bAnyOn |= Emitter.bOn;
+	}
+	if (Reached > 0)
+	{
+		for (auto It = TaggedWetGround.CreateKeyIterator(Tag); It; ++It)
+		{
+			if (AActor* Wet = It.Value().Get())
+			{
+				Wet->SetActorHiddenInGame(!bAnyOn);
+			}
+		}
+	}
+	return Reached;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -800,6 +901,8 @@ bool UScctLevelStateSubsystem::SpawnStandIn(FActorState& State, const FScctWorld
 	Component->SetMobility(EComponentMobility::Movable);
 	Component->SetCollisionEnabled(ECollisionEnabled::NoCollision); // the simulation owns collision
 	Component->SetStaticMesh(Mesh);
+	// It moves: the surface material's detail layer goes with it (the importer sets this on its own movable meshes).
+	Component->SetCustomPrimitiveDataFloat(LevelLocalDetailSlot, 1.0f);
 	LevelAvoidNanite(Component);
 	FVector Scale(State.Info.ScaleX, State.Info.ScaleY, State.Info.ScaleZ);
 	Actor->SetActorScale3D(Scale.IsNearlyZero() ? FVector::OneVector : Scale);
@@ -1296,6 +1399,18 @@ void UScctLevelStateSubsystem::DrainEvents()
 				}
 				break;
 
+			case EScctWorldEventKind::EmitterTriggered:
+			{
+				const int32 Reached = TriggerEmitters(Name);
+				NumEmittersReached += Reached;
+				if (bLog || Reached == 0)
+				{
+					UE_LOG(LogOpenSCCT, Log, TEXT("Level state: %.1f s emitter '%s' triggered at (%.0f, %.0f, %.0f): %d of the level's particle emitters follow%s"), MatchSeconds, *Name, Event.X, Event.Y, Event.Z, Reached,
+						Reached == 0 ? TEXT(" (mesh emitters are not drawn)") : TEXT(""));
+				}
+				break;
+			}
+
 			case EScctWorldEventKind::MoverMoving:
 				if (ActorStates.IsValidIndex(Event.NameId))
 				{
@@ -1466,9 +1581,9 @@ void UScctLevelStateSubsystem::LogSummary()
 	}
 
 	UE_LOG(LogOpenSCCT, Log, TEXT("Level state summary after %.0f s: %d of %d movers moved; %d of %d lights changed; %d actors spawned here for names the level lacks, %d shown names with no imported mesh; "
-		"events: %d mesh, %d skin, %d glass, %d light switch, %d light break, %d marker, %d mover start/stop, %d shown/hidden"),
+		"events: %d mesh, %d skin, %d glass, %d light switch, %d light break, %d marker, %d mover start/stop, %d shown/hidden, %d emitter triggers (%d particle emitters reached)"),
 		MatchSeconds, NumMoved, NumMovers, NumChanged, LightStates.Num(), NumStandIns, NumNothingToDraw,
 		NumEvents[EScctWorldEventKind::MeshChanged], NumEvents[EScctWorldEventKind::SkinChanged], NumEvents[EScctWorldEventKind::GlassBroken],
 		NumEvents[EScctWorldEventKind::LightSwitched], NumEvents[EScctWorldEventKind::LightBreaking], NumEvents[EScctWorldEventKind::MarkerChanged],
-		NumEvents[EScctWorldEventKind::MoverMoving], NumEvents[EScctWorldEventKind::ShownChanged]);
+		NumEvents[EScctWorldEventKind::MoverMoving], NumEvents[EScctWorldEventKind::ShownChanged], NumEvents[EScctWorldEventKind::EmitterTriggered], NumEmittersReached);
 }

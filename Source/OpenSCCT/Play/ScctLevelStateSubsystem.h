@@ -6,6 +6,7 @@
 #include "ScctLevelStateSubsystem.generated.h"
 
 class ULightComponent;
+class UNiagaraComponent;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
 class UScctSessionSubsystem;
@@ -37,6 +38,10 @@ struct FScctWorldDebugApi;
  *     match shows. In a match the simulation computes the same rhythm, in step for every player and for the
  *     corona; so while a match plays that light's function is held steady (a copy with LightType 1) and the
  *     simulation's value is applied, never both.
+ *   - The map's own particle emitters (the importer's Niagara actors, tagged like everything else) follow the
+ *     simulation's triggers: one that waits for its event starts on it, a running one stops, a burst fires again.
+ *     The wet ground under a rain volume (the decal tagged "ScctWetOf:" + the volume's name) is hidden while the
+ *     rain of that name is off.
  *   - Skeletal map props (the importer's SkeletalMeshActors) are shown and hidden with the simulation; they are
  *     not moved from here (the importer places them with the mesh's own rotation origin).
  *   - Destructibles swap to the mesh and the skins the simulation names; a mesh that was not imported is logged
@@ -170,6 +175,15 @@ private:
 		bool bMoved = false;
 	};
 
+	/** One sub-emitter of a map Emitter: the importer's Niagara actor. */
+	struct FLevelEmitter
+	{
+		TWeakObjectPtr<UNiagaraComponent> Component;
+		bool bBurst = false;          // fires afresh on every trigger instead of toggling (tag "ScctEmitterBurst")
+		bool bOriginalActive = false; // as imported: running from the start, or waiting for its event
+		bool bOn = false;
+	};
+
 	struct FDebugAction
 	{
 		FString What;
@@ -200,6 +214,8 @@ private:
 	bool SpawnStandIn(FActorState& State, const FScctWorldActor& Record);
 	void ApplyMesh(FActorState& State, int32 MeshId);
 	void ApplySkin(FActorState& State, int32 Slot, int32 SkinId);
+	/** Emitter.Trigger on the importer's Niagara actors of that map Emitter; returns how many it reached. */
+	int32 TriggerEmitters(const FString& Name);
 	void BindLight(FLightState& State, const FScctWorldLight& Record);
 	void BindFixtures(FLightState& State);
 	/** The glowing material a switched light put in this slot of a lamp mesh, or null. */
@@ -236,6 +252,9 @@ private:
 	TMap<FName, TWeakObjectPtr<AActor>> TaggedLights;
 	/** The importer's corona cards by the name of their light. */
 	TMultiMap<FName, TWeakObjectPtr<AActor>> TaggedCoronas;
+	/** The importer's particle emitters by the tag of their map Emitter, and the wet-ground decals by their rain volume's. */
+	TMultiMap<FName, FLevelEmitter> TaggedEmitters;
+	TMultiMap<FName, TWeakObjectPtr<AActor>> TaggedWetGround;
 
 	/** The level's tagged mesh actors that can move (the importer makes movers and gameplay meshes movable). */
 	TSet<FName> MovableTags;
@@ -272,7 +291,8 @@ private:
 	int32 NumGlowCards = 0;
 	int32 NumEffectActors = 0;
 	int32 NumMobilityChanged = 0;
-	int32 NumEvents[9] = {};
+	int32 NumEvents[10] = {};
+	int32 NumEmittersReached = 0;
 	float PlacementError = 0.0f;
 	float PlacementTurnError = 0.0f;
 	int32 PlacementChecked = 0;

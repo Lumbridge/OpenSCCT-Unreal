@@ -21,7 +21,8 @@
 // (Pitch, Yaw, Roll as FRotator takes them), -180 to 180.
 
 // Version 2: FScctWorldLight carries the light's place and bone, GetActorSkins added.
-constexpr int32 ScctWorldApiVersion = 2;
+// Version 3: the EmitterTriggered event.
+constexpr int32 ScctWorldApiVersion = 3;
 
 /** How many material slots GetActorSkins reports for an actor. */
 constexpr int32 ScctWorldSkinSlots = 8;
@@ -193,6 +194,8 @@ namespace EScctWorldEventKind
 	constexpr int32 MoverMoving = 7;
 	/** An actor was shown (A 1) or hidden (A 0) by the simulation. A spawned prop that is destroyed raises A 0, B 1 and leaves the actor list. */
 	constexpr int32 ShownChanged = 8;
+	/** A map Emitter was triggered: each of its sub-emitters toggles or bursts. NameId: the Emitter actor's map name. X,Y,Z: where it stands. */
+	constexpr int32 EmitterTriggered = 9;
 }
 
 /** One state change of the level, in the order they happened. */

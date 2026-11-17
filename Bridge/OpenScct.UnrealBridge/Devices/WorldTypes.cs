@@ -325,6 +325,12 @@ public static class BridgeWorldEventKind
     /// and leaves the actor list.
     /// </summary>
     public const int ShownChanged = 8;
+
+    /// <summary>
+    /// A map Emitter was triggered (Emitter.ReplicateTrigger, the server's relayed to a client included): every
+    /// sub-emitter of it toggles or bursts. NameId is the Emitter actor's map name; X,Y,Z where it stands.
+    /// </summary>
+    public const int EmitterTriggered = 9;
 }
 
 /// <summary>One state change of the level (<c>GetEvents</c>), in the order they happened.</summary>
