@@ -349,7 +349,14 @@ def main():
     instances = build_materials(material_doc)
     log("materials: %d" % len(instances))
 
-    # Every mesh gets the new materials, and Nanite for crisp shadows and cheap overdraw.
+    # Every mesh gets the new materials, and Nanite for crisp shadows and cheap overdraw. Nanite draws only
+    # opaque and masked materials (anything else shows the engine's checkerboard and a "missing usage flag
+    # Nanite" warning per material), so a mesh with any other material is not a Nanite mesh. The setting is
+    # written both ways: a re-import keeps the mesh asset, and with it whatever an older import decided. The
+    # game's level state has the same rule for materials that change in play (ScctLevelStateSubsystem.cpp,
+    # LevelAvoidNanite).
+    nanite_blends = (unreal.BlendMode.BLEND_OPAQUE, unreal.BlendMode.BLEND_MASKED)
+    nanite_on = nanite_off = 0
     meshes = {}
     unmatched = set()
     for path in editor_assets.list_assets(DEST + "/world/StaticMeshes"):
@@ -363,15 +370,18 @@ def main():
             replacement = instances.get(key(str(current.get_name()))) if current else None
             if replacement:
                 mesh.set_material(index, replacement)
-                if replacement.get_blend_mode() in (unreal.BlendMode.BLEND_TRANSLUCENT, unreal.BlendMode.BLEND_ADDITIVE):
-                    translucent = True
+                current = replacement
             elif current:
                 unmatched.add(str(current.get_name()))
-        if not translucent:
-            settings = mesh.get_editor_property("nanite_settings")
-            if not settings.enabled:
-                settings.enabled = True
-                mesh.set_editor_property("nanite_settings", settings)
+            if current and current.get_blend_mode() not in nanite_blends:
+                translucent = True
+        settings = mesh.get_editor_property("nanite_settings")
+        if settings.enabled == translucent:
+            settings.enabled = not translucent
+            mesh.set_editor_property("nanite_settings", settings)
+        nanite_on += 0 if translucent else 1
+        nanite_off += 1 if translucent else 0
+    log("meshes: %d Nanite, %d drawn the ordinary way (glass, glow, cards)" % (nanite_on, nanite_off))
     if unmatched:
         log("materials without a record (kept as imported): %s" % sorted(unmatched)[:10])
 

@@ -260,6 +260,22 @@ def import_meshes():
     asset_tools.import_asset_tasks(tasks)
     meshes = [p for p in editor_assets.list_assets("/Game/Imported/Fx", recursive=True)
               if isinstance(unreal.load_asset(p), unreal.StaticMesh)]
+    # The importer makes every mesh a Nanite mesh. Nanite draws only opaque and masked materials, so a mesh that
+    # wears glass or a glow (the first-aid box's window, laser beams) is drawn the ordinary way: the same rule
+    # as the map import (Tools/Import/import_map.py) and the game's level state.
+    nanite_blends = (unreal.BlendMode.BLEND_OPAQUE, unreal.BlendMode.BLEND_MASKED)
+    ordinary = 0
+    for path in meshes:
+        mesh = unreal.load_asset(path)
+        see_through = any(slot.material_interface and slot.material_interface.get_blend_mode() not in nanite_blends
+                          for slot in mesh.static_materials)
+        settings = mesh.get_editor_property("nanite_settings")
+        if settings.enabled == see_through:
+            settings.enabled = not see_through
+            mesh.set_editor_property("nanite_settings", settings)
+            editor_assets.save_loaded_asset(mesh, only_if_is_dirty=False)
+        ordinary += 1 if see_through else 0
+    log("effect meshes drawn the ordinary way, not by Nanite (glass, glow): %d" % ordinary)
     log("effect meshes imported: %d (%s ...)" % (len(meshes), ", ".join(m.rsplit("/", 1)[1].split(".")[0] for m in meshes[:5])))
 
 
