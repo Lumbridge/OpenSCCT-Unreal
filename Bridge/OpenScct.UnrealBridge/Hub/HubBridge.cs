@@ -308,12 +308,40 @@ public sealed partial class HubBridge : IDisposable
             }
         }
 
+        if (Bots is { } bots)
+        {
+            Bots = null;
+            bots.Dispose();
+            Log("the hub bots left");
+        }
+
         if (Host is { } host)
         {
             Host = null;
             host.Dispose();
             Log("the hub this PC hosted is closed");
         }
+    }
+
+    /// <summary>The bot visitors of the hub this PC hosts, or null.</summary>
+    public HubBots? Bots { get; private set; }
+
+    /// <summary>
+    /// Sends <paramref name="count"/> bot visitors into the hub this PC hosts (none before, they replace any already
+    /// there). False with the reason logged when this PC hosts no hub: bots are never sent into someone else's.
+    /// </summary>
+    public bool StartBots(int count)
+    {
+        if (Host is not { } host)
+        {
+            Log("hub bots are only sent into a hub this PC hosts");
+            return false;
+        }
+
+        Bots?.Dispose();
+        Bots = count > 0 ? HubBots.Start(count, host.LocalAddress, new MapCatalog([.. Catalog.Maps.Roots]), Classes, line => Log("bots: " + line)) : null;
+        Touch();
+        return Bots is not null;
     }
 
     // ---- the frame ----------------------------------------------------------------------------------------------

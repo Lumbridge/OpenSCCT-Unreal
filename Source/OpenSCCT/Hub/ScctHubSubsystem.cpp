@@ -4,6 +4,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
 #include "Hub/SScctHubLoadingScreen.h"
+#include "Hub/ScctHubHud.h"
 #include "Engine/World.h"
 #include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
@@ -98,6 +99,8 @@ void UScctHubSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		AutoTeam = Side.Equals(TEXT("merc"), ESearchCase::IgnoreCase) ? 1 : 0;
 	}
 	FParse::Value(CommandLine, TEXT("ScctHubCoverHold="), CoverHoldSeconds);
+	FParse::Value(CommandLine, TEXT("ScctHubBots="), AutoBots);
+	Hud = MakeShared<FScctHubHud>(this);
 
 	FScctSettingDesc Listed;
 	Listed.Key = HubListedSetting;
@@ -121,6 +124,11 @@ void UScctHubSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 void UScctHubSubsystem::Deinitialize()
 {
 	FTSTicker::RemoveTicker(TickerHandle);
+	if (Hud.IsValid())
+	{
+		Hud->Stop();
+		Hud.Reset();
+	}
 	CloseCover();
 	if (Api != nullptr && GetState() != EScctHubState::Idle)
 	{
@@ -367,7 +375,47 @@ void UScctHubSubsystem::PresentIn(UScctSessionSubsystem* Session)
 		PresentedWorld = Session->GetWorld();
 		bWasPresented = true;
 		Session->OnBeforeTicks.AddUObject(this, &UScctHubSubsystem::HandleBeforeTicks);
+		Session->OnFrame.AddUObject(this, &UScctHubSubsystem::HandleFrame);
 	}
+}
+
+void UScctHubSubsystem::HandleFrame(float DeltaSeconds)
+{
+	// The session's frame, after the view and the pawns are this frame's: the hub HUD reads and projects from here.
+	UWorld* World = PresentedWorld.IsValid() ? const_cast<UWorld*>(PresentedWorld.Get()) : nullptr;
+	if (Hud.IsValid() && World != nullptr && GetState() == EScctHubState::InHub)
+	{
+		Hud->Tick(World, DeltaSeconds, LogEvery > 0.0f);
+	}
+}
+
+float UScctHubSubsystem::GetVoiceVolume(const FString& PlayerName) const
+{
+	const float* Volume = VoiceVolumes.Find(PlayerName);
+	return Volume != nullptr ? *Volume : 1.0f;
+}
+
+void UScctHubSubsystem::SetVoiceVolume(const FString& PlayerName, float Volume)
+{
+	VoiceVolumes.Add(PlayerName, FMath::Clamp(Volume, 0.0f, 2.0f));
+}
+
+bool UScctHubSubsystem::IsVoiceMuted(const FString& PlayerName) const
+{
+	return VoiceMuted.Contains(PlayerName);
+}
+
+void UScctHubSubsystem::SetVoiceMuted(const FString& PlayerName, bool bMuted)
+{
+	if (bMuted)
+	{
+		VoiceMuted.Add(PlayerName);
+	}
+	else
+	{
+		VoiceMuted.Remove(PlayerName);
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: %s's voice %s"), *PlayerName, bMuted ? TEXT("muted") : TEXT("unmuted"));
 }
 
 void UScctHubSubsystem::HandleBeforeTicks(float DeltaSeconds)
@@ -395,6 +443,12 @@ void UScctHubSubsystem::TickVisit()
 		return;
 	}
 	LastTickFrame = GFrameCounter;
+
+	// The hub HUD goes with the drawn hub (another level, the visit left or failed).
+	if (Hud.IsValid() && Hud->IsRunning() && (!PresentedWorld.IsValid() || GetState() != EScctHubState::InHub))
+	{
+		Hud->Stop();
+	}
 
 	const double Now = FPlatformTime::Seconds();
 	const float DeltaSeconds = static_cast<float>(FMath::Clamp(Now - LastTickSeconds, 0.0, 1.0));
@@ -588,7 +642,10 @@ void UScctHubSubsystem::RunUnattended()
 	if (bAutoHost)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: -ScctHostHub: hosting a hub on this PC and joining it"));
-		HostAndJoin(AutoHostPort, AutoTeam, bAutoHostLoopback);
+		if (HostAndJoin(AutoHostPort, AutoTeam, bAutoHostLoopback))
+		{
+			StartBots();
+		}
 	}
 	else
 	{
@@ -722,4 +779,26 @@ void UScctHubSubsystem::CloseCover()
 	}
 	Cover.Reset();
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: loading cover down"));
+}
+void UScctHubSubsystem::StartBots()
+{
+	// -ScctHubBots=N, or the level URL's ?Bots=N (Run-Offscreen -Options "?Bots=3").
+	int32 Count = AutoBots;
+	const UWorld* World = GetGameInstance()->GetWorld();
+	if (Count < 0 && World != nullptr && World->URL.HasOption(TEXT("Bots")))
+	{
+		Count = FCString::Atoi(World->URL.GetOption(TEXT("Bots="), TEXT("0")));
+	}
+	if (Count <= 0)
+	{
+		return;
+	}
+	const FScctHubSocialApi* Social = ScctFeature<FScctHubSocialApi>();
+	if (Social == nullptr)
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHub: no hub bots: the bridge has no hub social table"));
+		return;
+	}
+	const bool bStarted = Social->StartBots(Count) != 0;
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: %d hub bot(s) %s"), Count, bStarted ? TEXT("join the hosted hub") : TEXT("could not be started (see the bridge's lines)"));
 }

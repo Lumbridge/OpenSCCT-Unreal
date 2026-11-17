@@ -6,7 +6,7 @@ using System.Threading;
 using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Hub;
 
-// HubProbe <content root> <OpenSCCT checkout> [port] [seconds in the hub] [master url] [invite key] [host [hold seconds] | join [hub name]]
+// HubProbe <content root> <OpenSCCT checkout> [port] [seconds in the hub] [master url] [invite key] [host [hold seconds] | join [hub name] | social]
 //
 // Visits a hub the way Unreal does, through the function table HubExports.GetApi fills (the same unmanaged entries,
 // called through their pointers), once a frame at about 60 Hz:
@@ -19,11 +19,13 @@ using OpenScct.UnrealBridge.Hub;
 //      in the log), the list asked until it shows that hub, held open for the hold seconds, and off the list after
 //      Leave. With "join", only this: the hub of that name (default "HubProbe's hub", which a second probe hosts)
 //      is joined through the master's join answer (its ways in tried in turn) and the player stands in it.
+//   6. with "social" (give "" for the master url and key), only this: the hub HUD's table (HubSocialExports) in a
+//      hosted hub with bot visitors (Social.cs).
 // The OpenSCCT checkout's fixtures folder is given as the hub's map root (Unreal gives the project's
 // Saved/ScctImport/HubContent/svmap, which holds the same map).
 return Probe.Run(args);
 
-internal static unsafe class Probe
+internal static unsafe partial class Probe
 {
     private static HubApi s_api;
     private static readonly Stopwatch s_run = Stopwatch.StartNew();
@@ -60,7 +62,9 @@ internal static unsafe class Probe
         bool ok = false;
         try
         {
-            ok = mode == "join" && masterUrl is not null
+            ok = mode == "social"
+                ? Social(port, inHubSeconds)
+                : mode == "join" && masterUrl is not null
                 ? ListedJoin(masterUrl, inviteKey, joinName ?? HostedName, inHubSeconds)
                 : NobodyThere(port + 1) && HostAndVisit(port, inHubSeconds) && (masterUrl is null || ListedHost(port, masterUrl, inviteKey, holdSeconds));
         }

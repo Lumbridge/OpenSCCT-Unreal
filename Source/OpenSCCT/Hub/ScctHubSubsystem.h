@@ -6,6 +6,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "ScctHubSubsystem.generated.h"
 
+class FScctHubHud;
 class SScctHubLoadingScreen;
 class UScctSessionSubsystem;
 
@@ -48,6 +49,10 @@ DECLARE_MULTICAST_DELEGATE(FScctHubChanged);
  *   -ScctSide=spy|merc            the side to enter the hub on (default spy)
  *   -ScctName=<name>              the player's name for this run
  *   -ScctHubLog=S                 seconds between the status lines in the log (default 2 with the switches above)
+ *   -ScctHubBots=N                (or the level URL's ?Bots=N) with -ScctHostHub: N bot players join the hosted hub,
+ *                                 walk about, chat and change sides (the bridge's HubSoak)
+ * The hub's own HUD (Hub/ScctHubHud.h: name tags, chat, signs, the player list) belongs to this subsystem and runs
+ * while the hub level presents the visit; its switches are listed there.
  * Started in the hub level itself (Tools\Run-Offscreen.ps1 -Map Hub -Extra "-ScctHostHub") the level presents the
  * visit at once instead of starting a local match on the hub map.
  */
@@ -125,6 +130,20 @@ public:
 	/** Called by the game mode of a level that presents the hub: that world's session subsystem shows the visit's session. */
 	void PresentIn(UScctSessionSubsystem* Session);
 
+	// ---- the hub HUD and the voice settings -----------------------------------------------------------------------
+
+	/** The hub's own HUD (null before Initialize). */
+	FScctHubHud* GetHud() const { return Hud.Get(); }
+
+	/** A player's voice volume, 0 to 2 (1 when never set); kept for this run for the hub's voice chat. */
+	float GetVoiceVolume(const FString& PlayerName) const;
+	void SetVoiceVolume(const FString& PlayerName, float Volume);
+	bool IsVoiceMuted(const FString& PlayerName) const;
+	void SetVoiceMuted(const FString& PlayerName, bool bMuted);
+
+	/** What a voice chat multiplies a player's voice by: 0 when muted, else the volume. */
+	float GetVoiceGain(const FString& PlayerName) const { return IsVoiceMuted(PlayerName) ? 0.0f : GetVoiceVolume(PlayerName); }
+
 	// UGameInstanceSubsystem
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
@@ -137,6 +156,8 @@ private:
 	void TickVisit();
 	bool TickFromTicker(float DeltaSeconds);
 	void HandleBeforeTicks(float DeltaSeconds);
+	void HandleFrame(float DeltaSeconds);
+	void StartBots();
 
 	void RefreshTexts();
 	void DrainLog();
@@ -206,4 +227,10 @@ private:
 	bool bAutoStarted = false;
 	float LogEvery = 0.0f;
 	float LogTimer = 0.0f;
+	int32 AutoBots = -1;
+
+	// The hub HUD and the per-player voice settings.
+	TSharedPtr<FScctHubHud> Hud;
+	TMap<FString, float> VoiceVolumes;
+	TSet<FString> VoiceMuted;
 };
