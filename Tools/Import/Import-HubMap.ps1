@@ -42,6 +42,10 @@ function Set-Junction([string] $Path, [string] $Target) {
 }
 Set-Junction (Join-Path $root 'svmap\Hub') $hub
 Set-Junction (Join-Path $root 'shared') $shared
+# The pads' matches and places (hub.json, areas.json): a hub hosted from the game finds them beside the hub map,
+# else it falls back to built-in pads that are not where the hub map draws them.
+$hubmap = Join-Path $OpenScct 'fixtures\hubmap'
+if (Test-Path (Join-Path $hubmap 'hub.json')) { Set-Junction (Join-Path $root 'svmap\hubmap') $hubmap }
 Write-Host "Hub content laid out at $root"
 
 & "$PSScriptRoot\Import-Map.ps1" -Map Hub -Content $root -Engine $Engine

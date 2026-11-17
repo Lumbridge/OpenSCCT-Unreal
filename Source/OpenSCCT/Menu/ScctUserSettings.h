@@ -14,6 +14,8 @@ enum class EScctSoundKind : uint8
 	MenuSounds,
 	Objective, // the objective jingles (at 0 they are not played at all)
 	Voice,     // other players' voices
+	HubJukebox, // the hub's jukebox music (Hub/ScctHubAudio.h)
+	HubChimes,  // the chimes of the hub's courses, aim range and ball game
 };
 
 /**
@@ -70,6 +72,8 @@ public:
 	int32 MenuSoundsVolume = 5;
 	int32 ObjectiveVolume = 80;
 	int32 VoiceVolume = 100;
+	int32 HubJukeboxVolume = 100;
+	int32 HubChimesVolume = 100;
 
 	bool bMotionBlur = true;
 

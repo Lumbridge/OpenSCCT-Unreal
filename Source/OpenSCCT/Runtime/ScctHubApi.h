@@ -27,6 +27,7 @@ enum class EScctHubState : int32
 	Loading = 2,    // welcomed: the hub map loads and the player's controller arrives
 	InHub = 3,      // the visit's session is in the main slot: pawns, poses, view and input work as in a match
 	Failed = 4,     // the visit ended with an error: GetText(EScctHubText::Error). Leave() clears it.
+	InMatch = 5,    // away at a pad's match (the online visit plays it); the hub is joined again after its results
 };
 
 /** FScctHubStatus::Flags. */
