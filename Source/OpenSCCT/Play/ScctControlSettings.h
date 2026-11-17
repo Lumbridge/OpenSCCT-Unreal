@@ -175,6 +175,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "OpenSCCT|Controls")
 	FString GetBindingsJson() const;
 
+	/**
+	 * Says that the bindings in play changed (the Options screen applied or threw away its key edits). SetBinding,
+	 * ResetBindings and LoadBindings say it themselves.
+	 */
+	void NotifyRebound();
+
+	/**
+	 * Raised after the bindings in play changed. A running match needs nothing from it: the bridge's input mapper
+	 * reads the layout in play every frame, so a rebind plays from the next one. It is for what shows keys (button
+	 * prompts, help lines) to look them up again.
+	 */
+	FSimpleMulticastDelegate OnRebound;
+
 	/** Why the last call here that returned false did. */
 	UFUNCTION(BlueprintPure, Category = "OpenSCCT|Controls")
 	const FString& GetLastError() const { return LastError; }

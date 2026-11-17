@@ -90,6 +90,12 @@ public:
 	 */
 	static FString PlayerName(const UScctOnlineSubsystem* Online);
 
+	/**
+	 * The overlay of the Options screen on show (null when none is): where a section opens what covers the whole
+	 * screen while it is answered (SScctConfirm, the key capture).
+	 */
+	static TSharedPtr<SOverlay> ModalHost();
+
 	void Construct(const FArguments& InArgs);
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;

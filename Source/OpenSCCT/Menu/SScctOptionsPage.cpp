@@ -2,6 +2,7 @@
 
 #include "Algo/StableSort.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Menu/SScctBindingsPanel.h"
 #include "Menu/SScctBrightnessPage.h"
 #include "Menu/SScctConfirm.h"
 #include "Menu/ScctMenuStyle.h"
@@ -39,6 +40,9 @@ namespace
 		static TMap<FName, FScctOptionsSection> Registered;
 		return Registered;
 	}
+
+	/** The overlay of the screen built last (one is on show at a time). */
+	TWeakPtr<SOverlay> ShownRoot;
 
 	/** The registry's page order (Settings/ScctSettings.h); a page that is not here comes after these. */
 	const TArray<FName>& PageOrder()
@@ -138,6 +142,11 @@ void SScctOptionsPage::RegisterSection(FName Page, const FScctOptionsSection& Se
 	Sections().Add(Page, Section);
 }
 
+TSharedPtr<SOverlay> SScctOptionsPage::ModalHost()
+{
+	return ShownRoot.Pin();
+}
+
 FString SScctOptionsPage::PlayerName(const UScctOnlineSubsystem* Online)
 {
 	// The subsystem reads its identity when it first connects; until then the stored name is the one it will read.
@@ -160,6 +169,7 @@ void SScctOptionsPage::Construct(const FArguments& InArgs)
 	{
 		RegisterDemoOptions();
 	}
+	SScctBindingsPanel::RegisterSections();
 	const TArray<FName> Pages = FindPages();
 	CurrentPage = Pages.Contains(InArgs._InitialPage) ? InArgs._InitialPage : Pages.Num() > 0 ? Pages[0] : NAME_None;
 
@@ -243,6 +253,7 @@ void SScctOptionsPage::Construct(const FArguments& InArgs)
 		]
 	];
 
+	ShownRoot = Root;
 	RebuildTabs();
 	RebuildBody();
 	RunUnattendedSwitches();

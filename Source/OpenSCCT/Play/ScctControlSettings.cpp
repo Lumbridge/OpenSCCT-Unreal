@@ -204,7 +204,14 @@ bool UScctControlSettings::LoadBindings()
 	{
 		return false;
 	}
-	return Controls->LoadBindings(*GetBindingsFile()) != 0 || FailFromBridge(TEXT("The bindings file could not be read."));
+	const bool bRead = Controls->LoadBindings(*GetBindingsFile()) != 0;
+	NotifyRebound();
+	return bRead || FailFromBridge(TEXT("The bindings file could not be read."));
+}
+
+void UScctControlSettings::NotifyRebound()
+{
+	OnRebound.Broadcast();
 }
 
 bool UScctControlSettings::SaveBindings()
@@ -250,6 +257,7 @@ bool UScctControlSettings::SetBinding(bool bMerc, bool bPad, const FString& Key,
 		LastError = FString::Printf(TEXT("'%s' is not the name of a %s."), *Key, bPad ? TEXT("controller control") : TEXT("key"));
 		return false;
 	}
+	NotifyRebound();
 	return true;
 }
 
@@ -259,6 +267,7 @@ void UScctControlSettings::ResetBindings(bool bMerc)
 	if (const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>())
 	{
 		Controls->ResetBindings(bMerc ? 1 : 0);
+		NotifyRebound();
 	}
 }
 

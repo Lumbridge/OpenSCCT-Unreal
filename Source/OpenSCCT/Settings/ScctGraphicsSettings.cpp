@@ -9,7 +9,7 @@ using ScctVideoOptions::SetCVar;
 
 namespace
 {
-	const TCHAR* const Page = TEXT("Graphics");
+	const TCHAR* const GraphicsPage = TEXT("Graphics");
 
 	const FName QualityKey(TEXT("Graphics.Quality"));
 	const FName RenderScaleKey(TEXT("Graphics.RenderScale"));
@@ -19,7 +19,7 @@ namespace
 	const FName AmbientOcclusionKey(TEXT("Graphics.AmbientOcclusion"));
 
 	/** Unreal's scalability levels, as the overall quality lists them (the stored value is the level). */
-	const TArray<const TCHAR*> Levels = { TEXT("Low"), TEXT("Medium"), TEXT("High"), TEXT("Epic"), TEXT("Cinematic") };
+	const TArray<const TCHAR*> QualityLevels = { TEXT("Low"), TEXT("Medium"), TEXT("High"), TEXT("Epic"), TEXT("Cinematic") };
 
 	/** A scalability group the player can set apart from the overall quality. */
 	struct FGroup
@@ -58,9 +58,9 @@ void ScctGraphicsSettings::Register()
 {
 	int32 Order = 0;
 	{
-		FScctSettingDesc Desc = Option(TEXT("Graphics.Quality"), Page, TEXT("Quality"), TEXT("Overall quality"),
+		FScctSettingDesc Desc = Option(TEXT("Graphics.Quality"), GraphicsPage, TEXT("Quality"), TEXT("Overall quality"),
 			TEXT("Sets every group below that is on \"Same as overall\". Lower is faster."), EScctSettingType::Choice, TEXT("3"), Order++);
-		for (const TCHAR* Level : Levels)
+		for (const TCHAR* Level : QualityLevels)
 		{
 			Desc.Choices.Add(FText::FromString(Level));
 		}
@@ -68,9 +68,9 @@ void ScctGraphicsSettings::Register()
 	}
 	for (const FGroup& Group : Groups)
 	{
-		FScctSettingDesc Desc = Option(Group.Key, Page, TEXT("Quality"), Group.Label, Group.Tooltip, EScctSettingType::Choice, TEXT("0"), Order++);
+		FScctSettingDesc Desc = Option(Group.Key, GraphicsPage, TEXT("Quality"), Group.Label, Group.Tooltip, EScctSettingType::Choice, TEXT("0"), Order++);
 		Desc.Choices.Add(FText::FromString(TEXT("Same as overall")));
-		for (const TCHAR* Level : Levels)
+		for (const TCHAR* Level : QualityLevels)
 		{
 			Desc.Choices.Add(FText::FromString(Level));
 		}
@@ -78,7 +78,7 @@ void ScctGraphicsSettings::Register()
 	}
 
 	{
-		FScctSettingDesc Desc = Option(TEXT("Graphics.RenderScale"), Page, TEXT("Image"), TEXT("Render scale"),
+		FScctSettingDesc Desc = Option(TEXT("Graphics.RenderScale"), GraphicsPage, TEXT("Image"), TEXT("Render scale"),
 			TEXT("The 3D picture's resolution against the screen's. Lower is faster and softer; the HUD and menus stay sharp."),
 			EScctSettingType::Float, TEXT("1.0"), Order++);
 		Desc.Min = 0.5f;
@@ -88,7 +88,7 @@ void ScctGraphicsSettings::Register()
 		FScctSettings::Register(Desc);
 	}
 	{
-		FScctSettingDesc Desc = Option(TEXT("Graphics.AutoScaleFps"), Page, TEXT("Image"), TEXT("Automatic render scale"),
+		FScctSettingDesc Desc = Option(TEXT("Graphics.AutoScaleFps"), GraphicsPage, TEXT("Image"), TEXT("Automatic render scale"),
 			TEXT("Lowers the 3D resolution, down to 50%, while the frame rate is under the chosen rate, and raises it again when there is room. Render scale is the highest it goes."),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		for (const int32 Target : AutoScaleTargets)
@@ -98,19 +98,19 @@ void ScctGraphicsSettings::Register()
 		FScctSettings::Register(Desc);
 	}
 	{
-		FScctSettingDesc Desc = Option(TEXT("Graphics.AntiAliasing"), Page, TEXT("Image"), TEXT("Anti-aliasing"),
+		FScctSettingDesc Desc = Option(TEXT("Graphics.AntiAliasing"), GraphicsPage, TEXT("Image"), TEXT("Anti-aliasing"),
 			TEXT("TSR is the sharpest and also upscales a lower render scale. TAA is cheaper, FXAA cheaper still and blurrier; Off leaves jagged edges."),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		Desc.Choices = ScctVideoOptions::Texts({ TEXT("TSR"), TEXT("TAA"), TEXT("FXAA"), TEXT("Off") });
 		FScctSettings::Register(Desc);
 	}
 	{
-		FScctSettingDesc Desc = Option(TEXT("Graphics.TextureFiltering"), Page, TEXT("Image"), TEXT("Texture filtering"),
+		FScctSettingDesc Desc = Option(TEXT("Graphics.TextureFiltering"), GraphicsPage, TEXT("Image"), TEXT("Texture filtering"),
 			TEXT("Keeps floors and walls seen at a slant sharp."), EScctSettingType::Choice, TEXT("3"), Order++);
 		Desc.Choices = ScctVideoOptions::Texts({ TEXT("Trilinear (off)"), TEXT("2x anisotropic"), TEXT("4x anisotropic"), TEXT("8x anisotropic"), TEXT("16x anisotropic") });
 		FScctSettings::Register(Desc);
 	}
-	FScctSettings::Register(Option(TEXT("Graphics.AmbientOcclusion"), Page, TEXT("Image"), TEXT("Ambient occlusion"),
+	FScctSettings::Register(Option(TEXT("Graphics.AmbientOcclusion"), GraphicsPage, TEXT("Image"), TEXT("Ambient occlusion"),
 		TEXT("Contact shading in corners and under objects (screen-space and Lumen's short-range occlusion)."), EScctSettingType::Bool, TEXT("true"), Order++));
 }
 
@@ -127,14 +127,14 @@ void ScctGraphicsSettings::Apply()
 		return;
 	}
 
-	const int32 Overall = FMath::Clamp(FScctSettings::GetInt(QualityKey), 0, Levels.Num() - 1);
+	const int32 Overall = FMath::Clamp(FScctSettings::GetInt(QualityKey), 0, QualityLevels.Num() - 1);
 	Settings->SetOverallScalabilityLevel(Overall);
 	FString GroupText;
 	for (const FGroup& Group : Groups)
 	{
 		// 0 follows the overall level; 1 to 5 are Low to Cinematic.
 		const int32 Choice = FScctSettings::GetInt(Group.Key);
-		const int32 Level = Choice <= 0 ? Overall : FMath::Clamp(Choice - 1, 0, Levels.Num() - 1);
+		const int32 Level = Choice <= 0 ? Overall : FMath::Clamp(Choice - 1, 0, QualityLevels.Num() - 1);
 		(Settings->*Group.Set)(Level);
 		GroupText += FString::Printf(TEXT(" %s=%d"), Group.Key + 9, Level);
 	}
@@ -166,7 +166,7 @@ void ScctGraphicsSettings::Apply()
 	SetCVar(TEXT("r.Lumen.ScreenProbeGather.ShortRangeAO"), bAmbientOcclusion ? 1 : 0);
 
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctGraphics: applied overall %d (%s),%s; render scale %.0f%% (r.ScreenPercentage %s), automatic %s (dynamic resolution %s, budget %s ms); r.AntiAliasingMethod %d, r.MaxAnisotropy %d, ambient occlusion %s; sg.ShadowQuality %s sg.GlobalIlluminationQuality %s sg.PostProcessQuality %s"),
-		Overall, Levels[Overall], *GroupText, RenderScale * 100.0f, *ScctVideoOptions::GetCVar(TEXT("r.ScreenPercentage")),
+		Overall, QualityLevels[Overall], *GroupText, RenderScale * 100.0f, *ScctVideoOptions::GetCVar(TEXT("r.ScreenPercentage")),
 		Target > 0 ? *FString::Printf(TEXT("holds %d FPS"), Target) : TEXT("off"), Settings->IsDynamicResolutionEnabled() ? TEXT("on") : TEXT("off"),
 		*ScctVideoOptions::GetCVar(TEXT("r.DynamicRes.FrameTimeBudget")), Method, MaxAnisotropy, bAmbientOcclusion ? TEXT("on") : TEXT("off"),
 		*ScctVideoOptions::GetCVar(TEXT("sg.ShadowQuality")), *ScctVideoOptions::GetCVar(TEXT("sg.GlobalIlluminationQuality")),
