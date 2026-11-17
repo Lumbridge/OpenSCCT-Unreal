@@ -33,8 +33,8 @@
   "ice": {"kind": "surface", "detail": "SurfaceImperfections001", "rough_dark": 0.25, "rough_bright": 0.08, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.6, "detail_normal": 0.4, "detail_rough": 0.4, "detail_colour": 0.0, "detail_ao": 0.0},
   "foliage": {"kind": "plain", "rough_dark": 0.8, "rough_bright": 0.55, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.6},
   "effect": {"kind": "plain", "rough_dark": 0.9, "rough_bright": 0.6, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.0},
-  "screen": {"kind": "plain", "rough_dark": 0.25, "rough_bright": 0.1, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.0, "emissive": 1.6},
-  "lamp": {"kind": "plain", "rough_dark": 0.4, "rough_bright": 0.2, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.3, "emissive": 6.0},
+  "screen": {"kind": "plain", "rough_dark": 0.25, "rough_bright": 0.1, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.0, "emissive": 1.0},
+  "lamp": {"kind": "plain", "rough_dark": 0.4, "rough_bright": 0.2, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.3, "emissive": 3.0},
   "glass": {"kind": "glass", "rough_dark": 0.06, "rough_bright": 0.03, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.0, "opacity_floor": 0.12},
   "water": {"kind": "water", "rough_dark": 0.08, "rough_bright": 0.03, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.0}
  },

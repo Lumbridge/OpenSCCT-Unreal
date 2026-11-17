@@ -42,7 +42,7 @@ DEFAULT_SPOT_PICTURE = "echelon_spot_bw"
 # How much of a beam light's light the air scatters, per square root of the original's beam alpha.
 BEAM_SCATTER = 4.0
 BEAM_SCATTER_MOST = 16.0
-CORONA_BRIGHTNESS = 1.5
+CORONA_BRIGHTNESS = 0.8
 # A caustics light: its strength in import_map's light units, and how far its (mostly dark) picture is lifted.
 CAUSTIC_INTENSITY = 4.0
 CAUSTIC_GAIN = 2.5
@@ -58,7 +58,7 @@ FOG_DEPTH_MOST = 2.0
 DRAW_MESH = 2      # Actor.DrawType DT_Mesh: a skeletal mesh
 
 # Light given off by additive sprites (sparks, flames, bubbles), in the units of import_map's emissive surfaces.
-GLOW_BRIGHTNESS = 2.0
+GLOW_BRIGHTNESS = 1.5
 FOREVER = 1.0e9
 
 
@@ -308,6 +308,10 @@ class MapEffects:
                 actor.set_folder_path("Effects/Emitters" if active else "Effects/Triggered")
                 actor.tags = [unreal.Name("Scct:" + name), unreal.Name("ScctTag:" + str(actor_props.get("Tag", ""))),
                               unreal.Name("ScctEmitter:%d" % index)]
+                if not pick(props, "TriggerDisabled", True):
+                    # A trigger does not switch this one on and off: it fires its burst again each time
+                    # (Play/ScctLevelStateSubsystem, TriggerEmitters).
+                    actor.tags = list(actor.tags) + [unreal.Name("ScctEmitterBurst")]
                 component = actor.niagara_component
                 component.set_asset(system)
                 set_parameters(component, parameters)

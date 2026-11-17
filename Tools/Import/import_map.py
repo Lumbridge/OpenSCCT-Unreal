@@ -36,9 +36,12 @@ LIGHT_PER_BRIGHTNESS = 5.0 / 255.0
 # The map's light colours are strong (they multiplied 2005 textures in display space). Under bounce lighting a
 # strongly coloured lamp turns a whole room one hue, so part of the colour is given up toward white.
 LIGHT_SATURATION = 0.7
-EMISSIVE_UNLIT = 1.2      # screens, lamps and signs that were unlit in the original
-EMISSIVE_ADDITIVE = 0.4   # flare and glow sprites: bloom does the rest
-EMISSIVE_SELF_ILLUM = 4.0  # the self-lit part of a lit surface whose class names no strength of its own
+# Glow strengths are brightnesses in the finished picture, not in the scene (scct_materials.Graph.in_the_picture):
+# 1 is the texture as painted at any exposure, more than 1 burns toward white and blooms. What the original drew
+# unlit is also shaded unlit here, so a screen in a lit room is not its picture plus the room's light on top.
+EMISSIVE_UNLIT = 0.9      # screens, lamps and signs that were unlit in the original
+EMISSIVE_ADDITIVE = 0.35  # flare and glow sprites, holograms: bloom does the rest
+EMISSIVE_SELF_ILLUM = 2.0  # the self-lit part of a lit surface whose class names no strength of its own
 # Additive materials that are painted light: beam and flare cards modelled into the level (French "rayon": ray).
 # They get the glow-card material (scct_effects.py) instead of the surface material, which draws them as solids.
 GLOW_CARDS = re.compile(r"beam|rayon|flare|lenseffect|dca_fx", re.IGNORECASE)
@@ -46,7 +49,21 @@ GLOW_CARD_BRIGHTNESS = 0.2
 # Additive sheets laid over a floor to draw the play of light under water (AquaE's Caustic1 group). At a flare's
 # strength they burn the floor to a white slab; they are a shimmer on it.
 CAUSTIC_SHEETS = re.compile(r"caustic", re.IGNORECASE)
-EMISSIVE_CAUSTICS = 0.06
+EMISSIVE_CAUSTICS = 0.08
+
+# The original's skyline: buildings and hills modelled in the sky zone, a small diorama the engine drew behind
+# everything as seen from one fixed point (the SkyZoneInfo). The sky itself is not imported (each map gets a real
+# one), but the skyline is brought back as real geometry far outside the level: the diorama is blown up about
+# the sky zone's eye point until its widest mesh stands this many times the level's own radius away (within the
+# two bounds, in cm), with the eye point moved to the middle of the level. Seen from there it is exactly the
+# original's view; elsewhere it shifts a little, as a real skyline would.
+BACKDROP_MESHES = re.compile(r"skyline|warp|imm", re.IGNORECASE)          # by the mesh's own name
+BACKDROP_NOT = re.compile(r"sky(?!line)|hemis|cloud|moon|lune|star", re.IGNORECASE)   # the sky itself
+BACKDROP_LEVEL_RADII = 4.0
+BACKDROP_DISTANCE = (60000.0, 150000.0)
+# A skyline is neither a lamp in the room nor part of the sky dome: its glow goes half the way with the exposure.
+BACKDROP_GLOW = 0.6
+BACKDROP_GLOW_IN_PICTURE = 0.5
 
 # What a detail set is scaled to before a surface class's amounts apply (see fetch_assets.measure_set): the
 # variation a set with real character has. A weaker set is brought up to it, at most this many times (beyond that
@@ -57,7 +74,7 @@ DETAIL_MAX_GAIN = 5.0
 # How much of the original's baked light (lightmaps, baked vertex colours) glows from the surfaces that carried it,
 # in the units of the lights above: about 1.6 would be all of it. It is a fill under the real lights, which do the
 # shadows and the shine, so it stays well below that.
-BAKED_FILL = 0.35
+BAKED_FILL = 0.5
 
 asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
 editor_assets = unreal.EditorAssetLibrary
@@ -323,6 +340,11 @@ def build_materials(material_doc):
         two_sided = bool(flags.get("two_sided")) and kind not in ("glass", "card")   # those masters are two-sided already
         overrides.set_editor_property("override_two_sided", two_sided)
         overrides.set_editor_property("two_sided", two_sided)
+        # Unlit in the original, unlit here: only its own glow. (Glass, water and cards have their own masters.)
+        shade_unlit = unlit and kind in ("surface", "plain")
+        overrides.set_editor_property("override_shading_model", shade_unlit)
+        overrides.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT if shade_unlit
+                                      else unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
         instance.set_editor_property("base_property_overrides", overrides)
 
         materials_lib.update_material_instance(instance)
@@ -462,6 +484,63 @@ def main():
                    baked_colours=bool(instance.get("vertexLit")), tags=scct_fx.instance_tags(instance))
         placed += 1
     log("placed %d meshes, %d without a mesh asset" % (placed, missing))
+
+    # ---- the skyline ------------------------------------------------------------------------------------------
+    sky_eye = (lighting.get("sky") or {}).get("location")
+    backdrop_rules = json.load(open(os.path.join(HERE, "map_skies.json"))).get("backdrop", {})
+    skip_backdrop = set(key(name) for name in backdrop_rules.get("skip", []))
+    backdrop = []
+    for instance in gltf["extras"]["svmap"]["instances"]:
+        own_name = instance["mesh"].split("#")[0].split(".")[-1]
+        if (not instance.get("skyZone") or instance.get("hidden") or instance.get("kind") != "staticmesh"
+                or not BACKDROP_MESHES.search(own_name) or BACKDROP_NOT.search(own_name) or key(own_name) in skip_backdrop):
+            continue
+        mesh = meshes.get(key(instance["mesh"]))
+        if mesh:
+            backdrop.append((instance, mesh))
+    if sky_eye and backdrop:
+        box_low = [min(i["location"][axis] for i in gltf["extras"]["svmap"]["instances"] if not i.get("skyZone") and not i.get("hidden")) for axis in range(3)]
+        box_high = [max(i["location"][axis] for i in gltf["extras"]["svmap"]["instances"] if not i.get("skyZone") and not i.get("hidden")) for axis in range(3)]
+        centre = [(box_low[axis] + box_high[axis]) * 0.5 for axis in range(3)]
+        level_radius = 0.5 * math.hypot(box_high[0] - box_low[0], box_high[1] - box_low[1])
+        widest = 1.0
+        for instance, mesh in backdrop:
+            bounds = mesh.get_bounds()
+            scale = instance.get("scale", [1, 1, 1])
+            reach = bounds.sphere_radius * max(abs(scale[0]), abs(scale[1]), abs(scale[2]))
+            widest = max(widest, math.hypot(instance["location"][0] - sky_eye[0], instance["location"][1] - sky_eye[1]) + reach)
+        distance = min(max(BACKDROP_LEVEL_RADII * level_radius, BACKDROP_DISTANCE[0]), BACKDROP_DISTANCE[1])
+        grow = distance / widest
+        glowing = set()
+        for instance, mesh in backdrop:
+            r = instance["rotation"]
+            rotation = rotator([r["Pitch"], r["Yaw"], r["Roll"]])
+            own = instance.get("scale", [1, 1, 1])
+            scale = unreal.Vector(own[0] * grow, own[1] * grow, own[2] * grow)
+            location = unreal.Vector(*[centre[axis] + (instance["location"][axis] - sky_eye[axis]) * grow for axis in range(3)])
+            pivot = instance.get("prePivot")
+            if pivot:
+                offset = unreal.Vector(pivot[0] * scale.x, pivot[1] * scale.y, pivot[2] * scale.z)
+                location = location - unreal.MathLibrary.greater_greater_vector_rotator(offset, rotation)
+            actor = place_mesh(mesh, instance["actor"], location, rotation, scale, "Atmosphere/Skyline", baked_colours=bool(instance.get("vertexLit")),
+                               tags=[unreal.Name("ScctBackdrop")])
+            component = actor.static_mesh_component
+            # A picture behind the level: it throws no shadow into it and is no part of its bounce light.
+            component.set_cast_shadow(False)
+            for name in ("visible_in_ray_tracing", "affect_dynamic_indirect_lighting", "affect_distance_field_lighting"):
+                try_set(component, name, False)
+            for slot in mesh.static_materials:
+                material = slot.material_interface
+                if isinstance(material, unreal.MaterialInstanceConstant) and material.get_path_name() not in glowing:
+                    glowing.add(material.get_path_name())
+                    if materials_lib.get_material_instance_scalar_parameter_value(material, "Emissive") > 0.0:
+                        materials_lib.set_material_instance_scalar_parameter_value(material, "Emissive", BACKDROP_GLOW)
+                        materials_lib.set_material_instance_scalar_parameter_value(material, "GlowInPicture", BACKDROP_GLOW_IN_PICTURE)
+                        materials_lib.update_material_instance(material)
+        log("skyline: %d meshes of the sky zone stand %.0f m out, %.0f times their size (%s)" % (
+            len(backdrop), distance / 100.0, grow, ", ".join(sorted(set(i["mesh"].split("#")[0].split(".")[-1] for i, _ in backdrop)))))
+    else:
+        log("skyline: none")
 
     # ---- effects ----------------------------------------------------------------------------------------------
     # What the original drew besides surfaces and lights (scct_fx.py). Their textures are mostly not in the
@@ -623,13 +702,17 @@ def main():
         ("auto_exposure_method", unreal.AutoExposureMethod.AEM_HISTOGRAM),
         # In EV100 (the project extends the luminance range). The eye adapts well into the dark, so shadows
         # stay readable when you stand in them, but not far up, so bright rooms do not grey out.
-        ("auto_exposure_min_brightness", -2.5),
-        ("auto_exposure_max_brightness", 3.0),
+        ("auto_exposure_min_brightness", -4.0),
+        ("auto_exposure_max_brightness", 4.0),
         ("auto_exposure_bias", 0.0),
+        # The eye is quick: a match starts on the right exposure within a second, and walking out of a dark
+        # corridor does not leave the yard white for long.
+        ("auto_exposure_speed_up", 5.0),
+        ("auto_exposure_speed_down", 2.5),
         # Local exposure: a lit doorway seen from a dark room keeps its detail and the dark room keeps its shapes,
-        # instead of one burning out or the other going black.
-        ("local_exposure_highlight_contrast_scale", 0.75),
-        ("local_exposure_shadow_contrast_scale", 0.75),
+        # instead of one burning out or the other going black (a floodlit wall beside a man in a black suit).
+        ("local_exposure_highlight_contrast_scale", 0.6),
+        ("local_exposure_shadow_contrast_scale", 0.6),
         ("bloom_intensity", 0.6),
         ("bloom_threshold", -1.0),
         ("vignette_intensity", 0.45),

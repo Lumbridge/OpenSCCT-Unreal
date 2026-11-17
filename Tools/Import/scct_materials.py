@@ -30,6 +30,10 @@ asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
 editor_assets = unreal.EditorAssetLibrary
 lib = unreal.MaterialEditingLibrary
 
+# How far a glow is taken along with the exposure (Graph.in_the_picture): from the darkest the eye adapts to
+# (the scale is about 0.2 there) to the brightest (about 10).
+EXPOSURE_BOUNDS = (0.08, 16.0)
+
 FLOAT1 = unreal.CustomMaterialOutputType.CMOT_FLOAT1
 FLOAT2 = unreal.CustomMaterialOutputType.CMOT_FLOAT2
 FLOAT3 = unreal.CustomMaterialOutputType.CMOT_FLOAT3
@@ -87,6 +91,29 @@ class Graph:
             node, output = source if isinstance(source, tuple) else (source, "")
             self.link(node, expression, name, output)
         return expression
+
+    def in_the_picture(self, light, amount=None):
+        """`light` as a brightness in the finished picture instead of in the scene: divided by the exposure the
+        eye has settled on (the engine's eye adaptation node). The levels are played with automatic exposure over
+        a wide range, and a glow of a fixed scene brightness is a dim patch in a lit hall and a white hole in a
+        dark cellar; a screen, a lamp glass or a painted flare is meant to look the same in both, as the original
+        drew them. `amount` (a node, 0..1) says how far to go: 0 leaves the scene brightness. The correction is
+        bounded, so a pass without an exposure of its own (Lumen's surface cache) cannot blow a glow up."""
+        inverse = self.node(unreal.MaterialExpressionEyeAdaptationInverse)
+        one = self.node(unreal.MaterialExpressionConstant3Vector, constant=unreal.LinearColor(1, 1, 1, 1))
+        linked = False
+        for name in ("LightValueInput", "LightValue"):
+            if lib.connect_material_expressions(one, "", inverse, name):
+                linked = True
+                break
+        if not linked:
+            raise RuntimeError("could not connect the eye adaptation node in " + self.path)
+        if amount is not None:
+            if not (lib.connect_material_expressions(amount, "", inverse, "AlphaInput")
+                    or lib.connect_material_expressions(amount, "", inverse, "Alpha")):
+                raise RuntimeError("could not connect the eye adaptation amount in " + self.path)
+        return self.custom("float s = (K.r + K.g + K.b) / 3.0; return L * clamp(s, %f, %f);" % EXPOSURE_BOUNDS, FLOAT3,
+                           L=light, K=inverse)
 
     def output(self, source, material_property, source_output=""):
         if not lib.connect_material_property(source, source_output, material_property):
@@ -237,9 +264,14 @@ def build_surface():
                      " return (min(LM * 4.6, 4.6) + vertex) * Fill;", FLOAT3,
                      LM=(lightmap, "RGB"), VC=g.node(unreal.MaterialExpressionVertexColor), UseVC=baked_vertex,
                      Fill=g.scalar("BakedFill", 0.0))
-    emissive = g.custom("return Base * Tint * (Whole + Baked) + Lit * Mask * Strength;", FLOAT3,
-                        Base=(base, "RGB"), Tint=tint, Whole=g.scalar("Emissive", 0.0), Baked=baked,
-                        Lit=(self_lit, "RGB"), Mask=(self_mask, "A"), Strength=g.scalar("SelfIllum", 0.0))
+    # The glow of a screen, a lamp glass or an additive flare is a brightness in the finished picture (see
+    # Graph.in_the_picture): 1 is the texture as painted, whatever the exposure. The baked light is light in the
+    # scene like any lamp's and stays that.
+    glow = g.custom("return Base * Tint * Whole + Lit * Mask * Strength;", FLOAT3,
+                    Base=(base, "RGB"), Tint=tint, Whole=g.scalar("Emissive", 0.0),
+                    Lit=(self_lit, "RGB"), Mask=(self_mask, "A"), Strength=g.scalar("SelfIllum", 0.0))
+    emissive = g.custom("return Glow + Base * Tint * Baked;", FLOAT3, Glow=g.in_the_picture(glow, g.scalar("GlowInPicture", 1.0)),
+                        Base=(base, "RGB"), Tint=tint, Baked=baked)
     g.output(emissive, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
     alpha = g.custom("return A * O;", FLOAT1, A=(base, "A"), O=g.scalar("Opacity", 1.0))
@@ -278,7 +310,7 @@ def build_glass():
                        F=fresnel, Glance=g.scalar("GlanceOpacity", 0.5))
     g.output(opacity, unreal.MaterialProperty.MP_OPACITY)
     emissive = g.custom("return Base * Tint * E;", FLOAT3, Base=(base, "RGB"), Tint=tint, E=g.scalar("Emissive", 0.0))
-    g.output(emissive, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    g.output(g.in_the_picture(emissive), unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     return g.finish()
 
 

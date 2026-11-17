@@ -108,7 +108,8 @@ def build_particle_glow():
     glow = g.custom("return T * C * CA * lerp(1.0, TA, saturate(W)) * B * S * N;", FLOAT3,
                     T=(texture, "RGB"), TA=(texture, "A"), C=(colour, "RGB"), CA=(colour, "A"),
                     W=g.scalar("AlphaWeight", 0.0), B=g.scalar("Brightness", 1.0), S=soft, N=near)
-    g.output(glow, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    # A spark or a flame is as bright in the picture in a dark room as in a lit one (Graph.in_the_picture).
+    g.output(g.in_the_picture(glow), unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     return g.finish()
 
 
@@ -181,7 +182,8 @@ def build_corona():
                       G=primitive_data(g, "ColourG", CORONA_COLOUR_SLOT + 1, 1.0),
                       B=primitive_data(g, "ColourB", CORONA_COLOUR_SLOT + 2, 1.0))
     glow = g.custom("return T * C * S * B;", FLOAT3, T=(texture, "RGB"), C=colour, S=sight, B=g.scalar("Brightness", 1.0))
-    g.output(glow, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    # A halo is the original's picture of glare: the same in the picture at any exposure, never a white blob.
+    g.output(g.in_the_picture(glow), unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     return g.finish()
 
 
@@ -302,7 +304,7 @@ def build_glow_card():
     glow = g.custom("return T * saturate(VC * 2.0) * B * S * N * lerp(1.0, F, saturate(E));", FLOAT3,
                     T=(texture, "RGB"), VC=g.node(unreal.MaterialExpressionVertexColor), B=g.scalar("Brightness", 0.2),
                     S=soft, N=near, F=facing, E=g.scalar("EdgeFade", 1.0))
-    g.output(glow, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    g.output(g.in_the_picture(glow), unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     return g.finish()
 
 
@@ -331,7 +333,11 @@ float fine = lerp(lerp(SCCT_WET_HASH(cell2), SCCT_WET_HASH(cell2 + float2(1, 0))
 #undef SCCT_WET_HASH
 float puddle = smoothstep(0.52, 0.68, coarse * 0.7 + fine * 0.3);
 float edge = saturate(min(min(UV.x, 1.0 - UV.x), min(UV.y, 1.0 - UV.y)) * 6.0);
-return float2(lerp(Damp, Puddle, puddle), lerp(DampAmount, 1.0, puddle) * edge);"""
+// Rain wets what faces the sky: the decal is projected straight down, and on a wall or a hanging leaf it would
+// smear into streaks. The surface's own slope is read from how the world position changes across the screen.
+float3 slope = cross(ddx(Position), ddy(Position));
+float up = smoothstep(0.55, 0.85, abs(slope.z) / max(length(slope), 1e-6));
+return float2(lerp(Damp, Puddle, puddle), lerp(DampAmount, 1.0, puddle) * edge * up);"""
 
 
 def build_wet():
