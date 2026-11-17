@@ -201,7 +201,7 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 		if (Amounts[Index] > ObjectAmount)
 		{
 			ObjectAmount = Amounts[Index];
-			ObjectMode = Modes[Index].Mode;
+			ObjectMode = VisionModes[Index].Mode;
 		}
 	}
 	Objects.Update(GetWorld(), ObjectMode, Data);
@@ -286,7 +286,7 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 		if (bMark && Amounts[Index] > MarkAmount)
 		{
 			MarkAmount = Amounts[Index];
-			MarkMode = Modes[Index].Mode;
+			MarkMode = VisionModes[Index].Mode;
 		}
 	}
 	const bool bThermal = MarkMode == 36;
