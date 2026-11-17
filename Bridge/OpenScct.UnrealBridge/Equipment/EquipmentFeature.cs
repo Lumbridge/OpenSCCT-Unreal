@@ -114,7 +114,15 @@ public sealed class EquipmentFeature
         }
 
         _gone.Clear();
-        _merc.OnTick(_session.Session.LocalController);
+        // A demo watches someone else from his eyes: his rebuilt weapon is sampled instead (PlayRoot's OnObservedTick).
+        if (_session.Session.FirstPersonOverride is { } observed)
+        {
+            _merc.OnObservedTick(observed());
+        }
+        else
+        {
+            _merc.OnTick(_session.Session.LocalController);
+        }
     }
 
     private Gear GearOf(SBasePawn pawn)
@@ -159,6 +167,12 @@ public sealed class EquipmentFeature
         _firstPerson = default;
         _eyePawn = null;
         PlaySession play = _session.Session;
+        if (play.FirstPersonOverride is { } observedOf)
+        {
+            DrawObservedFirstPerson(play, observedOf(), alpha);
+            return;
+        }
+
         SPlayerController? pc = play.LocalController;
         SBasePawn? local = play.LocalPawn;
         if (pc is null || local is null || !play.View.Valid)
@@ -185,6 +199,31 @@ public sealed class EquipmentFeature
         _firstPerson.ActorId = local.ActorId;
         _firstPerson.ShotCount = _gear.TryGetValue(local.ActorId, out Gear? gear) ? gear.Shots : 0;
         _firstPerson.Cloak = local.GlassEffect / 255f;
+    }
+
+    /// <summary>
+    /// A demo's first-person view of the watched player (PlayRoot with a FirstPersonOverride): his body leaves the
+    /// main view and, when he is a merc with a gun in his hands, the view model rebuilt from his recorded weapon is
+    /// drawn at the camera. Never the spy's eye view, as in the Godot client. A paused demo does not tick, so the
+    /// view model's clips stand still with it.
+    /// </summary>
+    private void DrawObservedFirstPerson(PlaySession play, SBasePawn? observed, float alpha)
+    {
+        if (observed is not { bDeleteMe: false } || !play.View.Valid)
+        {
+            return;
+        }
+
+        _eyePawn = observed;
+        if (!_merc.DrawObserved(observed, _frameDt, alpha, ref _firstPerson))
+        {
+            _firstPerson = default;
+            return;
+        }
+
+        _firstPerson.ActorId = observed.ActorId;
+        _firstPerson.ShotCount = _gear.TryGetValue(observed.ActorId, out Gear? gear) ? gear.Shots : 0;
+        _firstPerson.Cloak = observed.GlassEffect / 255f;
     }
 
     /// <summary>The first-person view model of this frame. False (and a cleared struct) when none is drawn.</summary>

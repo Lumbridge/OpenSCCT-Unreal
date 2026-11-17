@@ -39,5 +39,8 @@
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\CreateSessionModel.cs" Link="Linked\UI\CreateSessionModel.cs" />
     <!-- Demo playback's chase camera (Demo/DemoPlayback.cs), Godot-free like the session. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\Play\Demo\DemoChaseCamera.cs" Link="Linked\Demo\DemoChaseCamera.cs" />
+    <!-- The first-person weapon of a merc watched in a demo, rebuilt from his recorded third-person one
+         (Equipment/FirstPersonModels.cs, MercFirstPerson.DrawObserved); Godot-free like the session. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\Views\ObservedWeaponViewModel.cs" Link="Linked\Views\ObservedWeaponViewModel.cs" />
   </ItemGroup>
 </Project>

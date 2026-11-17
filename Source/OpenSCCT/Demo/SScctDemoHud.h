@@ -14,7 +14,7 @@ class SWrapBox;
  * Hide and Back to demos; the players to watch and the cameras (first person, third person, free, as played).
  *
  * Keys (as DemoHud): Space play / pause, Left / Right 5 s (Shift 30 s), Up / Down speed, Home restart, End the end,
- * C camera, [ / ] or the wheel the player, 1-9 a player, H hide / show, ? the shortcuts, Escape close them or ask to
+ * C camera, X X-ray, [ / ] or the wheel the player, 1-9 a player, H hide / show, ? the shortcuts, Escape close them or ask to
  * go back to the demos. The right mouse button orbits the third-person camera or looks with the free one; W A S D,
  * Q / E and Shift fly the free camera. The bar hides after four idle seconds while playing (not in an unattended run).
  */
@@ -24,6 +24,9 @@ public:
 	SLATE_BEGIN_ARGS(SScctDemoHud) {}
 		/** Back to demos was confirmed. */
 		SLATE_EVENT(FSimpleDelegate, OnLeave)
+		/** Whether X-ray is on, and its toggle (the X-RAY chip and the X key). */
+		SLATE_ATTRIBUTE(bool, XRayOn)
+		SLATE_EVENT(FSimpleDelegate, OnToggleXRay)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -63,6 +66,8 @@ private:
 	void ToggleHelp();
 
 	FSimpleDelegate OnLeave;
+	TAttribute<bool> XRayOn;
+	FSimpleDelegate OnToggleXRay;
 	FScctDemoPlayInfo Info = {};
 	TArray<FScctDemoMarker> Markers;
 	TArray<FScctDemoTarget> Targets;
