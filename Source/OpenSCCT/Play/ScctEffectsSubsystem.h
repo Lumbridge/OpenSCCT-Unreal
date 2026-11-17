@@ -45,6 +45,18 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
+	/**
+	 * For other features (the level state): a lamp or a device giving up, as a short burst of Count electric sparks
+	 * thrown along Normal with a brief cold flash of light. Does nothing before the first match's effects are ready.
+	 */
+	void SpawnSparkBurst(const FVector& At, const FVector& Normal, int32 Count);
+
+	/**
+	 * For other features: a pane of glass going at At, its glints and dust thrown along Direction (zero: it just
+	 * drops). Does nothing before the first match's effects are ready.
+	 */
+	void SpawnGlassBurst(const FVector& At, const FVector& Direction);
+
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 

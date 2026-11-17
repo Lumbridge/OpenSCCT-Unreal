@@ -1272,3 +1272,30 @@ UStaticMesh* UScctEffectsSubsystem::FindMesh(int32 MeshId)
 	}
 	return Meshes.Add(MeshId, Mesh);
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// For other features
+// ---------------------------------------------------------------------------------------------------------------
+
+void UScctEffectsSubsystem::SpawnSparkBurst(const FVector& At, const FVector& Normal, int32 Count)
+{
+	if (!bSceneReady || !IsValid(Host))
+	{
+		return;
+	}
+	const FVector Out = Normal.GetSafeNormal(UE_SMALL_NUMBER, FVector::DownVector);
+	SpawnSparks(At, Out, Count, FLinearColor(16.0f, 20.0f, 34.0f), 420.0f);
+	AcquireLight(At + Out * 10.0, FLinearColor(0.55f, 0.7f, 1.0f), 30.0f, 350.0f, 0.1f, false);
+}
+
+void UScctEffectsSubsystem::SpawnGlassBurst(const FVector& At, const FVector& Direction)
+{
+	if (!bSceneReady || !IsValid(Host))
+	{
+		return;
+	}
+	// Shards read as cold glints that fall fast; the fine dust hangs a moment where the pane was.
+	const FVector Out = Direction.GetSafeNormal(UE_SMALL_NUMBER, FVector::DownVector);
+	SpawnSparks(At, Out, 36, FLinearColor(5.0f, 6.0f, 6.5f), 520.0f);
+	SpawnDust(At, Out, 8, FLinearColor(0.82f, 0.87f, 0.9f, 0.3f), 55.0f);
+}
