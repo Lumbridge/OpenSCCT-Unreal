@@ -25,15 +25,15 @@ namespace OpenScct.UnrealBridge.Voice;
 /// <see cref="AfterVisitTick"/>, which the online bridge calls once a frame after its visit tick; the echo test by
 /// <see cref="Update"/>.</para>
 /// </summary>
-public sealed class VoiceBridge : IDisposable
+public sealed partial class VoiceBridge : IDisposable
 {
-    public const int ApiVersion = 2;
+    public const int ApiVersion = 3;
 
     /// <summary>The talker id the echo test comes back on (<see cref="ReadFrame"/>).</summary>
     public const int EchoTalker = VoiceEchoTest.Talker;
 
     private readonly VoiceSettings _settings = new();
-    private readonly VoiceVolumes _volumes = new();
+    private VoiceVolumes _volumes = new();
     private readonly float[] _scratch = new float[VoiceK.FrameSamples];
     private readonly Dictionary<ushort, int> _teams = new();
     private OnlineClient? _visit;
@@ -117,6 +117,11 @@ public sealed class VoiceBridge : IDisposable
         voice.SetCaptureRate(_captureRate);
         _online = new OnlineVoice(client, voice, _volumes);
         _visit = client;
+        // The players muted earlier in this run (another visit, or before this one began) stay muted.
+        foreach (string name in _mutedNames)
+        {
+            _online.SetMuted(name, true);
+        }
     }
 
     // ---- the microphone and the keys ----------------------------------------------------------------------------
@@ -350,7 +355,7 @@ public sealed class VoiceBridge : IDisposable
 
         if (online.NameOf((ushort)talker) is { } name)
         {
-            online.SetMuted(name, muted);
+            SetPlayerMuted(name, muted);
         }
         else
         {

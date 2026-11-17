@@ -43,6 +43,7 @@ internal static unsafe class Probe
     private static OnlineApi s_online;
     private static readonly Stopwatch s_run = Stopwatch.StartNew();
     private static double s_tonePhase;
+    private static string s_volumeFile = string.Empty;
 
     private static double Now => s_run.Elapsed.TotalSeconds;
 
@@ -84,6 +85,12 @@ internal static unsafe class Probe
         try
         {
             server = StartServer(openScct, content, work, port);
+            s_volumeFile = Path.Combine(work, "VoiceVolumes.json");
+            fixed (char* path = s_volumeFile)
+            {
+                s_voice.SetVolumeFile(path);
+            }
+
             ok &= Lobby(port);
         }
         finally
@@ -138,7 +145,9 @@ internal static unsafe class Probe
             ("VoiceSettingsBlock", sizeof(VoiceSettingsBlock), 48),
             ("VoiceStatus", sizeof(VoiceStatus), 64),
             ("VoiceTalkerInfo", sizeof(VoiceTalkerInfo), 176),
-            ("VoiceApi", sizeof(VoiceApi), 8 + 18 * sizeof(void*)),
+            ("VoicePlayerInfo", sizeof(VoicePlayerInfo), 28),
+            ("VoiceContext", sizeof(VoiceContext), 16),
+            ("VoiceApi", sizeof(VoiceApi), 8 + 24 * sizeof(void*)),
         ];
         bool ok = true;
         foreach ((string name, int size, int expected) in sizes)
@@ -480,8 +489,69 @@ internal static unsafe class Probe
             Console.WriteLine($"t={Now:F1} restrict mic to team: before {knownBefore}, sent {sent}, restricted {restricted}, unrestricted {unrestricted}");
             bool okD = knownBefore == 0 && sent == 1 && restricted && unrestricted;
 
-            Console.WriteLine($"bridge talks {(okA ? "ok" : "FAILED")}, bridge hears {(okB ? "ok" : "FAILED")}, volume and mute {(okC ? "ok" : "FAILED")}, team only {(okD ? "ok" : "FAILED")}");
-            return okA && okB && okC && okD;
+            // By name, as the overlay and the lobby do: volume 0 is still received but heard as silence, and saved.
+            VoicePlayerInfo PlayerVoice(string name)
+            {
+                VoicePlayerInfo info = default;
+                fixed (char* n = name)
+                {
+                    s_voice.GetPlayerVoice(n, &info);
+                }
+
+                return info;
+            }
+
+            void ByName(string name, float? volume, bool? muted)
+            {
+                fixed (char* n = name)
+                {
+                    if (volume is { } v)
+                    {
+                        s_voice.SetPlayerVolume(n, v);
+                    }
+
+                    if (muted is { } m)
+                    {
+                        s_voice.SetPlayerMuted(n, m ? 1 : 0);
+                    }
+                }
+            }
+
+            Wait(() => false, 1.0);
+            ByName("GodotVoice", 0f, null);
+            before = State().PacketsReceived;
+            heardByBridge.Clear();
+            Wait(() => heardByBridge.Count > 60 * VoiceK.FrameSamples, 10);
+            double silent = Rms(heardByBridge, 0);
+            long packetsAtZero = State().PacketsReceived - before;
+            VoicePlayerInfo other0 = PlayerVoice("GodotVoice");
+            VoicePlayerInfo self = PlayerVoice("UnrealVoice");
+            string savedAtZero = File.Exists(s_volumeFile) ? File.ReadAllText(s_volumeFile) : "(no file)";
+            VoiceContext context = default;
+            s_voice.GetContext(&context);
+            Console.WriteLine($"t={Now:F1} by name at volume 0: {heardByBridge.Count / VoiceK.FrameSamples} frames rms={silent:F4}, {packetsAtZero} packets; " +
+                $"row visit={other0.Visit} talker={other0.Talker} speaking={other0.Speaking} volume={other0.Volume:F2} muted={other0.Muted}; " +
+                $"own row local={self.Local} talker={self.Talker}; context visit={context.Visit} round={context.InRound} team={context.LocalTeam}; saved {savedAtZero}");
+            bool okE = heardByBridge.Count > 40 * VoiceK.FrameSamples && silent < 1e-6 && packetsAtZero > 40 && other0.Visit == 1 &&
+                other0.Talker == otherTalker && other0.Speaking != 0 && other0.Volume == 0f && self.Local == 1 &&
+                context.Visit == 1 && context.InRound == 0 && context.LocalTeam == 0 && savedAtZero.Contains("\"GodotVoice\":0", StringComparison.Ordinal);
+
+            ByName("GodotVoice", null, true);
+            Wait(() => false, 1.0);
+            before = State().PacketsReceived;
+            Wait(() => false, 2.0);
+            long packetsMuted = State().PacketsReceived - before;
+            bool mutedRow = PlayerVoice("GodotVoice").Muted == 1;
+            ByName("GodotVoice", 1f, false);
+            Wait(() => false, 1.0);
+            string savedAtOne = File.ReadAllText(s_volumeFile);
+            int banSent = s_voice.SetVoiceBanned(other.Lobby.LocalId, 1);
+            Console.WriteLine($"t={Now:F1} by name muted: {packetsMuted} packets in 2 s, row muted {mutedRow}; back to 100%: saved {savedAtOne}; voice ban sent {banSent} (the server checks the sender)");
+            bool okF = packetsMuted < 5 && mutedRow && !savedAtOne.Contains("GodotVoice", StringComparison.Ordinal) && banSent == 1;
+
+            Console.WriteLine($"bridge talks {(okA ? "ok" : "FAILED")}, bridge hears {(okB ? "ok" : "FAILED")}, volume and mute {(okC ? "ok" : "FAILED")}, team only {(okD ? "ok" : "FAILED")}, " +
+                $"by name {(okE ? "ok" : "FAILED")}, by name muted {(okF ? "ok" : "FAILED")}");
+            return okA && okB && okC && okD && okE && okF;
         }
         finally
         {

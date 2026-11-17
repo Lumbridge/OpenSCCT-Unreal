@@ -13,7 +13,7 @@
 // The visit's voice is ticked by the online table's Update (after the visit's own ticks); Update here only runs the
 // microphone test.
 
-constexpr int32 ScctVoiceApiVersion = 2;
+constexpr int32 ScctVoiceApiVersion = 3;
 
 /** Samples in one voice frame: 20 ms at 48 kHz, what ReadFrame writes. */
 constexpr int32 ScctVoiceFrameSamples = 960;
@@ -114,6 +114,36 @@ struct FScctVoiceTalker
 	TCHAR Name[NameCapacity];
 };
 
+/** One player as the lobby shows him (GetPlayerVoice, by name): Godot's speaking mark, "Voice volume" and "Mute". */
+struct FScctVoicePlayer
+{
+	/** An online visit is up (without one only Volume and Muted mean anything). */
+	int32 Visit;
+	/** His talker id on the current map, 0 when he is not on it. */
+	int32 Talker;
+	/** He is the local player. */
+	int32 Local;
+	/** Being heard now; for the local player, transmitting. */
+	int32 Speaking;
+	/** Muted by the local player (kept by name for the rest of the run). */
+	int32 Muted;
+	/** The local player's volume for him, 0 to 2 (kept by name in the volume file). */
+	float Volume;
+	/** RMS of the last frame heard from him (after the volume), or of the microphone for the local player. */
+	float Level;
+};
+
+/** Where the visit is (GetContext): what the speaker overlay needs beyond the talker rows. */
+struct FScctVoiceContext
+{
+	int32 Visit;
+	/** In a round, not the lobby. */
+	int32 InRound;
+	/** 0 spies, 1 mercs, 255 spectators (lobby), -1 not known. */
+	int32 LocalTeam;
+	int32 LocalTalker;
+};
+
 struct FScctVoiceApi
 {
 	int32 Version;
@@ -156,9 +186,26 @@ struct FScctVoiceApi
 	int32 (__cdecl* SetTeamVoiceOnly)(int32 Only);
 	/** The local player's "Restrict Mic to Team" as the server has it: -1 not known (no visit yet), else 0 or 1. */
 	int32 (__cdecl* GetTeamVoiceOnly)();
+
+	// Version 3: per-player choices by name, the lobby's per-player row, the host's voice ban, the overlay's context.
+
+	/** Keeps the per-player volumes in this file (JSON of name to volume): loaded now, written whenever one changes. */
+	void (__cdecl* SetVolumeFile)(const TCHAR* Path);
+	/** The local player's volume for a player by name, 0 to 2: at once on the current map, and saved. */
+	void (__cdecl* SetPlayerVolume)(const TCHAR* Name, float Volume);
+	/** Mutes or unmutes a player by name for the rest of the run (the server stops sending him while muted). */
+	void (__cdecl* SetPlayerMuted)(const TCHAR* Name, int32 Muted);
+	/** One player's speaking, level, volume and mute by name; returns 1 while an online visit is up. */
+	int32 (__cdecl* GetPlayerVoice)(const TCHAR* Name, FScctVoicePlayer* OutPlayer);
+	/** The host's Voice Ban of a lobby player id (OnlineClient.SetVoiceBanned; the server checks who asks); 1 sent, 0 no visit. */
+	int32 (__cdecl* SetVoiceBanned)(int32 PlayerId, int32 Banned);
+	/** Lobby or round, and the local player's team. */
+	void (__cdecl* GetContext)(FScctVoiceContext* OutContext);
 };
 
 static_assert(sizeof(FScctVoiceSettings) == 48, "FScctVoiceSettings does not match VoiceSettingsBlock");
 static_assert(sizeof(FScctVoiceStatus) == 64, "FScctVoiceStatus does not match VoiceStatus");
 static_assert(sizeof(FScctVoiceTalker) == 176, "FScctVoiceTalker does not match VoiceTalkerInfo");
-static_assert(sizeof(FScctVoiceApi) == 8 + 18 * sizeof(void*), "FScctVoiceApi does not match VoiceApi");
+static_assert(sizeof(FScctVoicePlayer) == 28, "FScctVoicePlayer does not match VoicePlayerInfo");
+static_assert(sizeof(FScctVoiceContext) == 16, "FScctVoiceContext does not match VoiceContext");
+static_assert(sizeof(FScctVoiceApi) == 8 + 24 * sizeof(void*), "FScctVoiceApi does not match VoiceApi");

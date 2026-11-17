@@ -5,6 +5,7 @@
 #include "Runtime/ScctVoiceApi.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Voice/ScctVoiceCapture.h"
+#include "Voice/SScctVoiceOverlay.h"
 #include <atomic>
 #include "ScctVoiceSubsystem.generated.h"
 
@@ -80,6 +81,15 @@ struct FScctVoiceTalkerOutput
  *                              after the voice table came up (0 when no "S:"), as the Options screen would (so
  *                              they are kept in the user settings); "S:options[=Page]" logs a page at that time
  *   -ScctVoiceOptions[=Page]   logs every option of the page (default Voice) with its default and value
+ *   -ScctVoiceOverlay          the speaker overlay everywhere (a local match too), with made-up talkers and the
+ *                              muted microphone line beside any real ones
+ *   -ScctVoiceOverlayInput="S:Line:click|up|down;.."  a real mouse event through Slate on the overlay's line
+ *                              (0 the top) S seconds after the voice table came up (with -ScctMatchMenu to free the
+ *                              cursor), logged with what Slate made of it
+ *   -ScctVoiceMute=Name[;Name] those players at volume 0 by name (still received, played as silence), saved
+ *   -ScctVoiceVolume=Name=V[;..] those players at volume V (0 to 2) by name, saved
+ *
+ * OVERLAY. In a round of an online visit, SScctVoiceOverlay on the game viewport (Voice/ScctVoicePlayers.cpp).
  * Console: scct.Voice.Set <Key> <Value|default>, scct.Voice.Options [Page].
  * Log lines start with "ScctVoice:": the capture (device, rate), once a second while the voice client is connected
  * the frames captured and sent and the talkers, and for every talker heard that second "ScctVoice: heard talker=..
@@ -122,7 +132,36 @@ public:
 	FText GetTestState() const { return TestState; }
 	bool IsTestRunning() const { return bTestRunning; }
 
+	// ---- other players (Voice/ScctVoicePlayers.cpp) -----------------------------------------------------------
+	//
+	// The local player's choices for each other player, by name so they hold from map to map: a volume from 0 to 2
+	// (10% steps from the overlay, kept across runs in Saved/VoiceVolumes.json as Godot's PlayerVoiceVolumeStore does)
+	// and a mute (the server stops sending him; kept for the rest of the run). The lobby screen reads a player's row
+	// with GetPlayerVoice and acts with SetPlayerVolume, SetPlayerMuted and, for the host, SetVoiceBanned;
+	// SScctVoiceLobbyControls is a ready-made row of those controls.
+
+	/** One player's speaking, level, volume and mute (zeros and volume 1 when the bridge has no voice table). */
+	FScctVoicePlayer GetPlayerVoice(const FString& Name) const;
+	/** The local player's volume for Name, 0 to 2: at once on the current map, and saved. */
+	void SetPlayerVolume(const FString& Name, float Volume);
+	void SetPlayerMuted(const FString& Name, bool bMuted);
+	/** The host's (or an admin's) Voice Ban of a lobby player; the server refuses anyone else. False with no visit. */
+	bool SetVoiceBanned(int32 PlayerId, bool bBanned);
+	/** Godot's lobby line about the microphone: "Mic transmitting, push to talk", "Your microphone is muted"... */
+	FText GetMicrophoneLine() const;
+	/** Lobby or round, and the local player's team, as of this frame. */
+	FScctVoiceContext GetContext() const { return Context; }
+
 private:
+	void InitPlayers();
+	void StartPlayers();
+	void UpdateOverlay();
+	void ShowOverlay(bool bShow);
+	TArray<FScctVoiceOverlayLine> BuildOverlayLines() const;
+	void ToggleOverlayMute(const FString& Player);
+	void AdjustOverlayVolume(const FString& Player, int32 Steps);
+	void RunOverlayInputs();
+
 	bool Tick(float DeltaTime);
 	void BindCommands();
 	void HandleLocalCommand(FName Name, int32 Arg, bool bPressed);
@@ -230,6 +269,36 @@ private:
 	TArray<FScheduledSetting> ScheduledSettings;
 	float ReadyTime = 0.0f;
 	FString OptionsToLog;
+
+	/** The speaker overlay on the game viewport (null while it is not shown) and the viewport it is on. */
+	TSharedPtr<SScctVoiceOverlay> Overlay;
+	TWeakObjectPtr<class UGameViewportClient> OverlayViewport;
+	/** -ScctVoiceOverlay: shown everywhere, with made-up talkers beside any real ones. */
+	bool bForceOverlay = false;
+	struct FFakeTalker
+	{
+		FString Name;
+		int32 Team = 0;
+		bool bTeamChannel = false;
+		float Volume = 1.0f;
+		bool bMuted = false;
+	};
+	TArray<FFakeTalker> FakeTalkers;
+	/** -ScctVoiceOverlayInput: mouse events sent through Slate onto a line, at seconds after the voice table came up. */
+	struct FOverlayInput
+	{
+		float Seconds = 0.0f;
+		int32 Line = 0;
+		/** "click", "up" or "down" (the wheel). */
+		FString Action;
+	};
+	TArray<FOverlayInput> OverlayInputs;
+	FString LastOverlayText;
+	FScctVoiceContext Context = { 0, 0, -1, 0 };
+	/** Where the per-player volumes are kept, and -ScctVoiceMute / -ScctVoiceVolume's names and volumes. */
+	FString VolumeFile;
+	TArray<TPair<FString, float>> SwitchVolumes;
+	bool bPlayersStarted = false;
 
 	float LogTimer = 0.0f;
 	int64 LastFramesSent = 0;

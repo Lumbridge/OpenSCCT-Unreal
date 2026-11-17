@@ -72,6 +72,26 @@ public unsafe struct VoiceApi
 
     /// <summary>The local player's "Restrict Mic to Team" as the server has it: -1 not known, else 0 or 1.</summary>
     public delegate* unmanaged[Cdecl]<int> GetTeamVoiceOnly;
+
+    // Version 3: per-player choices by name, the lobby's per-player row, the host's voice ban, the overlay's context.
+
+    /// <summary>Keeps the per-player volumes in this file (UTF-16 path, zero terminated): loaded now, saved on change.</summary>
+    public delegate* unmanaged[Cdecl]<char*, void> SetVolumeFile;
+
+    /// <summary>The local player's volume for a player by name, 0 to 2, saved.</summary>
+    public delegate* unmanaged[Cdecl]<char*, float, void> SetPlayerVolume;
+
+    /// <summary>Mutes or unmutes a player by name for the rest of the run.</summary>
+    public delegate* unmanaged[Cdecl]<char*, int, void> SetPlayerMuted;
+
+    /// <summary>One player's speaking, level, volume and mute by name; 1 when an online visit is up.</summary>
+    public delegate* unmanaged[Cdecl]<char*, VoicePlayerInfo*, int> GetPlayerVoice;
+
+    /// <summary>The host's Voice Ban of a lobby player id (OnlineClient.SetVoiceBanned); 1 sent, 0 no visit.</summary>
+    public delegate* unmanaged[Cdecl]<int, int, int> SetVoiceBanned;
+
+    /// <summary>Lobby or round, and the local player's team.</summary>
+    public delegate* unmanaged[Cdecl]<VoiceContext*, void> GetContext;
 }
 
 public static unsafe class VoiceExports
@@ -104,6 +124,12 @@ public static unsafe class VoiceExports
         api->SetMeter = &SetMeter;
         api->SetTeamVoiceOnly = &SetTeamVoiceOnly;
         api->GetTeamVoiceOnly = &GetTeamVoiceOnly;
+        api->SetVolumeFile = &SetVolumeFile;
+        api->SetPlayerVolume = &SetPlayerVolume;
+        api->SetPlayerMuted = &SetPlayerMuted;
+        api->GetPlayerVoice = &GetPlayerVoice;
+        api->SetVoiceBanned = &SetVoiceBanned;
+        api->GetContext = &GetContext;
         return VoiceBridge.ApiVersion;
     }
 
@@ -337,6 +363,108 @@ public static unsafe class VoiceExports
         {
             Fail(e);
             return -1;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void SetVolumeFile(char* path)
+    {
+        try
+        {
+            if (path != null)
+            {
+                Voice.SetVolumeFile(new string(path));
+            }
+        }
+        catch (Exception e)
+        {
+            Fail(e);
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void SetPlayerVolume(char* name, float volume)
+    {
+        try
+        {
+            if (name != null)
+            {
+                Voice.SetPlayerVolume(new string(name), volume);
+            }
+        }
+        catch (Exception e)
+        {
+            Fail(e);
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void SetPlayerMuted(char* name, int muted)
+    {
+        try
+        {
+            if (name != null)
+            {
+                Voice.SetPlayerMuted(new string(name), muted != 0);
+            }
+        }
+        catch (Exception e)
+        {
+            Fail(e);
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetPlayerVoice(char* name, VoicePlayerInfo* info)
+    {
+        if (info == null)
+        {
+            return 0;
+        }
+
+        try
+        {
+            *info = Voice.ReadPlayer(name == null ? string.Empty : new string(name));
+            return info->Visit;
+        }
+        catch (Exception e)
+        {
+            *info = default;
+            Fail(e);
+            return 0;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int SetVoiceBanned(int playerId, int banned)
+    {
+        try
+        {
+            return Voice.SetVoiceBanned(playerId, banned != 0) ? 1 : 0;
+        }
+        catch (Exception e)
+        {
+            Fail(e);
+            return 0;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void GetContext(VoiceContext* context)
+    {
+        if (context == null)
+        {
+            return;
+        }
+
+        try
+        {
+            *context = Voice.ReadContext();
+        }
+        catch (Exception e)
+        {
+            *context = new VoiceContext { LocalTeam = -1 };
+            Fail(e);
         }
     }
 

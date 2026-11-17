@@ -8,6 +8,9 @@
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
+#include "Engine/GameInstance.h"
+#include "Voice/ScctVoiceSubsystem.h"
+#include "Voice/SScctVoiceLobbyControls.h"
 #include "OpenSCCT.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
@@ -772,6 +775,10 @@ void SScctFrontEnd::RefillLobby()
 	{
 		Rows->ClearChildren();
 	}
+	// Voice chat's part of each row (Voice/SScctVoiceLobbyControls): speaking mark, volume, mute, the host's voice ban.
+	const TWeakObjectPtr<UScctVoiceSubsystem> VoiceChat = Visit->GetGameInstance() != nullptr ? Visit->GetGameInstance()->GetSubsystem<UScctVoiceSubsystem>() : nullptr;
+	const FScctOnlinePlayer* LocalRow = Visit->GetPlayers().FindByPredicate([Visit](const FScctOnlinePlayer& P) { return P.Id == Visit->GetStatus().LocalId; });
+	const bool bLocalAdmin = LocalRow != nullptr && (LocalRow->Flags & (EScctOnlinePlayerFlags::Host | EScctOnlinePlayerFlags::Admin)) != 0;
 	FString Watching;
 	for (const FScctOnlinePlayer& Player : Visit->GetPlayers())
 	{
@@ -804,6 +811,11 @@ void SScctFrontEnd::RefillLobby()
 			[
 				Ui::Text(Ui::ToText(FString(Player.Name)), 13.5f, FSlateColor(bLocal ? ScctHudStyle::Accent(Player.Team) : ScctHudStyle::Text()),
 					bLocal ? ScctHudStyle::EWeight::Bold : ScctHudStyle::EWeight::Regular)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 10.0f, 0.0f)
+			[
+				SNew(SScctVoiceLobbyControls).Voice(VoiceChat).PlayerName(FString(Player.Name)).PlayerId(Player.Id).Team(Player.Team)
+				.Local(bLocal).Bot(bBot).CanBan(bLocalAdmin && !bLocal).VoiceBanned((Player.Flags & EScctOnlinePlayerFlags::VoiceBanned) != 0)
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[

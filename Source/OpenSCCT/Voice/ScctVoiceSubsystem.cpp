@@ -256,6 +256,7 @@ void UScctVoiceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	FScctSettings::Reset(TestKey);
 	TestState = LOCTEXT("TestIdle", "Hear exactly what other players hear from you.");
 
+	InitPlayers();
 	Capture = MakeUnique<FScctVoiceCapture>();
 	RefreshDevices();
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: microphone %s%s%s%s"),
@@ -277,6 +278,7 @@ void UScctVoiceSubsystem::Deinitialize()
 		CommandSource->OnLocalCommand.Remove(CommandHandle);
 	}
 	CommandSource.Reset();
+	ShowOverlay(false);
 	ClearOutputs();
 	RemoveTaps();
 	if (Capture.IsValid())
@@ -313,6 +315,7 @@ bool UScctVoiceSubsystem::Tick(float DeltaTime)
 		}
 		UE_LOG(LogOpenSCCT, Log, TEXT("ScctVoice: the bridge's voice table is ready"));
 		ApplySettings();
+		StartPlayers();
 		if (!OptionsToLog.IsEmpty())
 		{
 			// Every subsystem has registered its options by now.
@@ -359,6 +362,8 @@ bool UScctVoiceSubsystem::Tick(float DeltaTime)
 	EnsureTaps();
 	UpdateCapture(DeltaTime);
 	PumpPlayback(DeltaTime);
+	Api->GetContext(&Context);
+	UpdateOverlay();
 	PumpEchoReference();
 	ReportError();
 

@@ -145,3 +145,49 @@ public unsafe struct VoiceTalkerInfo
     /// <summary>The player's name (lobby player or PlayerReplicationInfo), or "Player n" while unknown.</summary>
     public fixed char Name[NameCapacity];
 }
+
+/// <summary>
+/// One player as the lobby shows him (<c>GetPlayerVoice</c>, by name): Godot's LobbyRoomScreen speaking mark, "Voice
+/// volume" and "Mute".
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct VoicePlayerInfo
+{
+    /// <summary>An online visit is up (without one only the volume and the mute mean anything).</summary>
+    public int Visit;
+
+    /// <summary>His talker id on the current map, 0 when he is not on it (or not named yet).</summary>
+    public int Talker;
+
+    /// <summary>He is the local player.</summary>
+    public int Local;
+
+    /// <summary>Being heard now; for the local player, transmitting.</summary>
+    public int Speaking;
+
+    /// <summary>Muted by the local player (kept by name for the rest of the run).</summary>
+    public int Muted;
+
+    /// <summary>The local player's volume for him, 0 to 2 (kept by name in the volume file).</summary>
+    public float Volume;
+
+    /// <summary>RMS of the last frame heard from him (after the volume), or of the microphone for the local player.</summary>
+    public float Level;
+}
+
+/// <summary>Where the visit is (<c>GetContext</c>): what the speaker overlay needs beyond the talker rows.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct VoiceContext
+{
+    /// <summary>An online visit is up.</summary>
+    public int Visit;
+
+    /// <summary>The visit is in a round (not the lobby).</summary>
+    public int InRound;
+
+    /// <summary>The local player's team: 0 spies, 1 mercs, 255 spectators (lobby), -1 not known.</summary>
+    public int LocalTeam;
+
+    /// <summary>The local player's talker id on the current map (0 until known).</summary>
+    public int LocalTalker;
+}
