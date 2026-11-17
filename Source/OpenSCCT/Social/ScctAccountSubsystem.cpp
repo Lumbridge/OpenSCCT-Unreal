@@ -418,8 +418,8 @@ void UScctAccountSubsystem::ApplyIncoming()
 	{
 		return ReadAll([this, Which](TCHAR* Buffer, int32 Capacity) { return Api->GetIncomingProfile(static_cast<int32>(Which), Buffer, Capacity); });
 	};
-	TCHAR Probe[2];
-	if (Api->GetIncomingProfile(static_cast<int32>(EScctProfilePart::Settings), Probe, UE_ARRAY_COUNT(Probe)) < 0)
+	TCHAR IncomingProbe[2];
+	if (Api->GetIncomingProfile(static_cast<int32>(EScctProfilePart::Settings), IncomingProbe, UE_ARRAY_COUNT(IncomingProbe)) < 0)
 	{
 		return;
 	}
