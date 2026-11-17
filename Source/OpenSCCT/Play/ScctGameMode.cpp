@@ -1,7 +1,15 @@
 #include "Play/ScctGameMode.h"
 
+#include "Blueprint/UserWidget.h"
+#include "GameFramework/PlayerController.h"
+#include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
+#include "Menu/ScctMatchMenuWidget.h"
+#include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
+#include "Misc/Parse.h"
+#include "Online/ScctOnlineSubsystem.h"
+#include "OpenSCCT.h"
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctViewPawn.h"
 
@@ -36,6 +44,7 @@ namespace
 
 AScctGameMode::AScctGameMode()
 {
+	PrimaryActorTick.bCanEverTick = true;
 	DefaultPawnClass = AScctViewPawn::StaticClass();
 	PlayerControllerClass = AScctPlayerController::StaticClass();
 }
@@ -65,14 +74,92 @@ void AScctGameMode::InitGame(const FString& MapName, const FString& Options, FSt
 	Match.bRifles = ParseSwitch(Options, TEXT("Rifles"));
 	Match.bOfflineRules = ParseSwitch(Options, TEXT("Practice"));
 	Match.PlayerName = UGameplayStatics::ParseOption(Options, TEXT("Name"));
+	bOnline = ParseSwitch(Options, UScctOnlineSubsystem::OnlineOption);
+	FParse::Value(FCommandLine::Get(), TEXT("ScctMatchMenu="), OpenMenuIn);
 }
 
 void AScctGameMode::StartPlay()
 {
 	Super::StartPlay();
 
-	if (UScctSessionSubsystem* Session = GetWorld()->GetSubsystem<UScctSessionSubsystem>())
+	UScctSessionSubsystem* Session = GetWorld()->GetSubsystem<UScctSessionSubsystem>();
+	UScctOnlineSubsystem* Online = UScctOnlineSubsystem::Get(this);
+	if (Session == nullptr)
 	{
-		Session->StartMatch(Match);
+		return;
+	}
+
+	if (bOnline && Online != nullptr)
+	{
+		// The round is the server's: this level only presents the session the visit puts in the bridge's slot.
+		UE_LOG(LogOpenSCCT, Log, TEXT("Level %s presents the online visit's round (no local match)"), *Match.Map);
+		Online->PresentIn(Session);
+		return;
+	}
+
+	if (Online != nullptr && Online->GetState() != EScctOnlineState::Idle)
+	{
+		// Starting a local match ends a visit in the bridge anyway; leaving first tells the server.
+		Online->Leave();
+	}
+	Session->StartMatch(Match);
+}
+
+void AScctGameMode::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	APlayerController* Player = GetWorld()->GetFirstPlayerController();
+	if (Player == nullptr || !Player->IsLocalController())
+	{
+		return;
+	}
+	if (!IsValid(MatchMenu))
+	{
+		// Above the HUD (10), which it never covers while the menu is closed and nothing is waited for.
+		MatchMenu = CreateWidget<UScctMatchMenuWidget>(Player, UScctMatchMenuWidget::StaticClass());
+		if (!IsValid(MatchMenu))
+		{
+			return;
+		}
+		MatchMenu->OnResumed.BindUObject(this, &AScctGameMode::SetMenuOpen, false);
+		MatchMenu->AddToViewport(30);
+	}
+
+	if (Player->WasInputKeyJustPressed(EKeys::Escape))
+	{
+		SetMenuOpen(!MatchMenu->IsMenuOpen());
+	}
+	if (OpenMenuIn >= 0.0f)
+	{
+		OpenMenuIn -= DeltaSeconds;
+		if (OpenMenuIn < 0.0f)
+		{
+			SetMenuOpen(true);
+		}
+	}
+}
+
+void AScctGameMode::SetMenuOpen(bool bOpen)
+{
+	APlayerController* Player = GetWorld()->GetFirstPlayerController();
+	if (Player == nullptr || !IsValid(MatchMenu))
+	{
+		return;
+	}
+
+	// The match goes on underneath (it is the server's, or the bots'): the menu only takes the mouse.
+	MatchMenu->SetMenuOpen(bOpen);
+	Player->SetShowMouseCursor(bOpen);
+	if (bOpen)
+	{
+		FInputModeGameAndUI Mode;
+		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		Mode.SetHideCursorDuringCapture(false);
+		Player->SetInputMode(Mode);
+	}
+	else
+	{
+		Player->SetInputMode(FInputModeGameOnly());
 	}
 }

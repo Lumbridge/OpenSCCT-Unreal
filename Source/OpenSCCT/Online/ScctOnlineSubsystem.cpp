@@ -1,0 +1,773 @@
+#include "Online/ScctOnlineSubsystem.h"
+
+#include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
+#include "HAL/PlatformProcess.h"
+#include "Misc/CommandLine.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/PackageName.h"
+#include "Misc/Parse.h"
+#include "OpenSCCT.h"
+#include "Play/ScctSessionSubsystem.h"
+#include "Runtime/ScctFeatures.h"
+
+const TCHAR* const UScctOnlineSubsystem::FrontEndLevel = TEXT("/Game/OpenSCCT/Maps/L_FrontEnd");
+const TCHAR* const UScctOnlineSubsystem::OnlineOption = TEXT("ScctOnline");
+
+namespace
+{
+	// The player's own settings (Saved/Config, never the project's): who they are online.
+	const TCHAR* const UserSection = TEXT("OpenSCCT.Online");
+
+	// The project's settings (Config/DefaultGame.ini): the master server and the invite key every build ships.
+	const TCHAR* const ProjectSection = TEXT("OpenSCCT.Online");
+
+	constexpr int32 MaxPlayers = 64;
+	constexpr int32 MaxServers = 64;
+	constexpr int32 MaxChatLines = 60;
+
+	/** The moment a travel waits, so the screen can say where the game is going before the load blocks it. */
+	constexpr float TravelNoticeSeconds = 0.25f;
+
+	/** A level must have run this long before the server is told the player is in: its first frames are drawn. */
+	constexpr float LoadedAfterSeconds = 0.5f;
+
+	const TCHAR* StateName(EScctOnlineState State)
+	{
+		static const TCHAR* const Names[] = { TEXT("Idle"), TEXT("Connecting"), TEXT("Lobby"), TEXT("Travelling"), TEXT("Loading"),
+			TEXT("Match"), TEXT("Results"), TEXT("Failed"), TEXT("Left") };
+		const int32 Index = static_cast<int32>(State);
+		return Index >= 0 && Index < UE_ARRAY_COUNT(Names) ? Names[Index] : TEXT("?");
+	}
+
+	bool IsOnARoundsMap(EScctOnlineState State)
+	{
+		return State == EScctOnlineState::Travelling || State == EScctOnlineState::Loading
+			|| State == EScctOnlineState::Match || State == EScctOnlineState::Results;
+	}
+
+	/** The package of the level a world was loaded from, without the prefix a play-in-editor copy gets. */
+	FString LevelPackageOf(const UWorld& World)
+	{
+		return UWorld::RemovePIEPrefix(World.GetOutermost()->GetName());
+	}
+}
+
+UScctOnlineSubsystem* UScctOnlineSubsystem::Get(const UObject* WorldContext)
+{
+	const UWorld* World = GEngine != nullptr ? GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull) : nullptr;
+	const UGameInstance* Instance = World != nullptr ? World->GetGameInstance() : nullptr;
+	return Instance != nullptr ? Instance->GetSubsystem<UScctOnlineSubsystem>() : nullptr;
+}
+
+FString UScctOnlineSubsystem::LevelOf(const FString& Map)
+{
+	return FString::Printf(TEXT("/Game/Imported/Maps/%s/%s"), *Map, *Map);
+}
+
+TArray<FString> UScctOnlineSubsystem::FindImportedMaps()
+{
+	// The maps a match can be played on are the ones the bridge has converted content for; of those, the ones
+	// with an imported level can be shown.
+	TArray<FString> Maps;
+	const FScctOnlineApi* Online = ScctFeature<FScctOnlineApi>();
+	if (Online == nullptr)
+	{
+		return Maps;
+	}
+
+	TArray<TCHAR> Buffer;
+	Buffer.SetNumZeroed(Online->GetText(static_cast<int32>(EScctOnlineText::InstalledMaps), nullptr, 0) + 1);
+	Online->GetText(static_cast<int32>(EScctOnlineText::InstalledMaps), Buffer.GetData(), Buffer.Num());
+	TArray<FString> Installed;
+	FString(Buffer.GetData()).ParseIntoArrayLines(Installed);
+	for (const FString& Map : Installed)
+	{
+		if (FPackageName::DoesPackageExist(LevelOf(Map)))
+		{
+			Maps.Add(Map);
+		}
+	}
+	Maps.Sort();
+	return Maps;
+}
+
+void UScctOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
+{
+	Super::Initialize(Collection);
+
+	const TCHAR* CommandLine = FCommandLine::Get();
+	FParse::Value(CommandLine, TEXT("ScctJoin="), AutoJoin);
+	FString Side;
+	if (FParse::Value(CommandLine, TEXT("ScctSide="), Side))
+	{
+		AutoSide = Side.Equals(TEXT("merc"), ESearchCase::IgnoreCase) ? 1
+			: Side.Equals(TEXT("spy"), ESearchCase::IgnoreCase) ? 0
+			: Side.Equals(TEXT("watch"), ESearchCase::IgnoreCase) ? 255 : -1;
+	}
+	bAutoReady = FParse::Param(CommandLine, TEXT("ScctAutoReady"));
+	bAutoWalk = FParse::Param(CommandLine, TEXT("ScctAutoWalk"));
+	FParse::Value(CommandLine, TEXT("ScctLeaveAfter="), LeaveAfter);
+	FParse::Value(CommandLine, TEXT("ScctChat="), AutoChat, false);
+	FParse::Value(CommandLine, TEXT("ScctOnlineLog="), LogEvery);
+
+	LastTickSeconds = FPlatformTime::Seconds();
+	TickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &UScctOnlineSubsystem::TickFromTicker));
+}
+
+void UScctOnlineSubsystem::Deinitialize()
+{
+	FTSTicker::RemoveTicker(TickerHandle);
+	if (Api != nullptr && GetState() != EScctOnlineState::Idle)
+	{
+		// The game is closing: the server hears that the player left instead of timing them out.
+		UE_LOG(LogOpenSCCT, Log, TEXT("Online: leaving the server (the game is closing, state %s)"), StateName(GetState()));
+		Api->Leave();
+	}
+	Api = nullptr;
+	Super::Deinitialize();
+}
+
+const FScctOnlineApi* UScctOnlineSubsystem::Connect()
+{
+	if (Api != nullptr)
+	{
+		return Api;
+	}
+
+	FString Error;
+	Api = ScctFeature<FScctOnlineApi>(&Error);
+	if (Api == nullptr)
+	{
+		Notice = Error;
+		Touch();
+		return nullptr;
+	}
+
+	LoadIdentity();
+
+	FString MasterUrl, InviteKey;
+	GConfig->GetString(ProjectSection, TEXT("MasterUrl"), MasterUrl, GGameIni);
+	GConfig->GetString(ProjectSection, TEXT("InviteKey"), InviteKey, GGameIni);
+	if (!MasterUrl.IsEmpty())
+	{
+		Api->SetMaster(*MasterUrl, *InviteKey);
+		bMasterSet = true;
+
+		// A sign-in of an earlier run: the master answers with the account.
+		FString Token;
+		if (GConfig->GetString(UserSection, TEXT("AccountToken"), Token, GGameUserSettingsIni) && !Token.IsEmpty())
+		{
+			Api->SetAccountToken(*Token);
+		}
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: ready as '%s'%s"), *PlayerName, bMasterSet ? *FString::Printf(TEXT(", master %s"), *MasterUrl) : TEXT(", no master server set"));
+	return Api;
+}
+
+void UScctOnlineSubsystem::LoadIdentity()
+{
+	FString InstallId, PrivateKey;
+	GConfig->GetString(UserSection, TEXT("PlayerName"), PlayerName, GGameUserSettingsIni);
+	GConfig->GetString(UserSection, TEXT("InstallId"), InstallId, GGameUserSettingsIni);
+	GConfig->GetString(UserSection, TEXT("PrivateKey"), PrivateKey, GGameUserSettingsIni);
+
+	// -ScctName: for this run only.
+	FString RunName;
+	const bool bRunName = FParse::Value(FCommandLine::Get(), TEXT("ScctName="), RunName) && !RunName.IsEmpty();
+	if (PlayerName.IsEmpty())
+	{
+		PlayerName = TEXT("Player");
+	}
+
+	// Empty id or key: the bridge makes new ones, which are saved so bans and a kept place follow this install.
+	Api->SetIdentity(bRunName ? *RunName : *PlayerName, InstallId.IsEmpty() ? nullptr : *InstallId, PrivateKey.IsEmpty() ? nullptr : *PrivateKey);
+	if (bRunName)
+	{
+		PlayerName = RunName;
+	}
+	if (InstallId.IsEmpty() || PrivateKey.IsEmpty())
+	{
+		GConfig->SetString(UserSection, TEXT("InstallId"), *ReadText(EScctOnlineText::InstallId), GGameUserSettingsIni);
+		GConfig->SetString(UserSection, TEXT("PrivateKey"), *ReadText(EScctOnlineText::PrivateKey), GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+	}
+}
+
+void UScctOnlineSubsystem::SaveIdentity()
+{
+	GConfig->SetString(UserSection, TEXT("PlayerName"), *PlayerName, GGameUserSettingsIni);
+	GConfig->Flush(false, GGameUserSettingsIni);
+}
+
+void UScctOnlineSubsystem::SetPlayerName(const FString& Name)
+{
+	const FString Trimmed = Name.TrimStartAndEnd().Left(31);
+	if (Trimmed.IsEmpty() || Trimmed == PlayerName)
+	{
+		return;
+	}
+	PlayerName = Trimmed;
+	SaveIdentity();
+	if (Connect() != nullptr)
+	{
+		// Null id and key: the bridge keeps the ones it has.
+		Api->SetIdentity(*PlayerName, nullptr, nullptr);
+	}
+}
+
+FString UScctOnlineSubsystem::ReadText(EScctOnlineText Kind) const
+{
+	if (Api == nullptr)
+	{
+		return FString();
+	}
+
+	TCHAR Short[512];
+	const int32 Length = Api->GetText(static_cast<int32>(Kind), Short, UE_ARRAY_COUNT(Short));
+	if (Length < UE_ARRAY_COUNT(Short))
+	{
+		return FString(Short);
+	}
+
+	TArray<TCHAR> Long;
+	Long.SetNumZeroed(Length + 1);
+	Api->GetText(static_cast<int32>(Kind), Long.GetData(), Long.Num());
+	return FString(Long.GetData());
+}
+
+// ---- joining and leaving ------------------------------------------------------------------------------------------
+
+bool UScctOnlineSubsystem::Join(const FString& Address, const FString& Password, int32 PreferredTeam)
+{
+	if (Connect() == nullptr)
+	{
+		return false;
+	}
+
+	Notice.Reset();
+	Chat.Reset();
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: joining %s (side asked for: %d)"), *Address, PreferredTeam);
+	const bool bStarted = Api->Join(*Address, Password.IsEmpty() ? nullptr : *Password, PreferredTeam) != 0;
+	if (!bStarted)
+	{
+		Notice = ReadText(EScctOnlineText::Error);
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Online: the join did not start: %s"), *Notice);
+	}
+	Touch();
+	return bStarted;
+}
+
+void UScctOnlineSubsystem::JoinListed(int32 Index, const FString& Password, int32 PreferredTeam)
+{
+	if (Connect() == nullptr || !Servers.IsValidIndex(Index))
+	{
+		return;
+	}
+
+	Notice.Reset();
+	Chat.Reset();
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: joining listed server %d '%s'"), Index, Servers[Index].Name);
+	Api->JoinListed(Index, Password.IsEmpty() ? nullptr : *Password, PreferredTeam);
+	Touch();
+}
+
+void UScctOnlineSubsystem::Leave()
+{
+	if (Api != nullptr && GetState() != EScctOnlineState::Idle)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Online: leaving (state %s)"), StateName(GetState()));
+		Api->Leave();
+	}
+	Notice.Reset();
+	Touch();
+}
+
+// ---- the lobby ----------------------------------------------------------------------------------------------------
+
+void UScctOnlineSubsystem::SetTeam(int32 Team)
+{
+	if (Api != nullptr)
+	{
+		Api->SetTeam(Team);
+	}
+}
+
+void UScctOnlineSubsystem::SetReady(bool bReady)
+{
+	if (Api != nullptr)
+	{
+		Api->SetReady(bReady ? 1 : 0);
+	}
+}
+
+void UScctOnlineSubsystem::Launch()
+{
+	if (Api != nullptr)
+	{
+		Api->Launch();
+	}
+}
+
+void UScctOnlineSubsystem::SendChat(const FString& Text, bool bTeamOnly)
+{
+	const FString Trimmed = Text.TrimStartAndEnd();
+	if (Api != nullptr && !Trimmed.IsEmpty())
+	{
+		Api->SendChat(*Trimmed, bTeamOnly ? 1 : 0);
+	}
+}
+
+bool UScctOnlineSubsystem::SetMatchMap(const FString& Map)
+{
+	return Api != nullptr && Api->SetMatch(*Map, -1) != 0;
+}
+
+bool UScctOnlineSubsystem::GetResults(FScctOnlineResults& OutResults, TArray<FScctOnlineResultRow>& OutRows) const
+{
+	OutRows.Reset();
+	if (Api == nullptr)
+	{
+		return false;
+	}
+
+	OutRows.SetNumZeroed(MaxPlayers);
+	OutResults = {};
+	const int32 Count = Api->GetResults(&OutResults, OutRows.GetData(), OutRows.Num());
+	OutRows.SetNum(FMath::Clamp(Count, 0, MaxPlayers));
+	return Count >= 0;
+}
+
+// ---- master and account -------------------------------------------------------------------------------------------
+
+void UScctOnlineSubsystem::RequestServerList()
+{
+	if (Connect() != nullptr && bMasterSet)
+	{
+		Api->RequestServerList();
+	}
+}
+
+void UScctOnlineSubsystem::BeginSignIn()
+{
+	if (Connect() != nullptr && bMasterSet)
+	{
+		bSignInPageOpened = false;
+		Api->BeginSignIn();
+	}
+}
+
+void UScctOnlineSubsystem::SignOut()
+{
+	if (Api != nullptr)
+	{
+		Api->SignOut();
+		GConfig->RemoveKey(UserSection, TEXT("AccountToken"), GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+	}
+}
+
+// ---- the frame ----------------------------------------------------------------------------------------------------
+
+void UScctOnlineSubsystem::PresentIn(UScctSessionSubsystem* Session)
+{
+	if (Session != nullptr && Session->FollowBridgeSessions(true))
+	{
+		Session->OnBeforeTicks.AddUObject(this, &UScctOnlineSubsystem::HandleBeforeTicks);
+	}
+}
+
+void UScctOnlineSubsystem::HandleBeforeTicks(float DeltaSeconds)
+{
+	// -ScctAutoWalk: the local player holds "forward". It is set before the visit's Update, which runs the round's
+	// ticks, and after the player controller has set its own input for the frame (which this replaces).
+	if (bAutoWalk && GetState() == EScctOnlineState::Match)
+	{
+		const UWorld* World = GetGameInstance()->GetWorld();
+		if (UScctSessionSubsystem* Session = World != nullptr ? World->GetSubsystem<UScctSessionSubsystem>() : nullptr)
+		{
+			FScctBridgeInput Input = {};
+			Input.Buttons[static_cast<int32>(EScctButton::Up)] = 1;
+			Session->SetInput(Input);
+		}
+	}
+
+	TickVisit();
+}
+
+bool UScctOnlineSubsystem::TickFromTicker(float DeltaSeconds)
+{
+	// In a level that presents a round the visit has already been run this frame, before the simulation's ticks.
+	TickVisit();
+	return true;
+}
+
+void UScctOnlineSubsystem::Touch()
+{
+	++Revision;
+	OnChanged.Broadcast();
+}
+
+void UScctOnlineSubsystem::TickVisit()
+{
+	if (LastTickFrame == GFrameCounter)
+	{
+		return;
+	}
+	LastTickFrame = GFrameCounter;
+
+	const double Now = FPlatformTime::Seconds();
+	const float DeltaSeconds = static_cast<float>(FMath::Clamp(Now - LastTickSeconds, 0.0, 1.0));
+	LastTickSeconds = Now;
+
+	if (Api == nullptr)
+	{
+		// The bridge is brought up by the first thing that needs it (a join, the server list, the map list), not
+		// by an idle frame; only an unattended join asks for it here.
+		if (!AutoJoin.IsEmpty() || FParse::Param(FCommandLine::Get(), TEXT("ScctListServers")))
+		{
+			RunUnattended(DeltaSeconds);
+		}
+		return;
+	}
+
+	Api->Update();
+
+	const EScctOnlineState OldState = GetState();
+	const bool bHadResults = HasFlag(EScctOnlineStatusFlags::ResultsReady);
+	Api->GetStatus(&Status);
+	if (Status.Revision != BridgeRevision)
+	{
+		BridgeRevision = Status.Revision;
+		RefreshTexts();
+		Touch();
+	}
+	DrainChat();
+	if (GetState() != OldState)
+	{
+		HandleStateChange(OldState, GetState());
+	}
+	if (!bHadResults && HasFlag(EScctOnlineStatusFlags::ResultsReady))
+	{
+		// The rows arrive a little after the state turns to Results.
+		FScctOnlineResults Results;
+		TArray<FScctOnlineResultRow> Rows;
+		if (GetResults(Results, Rows))
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("Online: results are in: winning team %d, reason %d, %d players, %d game(s) left, next step in %.0f s"),
+				Results.WinningTeam, Results.WinningReason, Rows.Num(), Results.GamesLeft, Status.Countdown);
+		}
+	}
+
+	FollowLevel();
+	ReportLoadedWhenReady();
+	RunUnattended(DeltaSeconds);
+	LogStatus(DeltaSeconds);
+}
+
+void UScctOnlineSubsystem::RefreshTexts()
+{
+	Players.SetNumZeroed(MaxPlayers, EAllowShrinking::No);
+	Players.SetNum(FMath::Clamp(Api->GetPlayers(Players.GetData(), MaxPlayers), 0, MaxPlayers), EAllowShrinking::No);
+
+	ServerName = ReadText(EScctOnlineText::ServerName);
+	SetupMap = ReadText(EScctOnlineText::SetupMap);
+	ModeName = ReadText(EScctOnlineText::ModeName);
+	SetupDescription = ReadText(EScctOnlineText::SetupDescription);
+	ConnectLog = ReadText(EScctOnlineText::ConnectLog);
+	MapToLoad = ReadText(EScctOnlineText::MapToLoad);
+
+	if (Status.MasterState != LastMasterState)
+	{
+		LastMasterState = Status.MasterState;
+		MasterError = ReadText(EScctOnlineText::MasterError);
+		Servers.SetNumZeroed(MaxServers, EAllowShrinking::No);
+		Servers.SetNum(FMath::Clamp(Api->GetServers(Servers.GetData(), MaxServers), 0, MaxServers), EAllowShrinking::No);
+		if (LastMasterState == static_cast<int32>(EScctOnlineMasterState::Ready))
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("Online: the master lists %d server(s)"), Servers.Num());
+			for (const FScctOnlineServerEntry& Server : Servers)
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("Online:   '%s' map %s mode %d phase %d players %d/%d flags 0x%x"),
+					Server.Name, Server.Map, Server.Mode, Server.Phase, Server.Players, Server.MaxPlayers, Server.Flags);
+			}
+		}
+		else if (LastMasterState == static_cast<int32>(EScctOnlineMasterState::Failed))
+		{
+			UE_LOG(LogOpenSCCT, Warning, TEXT("Online: the master did not answer: %s"), *MasterError);
+		}
+	}
+
+	if (Status.AccountState != LastAccountState)
+	{
+		LastAccountState = Status.AccountState;
+		AccountName = ReadText(EScctOnlineText::AccountName);
+		AccountError = ReadText(EScctOnlineText::AccountError);
+		if (LastAccountState == static_cast<int32>(EScctOnlineAccountState::SignedIn))
+		{
+			// Kept for the next run; never shown and never logged.
+			GConfig->SetString(UserSection, TEXT("AccountToken"), *ReadText(EScctOnlineText::AccountToken), GGameUserSettingsIni);
+			GConfig->Flush(false, GGameUserSettingsIni);
+			UE_LOG(LogOpenSCCT, Log, TEXT("Online: signed in as '%s'"), *AccountName);
+		}
+	}
+	if (LastAccountState == static_cast<int32>(EScctOnlineAccountState::SigningIn))
+	{
+		SignInCode = ReadText(EScctOnlineText::SignInCode);
+		const FString Url = ReadText(EScctOnlineText::SignInUrl);
+		if (!bSignInPageOpened && !Url.IsEmpty())
+		{
+			// Only ever after the player pressed "sign in" (BeginSignIn).
+			bSignInPageOpened = true;
+			FPlatformProcess::LaunchURL(*Url, nullptr, nullptr);
+		}
+	}
+	else
+	{
+		SignInCode.Reset();
+	}
+}
+
+void UScctOnlineSubsystem::DrainChat()
+{
+	FScctOnlineChatLine Line;
+	bool bAny = false;
+	for (int32 Taken = 0; Taken < 32 && Api->TakeChat(&Line) == 1; ++Taken)
+	{
+		FScctOnlineChatEntry& Entry = Chat.AddDefaulted_GetRef();
+		Entry.bSystem = Line.System != 0;
+		Entry.bTeamOnly = Line.TeamOnly != 0;
+		Entry.Team = Line.Team;
+		Entry.Sender = Line.Sender;
+		Entry.Text = Line.Text;
+		UE_LOG(LogOpenSCCT, Log, TEXT("Online chat: %s%s"), Entry.bSystem ? TEXT("[server] ") : *FString::Printf(TEXT("<%s> "), *Entry.Sender), *Entry.Text);
+		bAny = true;
+	}
+	if (bAny)
+	{
+		if (Chat.Num() > MaxChatLines)
+		{
+			Chat.RemoveAt(0, Chat.Num() - MaxChatLines);
+		}
+		Touch();
+	}
+}
+
+void UScctOnlineSubsystem::HandleStateChange(EScctOnlineState Old, EScctOnlineState New)
+{
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: state %s -> %s (server phase %d, map to load '%s')"), StateName(Old), StateName(New), Status.Phase, *MapToLoad);
+
+	if (New == EScctOnlineState::Failed)
+	{
+		Notice = ReadText(EScctOnlineText::Error);
+		if (Notice.IsEmpty())
+		{
+			Notice = TEXT("The connection to the server was lost.");
+		}
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Online: the visit failed%s: %s"), HasFlag(EScctOnlineStatusFlags::Kicked) ? TEXT(" (the server ended it)") : TEXT(""), *Notice);
+	}
+	else if (New == EScctOnlineState::Match && MatchSeconds < 0.0f)
+	{
+		MatchSeconds = 0.0f;
+	}
+	Touch();
+}
+
+// ---- the levels ---------------------------------------------------------------------------------------------------
+
+void UScctOnlineSubsystem::OpenLevel(const FString& LevelUrl)
+{
+	UWorld* World = GetGameInstance()->GetWorld();
+	if (World == nullptr || GEngine == nullptr)
+	{
+		return;
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: opening %s"), *LevelUrl);
+	PendingLevel = LevelUrl;
+	PendingFrom = World;
+	GEngine->SetClientTravel(World, *LevelUrl, TRAVEL_Absolute);
+}
+
+void UScctOnlineSubsystem::OpenFrontEnd()
+{
+	if (PendingLevel.IsEmpty())
+	{
+		OpenLevel(FrontEndLevel);
+	}
+}
+
+void UScctOnlineSubsystem::FollowLevel()
+{
+	const UWorld* World = GetGameInstance()->GetWorld();
+	if (World == nullptr || !World->HasBegunPlay())
+	{
+		return;
+	}
+
+	if (!PendingLevel.IsEmpty())
+	{
+		// The travel that was asked for happens at the start of the engine's next frame; nothing new is asked
+		// until another world is open (the level asked for or, if it could not be loaded, the engine's default).
+		if (PendingFrom.Get() == World)
+		{
+			return;
+		}
+		PendingLevel.Reset();
+		TravelDelay = 0.0f;
+	}
+
+	const FString Current = LevelPackageOf(*World);
+	const bool bInOnlineLevel = World->URL.HasOption(OnlineOption);
+	FString Wanted;
+	if (IsOnARoundsMap(GetState()) && !MapToLoad.IsEmpty() && !HasFlag(EScctOnlineStatusFlags::RoundRefused))
+	{
+		const FString Level = LevelOf(MapToLoad);
+		if (!FPackageName::DoesPackageExist(Level))
+		{
+			// The simulation could play it, but there is nothing to draw: the visit ends with the reason.
+			UE_LOG(LogOpenSCCT, Error, TEXT("Online: the server plays %s, which has no imported level (%s)"), *MapToLoad, *Level);
+			Api->Leave();
+			Notice = FString::Printf(TEXT("The server plays %s, which has not been imported into this game yet."), *MapToLoad);
+			Touch();
+			return;
+		}
+		if (Current != Level || !bInOnlineLevel)
+		{
+			Wanted = FString::Printf(TEXT("%s?%s=1"), *Level, OnlineOption);
+		}
+	}
+	else if (bInOnlineLevel)
+	{
+		// Back in the lobby, or the visit is over: a level that was opened for a round is left.
+		Wanted = FrontEndLevel;
+	}
+
+	if (Wanted.IsEmpty())
+	{
+		TravelDelay = 0.0f;
+		return;
+	}
+
+	TravelDelay += World->GetDeltaSeconds();
+	if (TravelDelay >= TravelNoticeSeconds)
+	{
+		OpenLevel(Wanted);
+	}
+}
+
+void UScctOnlineSubsystem::ReportLoadedWhenReady()
+{
+	if (!HasFlag(EScctOnlineStatusFlags::RoundActive) || !HasFlag(EScctOnlineStatusFlags::NeedsLoadReport) || !PendingLevel.IsEmpty())
+	{
+		return;
+	}
+
+	const UWorld* World = GetGameInstance()->GetWorld();
+	if (World == nullptr || !World->HasBegunPlay() || World->GetTimeSeconds() < LoadedAfterSeconds
+		|| !World->URL.HasOption(OnlineOption) || LevelPackageOf(*World) != LevelOf(MapToLoad))
+	{
+		return;
+	}
+
+	// The level's session subsystem must be presenting this very round: then the player sees it.
+	const UScctSessionSubsystem* Session = World->GetSubsystem<UScctSessionSubsystem>();
+	if (Session == nullptr || !Session->IsRemoteSession() || Session->GetSessionId() == ReportedSessionId)
+	{
+		return;
+	}
+
+	ReportedSessionId = Session->GetSessionId();
+	Api->ReportLoaded();
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: level %s is up and presents remote session %d: told the server this player is in (ReportLoaded)"), *MapToLoad, ReportedSessionId);
+}
+
+// ---- unattended ---------------------------------------------------------------------------------------------------
+
+void UScctOnlineSubsystem::RunUnattended(float DeltaSeconds)
+{
+	const UWorld* World = GetGameInstance()->GetWorld();
+	if (World == nullptr || !World->HasBegunPlay())
+	{
+		return;
+	}
+
+	if (!bAutoListed && FParse::Param(FCommandLine::Get(), TEXT("ScctListServers")))
+	{
+		bAutoListed = true;
+		RequestServerList();
+	}
+	if (!bAutoJoined && !AutoJoin.IsEmpty())
+	{
+		bAutoJoined = true;
+		Join(AutoJoin, FString(), AutoSide);
+	}
+	if (Api == nullptr)
+	{
+		return;
+	}
+
+	if (GetState() == EScctOnlineState::Lobby && Status.LocalId >= 0)
+	{
+		if (bAutoReady && !HasFlag(EScctOnlineStatusFlags::LocalReady))
+		{
+			// Asked once per change of the lobby, not once per frame.
+			if (AutoReadyRevision != Status.Revision)
+			{
+				AutoReadyRevision = Status.Revision;
+				UE_LOG(LogOpenSCCT, Log, TEXT("Online: -ScctAutoReady: saying ready (%d players in the lobby)"), Status.PlayerCount);
+				Api->SetReady(1);
+			}
+		}
+		if (!bAutoChatSent && !AutoChat.IsEmpty())
+		{
+			bAutoChatSent = true;
+			SendChat(AutoChat);
+		}
+	}
+
+	if (MatchSeconds >= 0.0f && !bLeftOnTimer && LeaveAfter > 0.0f)
+	{
+		MatchSeconds += DeltaSeconds;
+		if (MatchSeconds >= LeaveAfter)
+		{
+			bLeftOnTimer = true;
+			UE_LOG(LogOpenSCCT, Log, TEXT("Online: -ScctLeaveAfter: leaving %.0f s into the round"), MatchSeconds);
+			Leave();
+		}
+	}
+}
+
+void UScctOnlineSubsystem::LogStatus(float DeltaSeconds)
+{
+	if (LogEvery <= 0.0f || GetState() == EScctOnlineState::Idle)
+	{
+		return;
+	}
+	LogTimer -= DeltaSeconds;
+	if (LogTimer > 0.0f)
+	{
+		return;
+	}
+	LogTimer = LogEvery;
+
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: %s | server phase %d flags 0x%x | '%s' %s on %s | players %d/%d local id %d team %d | countdown %.1f | map to load '%s'"),
+		StateName(GetState()), Status.Phase, Status.Flags, *ServerName, *ModeName, *SetupMap, Status.PlayerCount, Status.MaxPlayers,
+		Status.LocalId, Status.LocalTeam, Status.Countdown, *MapToLoad);
+
+	// During a round: where the simulation's pawns are, so the log shows the other players moving.
+	const UWorld* World = GetGameInstance()->GetWorld();
+	const UScctSessionSubsystem* Session = World != nullptr ? World->GetSubsystem<UScctSessionSubsystem>() : nullptr;
+	if (Session == nullptr || !Session->IsRemoteSession())
+	{
+		return;
+	}
+	const FScctBridgeSessionInfo& Info = Session->GetSessionInfo();
+	FString Line = FString::Printf(TEXT("Online: remote session %d on %s, %d client ticks, %d pawns:"), Info.Id, Info.Map, Info.Ticks, Session->GetPawns().Num());
+	for (const FScctBridgePawn& Pawn : Session->GetPawns())
+	{
+		Line += FString::Printf(TEXT(" #%d %s team %d%s hp %d at (%.0f, %.0f, %.0f)"), Pawn.ActorId, Pawn.Kind == 1 ? TEXT("merc") : TEXT("spy"), Pawn.Team,
+			(Pawn.Flags & EScctPawnFlags::Local) != 0 ? TEXT(" LOCAL") : TEXT(""), Pawn.Health, Pawn.X, Pawn.Y, Pawn.Z);
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("%s"), *Line);
+}

@@ -36,16 +36,16 @@ public:
 	float GetOpacity() const { return Opacity; }
 
 	/** Blurs what has been drawn so far inside the box (the game picture and anything painted below). */
-	void Blur(const FBox2f& Box, float Strength, float Corner = 0.0f);
+	void Blur(const FBox2f& Box, float Strength, float Radius = 0.0f);
 
 	/** A filled box, with rounded corners and an outline when asked. */
-	void Fill(const FBox2f& Box, const FLinearColor& Colour, float Corner = 0.0f, const FLinearColor& Outline = FLinearColor::Transparent, float OutlineWidth = 0.0f);
+	void Fill(const FBox2f& Box, const FLinearColor& Colour, float Radius = 0.0f, const FLinearColor& Outline = FLinearColor::Transparent, float OutlineWidth = 0.0f);
 
 	/** A box that runs from one colour to another, left to right or top to bottom. */
-	void Gradient(const FBox2f& Box, const FLinearColor& From, const FLinearColor& To, bool bVertical, float Corner = 0.0f);
+	void Gradient(const FBox2f& Box, const FLinearColor& From, const FLinearColor& To, bool bVertical, float Radius = 0.0f);
 
 	/** The HUD's panel: blurred background, dark tint, a hairline edge. */
-	void Glass(const FBox2f& Box, float Corner, float Tint = 0.62f);
+	void Glass(const FBox2f& Box, float Radius, float Tint = 0.62f);
 
 	/** One line of text; returns its size. The position is the top of the line at its left, centre or right. */
 	FVector2f Text(const FVector2f& Position, const FString& String, const FSlateFontInfo& Font, const FLinearColor& Colour, EAlign Align = EAlign::Left, bool bShadow = true);

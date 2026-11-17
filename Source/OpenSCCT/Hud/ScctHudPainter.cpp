@@ -19,7 +19,7 @@ FPaintGeometry FScctHudPainter::BoxGeometry(const FBox2f& Box) const
 	return Geometry.ToPaintGeometry(Box.GetSize(), FSlateLayoutTransform(Box.Min));
 }
 
-void FScctHudPainter::Blur(const FBox2f& Box, float Strength, float Corner)
+void FScctHudPainter::Blur(const FBox2f& Box, float Strength, float Radius)
 {
 	Strength *= Opacity;
 	if (Strength < 0.5f || Box.GetSize().GetMin() <= 0.0f)
@@ -62,11 +62,11 @@ void FScctHudPainter::Blur(const FBox2f& Box, float Strength, float Corner)
 	Elements.PushClip(FSlateClippingZone(Geometry.MakeChild(Box.GetSize(), FSlateLayoutTransform(Box.Min))));
 	FSlateDrawElement::MakePostProcessBlur(Elements, ++Layer, PaintGeometry,
 		FVector4f(static_cast<float>(KernelSize), ComputedStrength, static_cast<float>(Width), static_cast<float>(Height)),
-		Downsample, FVector4f(Corner * Scale));
+		Downsample, FVector4f(Radius * Scale));
 	Elements.PopClip();
 }
 
-void FScctHudPainter::Fill(const FBox2f& Box, const FLinearColor& Colour, float Corner, const FLinearColor& Outline, float OutlineWidth)
+void FScctHudPainter::Fill(const FBox2f& Box, const FLinearColor& Colour, float Radius, const FLinearColor& Outline, float OutlineWidth)
 {
 	if (Box.GetSize().GetMin() <= 0.0f)
 	{
@@ -75,11 +75,11 @@ void FScctHudPainter::Fill(const FBox2f& Box, const FLinearColor& Colour, float 
 
 	// The draw element copies what it needs from the brush, so a brush on the stack is enough. The fill's colour
 	// is the element's tint (a brush's own tint is for widgets to apply); the outline's comes from the brush.
-	const FSlateRoundedBoxBrush Brush(FLinearColor::White, Corner, ScctHudStyle::Fade(Outline, Opacity), OutlineWidth);
+	const FSlateRoundedBoxBrush Brush(FLinearColor::White, Radius, ScctHudStyle::Fade(Outline, Opacity), OutlineWidth);
 	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Box), &Brush, ESlateDrawEffect::None, ScctHudStyle::Fade(Colour, Opacity));
 }
 
-void FScctHudPainter::Gradient(const FBox2f& Box, const FLinearColor& From, const FLinearColor& To, bool bVertical, float Corner)
+void FScctHudPainter::Gradient(const FBox2f& Box, const FLinearColor& From, const FLinearColor& To, bool bVertical, float Radius)
 {
 	if (Box.GetSize().GetMin() <= 0.0f)
 	{
@@ -90,13 +90,13 @@ void FScctHudPainter::Gradient(const FBox2f& Box, const FLinearColor& From, cons
 	Stops.Emplace(FVector2f::ZeroVector, ScctHudStyle::Fade(From, Opacity));
 	Stops.Emplace(Box.GetSize(), ScctHudStyle::Fade(To, Opacity));
 	FSlateDrawElement::MakeGradient(Elements, ++Layer, BoxGeometry(Box), MoveTemp(Stops), bVertical ? Orient_Horizontal : Orient_Vertical,
-		ESlateDrawEffect::None, FVector4f(Corner));
+		ESlateDrawEffect::None, FVector4f(Radius));
 }
 
-void FScctHudPainter::Glass(const FBox2f& Box, float Corner, float Tint)
+void FScctHudPainter::Glass(const FBox2f& Box, float Radius, float Tint)
 {
-	Blur(Box, 16.0f, Corner);
-	Fill(Box, FLinearColor(0.004f, 0.007f, 0.011f, Tint), Corner, FLinearColor(1.0f, 1.0f, 1.0f, 0.09f), 1.0f);
+	Blur(Box, 16.0f, Radius);
+	Fill(Box, FLinearColor(0.004f, 0.007f, 0.011f, Tint), Radius, FLinearColor(1.0f, 1.0f, 1.0f, 0.09f), 1.0f);
 }
 
 FVector2f FScctHudPainter::Measure(const FString& String, const FSlateFontInfo& Font) const

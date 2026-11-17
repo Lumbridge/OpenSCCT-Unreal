@@ -118,7 +118,9 @@ public static unsafe class OnlineExports
                 return 0;
             }
 
-            Online.Join(where, pass, preferredTeam);
+            // A server on this machine is reached through a socket bound to the loopback addresses only: a socket on
+            // every interface makes Windows ask the player about the firewall, for nothing.
+            Online.Join(where, pass, preferredTeam, loopbackOnly: IsThisMachine(where));
             return 1;
         }
         catch (Exception e)
@@ -126,6 +128,17 @@ public static unsafe class OnlineExports
             Failed(e);
             return 0;
         }
+    }
+
+    /// <summary>True for a typed address that names this machine by a loopback address or as localhost.</summary>
+    private static bool IsThisMachine(string address)
+    {
+        string a = address.Trim();
+        string host = a.StartsWith('[')
+            ? a[1..Math.Max(a.IndexOf(']'), 1)]
+            : a.AsSpan().Count(':') == 1 ? a[..a.IndexOf(':')] : a;
+        return host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || (System.Net.IPAddress.TryParse(host, out System.Net.IPAddress? ip) && System.Net.IPAddress.IsLoopback(ip));
     }
 
     /// <summary>Leaves the server and clears the visit (also clears a failed one). The state is Idle afterwards.</summary>
