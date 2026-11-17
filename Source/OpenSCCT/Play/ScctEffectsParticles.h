@@ -1,0 +1,94 @@
+#pragma once
+
+#include "CoreMinimal.h"
+
+class UInstancedStaticMeshComponent;
+class UMaterialInterface;
+class UStaticMesh;
+
+/** Which of the two sprite materials a particle is drawn with. */
+enum class EScctFxLayer : uint8
+{
+	Glow,  // added light, unlit: fire, sparks, flashes, tracers
+	Smoke, // soft and lit by the scene: smoke, dust, mist
+	Count,
+};
+
+/** One sprite of the effects' own particle system. Every field can be set by whoever spawns it. */
+struct FScctFxParticle
+{
+	FVector Position = FVector::ZeroVector;
+	FVector Velocity = FVector::ZeroVector;
+
+	/** Colour, and the opacity at its fullest. Glow sprites add Colour x Alpha to the picture (values above 1 bloom). */
+	FLinearColor Color = FLinearColor::White;
+
+	float Age = 0.0f;
+	float Life = 0.0f;       // seconds; a particle with Age >= Life is free
+	float SizeStart = 10.0f; // cm across, at birth and at death
+	float SizeEnd = 10.0f;
+	float Stretch = 0.0f;    // > 0: drawn as a streak along its velocity, this many seconds of travel long
+	float Drag = 0.0f;       // velocity lost per second (1 / s)
+	float Gravity = 0.0f;    // cm/s2 downwards; negative rises
+	float Rotation = 0.0f;   // radians about the view axis
+	float Spin = 0.0f;       // radians per second
+	float FadeIn = 0.05f;    // fraction of the life over which it appears; it fades out over the rest
+};
+
+/**
+ * The particle system of the effects: sprites simulated here on the game thread and drawn as instances of one
+ * quad per layer, turned to the camera each frame. Everything is allocated once: a spawn takes the next slot
+ * of a ring (the oldest sprite goes when the ring is full) and a frame writes the instance buffers in place.
+ *
+ * Why not Niagara: a Niagara system is an asset whose emitters are graphs compiled by the editor. There is no
+ * supported way to author one from code in a headless run and none at all at run time, and the engine's stock
+ * emitters cannot be re-tuned without those graphs. The game's effects are small (hundreds of sprites), so
+ * simulating them here costs little and keeps every effect's look in C++ next to the event that triggers it.
+ */
+class FScctFxSprites
+{
+public:
+	/** Creates the two instanced components on Host. A missing material or mesh leaves that layer undrawn. */
+	void Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* GlowMaterial, UMaterialInterface* SmokeMaterial);
+
+	/** A new particle to fill in. The reference is valid until the next Spawn. */
+	FScctFxParticle& Spawn(EScctFxLayer Layer);
+
+	/** A glowing line for this frame only (a tracer, a beam): drawn by the next Tick and then forgotten. */
+	void DrawStreak(const FVector& From, const FVector& To, float Width, const FLinearColor& Color);
+
+	/** Moves the particles on and writes what the camera at ViewLocation sees. */
+	void Tick(float DeltaSeconds, const FVector& ViewLocation, const FQuat& ViewRotation);
+
+	/** Removes every particle at once and stops drawing them, without waiting for a Tick (a match ended). */
+	void Clear();
+
+	int32 GetNumLive() const { return NumLive; }
+	bool IsDrawable() const { return Layers[0].Component.IsValid() || Layers[1].Component.IsValid(); }
+
+private:
+	struct FStreak
+	{
+		FVector From;
+		FVector To;
+		float Width;
+		FLinearColor Color;
+	};
+
+	struct FLayer
+	{
+		TArray<FScctFxParticle> Particles;
+		TArray<FTransform> Transforms;
+		TArray<float> CustomData;
+		TWeakObjectPtr<UInstancedStaticMeshComponent> Component; // owned by the host actor, which may go first
+		int32 Next = 0;
+		int32 Live = 0;
+		bool bDrawnEmpty = false; // the instance buffers already show nothing
+	};
+
+	static constexpr int32 MaxStreaks = 96;
+
+	FLayer Layers[static_cast<int32>(EScctFxLayer::Count)];
+	TArray<FStreak> Streaks;
+	int32 NumLive = 0;
+};

@@ -30,6 +30,9 @@ param(
     [string] $Exec = '',
     # Anything else for the command line, as written ("-ScctCheckFeatures -ResX=1280 -ResY=720").
     [string] $Extra = '',
+    # Run the audio engine without a sound device (the engine's non-realtime renderer, -DeterministicAudio)
+    # instead of no audio engine at all (-nosound): voices really play, into nothing. Never audible.
+    [switch] $NullAudio,
     [string] $Engine = 'F:\UE_5.8'
 )
 
@@ -49,7 +52,8 @@ New-Item -ItemType Directory -Force (Join-Path $project 'Saved\Logs') | Out-Null
 $arguments = @(
     "`"$project\OpenSCCTUnreal.uproject`"",
     "`"/Game/Imported/Maps/$Map/$Map$Options`"",
-    '-game', '-RenderOffscreen', '-ResX=1920', '-ResY=1080', '-unattended', '-nosplash', '-nosound',
+    '-game', '-RenderOffscreen', '-ResX=1920', '-ResY=1080', '-unattended', '-nosplash',
+    $(if ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
     (Format-Switch 'ScctContent' $contentDir),
     "-ScctShots=$Shots",
     "-ScctShotEvery=$Every",
