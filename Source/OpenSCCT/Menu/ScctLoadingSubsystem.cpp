@@ -33,11 +33,11 @@
 
 namespace
 {
-	const TCHAR* const FrontEndLevelName = TEXT("L_FrontEnd");
+	const TCHAR* const LoadingFrontEndLevel = TEXT("L_FrontEnd");
 
 	/** A text of the play table, whatever its length. */
 	template <typename TCall>
-	FString ReadText(TCall&& Call)
+	FString ReadPlayText(TCall&& Call)
 	{
 		TCHAR Small[512];
 		const int32 Length = Call(Small, static_cast<int32>(UE_ARRAY_COUNT(Small)));
@@ -52,7 +52,7 @@ namespace
 	}
 
 	/** The mode as the menus name it, from AScctGameMode's ?Mode= option. */
-	FString ModeLabel(const FString& Mode)
+	FString LoadingModeLabel(const FString& Mode)
 	{
 		if (Mode.Equals(TEXT("DiskHunt"), ESearchCase::IgnoreCase)) { return TEXT("DISK HUNT"); }
 		if (Mode.Equals(TEXT("Deathmatch"), ESearchCase::IgnoreCase)) { return TEXT("DEATHMATCH"); }
@@ -282,7 +282,7 @@ FScctLoadingPage UScctLoadingSubsystem::DescribeLoad(const FWorldContext& Contex
 {
 	FScctLoadingPage Page;
 	const FString Level = FPackageName::GetShortName(MapName);
-	if (Level.Equals(FrontEndLevelName, ESearchCase::IgnoreCase))
+	if (Level.Equals(LoadingFrontEndLevel, ESearchCase::IgnoreCase))
 	{
 		// On the way back to the menu: nothing to say but that it loads.
 		return Page;
@@ -327,7 +327,7 @@ FScctLoadingPage UScctLoadingSubsystem::DescribeLoad(const FWorldContext& Contex
 	const TCHAR* SideName = bWatching ? TEXT("SPECTATOR") : (bMerc ? TEXT("MERCENARY") : TEXT("SPY"));
 	Page.Detail = bOnline
 		? FString::Printf(TEXT("%s   /   %s"), Online != nullptr && !Online->GetServerName().IsEmpty() ? *Online->GetServerName() : TEXT("ONLINE"), SideName)
-		: FString::Printf(TEXT("%s   /   %s"), *ModeLabel(UGameplayStatics::ParseOption(Options, TEXT("Mode"))), SideName);
+		: FString::Printf(TEXT("%s   /   %s"), *LoadingModeLabel(UGameplayStatics::ParseOption(Options, TEXT("Mode"))), SideName);
 
 	// The map's name, picture and the side's tip are the player's own content, read through the bridge.
 	FString Error;
@@ -336,14 +336,14 @@ FScctLoadingPage UScctLoadingSubsystem::DescribeLoad(const FWorldContext& Contex
 	{
 		return Page;
 	}
-	Page.Title = ReadText([&](TCHAR* Buffer, int32 Capacity) { return Play->GetMapTitle(*Map, Buffer, Capacity); });
+	Page.Title = ReadPlayText([&](TCHAR* Buffer, int32 Capacity) { return Play->GetMapTitle(*Map, Buffer, Capacity); });
 	if (Page.Title.IsEmpty())
 	{
 		Page.Title = Map;
 	}
-	Page.Tip = ReadText([&](TCHAR* Buffer, int32 Capacity) { return Play->GetTip(bMerc ? 1 : 0, -1, Buffer, Capacity); });
+	Page.Tip = ReadPlayText([&](TCHAR* Buffer, int32 Capacity) { return Play->GetTip(bMerc ? 1 : 0, -1, Buffer, Capacity); });
 
-	const FString File = ReadText([&](TCHAR* Buffer, int32 Capacity) { return Play->GetLoadingImage(*Map, bMerc ? 1 : 0, Buffer, Capacity); });
+	const FString File = ReadPlayText([&](TCHAR* Buffer, int32 Capacity) { return Play->GetLoadingImage(*Map, bMerc ? 1 : 0, Buffer, Capacity); });
 	if (!File.IsEmpty())
 	{
 		TObjectPtr<UTexture2D>& Picture = Pictures.FindOrAdd(File);
