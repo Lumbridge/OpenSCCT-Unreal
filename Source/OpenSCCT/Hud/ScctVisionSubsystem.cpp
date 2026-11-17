@@ -457,4 +457,10 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 		LastMarkLog = Now;
 	}
 	LastMarkSummary = Summary;
+
+	// Unmarked, every live pawn above got its shadow back; what is left belongs to pawns that are gone.
+	if (!bMark)
+	{
+		ShadowsTaken.Reset();
+	}
 }

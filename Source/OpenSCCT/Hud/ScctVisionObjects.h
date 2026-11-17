@@ -68,6 +68,8 @@ private:
 	{
 		FLinearColor Tint = FLinearColor::White;
 		bool bVisible = true;
+		/** The share of Tint set now (negative until first set). */
+		float Applied = -1.0f;
 	};
 
 	/** What a primitive should be this frame. */

@@ -113,7 +113,18 @@ namespace
 	bool LevelAvoidNanite(UStaticMeshComponent* Component)
 	{
 		const UStaticMesh* Mesh = Component != nullptr ? Component->GetStaticMesh() : nullptr;
-		if (Mesh == nullptr || Component->IsForceDisableNanite() || !Mesh->IsNaniteEnabled())
+		if (Mesh == nullptr || Component->IsForceDisableNanite())
+		{
+			return false;
+		}
+#if WITH_EDITOR
+		// The mesh's setting: its Nanite data may still be building.
+		const bool bNanite = Mesh->IsNaniteEnabled();
+#else
+		// A cooked game has no setting, only the data the cook built.
+		const bool bNanite = Mesh->HasValidNaniteData();
+#endif
+		if (!bNanite)
 		{
 			return false;
 		}
