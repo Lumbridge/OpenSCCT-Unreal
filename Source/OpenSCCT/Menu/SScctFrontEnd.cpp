@@ -31,6 +31,11 @@ namespace
 	const TCHAR* const ModeKeys[] = { TEXT("Story"), TEXT("DiskHunt"), TEXT("Deathmatch"), TEXT("MercDeathMatch") };
 	const int32 BotCounts[] = { 0, 1, 2, 3, 5, 7 };
 	const TCHAR* const SkillLabels[] = { TEXT("Easy"), TEXT("Normal"), TEXT("Hard"), TEXT("Expert") };
+
+	// The mercs' sidearms: off as in OpenSCCT's own session settings, or allowed with the pistol the local merc
+	// brings (AScctGameMode's ?Sidearms and ?Sidearm).
+	const TCHAR* const SidearmLabels[] = { TEXT("None"), TEXT("Pistol"), TEXT("Suppressed"), TEXT("Automatic"), TEXT(".44 Magnum"), TEXT("Desert Eagle") };
+	const TCHAR* const SidearmKeys[] = { TEXT(""), TEXT("unsuppressed"), TEXT("suppressed"), TEXT("automatic"), TEXT("magnum44"), TEXT("desert_eagle") };
 	const int32 JoinSides[] = { -1, 0, 1, 255 };
 
 	constexpr float PageWidth = 560.0f;
@@ -183,6 +188,16 @@ void SScctFrontEnd::ShowPageNamed(const FString& Name)
 	{
 		ShowPage(EPage::Servers);
 	}
+	else if (Name.Equals(TEXT("password"), ESearchCase::IgnoreCase))
+	{
+		// Unattended: the prompt as a protected server of the list brings it up. No server stands behind it, so
+		// its CONNECT only goes back to the list.
+		Page = EPage::Servers;
+		PasswordServer = INDEX_NONE;
+		PasswordServerName = TEXT("This server");
+		bPasswordPrompt = true;
+		Rebuild();
+	}
 	else if (Name.Equals(TEXT("start"), ESearchCase::IgnoreCase))
 	{
 		// Unattended: the offline page with its choices as they stand, and its START pressed.
@@ -194,6 +209,7 @@ void SScctFrontEnd::ShowPageNamed(const FString& Name)
 void SScctFrontEnd::ShowPage(EPage NewPage)
 {
 	Page = NewPage;
+	bPasswordPrompt = false;
 	if (Page == EPage::Servers && Online.IsValid())
 	{
 		Online->RequestServerList();
@@ -204,6 +220,7 @@ void SScctFrontEnd::ShowPage(EPage NewPage)
 void SScctFrontEnd::Rebuild()
 {
 	ServerRows.Reset();
+	ServerPasswordBox.Reset();
 	ChatRows.Reset();
 	for (TSharedPtr<SVerticalBox>& Rows : TeamRows)
 	{
@@ -216,7 +233,7 @@ void SScctFrontEnd::Rebuild()
 	case EPage::Home: Content = BuildHome(); break;
 	case EPage::Offline: Content = BuildOffline(); break;
 	case EPage::Join: Content = BuildJoin(); break;
-	case EPage::Servers: Content = BuildServers(); break;
+	case EPage::Servers: Content = bPasswordPrompt ? BuildPasswordPrompt() : BuildServers(); break;
 	case EPage::Visit: Content = BuildVisit(); break;
 	}
 	PageBox->SetContent(Content);
@@ -311,6 +328,7 @@ TSharedRef<SWidget> SScctFrontEnd::BuildOffline()
 		}
 		AddBlock(Box, TEXT("Bots"), Choice(BotLabels, BotsIndex, Ui::Accent()));
 		AddBlock(Box, TEXT("Bot skill"), Choice(ToStrings(SkillLabels), SkillIndex, Ui::Accent()));
+		AddBlock(Box, TEXT("Mercenaries' sidearm"), Choice(ToStrings(SidearmLabels), SidearmIndex, ScctHudStyle::Accent(1)));
 	}
 
 	Box->AddSlot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
@@ -339,6 +357,10 @@ void SScctFrontEnd::StartOffline()
 	// AScctGameMode reads these (Play/ScctGameMode.h). A name with the URL's own separator would cut the options.
 	FString Url = FString::Printf(TEXT("%s?Mode=%s?Side=%s?Bots=%d?Difficulty=%d"), *UScctOnlineSubsystem::LevelOf(Maps[MapIndex]),
 		ModeKeys[ModeIndex], SideIndex == 1 ? TEXT("merc") : TEXT("spy"), BotCounts[BotsIndex], SkillIndex + 1);
+	if (SidearmIndex > 0 && SidearmIndex < UE_ARRAY_COUNT(SidearmKeys))
+	{
+		Url += FString::Printf(TEXT("?Sidearms=1?Sidearm=%s"), SidearmKeys[SidearmIndex]);
+	}
 	const FString Name = Online->GetPlayerName().Replace(TEXT("?"), TEXT(""));
 	if (!Name.IsEmpty())
 	{
@@ -527,9 +549,19 @@ void SScctFrontEnd::RefillServers()
 		const FString Line = FString::Printf(TEXT("%s    %s  %s    %d/%d%s"), Server.Name, Server.Map, ModeNameOf(Server.Mode), Server.Players, Server.MaxPlayers, *Marks);
 		ServerRows->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)
 		[
-			Ui::Button(Ui::ToText(Line), FOnClicked::CreateLambda([Weak, Index]
+			Ui::Button(Ui::ToText(Line), FOnClicked::CreateLambda([this, Weak, Index]
 			{
-				if (Weak.IsValid())
+				const UScctOnlineSubsystem* Listing = Weak.Get();
+				if (Listing == nullptr || !Listing->GetServers().IsValidIndex(Index))
+				{
+					return FReply::Handled();
+				}
+				// A protected server is asked for with its password; the join would only come back refused.
+				if ((Listing->GetServers()[Index].Flags & EScctOnlineServerFlags::Password) != 0)
+				{
+					AskPassword(Index);
+				}
+				else
 				{
 					Weak->JoinListed(Index);
 				}
@@ -537,6 +569,99 @@ void SScctFrontEnd::RefillServers()
 			}))
 		];
 	}
+}
+
+void SScctFrontEnd::AskPassword(int32 ServerIndex)
+{
+	const UScctOnlineSubsystem* Visit = Online.Get();
+	if (Visit == nullptr || !Visit->GetServers().IsValidIndex(ServerIndex))
+	{
+		return;
+	}
+	PasswordServer = ServerIndex;
+	PasswordServerName = Visit->GetServers()[ServerIndex].Name;
+	bPasswordPrompt = true;
+	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: server '%s' is protected: asking for its password"), *PasswordServerName);
+	Rebuild();
+}
+
+TSharedRef<SWidget> SScctFrontEnd::BuildPasswordPrompt()
+{
+	const auto BackToList = [this]
+	{
+		bPasswordPrompt = false;
+		Rebuild();
+		return FReply::Handled();
+	};
+	ServerPasswordBox = Ui::TextBox(TEXT("the server's password"), FString(), true, FOnTextCommitted::CreateLambda([this](const FText&, ETextCommit::Type Commit)
+	{
+		if (Commit == ETextCommit::OnEnter)
+		{
+			JoinWithPassword();
+		}
+	}));
+
+	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Ui::Title(Ui::ToText(TEXT("PASSWORD")), 24.0f) ];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 20.0f)
+	[
+		Ui::Text(FText::FromString(FString::Printf(TEXT("%s is protected. Type its password to join."), *PasswordServerName)),
+			12.0f, FSlateColor(ScctHudStyle::TextDim()), ScctHudStyle::EWeight::Regular, true)
+	];
+	AddBlock(Box, TEXT("Password"), ServerPasswordBox.ToSharedRef());
+	Box->AddSlot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
+		[
+			Ui::Button(Ui::ToText(TEXT("CONNECT")), FOnClicked::CreateLambda([this] { JoinWithPassword(); return FReply::Handled(); }), true, Ui::Accent(), 150.0f)
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			Ui::Button(Ui::ToText(TEXT("CANCEL")), FOnClicked::CreateLambda(BackToList))
+		]
+	];
+
+	// The field has the keyboard as soon as the prompt is up: the player types and presses Enter.
+	const TWeakPtr<SEditableTextBox> WeakBox = ServerPasswordBox;
+	RegisterActiveTimer(0.0f, FWidgetActiveTimerDelegate::CreateLambda([WeakBox](double, float)
+	{
+		if (const TSharedPtr<SEditableTextBox> Pinned = WeakBox.Pin())
+		{
+			FSlateApplication::Get().SetKeyboardFocus(Pinned, EFocusCause::SetDirectly);
+		}
+		return EActiveTimerReturnType::Stop;
+	}));
+	return SNew(SBox).WidthOverride(PageWidth)[ Ui::Glass(Box) ];
+}
+
+void SScctFrontEnd::JoinWithPassword()
+{
+	UScctOnlineSubsystem* Visit = Online.Get();
+	const FString Password = ServerPasswordBox.IsValid() ? ServerPasswordBox->GetText().ToString() : FString();
+	if (Visit != nullptr && Password.IsEmpty() && ServerPasswordBox.IsValid())
+	{
+		FSlateApplication::Get().SetKeyboardFocus(ServerPasswordBox, EFocusCause::SetDirectly);
+		return;
+	}
+
+	// The list may have been refreshed while the prompt was up: the server is found again by its name.
+	int32 Index = PasswordServer;
+	if (Visit != nullptr && (!Visit->GetServers().IsValidIndex(Index) || PasswordServerName != Visit->GetServers()[Index].Name))
+	{
+		Index = Visit->GetServers().IndexOfByPredicate([this](const FScctOnlineServerEntry& Server) { return PasswordServerName == Server.Name; });
+	}
+	bPasswordPrompt = false;
+	if (Visit != nullptr && Visit->GetServers().IsValidIndex(Index))
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: joining protected server '%s' with the password typed"), *PasswordServerName);
+		Visit->JoinListed(Index, Password);
+	}
+	else
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: server '%s' is no longer in the list; back to the list"), *PasswordServerName);
+	}
+	Rebuild();
 }
 
 // ---- the visit ----------------------------------------------------------------------------------------------------

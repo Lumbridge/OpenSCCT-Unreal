@@ -41,8 +41,9 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(FScctLocalCommandEvent, FName /*Name*/, i
  *
  * INTERFACE COMMANDS. Bindings that are not for the pawn (ShowMenu, Talk, HoldScoreboard, DisplayStrategicMap,
  * PushToTalk, Quit...) arrive through OnLocalCommand, on the press and again on the release. The game mode opens
- * the in-match menu on ShowMenu and Quit; the HUD takes HoldScoreboard, ShowConnectedPlayers and
- * SwitchEnhancedReality. Nothing reads a fixed key for any of these.
+ * the in-match menu on ShowMenu; the HUD takes the scoreboard, the mission status page, the chat line, the
+ * teammate names and SwitchEnhancedReality (Hud/ScctHudSubsystem.h lists them). Nothing reads a fixed key for any
+ * of these.
  *
  * MENUS. While a menu is open (SetMenuOpen) the bridge is told the game does not have the input: everything held
  * is released and no key or mouse movement reaches the player. The keys bound to a command can still be asked for

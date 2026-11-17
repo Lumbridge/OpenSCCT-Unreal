@@ -16,6 +16,8 @@ import sys
 import unreal
 
 CONTENT_ROOT, MAP, NORMALS_DIR = sys.argv[1], sys.argv[2], sys.argv[3]
+# What prepare_rain_cover.py wrote for this map (the heights of what stands in the rain's way), if it ran.
+RAIN_COVER_DIR = sys.argv[4] if len(sys.argv) > 4 else ""
 RENDER = os.path.join(CONTENT_ROOT, "svmap", MAP, "render")
 DEST = "/Game/Imported/Maps/" + MAP
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -34,8 +36,21 @@ LIGHT_FALLOFF = 1.6          # light = (1 - (d / R)^2) ^ this; the original's is
 # and the glowing surfaces below (all in the same units), inside the exposure range of the post-process volume.
 LIGHT_PER_BRIGHTNESS = 5.0 / 255.0
 # The map's light colours are strong (they multiplied 2005 textures in display space). Under bounce lighting a
-# strongly coloured lamp turns a whole room one hue, so part of the colour is given up toward white.
-LIGHT_SATURATION = 0.7
+# strongly coloured lamp turns a whole room one hue, so part of the colour is given up toward white. (The colour
+# counts more than once here: the lamp's light, its bounces off walls it has already tinted, and the baked fill,
+# which carries the same tint. At 0.7 SancE's break room was one green and CineE's backstage one blue. The game's
+# copy of this number is LevelLightSaturation in Play/ScctLevelStateSubsystem.cpp.)
+LIGHT_SATURATION = 0.55
+# A "special lit" light lit only the surfaces marked special lit (a car's own tail-light glow, a sign's housing),
+# none of the room and none of the characters. Nothing of ours carries that mark, so such a light is kept on a
+# lighting channel nothing receives: placed (the level state can still switch it) but lighting no one.
+SPECIAL_LIT_CHANNEL = 2
+# A light with a small radius (many maps hang one of radius 25 or 75 at each lamp, to light the lamp's own housing
+# and whoever walks under it) puts all its light on the patch of wall beside it. The original could not draw
+# that patch brighter than twice its texture; here it is a white hole with a ruled rim once the eye has opened for
+# the corridor around it. Below this radius a light is weakened in step with its radius and its edge is softened.
+SMALL_LIGHT_RADIUS = 300.0
+SMALL_LIGHT_FALLOFF = 3.0
 # Glow strengths are brightnesses in the finished picture, not in the scene (scct_materials.Graph.in_the_picture):
 # 1 is the texture as painted at any exposure, more than 1 burns toward white and blooms. What the original drew
 # unlit is also shaded unlit here, so a screen in a lit room is not its picture plus the room's light on top.
@@ -59,10 +74,11 @@ EMISSIVE_CAUSTICS = 0.08
 # original's view; elsewhere it shifts a little, as a real skyline would.
 BACKDROP_MESHES = re.compile(r"skyline|warp|imm", re.IGNORECASE)          # by the mesh's own name
 BACKDROP_NOT = re.compile(r"sky(?!line)|hemis|cloud|moon|lune|star", re.IGNORECASE)   # the sky itself
+BACKDROP_SKY_CUT = 2.0   # a HorizonCut (M_ScctSurface) above the whole texture: the part is not drawn
 BACKDROP_LEVEL_RADII = 4.0
 BACKDROP_DISTANCE = (60000.0, 150000.0)
 # A skyline is neither a lamp in the room nor part of the sky dome: its glow goes half the way with the exposure.
-BACKDROP_GLOW = 0.6
+BACKDROP_GLOW = 0.85
 BACKDROP_GLOW_IN_PICTURE = 0.5
 
 # What a detail set is scaled to before a surface class's amounts apply (see fetch_assets.measure_set): the
@@ -75,6 +91,20 @@ DETAIL_MAX_GAIN = 5.0
 # in the units of the lights above: about 1.6 would be all of it. It is a fill under the real lights, which do the
 # shadows and the shine, so it stays well below that.
 BAKED_FILL = 0.5
+# The least light a lit surface gives off, of its own colour, in the units of the lights above (M_ScctSurface, "the
+# least light"): what the original's zone ambient did. A room with no surviving lamp is dim shapes once the eye
+# has opened for it (the exposure reaches down to -4 EV, where this is about a quarter of middle grey), not black.
+AMBIENT_FLOOR = 0.012
+# Water the original drew at full brightness (a pool in a night club): how much of its colour it gives off, in the
+# picture. And the same for the haze sheets it hung in deep water.
+WATER_GLOW = 0.22
+HAZE_GLOW = 0.3
+HAZE_SOFT_DEPTH = 220.0
+
+# The level's motion blur (the engine's own default is 0.5): how much of a frame's motion is smeared, and the most a
+# pixel is smeared by, in percent of the picture's width.
+MOTION_BLUR = 0.12
+MOTION_BLUR_MOST = 1.5
 
 asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
 editor_assets = unreal.EditorAssetLibrary
@@ -232,7 +262,9 @@ def build_materials(material_doc):
         kind = look.get("kind", "surface")
         if kind == "glass" and not (translucent and not is_additive):
             kind = "plain"
-        if kind == "water" and (unlit or flags.get("masked")):
+        if kind == "water" and (is_additive or flags.get("masked")):
+            kind = "plain"
+        if kind == "haze" and not translucent:
             kind = "plain"
         counts[class_name] = counts.get(class_name, 0) + 1
 
@@ -264,8 +296,25 @@ def build_materials(material_doc):
             materials_lib.set_material_instance_parent(instance, parents["water"])
             texture("BaseColor", base)
             scalar("Roughness", look["rough_dark"])
-            # Water the original drew solid hides what is under it; keep it nearly so.
-            scalar("Opacity", 0.55 if translucent else 0.93)
+            # How much of what is under it shows through deep water, and through a hand's depth of it. Water the
+            # original drew solid hides what is under it (often nothing is modelled there); it only thins at its
+            # edges.
+            scalar("Opacity", look.get("deep_opacity", 0.82) if translucent else 1.0)
+            scalar("ShallowOpacity", look.get("shallow_opacity", 0.12) if translucent else 0.8)
+            scalar("Glow", WATER_GLOW if unlit else 0.0)
+            pan_u, pan_v = pan_speed(flags.get("uv_anim"))
+            scalar("PanU", pan_u)
+            scalar("PanV", pan_v)
+        elif kind == "haze":
+            # A sheet of coloured haze: as thin as the original painted it, its own colour and nothing else (no
+            # mirror at a glancing angle, no light on it), fading where it meets things.
+            materials_lib.set_material_instance_parent(instance, parents["glass"])
+            texture("BaseColor", base)
+            scalar("Opacity", look.get("opacity", 1.0))
+            scalar("OpacityFloor", 0.0)
+            scalar("GlanceOpacity", 0.0)
+            scalar("SoftDepth", look.get("soft_depth", HAZE_SOFT_DEPTH))
+            scalar("Emissive", look.get("emissive", HAZE_GLOW))
         else:
             materials_lib.set_material_instance_parent(instance, parents["surface"])
             texture("BaseColor", base)
@@ -278,6 +327,9 @@ def build_materials(material_doc):
             scalar("Metallic", look["metallic"])
             scalar("Specular", look.get("specular", 0.5))
             scalar("MacroNormal", look.get("macro_normal", 1.0))
+            tint = look.get("tint")
+            if tint:
+                materials_lib.set_material_instance_vector_parameter_value(instance, "Tint", unreal.LinearColor(tint[0], tint[1], tint[2], 1.0))
 
             # The detail layer: only on lit surfaces (a glow or a decal has no grain of its own).
             detail = look.get("detail") if kind == "surface" and not unlit else None
@@ -304,6 +356,7 @@ def build_materials(material_doc):
                 scalar("SelfIllum", glow or EMISSIVE_SELF_ILLUM)
 
             if not unlit:
+                scalar("AmbientFloor", AMBIENT_FLOOR)
                 scalar("BakedFill", BAKED_FILL)
                 page = lightmap_of.get(key(imported))
                 page = texture_of(page) if page else None
@@ -337,11 +390,11 @@ def build_materials(material_doc):
         overrides.set_editor_property("override_blend_mode", blend is not None)
         if blend is not None:
             overrides.set_editor_property("blend_mode", blend)
-        two_sided = bool(flags.get("two_sided")) and kind not in ("glass", "card")   # those masters are two-sided already
+        two_sided = bool(flags.get("two_sided")) and kind not in ("glass", "haze", "card")   # those masters are two-sided already
         overrides.set_editor_property("override_two_sided", two_sided)
         overrides.set_editor_property("two_sided", two_sided)
         # Unlit in the original, unlit here: only its own glow. (Glass, water and cards have their own masters.)
-        shade_unlit = unlit and kind in ("surface", "plain")
+        shade_unlit = (unlit and kind in ("surface", "plain")) or kind == "haze"
         overrides.set_editor_property("override_shading_model", shade_unlit)
         overrides.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT if shade_unlit
                                       else unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
@@ -489,6 +542,9 @@ def main():
     sky_eye = (lighting.get("sky") or {}).get("location")
     backdrop_rules = json.load(open(os.path.join(HERE, "map_skies.json"))).get("backdrop", {})
     skip_backdrop = set(key(name) for name in backdrop_rules.get("skip", []))
+    horizon_cut = {key(name): float(cut) for name, cut in backdrop_rules.get("horizon_cut", {}).items() if not name.startswith("about")}
+    backdrop_source = {"MI_" + sanitize(name): record.get("source") or name for name, record in material_doc["materials"].items()}
+    cut_sky = []
     backdrop = []
     for instance in gltf["extras"]["svmap"]["instances"]:
         own_name = instance["mesh"].split("#")[0].split(".")[-1]
@@ -533,12 +589,25 @@ def main():
                 material = slot.material_interface
                 if isinstance(material, unreal.MaterialInstanceConstant) and material.get_path_name() not in glowing:
                     glowing.add(material.get_path_name())
+                    # Parts of a skyline that are the sky itself (a painted star sphere, a cloud band) are not drawn,
+                    # and a panorama with a city under its painted sky keeps only the city: the real sky shows.
+                    source = backdrop_source.get(material.get_name(), "")
+                    cut = BACKDROP_SKY_CUT if BACKDROP_NOT.search(source.split(".")[-1]) else horizon_cut.get(key(source), 0.0)
+                    if cut > 0.0:
+                        materials_lib.set_material_instance_scalar_parameter_value(material, "HorizonCut", cut)
+                        overrides = material.get_editor_property("base_property_overrides")
+                        overrides.set_editor_property("override_blend_mode", True)
+                        overrides.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+                        material.set_editor_property("base_property_overrides", overrides)
+                        materials_lib.update_material_instance(material)
+                        cut_sky.append("%s %.2f" % (source.split(".")[-1], cut))
                     if materials_lib.get_material_instance_scalar_parameter_value(material, "Emissive") > 0.0:
                         materials_lib.set_material_instance_scalar_parameter_value(material, "Emissive", BACKDROP_GLOW)
                         materials_lib.set_material_instance_scalar_parameter_value(material, "GlowInPicture", BACKDROP_GLOW_IN_PICTURE)
                         materials_lib.update_material_instance(material)
         log("skyline: %d meshes of the sky zone stand %.0f m out, %.0f times their size (%s)" % (
             len(backdrop), distance / 100.0, grow, ", ".join(sorted(set(i["mesh"].split("#")[0].split(".")[-1] for i, _ in backdrop)))))
+        log("skyline sky left out: " + (", ".join(sorted(set(cut_sky))) or "none"))
     else:
         log("skyline: none")
 
@@ -564,7 +633,7 @@ def main():
                 log("effect texture missing: " + file)
         return effect_textures[stem]
 
-    effects = scct_fx.MapEffects(MAP, RENDER, DEST, spawn, effect_texture, import_files, log)
+    effects = scct_fx.MapEffects(MAP, RENDER, DEST, spawn, effect_texture, import_files, log, rain_cover=RAIN_COVER_DIR)
     # ---- lights -----------------------------------------------------------------------------------------------
     # Every light of the map is placed, also those the original used only for characters (apply_static false):
     # the lights its lightmaps were baked from are mostly not in the map file, and the character lights sit at the
@@ -584,8 +653,9 @@ def main():
         component.set_mobility(unreal.ComponentMobility.MOVABLE)
         radius = RADIUS_UNITS * (light["radius"] + 1.0)
         component.set_editor_property("use_inverse_squared_falloff", False)
-        component.set_editor_property("light_falloff_exponent", LIGHT_FALLOFF)
-        component.set_intensity(light["brightness"] * LIGHT_PER_BRIGHTNESS)
+        small = min(radius / SMALL_LIGHT_RADIUS, 1.0)
+        component.set_editor_property("light_falloff_exponent", LIGHT_FALLOFF + (SMALL_LIGHT_FALLOFF - LIGHT_FALLOFF) * (1.0 - small))
+        component.set_intensity(light["brightness"] * LIGHT_PER_BRIGHTNESS * small)
         # The map's colours come from hue and saturation, in display (gamma) space.
         colour = [channel ** 2.2 for channel in light["color"]]
         grey = 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2]
@@ -594,8 +664,18 @@ def main():
         component.set_attenuation_radius(radius)
         component.set_source_radius(6.0)
         component.set_soft_source_radius(12.0)
-        component.set_cast_shadows(True)
-        try_set(component, "volumetric_scattering_intensity", 1.5 if spot else 0.6)
+        component.set_cast_shadows(not light.get("special_lit"))
+        if light.get("special_lit"):
+            # Nothing receives it, so it has no shadow to cast either (a shadowed light costs its shadow maps
+            # whether or not anything it lights is drawn).
+            channels = unreal.LightingChannels()
+            channels.set_editor_property("channel0", False)
+            channels.set_editor_property("channel%d" % SPECIAL_LIT_CHANNEL, True)
+            component.set_editor_property("lighting_channels", channels)
+            try_set(component, "volumetric_scattering_intensity", 0.0)
+            try_set(component, "affect_global_illumination", False)
+        else:
+            try_set(component, "volumetric_scattering_intensity", 1.5 if spot else 0.6)
         if spot:
             # The original's cone: full angle 1.15 * acos((1 - LightCone/256)^2) (OpenSCCT docs/RENDERING.md).
             # Its inner cone is a twentieth of that; a softer edge reads better with real shadows.
@@ -720,7 +800,9 @@ def main():
         ("scene_fringe_intensity", 0.1),
         ("lens_flare_intensity", 0.4),
         ("ambient_occlusion_intensity", 0.6),
-        ("motion_blur_amount", 0.35),
+        # A trace of blur on a fast turn and nothing to see at a walk: at 0.35 the walls smeared while walking.
+        ("motion_blur_amount", MOTION_BLUR),
+        ("motion_blur_max", MOTION_BLUR_MOST),
         # Glass and water show the room in them, not only the sky.
         ("lumen_front_layer_translucency_reflections", True),
     ]:

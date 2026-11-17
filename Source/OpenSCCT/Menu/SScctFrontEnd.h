@@ -17,9 +17,9 @@ class UScctOnlineSubsystem;
  * player lists and chat are refilled whenever the online subsystem's revision changes.
  *
  *   Home      play offline, join by address, server list, quit
- *   Offline   map, mode, side, bots and their skill, start
+ *   Offline   map, mode, side, bots and their skill, the mercs' sidearms, start
  *   Join      name, address, password, side
- *   Servers   the master's list, refresh, sign in
+ *   Servers   the master's list, refresh, sign in. A server marked PASSWORD asks for its password before the join
  *   Visit     shown instead of the above while UScctOnlineSubsystem::IsVisiting
  */
 class SScctFrontEnd : public SCompoundWidget
@@ -33,7 +33,7 @@ public:
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 
-	/** Unattended: shows a page by name ("offline", "join", "servers"), for screenshots. */
+	/** Unattended: shows a page by name ("offline", "join", "servers", "password": the server list's password prompt), for screenshots. */
 	void ShowPageNamed(const FString& Name);
 
 private:
@@ -73,6 +73,11 @@ private:
 	void RefillServers();
 	void StartOffline();
 	void StartJoin();
+
+	/** The server list's password prompt: shown instead of the list for one protected server, then the join with what was typed. */
+	TSharedRef<SWidget> BuildPasswordPrompt();
+	void AskPassword(int32 ServerIndex);
+	void JoinWithPassword();
 	void SendChat();
 	void PickNextMap();
 
@@ -93,6 +98,7 @@ private:
 	int32 SideIndex = 0;
 	int32 BotsIndex = 3;
 	int32 SkillIndex = 1;
+	int32 SidearmIndex = 0;
 
 	// Join page.
 	TSharedPtr<SEditableTextBox> NameBox;
@@ -102,6 +108,12 @@ private:
 
 	// Servers page.
 	TSharedPtr<SVerticalBox> ServerRows;
+
+	/** The protected server whose password is being asked for (its place in the list and its name), or INDEX_NONE. */
+	int32 PasswordServer = INDEX_NONE;
+	FString PasswordServerName;
+	bool bPasswordPrompt = false;
+	TSharedPtr<SEditableTextBox> ServerPasswordBox;
 
 	// Lobby.
 	TSharedPtr<SVerticalBox> TeamRows[3];

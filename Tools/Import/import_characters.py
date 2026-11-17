@@ -200,6 +200,15 @@ def set_materials(package, mesh_name, surface, look):
             materials_lib.set_material_instance_scalar_parameter_value(instance, "RoughnessBright", bright)
             materials_lib.set_material_instance_scalar_parameter_value(instance, "Metallic", metallic)
             materials_lib.set_material_instance_scalar_parameter_value(instance, "Emissive", emissive)
+            materials_lib.set_material_instance_scalar_parameter_value(instance, "Specular", BODY_SPECULAR if look is body_look else 0.5)
+            # Masked, with the texture's alpha left out of the mask: the surface material can then thin the mesh
+            # out of the picture close to the camera (custom primitive data slot scct_materials.NEAR_FADE_SLOT),
+            # which the game asks for on the local player's body and what it carries.
+            materials_lib.set_material_instance_scalar_parameter_value(instance, "AlphaMask", 0.0)
+            overrides = instance.get_editor_property("base_property_overrides")
+            overrides.set_editor_property("override_blend_mode", True)
+            overrides.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+            instance.set_editor_property("base_property_overrides", overrides)
             materials_lib.update_material_instance(instance)
             editor_assets.save_loaded_asset(instance, only_if_is_dirty=False)
             slot.set_editor_property("material_interface", instance)
@@ -211,9 +220,15 @@ def set_materials(package, mesh_name, surface, look):
         log("materials set on %s.%s (%s): %d slots, %d bones" % (package, mesh_name, asset_path.rsplit("/", 1)[1], len(slots), bones))
 
 
+# How much a body mirrors its surroundings (the engine's Specular; 0.5 is its default for everything else). The
+# suits are painted nearly black, so almost all the light a body sends back is this mirror term: at 0.5 a spy under
+# an open sky, or beside a lit wall, was a pale grey figure, because the eye is open wide for the dark he stands in.
+BODY_SPECULAR = 0.18
+
+
 def body_look(_name):
-    # Suits and gear: matte cloth with a slight sheen on the brighter, worn parts.
-    return 0.8, 0.5, 0.0, 0.0
+    # Suits and gear: matte cloth, a little less matte on the brighter, worn parts.
+    return 0.92, 0.62, 0.0, 0.0
 
 
 def import_skins(package, pattern, parent, texture_parameter, scalars):

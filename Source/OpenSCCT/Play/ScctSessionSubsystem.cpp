@@ -64,6 +64,10 @@ bool UScctSessionSubsystem::ConnectBridge()
 		Fail(Error);
 		return false;
 	}
+
+	// Asking for the play table puts the local player's gear on every level the bridge loads from now on (a local
+	// match or an online round), so it is asked for as soon as the bridge is there.
+	ScctFeature<FScctPlayApi>();
 	return true;
 }
 
@@ -109,9 +113,16 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 	CopyText(Start.Mode, Options.Mode);
 	CopyText(Start.PlayerName, Options.PlayerName);
 
-	UE_LOG(LogOpenSCCT, Log, TEXT("Starting %s (%s) as %s with %d bots (difficulty %d, sidearms %d, rifles %d, practice rules %d, name '%s')"),
+	// The match only allows sidearms; which one the local merc carries is his own gear, asked of this machine when
+	// the server hands out the kit.
+	if (const FScctPlayApi* Play = ScctFeature<FScctPlayApi>())
+	{
+		Play->SetSidearm(Options.Sidearm);
+	}
+
+	UE_LOG(LogOpenSCCT, Log, TEXT("Starting %s (%s) as %s with %d bots (difficulty %d, sidearms %d (own sidearm %d), rifles %d, practice rules %d, name '%s')"),
 		*Options.Map, *Options.Mode, Options.bMerc ? TEXT("merc") : TEXT("spy"), Start.Bots, Start.Difficulty,
-		Options.bSidearms ? 1 : 0, Options.bRifles ? 1 : 0, Options.bOfflineRules ? 1 : 0, *Options.PlayerName);
+		Options.bSidearms ? 1 : 0, Options.Sidearm, Options.bRifles ? 1 : 0, Options.bOfflineRules ? 1 : 0, *Options.PlayerName);
 
 	const int32 NewId = Api->StartLocalEx(&Start);
 	if (NewId == 0)

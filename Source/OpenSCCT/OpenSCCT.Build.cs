@@ -23,11 +23,15 @@ public class OpenSCCT : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new[]
 		{
+			// The two-bone solver that closes a hand on a replacement weapon's grip (Play/ScctArmIk).
+			"AnimationCore",
 			// The effect meshes are imported on the player's machine and found by looking (Play/ScctEffectsSubsystem).
 			"AssetRegistry",
 			// A sound wave class of our own (Play/ScctSoundWave) links against the audio proxy interfaces.
 			"AudioExtensions",
 			"Json",
+			// The loading page is shown by the engine's movie player while a level loads (Menu/ScctLoadingSubsystem).
+			"MoviePlayer",
 			"Projects",
 			"RenderCore",
 			"Slate",
