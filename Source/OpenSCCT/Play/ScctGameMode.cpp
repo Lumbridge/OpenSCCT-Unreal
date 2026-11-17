@@ -161,8 +161,9 @@ void AScctGameMode::Tick(float DeltaSeconds)
 			bAnyDown |= Player->IsInputKeyDown(Key);
 			bAnyPressed |= Player->WasInputKeyJustPressed(Key);
 		}
-		if (bCloseKeysArmed && bAnyPressed)
+		if (bCloseKeysArmed && bAnyPressed && !MatchMenu->Back())
 		{
+			// Nothing open on the menu (a question, the Options screen) took the key back a step.
 			SetMenuOpen(false);
 		}
 		else if (!bAnyDown && !bAnyPressed)

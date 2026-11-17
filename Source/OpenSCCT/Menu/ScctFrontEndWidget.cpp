@@ -22,3 +22,20 @@ void UScctFrontEndWidget::ShowPageNamed(const FString& Name)
 		FrontEnd->ShowPageNamed(Name);
 	}
 }
+
+
+void UScctFrontEndWidget::ShowOptions(FName Page)
+{
+	if (FrontEnd.IsValid())
+	{
+		FrontEnd->ShowOptions(Page);
+	}
+}
+
+void UScctFrontEndWidget::AskQuit()
+{
+	if (FrontEnd.IsValid())
+	{
+		FrontEnd->AskQuit();
+	}
+}

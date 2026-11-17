@@ -5,6 +5,8 @@
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformMisc.h"
+#include "Menu/SScctConfirm.h"
+#include "Menu/SScctOptionsPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -74,7 +76,7 @@ void SScctFrontEnd::Construct(const FArguments& InArgs)
 	static const FSlateColorBrush Dim(FLinearColor::White);
 	ChildSlot
 	[
-		SNew(SOverlay)
+		SAssignNew(Root, SOverlay)
 		// The backdrop is a lit level: a wash keeps the type readable over its bright places.
 		+ SOverlay::Slot()
 		[
@@ -118,8 +120,17 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 	}
 
 	// A visit takes the screen over, whichever page it was started from, and gives that page back at its end.
+	// The Options screen is left alone (it may have been opened from the lobby); its BACK goes to the visit.
 	const bool bVisiting = Visit->IsVisiting();
-	if (bVisiting && Page != EPage::Visit)
+	if (Page == EPage::Options)
+	{
+		if (bVisiting && PageBeforeOptions != EPage::Visit)
+		{
+			PageBeforeVisit = PageBeforeOptions;
+			PageBeforeOptions = EPage::Visit;
+		}
+	}
+	else if (bVisiting && Page != EPage::Visit)
 	{
 		PageBeforeVisit = Page;
 		VisitView = FindVisitView();
@@ -183,12 +194,43 @@ void SScctFrontEnd::ShowPageNamed(const FString& Name)
 	{
 		ShowPage(EPage::Servers);
 	}
+	else if (Name.Equals(TEXT("options"), ESearchCase::IgnoreCase))
+	{
+		ShowOptions(NAME_None);
+	}
 	else if (Name.Equals(TEXT("start"), ESearchCase::IgnoreCase))
 	{
 		// Unattended: the offline page with its choices as they stand, and its START pressed.
 		ShowPage(EPage::Offline);
 		StartOffline();
 	}
+}
+
+void SScctFrontEnd::ShowOptions(FName OptionsPage)
+{
+	if (Page != EPage::Options)
+	{
+		PageBeforeOptions = Page;
+	}
+	OptionsFirstPage = OptionsPage;
+	ShowPage(EPage::Options);
+}
+
+void SScctFrontEnd::AskQuit()
+{
+	SScctConfirm::Open(Root.ToSharedRef(), TEXT("Quit OpenSCCT?"), TEXT("QUIT"), TEXT("CANCEL"),
+		FSimpleDelegate::CreateLambda([] { FPlatformMisc::RequestExit(false); }));
+}
+
+FReply SScctFrontEnd::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
+{
+	// Escape on the Options screen is its BACK, wherever the keyboard is on it.
+	if (InKeyEvent.GetKey() == EKeys::Escape && Page == EPage::Options && OptionsScreen.IsValid())
+	{
+		OptionsScreen->RequestBack();
+		return FReply::Handled();
+	}
+	return SCompoundWidget::OnKeyDown(MyGeometry, InKeyEvent);
 }
 
 void SScctFrontEnd::ShowPage(EPage NewPage)
@@ -205,6 +247,7 @@ void SScctFrontEnd::Rebuild()
 {
 	ServerRows.Reset();
 	ChatRows.Reset();
+	OptionsScreen.Reset();
 	for (TSharedPtr<SVerticalBox>& Rows : TeamRows)
 	{
 		Rows.Reset();
@@ -218,6 +261,12 @@ void SScctFrontEnd::Rebuild()
 	case EPage::Join: Content = BuildJoin(); break;
 	case EPage::Servers: Content = BuildServers(); break;
 	case EPage::Visit: Content = BuildVisit(); break;
+	case EPage::Options:
+		Content = SAssignNew(OptionsScreen, SScctOptionsPage)
+			.Online(Online)
+			.InitialPage(OptionsFirstPage)
+			.OnClose(FSimpleDelegate::CreateLambda([this] { ShowPage(PageBeforeOptions); }));
+		break;
 	}
 	PageBox->SetContent(Content);
 	SeenRevision = -1;
@@ -255,10 +304,14 @@ TSharedRef<SWidget> SScctFrontEnd::BuildHome()
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("PLAY OFFLINE"), EPage::Offline) ]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("JOIN BY ADDRESS"), EPage::Join) ]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 20.0f)[ Entry(TEXT("SERVER LIST"), EPage::Servers) ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("SERVER LIST"), EPage::Servers) ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 20.0f)
+			[
+				Ui::Button(Ui::ToText(TEXT("OPTIONS")), FOnClicked::CreateLambda([this] { ShowOptions(NAME_None); return FReply::Handled(); }), false, Ui::Accent(), 240.0f)
+			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
-				Ui::Button(Ui::ToText(TEXT("QUIT")), FOnClicked::CreateLambda([] { FPlatformMisc::RequestExit(false); return FReply::Handled(); }))
+				Ui::Button(Ui::ToText(TEXT("QUIT")), FOnClicked::CreateLambda([this] { AskQuit(); return FReply::Handled(); }))
 			])
 	];
 }
@@ -339,7 +392,7 @@ void SScctFrontEnd::StartOffline()
 	// AScctGameMode reads these (Play/ScctGameMode.h). A name with the URL's own separator would cut the options.
 	FString Url = FString::Printf(TEXT("%s?Mode=%s?Side=%s?Bots=%d?Difficulty=%d"), *UScctOnlineSubsystem::LevelOf(Maps[MapIndex]),
 		ModeKeys[ModeIndex], SideIndex == 1 ? TEXT("merc") : TEXT("spy"), BotCounts[BotsIndex], SkillIndex + 1);
-	const FString Name = Online->GetPlayerName().Replace(TEXT("?"), TEXT(""));
+	const FString Name = SScctOptionsPage::PlayerName(Online.Get()).Replace(TEXT("?"), TEXT(""));
 	if (!Name.IsEmpty())
 	{
 		Url += TEXT("?Name=") + Name;
@@ -359,7 +412,7 @@ TSharedRef<SWidget> SScctFrontEnd::BuildJoin()
 			StartJoin();
 		}
 	});
-	NameBox = Ui::TextBox(TEXT("Player"), Online.IsValid() ? Online->GetPlayerName() : FString());
+	NameBox = Ui::TextBox(TEXT("Player"), SScctOptionsPage::PlayerName(Online.Get()));
 	AddressBox = Ui::TextBox(TEXT("host or host:port"), LastAddress, false, OnEnter);
 	PasswordBox = Ui::TextBox(TEXT("only if the server asks for one"), FString(), true, OnEnter);
 
@@ -751,7 +804,11 @@ TSharedRef<SWidget> SScctFrontEnd::BuildLobby()
 				Ui::Button(Ui::ToText(TEXT("NEXT MAP")), FOnClicked::CreateLambda([this] { PickNextMap(); return FReply::Handled(); }))
 			]
 		]
-		+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right)
+		+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right).Padding(0.0f, 0.0f, 6.0f, 0.0f)
+		[
+			Ui::Button(Ui::ToText(TEXT("OPTIONS")), FOnClicked::CreateLambda([this] { ShowOptions(NAME_None); return FReply::Handled(); }))
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
 		[
 			Ui::Button(Ui::ToText(TEXT("LEAVE")), FOnClicked::CreateLambda([Weak] { if (Weak.IsValid()) { Weak->Leave(); } return FReply::Handled(); }),
 				false, Ui::Accent(), 110.0f)

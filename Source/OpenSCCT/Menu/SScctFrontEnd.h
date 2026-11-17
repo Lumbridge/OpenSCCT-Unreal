@@ -7,6 +7,8 @@
 
 class SBox;
 class SEditableTextBox;
+class SOverlay;
+class SScctOptionsPage;
 class SScrollBox;
 class SVerticalBox;
 class UScctOnlineSubsystem;
@@ -16,10 +18,12 @@ class UScctOnlineSubsystem;
  * the lobby, travelling, a failure). It is one widget whose middle is rebuilt when the page changes; the lobby's
  * player lists and chat are refilled whenever the online subsystem's revision changes.
  *
- *   Home      play offline, join by address, server list, quit
+ *   Home      play offline, join by address, server list, options, quit (after asking)
  *   Offline   map, mode, side, bots and their skill, start
  *   Join      name, address, password, side
  *   Servers   the master's list, refresh, sign in
+ *   Options   the Options screen (Menu/SScctOptionsPage.h), from the home page or the lobby; a visit does not
+ *             take the screen from it
  *   Visit     shown instead of the above while UScctOnlineSubsystem::IsVisiting
  */
 class SScctFrontEnd : public SCompoundWidget
@@ -33,8 +37,16 @@ public:
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 
-	/** Unattended: shows a page by name ("offline", "join", "servers"), for screenshots. */
+	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
+
+	/** Unattended: shows a page by name ("offline", "join", "servers", "options"), for screenshots. */
 	void ShowPageNamed(const FString& Name);
+
+	/** Opens the Options screen on one of its pages (the first when unknown); BACK returns to the page shown now. */
+	void ShowOptions(FName OptionsPage);
+
+	/** QUIT: asks, then ends the game. */
+	void AskQuit();
 
 private:
 	enum class EPage : uint8
@@ -44,6 +56,7 @@ private:
 		Join,
 		Servers,
 		Visit,
+		Options,
 	};
 
 	/** What the visit page is showing; a change rebuilds it. */
@@ -80,6 +93,8 @@ private:
 	TSharedRef<SWidget> Choice(const TArray<FString>& Labels, int32& Value, const FLinearColor& Colour);
 
 	TWeakObjectPtr<UScctOnlineSubsystem> Online;
+	/** The whole screen: questions open over it. */
+	TSharedPtr<SOverlay> Root;
 	TSharedPtr<SBox> PageBox;
 	EPage Page = EPage::Home;
 	EPage PageBeforeVisit = EPage::Home;
@@ -102,6 +117,11 @@ private:
 
 	// Servers page.
 	TSharedPtr<SVerticalBox> ServerRows;
+
+	// Options.
+	TSharedPtr<SScctOptionsPage> OptionsScreen;
+	FName OptionsFirstPage;
+	EPage PageBeforeOptions = EPage::Home;
 
 	// Lobby.
 	TSharedPtr<SVerticalBox> TeamRows[3];
