@@ -327,6 +327,13 @@ $imported = @(Select-String -LiteralPath $ufsManifest -Pattern '[\\/]Content[\\/
 if ($imported.Count -gt 0) {
     Fail ("imported content was cooked ($($imported.Count) files, see $ufsManifest); check DirectoriesToNeverCook and what refers to /Game/Imported:`n  " + (($imported | Select-Object -First 10) -join "`n  "))
 }
+# The map packs (Tools/Cook/Cook-MapPaks.ps1, docs/MAP-PAKS.md) are downloaded by the game, never shipped with it: a
+# release cook is not chunked (Config/Custom/MapPaks is read only with -CustomConfig=MapPaks), so the only container is
+# pakchunk0. Any other chunk means the map pak settings reached this cook.
+$stagedPaks = Join-Path $staged "$target/Content/Paks"
+$chunks = @(Get-ChildItem -LiteralPath $stagedPaks -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^pakchunk(\d+)' -and [int]$Matches[1] -ne 0 } | ForEach-Object Name)
+if ($chunks.Count -gt 0) { Fail "the release cook made map pak containers ($($chunks -join ', ')): it must not read Config/Custom/MapPaks" }
 Get-ChildItem -LiteralPath $staged -File -Filter 'Manifest_*.txt' | Remove-Item -Force
 
 Move-Item -LiteralPath $staged -Destination $folder

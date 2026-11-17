@@ -12,7 +12,9 @@ A release is a zip that the OpenSCCT launcher installs, plus a checksum and a la
 - This project's own content, cooked: the front end, materials, the merc rifle and the CC0 texture sets.
   `Config/DefaultGame.ini` lists the front end in `MapsToCook` and always cooks `/Game/OpenSCCT`.
 - **No original game content.** `/Game/Imported` is in `DirectoriesToNeverCook`. The script fails if staging's
-  list of packed files (`Manifest_UFSFiles_Win64.txt`) names anything under `Content/Imported`. The original content includes every playable map, the hub, the characters, the weapons
+  list of packed files (`Manifest_UFSFiles_Win64.txt`) names anything under `Content/Imported`, or when the paks folder holds a container other than `pakchunk0`: the
+  map packs (docs/MAP-PAKS.md) are cooked with `-CustomConfig=MapPaks`, which a release never passes, and are never
+  shipped with it. The original content includes every playable map, the hub, the characters, the weapons
   and the effects. So for now a release starts the front end and can do nothing more. Playing needs one of two
   things: cooked map packs mounted from `%LOCALAPPDATA%\OpenSCCT\unreal-packs` (the
   [OpenSCCT-Unreal-Content](https://github.com/Lumbridge/OpenSCCT-Unreal-Content) format), or a change to that rule.
