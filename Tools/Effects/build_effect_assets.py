@@ -8,7 +8,8 @@ The materials go to /Game/OpenSCCT/Effects/ and are committed: they are ours, ma
   M_ScctFxGlow    additive unlit sprite; colour and opacity per instance (the first four custom data floats) and
                   the distance in cm over which it dims into a surface behind it (the fifth)
   M_ScctFxSmoke   soft translucent sprite lit by the scene; colour and opacity per instance
-  M_ScctFxDecal   deferred decal: a dark hole in a paler chipped ring; parameters Color, RimColor and Strength
+  M_ScctFxDecal   deferred decal: a bullet hole with a ragged lip in a chipped ring; parameters Color, RimColor,
+                  Strength and RimStrength
   M_ScctFxSolid   opaque surface with a glow, for stand-in shapes; parameters Color and Glow
 
 With a content root the original effect meshes (grenades, mines, gadgets, beams: shared/fx/meshes/*.glb) are
@@ -65,6 +66,30 @@ def finish(material):
     lib.recompile_material(material)
     editor_assets.save_loaded_asset(material, only_if_is_dirty=False)
     log("material built: " + material.get_path_name())
+
+
+def in_the_picture(material, source, x, y):
+    """`source` as a brightness in the finished picture instead of in the scene: divided by the exposure the eye
+    has settled on, within bounds (the same rule as Graph.in_the_picture in Tools/Import/scct_materials.py). A
+    flash or a beam is then as bright on screen in a dark cellar as in a lit hall, and never a white-out."""
+    inverse = lib.create_material_expression(material, unreal.MaterialExpressionEyeAdaptationInverse, x, y)
+    one = lib.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, x - 200, y + 120)
+    one.set_editor_property("constant", unreal.LinearColor(1, 1, 1, 1))
+    if not (lib.connect_material_expressions(one, "", inverse, "LightValueInput")
+            or lib.connect_material_expressions(one, "", inverse, "LightValue")):
+        log("NOT CONNECTED: the eye adaptation node of " + material.get_name())
+    custom = lib.create_material_expression(material, unreal.MaterialExpressionCustom, x + 220, y)
+    custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    pins = []
+    for name in ("L", "K"):
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    custom.set_editor_property("inputs", pins)
+    custom.set_editor_property("code", "float s = (K.r + K.g + K.b) / 3.0; return L * clamp(s, 0.08, 16.0);")
+    lib.connect_material_expressions(source, "", custom, "L")
+    lib.connect_material_expressions(inverse, "", custom, "K")
+    return custom
 
 
 def soft_disc(material, x, y, power):
@@ -133,7 +158,7 @@ def build_glow():
     soft = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, 30, 100)
     connect(light, "", soft, "A")
     connect(fade, "", soft, "B")
-    connect_output(soft, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    connect_output(in_the_picture(material, soft, 250, 100), "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     finish(material)
 
 
@@ -178,39 +203,61 @@ def build_decal():
     material.set_editor_property("material_domain", unreal.MaterialDomain.MD_DEFERRED_DECAL)
     material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
 
-    # A dark hole in the middle of a paler ring of chipped, scuffed surface, so the mark reads on dark wood and
-    # on white plaster alike.
-    disc = soft_disc(material, -1700, 300, 1.0)
+    # A bullet hole: a small dark hole with a ragged lip, in a ring of chipped surface with a broken outline, so
+    # no two marks have the same shape once each is turned its own way. x: how much of the pixel is the hole
+    # (the rest is the chipped ring's colour), y: how much the mark covers the surface there.
+    code = """
+float2 p = UV * 2.0 - 1.0;
+float r = length(p);
+float a = atan2(p.y, p.x);
+float lip = 0.38 + 0.035 * sin(a * 3.0 + 0.7) + 0.025 * sin(a * 7.0 + 2.1);
+float hole = smoothstep(lip, lip - 0.07, r);
+float edge = 0.70 + 0.13 * sin(a * 2.0 + 1.3) + 0.09 * sin(a * 5.0 + 0.4) + 0.05 * sin(a * 11.0 + 2.9);
+float chip = smoothstep(edge, edge - 0.22, r);
+// Thin cracks run out of the ring a little way.
+float crack = pow(saturate(sin(a * 4.0 + 0.9) * 0.5 + 0.5), 24.0) * smoothstep(0.98, 0.55, r) * 0.6;
+return float2(hole, saturate(max(hole, max(chip, crack) * Rim)));"""
+    uv = lib.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -1500, 300)
+    rim_strength = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -1500, 480)
+    rim_strength.set_editor_property("parameter_name", "RimStrength")
+    rim_strength.set_editor_property("default_value", 0.55)
+    shape = lib.create_material_expression(material, unreal.MaterialExpressionCustom, -1150, 300)
+    shape.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT2)
+    pins = []
+    for name in ("UV", "Rim"):
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    shape.set_editor_property("inputs", pins)
+    shape.set_editor_property("code", code.strip())
+    connect(uv, "", shape, "UV")
+    connect(rim_strength, "", shape, "Rim")
+    hole_mask = lib.create_material_expression(material, unreal.MaterialExpressionComponentMask, -850, 250)
+    hole_mask.set_editor_property("r", True)
+    hole_mask.set_editor_property("g", False)
+    connect(shape, "", hole_mask, "")
+    cover = lib.create_material_expression(material, unreal.MaterialExpressionComponentMask, -850, 400)
+    cover.set_editor_property("r", False)
+    cover.set_editor_property("g", True)
+    connect(shape, "", cover, "")
+
     hole = lib.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -900, -250)
     hole.set_editor_property("parameter_name", "Color")
     hole.set_editor_property("default_value", unreal.LinearColor(0.008, 0.007, 0.006, 1.0))
     rim = lib.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -900, -50)
     rim.set_editor_property("parameter_name", "RimColor")
     rim.set_editor_property("default_value", unreal.LinearColor(0.42, 0.38, 0.33, 1.0))
-    inner = lib.create_material_expression(material, unreal.MaterialExpressionAdd, -900, 150)
-    inner.set_editor_property("const_b", -0.5)
-    connect(disc, "", inner, "A")
-    sharp = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -750, 150)
-    sharp.set_editor_property("const_b", 8.0)
-    connect(inner, "", sharp, "A")
-    middle = lib.create_material_expression(material, unreal.MaterialExpressionSaturate, -600, 150)
-    connect(sharp, "", middle, "")
     colour = lib.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -450, -100)
     connect(rim, "", colour, "A")
     connect(hole, "", colour, "B")
-    connect(middle, "", colour, "Alpha")
+    connect(hole_mask, "", colour, "Alpha")
     connect_output(colour, "", unreal.MaterialProperty.MP_BASE_COLOR)
 
-    wide = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -550, 300)
-    wide.set_editor_property("const_b", 2.4)
-    connect(disc, "", wide, "A")
-    cut = lib.create_material_expression(material, unreal.MaterialExpressionSaturate, -400, 300)
-    connect(wide, "", cut, "")
     strength = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -550, 480)
     strength.set_editor_property("parameter_name", "Strength")
     strength.set_editor_property("default_value", 0.92)
     opacity = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -250, 350)
-    connect(cut, "", opacity, "A")
+    connect(cover, "", opacity, "A")
     connect(strength, "", opacity, "B")
     connect_output(opacity, "", unreal.MaterialProperty.MP_OPACITY)
 

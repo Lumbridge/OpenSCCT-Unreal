@@ -14,6 +14,7 @@
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
 #include "Play/ScctEquipmentSubsystem.h"
+#include "Play/ScctExposure.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
@@ -21,6 +22,12 @@
 
 namespace
 {
+	// The light on the bodies of the local player's side (UpdateBodyFill): its strength in a moderately lit room, in the
+	// map lights' units, how far it reaches from the camera and how far above the camera it sits.
+	constexpr float BodyFillIntensity = 2.4f;
+	constexpr float BodyFillRadius = 700.0f;
+	constexpr float BodyFillRaise = 25.0f;
+
 	constexpr int32 MaxLights = 16;
 	constexpr int32 MaxMeshes = 96;
 	constexpr int32 MaxTracers = 48;
@@ -35,7 +42,14 @@ namespace
 	constexpr float CandelasPerBrightness = 2.0f;
 
 	// A bullet mark is about 12 cm across in the original.
-	constexpr float DecalHalfSize = 6.5f;
+	// Half the width of a bullet mark, cm, by what was hit (the mark's own DrawScale is laid over it): the hole
+	// is the middle third of that and the chipped ring around it the rest. A rifle round leaves a crater the
+	// size of a coin in concrete, a clean hole with a bright lip in sheet metal, a wider star in glass.
+	constexpr float DecalHalfSizeConcrete = 3.4f;
+	constexpr float DecalHalfSizeMetal = 2.0f;
+	constexpr float DecalHalfSizeWood = 2.4f;
+	constexpr float DecalHalfSizeGlass = 4.2f;
+	constexpr float DecalHalfSizeSoft = 2.8f;
 
 	const TCHAR* const GlowMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxGlow.M_ScctFxGlow");
 	const TCHAR* const SmokeMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxSmoke.M_ScctFxSmoke");
@@ -82,6 +96,9 @@ void UScctEffectsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Session->OnMatchStarted.AddUObject(this, &UScctEffectsSubsystem::HandleMatchStarted);
 	Session->OnBeforeTicks.AddUObject(this, &UScctEffectsSubsystem::HandleBeforeTicks);
 	Session->OnFrame.AddUObject(this, &UScctEffectsSubsystem::HandleFrame);
+
+	// Flashes are scaled by the picture's exposure (Play/ScctExposure.h).
+	FScctExposure::Start();
 
 	bLog = FParse::Param(FCommandLine::Get(), TEXT("ScctFxLog"));
 	bAutoFire = FParse::Param(FCommandLine::Get(), TEXT("ScctAutoFire"));
@@ -218,6 +235,18 @@ bool UScctEffectsSubsystem::EnsureScene()
 		LightComponents.Add(Light);
 	}
 
+	BodyFill = NewObject<UPointLightComponent>(Host);
+	BodyFill->SetMobility(EComponentMobility::Movable);
+	BodyFill->bUseInverseSquaredFalloff = false; // the same units as the map's lights (Tools/Import/import_map.py)
+	BodyFill->SetLightFalloffExponent(1.0f);
+	BodyFill->SetAttenuationRadius(BodyFillRadius);
+	BodyFill->SetCastShadows(false);
+	BodyFill->SetSpecularScale(0.6f);
+	BodyFill->SetLightingChannels(false, true, false);
+	BodyFill->SetVisibility(false);
+	BodyFill->SetupAttachment(Root);
+	BodyFill->RegisterComponent();
+
 	MeshUsed.Init(false, MaxMeshes);
 	MeshPool.SetNum(MaxMeshes);
 
@@ -285,10 +314,53 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 	UpdateImpactMarks();
 	UpdateEffectActors(FxSeconds);
 	UpdateLights(FxSeconds);
+	UpdateBodyFill();
 
 	const FScctBridgeView& View = Session->GetView();
 	Sprites.Tick(FxSeconds, FVector(View.X, View.Y, View.Z), FRotator(View.Pitch, View.Yaw, View.Roll).Quaternion());
 	PeakSprites = FMath::Max(PeakSprites, Sprites.GetNumLive());
+}
+
+void UScctEffectsSubsystem::UpdateBodyFill()
+{
+	if (BodyFill == nullptr)
+	{
+		return;
+	}
+	const AScctPawnProxy* Local = Session->FindLocalProxy();
+	if (Local == nullptr)
+	{
+		if (BodyFill->IsVisible())
+		{
+			BodyFill->SetVisibility(false);
+		}
+		return;
+	}
+
+	// The fill's channel on the bodies of the local player's side, off every other body (sides can change
+	// between rounds while the proxies stay).
+	for (const FScctBridgePawn& Pawn : Session->GetPawns())
+	{
+		const AScctPawnProxy* Proxy = Session->FindProxy(Pawn.ActorId);
+		UPrimitiveComponent* Body = Proxy != nullptr ? Proxy->GetBodyMesh() : nullptr;
+		if (Body == nullptr)
+		{
+			continue;
+		}
+		const bool bOwnSide = Proxy->GetTeam() == Local->GetTeam();
+		if (static_cast<bool>(Body->LightingChannels.bChannel1) != bOwnSide)
+		{
+			Body->SetLightingChannels(true, bOwnSide, false);
+		}
+	}
+
+	const FScctBridgeView& View = Session->GetView();
+	BodyFill->SetWorldLocation(FVector(View.X, View.Y, View.Z + BodyFillRaise));
+	BodyFill->SetIntensity(BodyFillIntensity * FScctExposure::FlashScale());
+	if (!BodyFill->IsVisible())
+	{
+		BodyFill->SetVisibility(true);
+	}
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -472,13 +544,14 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 			}
 			if (bNew || !Decal->IsVisible())
 			{
-				TintDecal(DecalTints[Mark.Slot], GetName(Mark.TypeId), GetName(Mark.SparkClassId));
+				const float HalfSize = TintDecal(DecalTints[Mark.Slot], GetName(Mark.TypeId), GetName(Mark.SparkClassId));
 				// A decal projects along its own X axis, into the surface; its turn about that axis is random so
-				// a burst does not stamp one shape.
-				const float Size = DecalHalfSize * (Mark.DrawScale > 0.0f ? FMath::Clamp(Mark.DrawScale, 0.5f, 3.0f) : 1.0f);
+				// a burst does not stamp one shape, and so is its size a little.
+				const float Size = HalfSize * (Mark.DrawScale > 0.0f ? FMath::Clamp(Mark.DrawScale, 0.6f, 2.0f) : 1.0f) * Random.FRandRange(0.85f, 1.2f);
 				FRotator Facing = (-Normal).Rotation();
 				Facing.Roll = Random.FRandRange(0.0f, 360.0f);
-				Decal->DecalSize = FVector(8.0, Size, Size);
+				// Shallow, so a mark on a thin wall or a door edge is not projected onto what stands behind it.
+				Decal->DecalSize = FVector(4.0, Size, Size);
 				Decal->SetWorldLocationAndRotation(At, Facing);
 				Decal->SetVisibility(true);
 			}
@@ -906,7 +979,7 @@ void UScctEffectsSubsystem::SpawnMuzzleFlash(const FVector& At, const FVector& D
 
 	const FLinearColor LightTint = bSticky ? FLinearColor(0.3f, 0.55f, 1.0f) : FLinearColor(1.0f, 0.68f, 0.36f);
 	// The light sits a little way down the line of fire, so it lights the room and not just the shooter's hands.
-	AcquireLight(At + Direction * 35.0, LightTint, 130.0f * Level, 900.0f, 0.09f, true);
+	AcquireLight(At + Direction * 35.0, LightTint, 45.0f * Level, 900.0f, 0.09f, true);
 }
 
 void UScctEffectsSubsystem::SpawnSparks(const FVector& At, const FVector& Normal, int32 Count, const FLinearColor& Color, float Speed)
@@ -1002,12 +1075,8 @@ void UScctEffectsSubsystem::SpawnImpact(const FVector& At, const FVector& Normal
 	}
 }
 
-void UScctEffectsSubsystem::TintDecal(UMaterialInstanceDynamic* Tint, const FString& TypeClass, const FString& SparkClass)
+float UScctEffectsSubsystem::TintDecal(UMaterialInstanceDynamic* Tint, const FString& TypeClass, const FString& SparkClass)
 {
-	if (Tint == nullptr)
-	{
-		return;
-	}
 	const auto Is = [&SparkClass, &TypeClass](const TCHAR* Word)
 	{
 		return SparkClass.Contains(Word) || TypeClass.Contains(Word);
@@ -1015,34 +1084,50 @@ void UScctEffectsSubsystem::TintDecal(UMaterialInstanceDynamic* Tint, const FStr
 
 	// The hole itself and the ring of broken surface around it: fresh splinters on wood, bare bright metal,
 	// crushed white on glass, chipped grey on concrete. Strength is how much of the surface the mark covers.
+	// Rim is how much of the chipped ring shows (1: a crater of broken surface, low: little more than the hole).
 	FLinearColor Hole(0.012f, 0.011f, 0.01f);
 	FLinearColor Rim(0.3f, 0.29f, 0.27f);
 	float Strength = 0.9f;
+	float RimStrength = 0.55f;
+	float HalfSize = DecalHalfSizeConcrete;
 	if (Is(TEXT("Wood")))
 	{
 		Hole = FLinearColor(0.02f, 0.012f, 0.006f);
 		Rim = FLinearColor(0.2f, 0.135f, 0.07f);
+		RimStrength = 0.5f;
+		HalfSize = DecalHalfSizeWood;
 	}
 	else if (Is(TEXT("Metal")) || Is(TEXT("Fence")) || Is(TEXT("Armor")))
 	{
 		Hole = FLinearColor(0.006f, 0.006f, 0.007f);
 		Rim = FLinearColor(0.42f, 0.42f, 0.45f);
+		RimStrength = 0.7f;
+		HalfSize = DecalHalfSizeMetal;
 	}
 	else if (Is(TEXT("Glass")))
 	{
 		Hole = FLinearColor(0.05f, 0.055f, 0.06f);
 		Rim = FLinearColor(0.7f, 0.74f, 0.78f);
 		Strength = 0.6f;
+		RimStrength = 0.45f;
+		HalfSize = DecalHalfSizeGlass;
 	}
 	else if (Is(TEXT("Sand")) || Is(TEXT("Soft")) || Is(TEXT("Blood")))
 	{
 		Hole = FLinearColor(0.02f, 0.016f, 0.012f);
 		Rim = FLinearColor(0.1f, 0.085f, 0.065f);
 		Strength = 0.75f;
+		RimStrength = 0.35f;
+		HalfSize = DecalHalfSizeSoft;
 	}
-	Tint->SetVectorParameterValue(TEXT("Color"), Hole);
-	Tint->SetVectorParameterValue(TEXT("RimColor"), Rim);
-	Tint->SetScalarParameterValue(TEXT("Strength"), Strength);
+	if (Tint != nullptr)
+	{
+		Tint->SetVectorParameterValue(TEXT("Color"), Hole);
+		Tint->SetVectorParameterValue(TEXT("RimColor"), Rim);
+		Tint->SetScalarParameterValue(TEXT("Strength"), Strength);
+		Tint->SetScalarParameterValue(TEXT("RimStrength"), RimStrength);
+	}
+	return HalfSize;
 }
 
 void UScctEffectsSubsystem::SpawnExplosion(const FVector& At)
@@ -1155,11 +1240,15 @@ int32 UScctEffectsSubsystem::AcquireLight(const FVector& At, const FLinearColor&
 		{
 			continue;
 		}
-		Lights[Index] = { Life, 0.0f, Candelas, true };
+		// A timed flash is as bright in the picture in a dark cellar as in a lit hall: without this the eye,
+		// opened up for the dark, sees a muzzle flash a metre from a wall as a white screen. A light an effect
+		// actor holds (a flare, a burning thing) is a lamp like any other and keeps its strength.
+		const float Shown = Life > 0.0f ? Candelas * FScctExposure::FlashScale() : Candelas;
+		Lights[Index] = { Life, 0.0f, Shown, true };
 		UPointLightComponent* Light = LightComponents[Index];
 		Light->SetWorldLocation(At);
 		Light->SetLightColor(Color);
-		Light->SetIntensity(Candelas);
+		Light->SetIntensity(Shown);
 		Light->SetAttenuationRadius(Radius);
 		Light->SetCastShadows(bShadows);
 		Light->SetVisibility(true);

@@ -81,6 +81,30 @@ def facing(material, x, y):
     return saturate
 
 
+def in_the_picture(material, source, x, y):
+    """`source` as a brightness in the finished picture instead of in the scene: divided by the exposure the eye
+    has settled on, within bounds (the same rule as Graph.in_the_picture in Tools/Import/scct_materials.py). A
+    flash or a beam is then as bright on screen in a dark cellar as in a lit hall, and never a white-out."""
+    inverse = materials_lib.create_material_expression(material, unreal.MaterialExpressionEyeAdaptationInverse, x, y)
+    one = materials_lib.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, x - 200, y + 120)
+    one.set_editor_property("constant", unreal.LinearColor(1, 1, 1, 1))
+    if not (materials_lib.connect_material_expressions(one, "", inverse, "LightValueInput")
+            or materials_lib.connect_material_expressions(one, "", inverse, "LightValue")):
+        log("NOT CONNECTED: the eye adaptation node of " + material.get_name())
+    custom = materials_lib.create_material_expression(material, unreal.MaterialExpressionCustom, x + 220, y)
+    custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    pins = []
+    for name in ("L", "K"):
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    custom.set_editor_property("inputs", pins)
+    custom.set_editor_property("code", "float s = (K.r + K.g + K.b) / 3.0; return L * clamp(s, 0.08, 16.0);")
+    materials_lib.connect_material_expressions(source, "", custom, "L")
+    materials_lib.connect_material_expressions(inverse, "", custom, "K")
+    return custom
+
+
 def build_glow():
     material = new_material("M_ScctGlow")
     if not material:
@@ -103,7 +127,7 @@ def build_glow():
     lit = binary(material, unreal.MaterialExpressionMultiply, colour, intensity, -600, -100)
     faded = binary(material, unreal.MaterialExpressionMultiply, lit, fade, -400, -50)
     out = binary(material, unreal.MaterialExpressionMultiply, faded, core, -100, 0)
-    materials_lib.connect_material_property(out, "", MP.MP_EMISSIVE_COLOR)
+    materials_lib.connect_material_property(in_the_picture(material, out, 150, 0), "", MP.MP_EMISSIVE_COLOR)
     finish(material)
 
 

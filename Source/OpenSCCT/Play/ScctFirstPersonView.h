@@ -93,6 +93,8 @@ private:
 
 	/** Seconds since the last shot; negative while no flash shows. */
 	float FlashAge = -1.0f;
+	/** The exposure scale the flash's light took when it fired (Play/ScctExposure.h). */
+	float FlashExposureScale = 1.0f;
 	int32 FlashesPlayed = 0;
 	TArray<FScctBridgeBone> PoseBuffer;
 };

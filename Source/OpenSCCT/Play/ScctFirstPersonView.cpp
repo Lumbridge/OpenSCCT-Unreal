@@ -10,6 +10,7 @@
 #include "OpenSCCT.h"
 #include "Play/ScctEquipmentData.h"
 #include "Play/ScctEquipmentModels.h"
+#include "Play/ScctExposure.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -20,7 +21,9 @@ namespace
 	// crack of light and not a glow. Its light outlasts it by a little, as the eye's impression does.
 	constexpr float FlashSeconds = 0.05f;
 	constexpr float FlashLightSeconds = 0.085f;
-	constexpr float FlashLightCandelas = 60.0f;
+	// In a moderately lit room; scaled by the picture's exposure when it fires (Play/ScctExposure.h), so the
+	// flash does not white out the screen when the eye is open for the dark.
+	constexpr float FlashLightCandelas = 26.0f;
 
 	struct FFlashShape
 	{
@@ -273,6 +276,7 @@ void AScctFirstPersonView::PlayMuzzleFlash()
 	}
 	FlashLight->SetVisibility(true);
 	FlashAge = 0.0f;
+	FlashExposureScale = FScctExposure::FlashScale();
 	++FlashesPlayed;
 	UE_LOG(LogOpenSCCT, Log, TEXT("First person: muzzle flash %d at (%.0f %.0f %.0f), %.1f cm from the eye"), FlashesPlayed,
 		Muzzle.GetLocation().X, Muzzle.GetLocation().Y, Muzzle.GetLocation().Z, FVector::Dist(Muzzle.GetLocation(), LastCamera.GetLocation()));
@@ -318,7 +322,7 @@ void AScctFirstPersonView::TickFlash(float DeltaSeconds)
 	}
 
 	const float LightFade = bGunShown ? 1.0f - FMath::Clamp(Age / FlashLightSeconds, 0.0f, 1.0f) : 0.0f;
-	FlashLight->SetIntensity(FlashLightCandelas * LightFade);
+	FlashLight->SetIntensity(FlashLightCandelas * FlashExposureScale * LightFade);
 	if (LightFade <= 0.0f)
 	{
 		FlashLight->SetVisibility(false);

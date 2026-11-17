@@ -5,6 +5,7 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "Play/ScctExposure.h"
 
 DEFINE_LOG_CATEGORY(LogOpenSCCT);
 
@@ -30,6 +31,8 @@ FOpenSCCTModule& FOpenSCCTModule::Get()
 
 void FOpenSCCTModule::ShutdownModule()
 {
+	FScctExposure::Stop();
+
 	if (bTableReady && Api.Shutdown != nullptr)
 	{
 		// Never throws and gives up after the timeout, so a stuck server thread cannot hang the exit.

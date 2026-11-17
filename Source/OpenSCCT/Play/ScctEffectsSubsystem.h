@@ -136,7 +136,8 @@ private:
 	void SpawnMuzzleFlash(const FVector& At, const FVector& Direction, float Scale, bool bSticky, bool bSuppressed, bool bShotgun);
 	void SpawnImpact(const FVector& At, const FVector& Normal, const FString& SparkClass, const FString& TypeClass);
 	/** Colours an impact slot's decal for the surface that was hit (the impact's class names say which). */
-	void TintDecal(UMaterialInstanceDynamic* Tint, const FString& TypeClass, const FString& SparkClass);
+	/** Colours a bullet mark for the surface that was hit; returns half its width in cm. */
+	float TintDecal(UMaterialInstanceDynamic* Tint, const FString& TypeClass, const FString& SparkClass);
 	void SpawnExplosion(const FVector& At);
 	void SpawnFlashBang(const FVector& At);
 	void SpawnSparks(const FVector& At, const FVector& Normal, int32 Count, const FLinearColor& Color, float Speed);
@@ -169,6 +170,18 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UPointLightComponent>> LightComponents;
+
+	/**
+	 * A soft light from the camera on the bodies of the local player's own side, and on nothing else (its own
+	 * lighting channel). A spy's suit is nearly black: seen from behind with the room's light in front of him he
+	 * was a flat black cut-out in his own picture, and so was the team mate beside him. The light follows the
+	 * picture's exposure, so it is the same faint sheen in a cellar and in a lit hall. It never falls on the other
+	 * side (a spy in the dark stays in the dark for the merc who looks his way) and it lights no wall.
+	 */
+	UPROPERTY(Transient)
+	TObjectPtr<UPointLightComponent> BodyFill;
+
+	void UpdateBodyFill();
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UStaticMeshComponent>> MeshPool;
