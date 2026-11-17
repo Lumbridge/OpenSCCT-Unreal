@@ -19,16 +19,16 @@ public:
 	/** Unattended: shows a page by name ("offline", "join", "servers", "options"). */
 	void ShowPageNamed(const FString& Name);
 
-	/** Opens the Options screen on one of its pages (SScctFrontEnd::ShowOptions). */
+	/** Opens the settings page on the tab of that name (\"settings/<tab>\"). */
 	void ShowOptions(FName Page);
 
 	/** The QUIT question, as the button asks it. */
 	void AskQuit();
 
-	/** The Equipment page, as the offline page's or the lobby's EQUIPMENT opens it (SScctFrontEnd::ShowGear). */
+	/** The front end's Equipment page for a side (0 spy, 1 merc), over the main menu (Menu/ScctOverlayPages.h). */
 	TSharedPtr<class SScctGearPage> ShowGear(int32 Side = -1);
 
-	/** The strategic map of a map (empty: the lobby's), as the lobby's STRATEGIC MAP opens it (SScctFrontEnd::ShowStrategicMap). */
+	/** A map's strategic map, over the main menu, as the lobby's STRATEGIC MAP shows the lobby's map. */
 	TSharedPtr<class SScctStrategicMapPage> ShowStrategicMap(const FString& Map = FString());
 
 protected:

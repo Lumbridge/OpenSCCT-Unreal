@@ -118,7 +118,7 @@ void AScctFrontEndGameMode::ShowMenu()
 	Player->SetShowMouseCursor(true);
 
 	FString Page;
-	if (FParse::Value(FCommandLine::Get(), TEXT("ScctMenuPage="), Page))
+	if (FParse::Value(FCommandLine::Get(), TEXT("ScctMenuPage="), Page) || FParse::Value(FCommandLine::Get(), TEXT("ScctOpenPage="), Page))
 	{
 		Menu->ShowPageNamed(Page);
 	}

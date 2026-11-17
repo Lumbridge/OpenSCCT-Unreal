@@ -142,6 +142,13 @@ struct FScctBridgeStartOptions
 	TCHAR Map[32];
 	TCHAR Mode[32];       // Story, DiskHunt, Deathmatch, MercDeathMatch; empty: Story
 	TCHAR PlayerName[48]; // empty: "Player"
+
+	// The player's own rules over the map's, each one higher than its value so that zero keeps the map's:
+	// 0 the map's own, 1 none or unlimited, n the value n - 1.
+	int32 TimeLimitPlusOne; // minutes
+	int32 SpyLivesPlusOne;  // not used in Merc Deathmatch
+	int32 MercLivesPlusOne;
+	int32 RespawnPlusOne;   // seconds
 };
 
 struct FScctBridgeApi
@@ -193,7 +200,7 @@ static_assert(sizeof(FScctBridgeBone) == 40, "FScctBridgeBone must match BridgeB
 static_assert(sizeof(FScctBridgeView) == 40, "FScctBridgeView must match BridgeView");
 static_assert(sizeof(FScctBridgeInput) == 32, "FScctBridgeInput must match BridgeInput");
 static_assert(sizeof(FScctBridgeSessionInfo) == 80, "FScctBridgeSessionInfo must match BridgeSessionInfo");
-static_assert(sizeof(FScctBridgeStartOptions) == 244, "FScctBridgeStartOptions must match BridgeStartOptions");
+static_assert(sizeof(FScctBridgeStartOptions) == 260, "FScctBridgeStartOptions must match BridgeStartOptions");
 static_assert(sizeof(FScctBridgeApi) == 8 + 17 * sizeof(void*), "FScctBridgeApi must match BridgeApi (64-bit)");
 static_assert(sizeof(TCHAR) == 2, "the bridge's strings are UTF-16");
 

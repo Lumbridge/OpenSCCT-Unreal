@@ -6,6 +6,10 @@
   T_RainStreak.png  one falling raindrop as the eye sees it: a thin streak, bright in the middle, fading to both
                     ends and to its sides. White with the shape in the alpha channel.
 
+  T_RainCoverNone.png  the cover picture of a rain volume that has none (prepare_rain_cover.py makes the real ones
+                    per map): one grey value, "nothing stands in the rain's way". It is what the rain and wet
+                    ground materials hold until a map gives them a picture.
+
 import_effects.py imports the results to /Game/OpenSCCT/Effects (committed: they are made here, see docs/ASSETS.md).
 """
 import os
@@ -29,6 +33,7 @@ def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
     rain_streak().save(os.path.join(out, "T_RainStreak.png"))
+    Image.fromarray(np.zeros((4, 4), dtype=np.uint16)).save(os.path.join(out, "T_RainCoverNone.png"))
     print("effect textures written to " + out)
 
 

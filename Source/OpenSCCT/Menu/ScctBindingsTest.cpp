@@ -1,7 +1,7 @@
 #include "Menu/ScctBindingsTest.h"
 
 #include "Engine/World.h"
-#include "Menu/SScctBindingsPanel.h"
+#include "Menu/ScctBindingsModel.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "TimerManager.h"

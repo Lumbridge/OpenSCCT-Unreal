@@ -27,9 +27,9 @@ struct FSlateBrush;
  * drafts as the kit (Saved/Controls/loadout.json) and, in a round, asks the server to put the played side's kit on
  * (ServerChangeGear): its answer is the HUD's message line ("Gear changed.", or at the next spawn, or the wait).
  *
- * It opens over a host overlay, dimming what is behind, like a question (Menu/SScctConfirm.h): from the offline page
+ * It opens over a host overlay, dimming what is behind: from the offline page
  * and the lobby (EQUIPMENT), from the in-match menu (CHANGE GEAR) and on the ChangeGear binding
- * (Menu/ScctMenuSubsystem.h). Escape is BACK.
+ * (Menu/ScctMatchCommands.h). Escape is BACK.
  *
  * Unattended: -ScctGear[=spy|merc] opens it (front end, or a match after the menu subsystem's delay);
  * -ScctGearApply=<side>,<gadget>,...[,weapon=<path>][,sidearm=<id>] picks those as clicks do and applies, logging
@@ -73,6 +73,9 @@ public:
 	/** BACK, CANCEL or Escape: closes, after asking when a draft differs from the saved kit. */
 	void RequestBack();
 
+	/** The layer the page asks its questions on (the host's, Menu/ScctMenuKit.h); without one CANCEL with changes keeps the page. */
+	void SetDialogs(const TSharedPtr<class SScctDialogLayer>& InDialogs) { Dialogs = InDialogs; }
+
 	/** Closes without asking (the drafts are dropped). */
 	void Close();
 
@@ -110,6 +113,7 @@ private:
 	FSimpleDelegate OnApplied;
 	FSimpleDelegate OnClosed;
 	bool bTakeKeyboard = true;
+	TWeakPtr<class SScctDialogLayer> Dialogs;
 	bool bFocusTaken = false;
 	bool bClosed = false;
 	int32 Context = EScctGearMenuContext::Menus;

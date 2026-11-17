@@ -191,6 +191,20 @@ public unsafe struct BridgeStartOptions
 
     /// <summary>The local player's name; empty for "Player".</summary>
     public fixed char PlayerName[NameCapacity];
+
+    // The player's own rules over the map's, each stored one higher than its value so that the zero of an older
+    // caller keeps the map's: 0 the map's own, 1 none or unlimited, n the value n - 1.
+
+    /// <summary>Minutes plus one.</summary>
+    public int TimeLimitPlusOne;
+
+    /// <summary>Lives of each spy plus one (not used in Merc Deathmatch).</summary>
+    public int SpyLivesPlusOne;
+
+    public int MercLivesPlusOne;
+
+    /// <summary>Seconds plus one.</summary>
+    public int RespawnPlusOne;
 }
 
 public static class BridgeStartFlags

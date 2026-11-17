@@ -10,7 +10,7 @@ class SOverlay;
  *
  *   Controls   the side being played: every action the player can bind, in the Godot client's order under its
  *              category (movement, combat, gadgets, vision, communication, interface), with the keys the player has
- *              on it now (the bindings in play, so a key rebound on the Options screen shows here at once); an
+ *              on it now (the bindings in play, so a key rebound on the settings page shows here at once); an
  *              action without a key is left out and counted at the end
  *   Goals      the round's mode and what it asks of each side, the lives left, and the mission's objectives as the
  *              player's side reads them, those already done marked (Runtime/ScctMatchMenuApi.h GetGoals)

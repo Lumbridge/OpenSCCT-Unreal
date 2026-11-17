@@ -38,11 +38,34 @@ public sealed record LocalMatch
     /// <summary>The mercs may pick OpenSCCT's additional rifles.</summary>
     public bool Rifles { get; init; }
 
-    /// <summary>Practice rules instead of the map's own: no time limit, unlimited lives, 5 s respawn.</summary>
+    /// <summary>
+    /// A practice round, as the Godot client's --practice: no time limit, unlimited lives, 5 s respawn, and the
+    /// level's PracticeRules on (unlimited ammunition, charges and mask air, instant gear changes, the practice aids).
+    /// </summary>
     public bool OfflineRules { get; init; }
 
     /// <summary>Visit a Map practice: unlimited ammunition and gadgets, instant gear changes, and Switch Team in the menu.</summary>
     public bool UnlimitedGear { get; init; }
+    /// <summary>The player's own rules over the map's (and over the practice rules): minutes (0 for no limit), lives of
+    /// each spy and merc (0 for unlimited) and the respawn's seconds; negative keeps what the rules gave.</summary>
+    public int TimeLimit { get; init; } = -1;
+
+    public int SpyLives { get; init; } = -1;
+
+    public int MercLives { get; init; } = -1;
+
+    public int RespawnSeconds { get; init; } = -1;
+    /// <summary>
+    /// Where the local player first spawns instead of a PlayerStart (the map editor's Play From Camera; a TestRange
+    /// drill's ledge or lane, Test/LessonLaunch.cs), or null. Later spawns use the map's starts.
+    /// </summary>
+    public (FVector Location, FRotator Rotation)? StartAt { get; init; }
+
+    /// <summary>The editor's Play Level rules (unlimited lives, no time limit) instead of the map's settings.</summary>
+    public bool PlayLevel { get; init; }
+
+    /// <summary>The server ticks on the caller's thread just before the client (the drills read it between ticks).</summary>
+    public bool InlineHost { get; init; }
 }
 
 /// <summary>
@@ -127,9 +150,58 @@ public sealed class BridgeSession : IDisposable
             Sidearms = match.Sidearms,
             Rifles = match.Rifles,
             OfflineRules = match.OfflineRules,
-            UnlimitedGear = match.UnlimitedGear,
+            UnlimitedGear = match.OfflineRules || match.UnlimitedGear,
+            StartAt = match.StartAt,
+            Rules = match.PlayLevel ? PlayRules.PlayLevel : PlayRules.MapSettings,
+            HostMode = match.InlineHost ? PlayHostMode.Inline : PlayHostMode.Thread,
         }.ForLocalLaunch();
-        return Wrap(new PlaySession(settings, new StopwatchClock()));
+        var session = new PlaySession(settings, new StopwatchClock());
+        OverrideRules(session, match);
+        return Wrap(session);
+    }
+
+    /// <summary>
+    /// Puts the player's own time limit, lives and respawn over the rules the match started with. PlaySettings has no
+    /// place for them (it starts every local match from the map's untouched match page), so they are written where
+    /// the rules read them: the host's match info, its replicated copy and the lives already handed out. It runs on
+    /// the host's thread, on its first tick after the game exists.
+    /// </summary>
+    private static void OverrideRules(PlaySession session, LocalMatch match)
+    {
+        if (match.TimeLimit < 0 && match.SpyLives < 0 && match.MercLives < 0 && match.RespawnSeconds < 0)
+        {
+            return;
+        }
+
+        bool done = false;
+        session.Host.BeforeWorldTick += _ =>
+        {
+            if (done || session.Loader.Game is not { MatchInfo: { } info } game)
+            {
+                return;
+            }
+
+            done = true;
+            bool mercDeathMatch = info.GameMode == EGameMode.GM_MercDeathMatch;
+            if (match.TimeLimit >= 0) info.TimeLimit = match.TimeLimit;
+            if (match.SpyLives >= 0 && !mercDeathMatch) info.NumLivesATT = match.SpyLives == 0 ? OpenScct.Game.GameFlow.K.UnlimitedLives : match.SpyLives;
+            if (match.MercLives >= 0) info.NumLivesDEF = match.MercLives == 0 ? OpenScct.Game.GameFlow.K.UnlimitedLives : match.MercLives;
+            if (match.RespawnSeconds >= 0) info.TimesRespawn = match.RespawnSeconds;
+            if (game.GameReplicationInfo is { } gri)
+            {
+                gri.TimeLimit = info.TimeLimit;
+                gri.TeamLivesATT = info.NumLivesATT;
+                gri.TeamLivesDEF = info.NumLivesDEF;
+                gri.TimesRespawn = info.TimesRespawn;
+                for (int i = 0; i < gri.PRIArray.Count; i++)
+                {
+                    if (gri.PRIArray[i] is { Team: { } team } pri)
+                    {
+                        pri.NumLives = team.TeamIndex == 0 ? info.NumLivesATT : info.NumLivesDEF;
+                    }
+                }
+            }
+        };
     }
 
     /// <summary>

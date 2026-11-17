@@ -1,7 +1,7 @@
 #include "Menu/SScctHelpPage.h"
 
 #include "Brushes/SlateColorBrush.h"
-#include "Menu/SScctBindingsPanel.h"
+#include "Menu/ScctBindingsModel.h"
 #include "Menu/ScctMenuStyle.h"
 #include "OpenSCCT.h"
 #include "Runtime/ScctMatchMenuApi.h"

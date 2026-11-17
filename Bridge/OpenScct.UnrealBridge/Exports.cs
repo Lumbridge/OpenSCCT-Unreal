@@ -330,6 +330,10 @@ public static unsafe class Exports
             Rifles = (o.Flags & BridgeStartFlags.Rifles) != 0,
             OfflineRules = (o.Flags & BridgeStartFlags.OfflineRules) != 0,
             UnlimitedGear = (o.Flags & BridgeStartFlags.UnlimitedGear) != 0,
+            TimeLimit = o.TimeLimitPlusOne - 1,
+            SpyLives = o.SpyLivesPlusOne - 1,
+            MercLives = o.MercLivesPlusOne - 1,
+            RespawnSeconds = o.RespawnPlusOne - 1,
         });
     }
 
@@ -340,7 +344,7 @@ public static unsafe class Exports
         {
             EndCurrent();
             ClearFailure();
-            return Adopt(BridgeSession.StartLocal(match)).Id;
+            return Adopt(BridgeSession.StartLocal(Test.LessonLaunch.Apply(match))).Id;
         }
         catch (Exception e)
         {
@@ -623,6 +627,8 @@ public static unsafe class Exports
                 {
                     // The visit first: it releases its round, tells the server and closes the connection.
                     OnlineBridge.Existing?.Dispose();
+                    // The hub visit and the hub this PC hosts likewise.
+                    Hub.HubBridge.Existing?.Dispose();
                 }
                 finally
                 {

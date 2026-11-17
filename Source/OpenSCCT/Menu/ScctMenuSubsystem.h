@@ -1,80 +1,136 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "InputCoreTypes.h"
-#include "Subsystems/WorldSubsystem.h"
+#include "Play/ScctSoundData.h"
+#include "Runtime/ScctMenuApi.h"
+#include "Styling/SlateBrush.h"
+#include "Subsystems/GameInstanceSubsystem.h"
 #include "ScctMenuSubsystem.generated.h"
 
-class AScctPlayerController;
+class UAudioComponent;
+class UScctSoundWave;
+class UTexture2D;
+
+/** The sounds the menus make, from the content's own interface sounds (shared/audio/wav/Interface/Menu). */
+enum class EScctUiSound : uint8
+{
+	Move,   // the focus went to another control
+	Accept, // a control was pressed
+	Back,   // a page or a dialog was closed
+	Open,   // a page or a dialog opened
+	Notice, // a toast, a chat line
+	Count,
+};
+
+/** A map the menus list: OpenSCCT's catalog entry and whether its level is imported into this project. */
+struct FScctMenuMapInfo
+{
+	FString Id;
+	FString Title;
+	FScctMenuMap Data = {};
+	bool bImported = false;
+
+	/** Index into Data.Modes of the bridge's mode key (Story, DiskHunt, Deathmatch, MercDeathMatch). */
+	bool Plays(int32 ModeIndex) const { return ModeIndex >= 0 && ModeIndex < 4 && Data.Modes[ModeIndex].Playable != 0; }
+};
 
 /**
- * The menus' own interface commands in a match. The player's bindings raise them on
- * AScctPlayerController::OnLocalCommand; this subscribes there rather than in the game mode:
+ * What every menu shares and what must outlive a level: the map catalog and the game's own strings (through the
+ * bridge's menu table, Runtime/ScctMenuApi.h), the pictures read from the content folder, the interface sounds and
+ * the menu music. It also puts the saved settings in force when the game starts (Menu/ScctUserSettings.h).
  *
- *   ChangeGear   (I by default) opens the in-match menu on the Equipment page (Menu/SScctGearPage.h), as the
- *                Godot client's PlayMenu.OpenGear does; closing the page goes back to the game
- *   DisplayStrategicMap (F7 by default) opens the strategic map of the round (Menu/SScctStrategicMapPage.h) when
- *                the player's state allows it (SPlayerController.DisplayStrategicMap: not a tutorial map, not working
- *                an object), as the Godot client's PlayMenu.OpenStrategicMap does; the same key closes it again
- *                (read here, as the controls raise no commands while a menu is open), as do Escape and BACK
- *
- * Unattended strategic map, in a match:
- *   -ScctStrategicMap[=S]        raises DisplayStrategicMap S seconds (3 by default) after the key first may open it
- *   -ScctStrategicMapFloorAt=S   S seconds after it opened, presses UP (DOWN from the top floor)
- *   -ScctStrategicMapCloseAt=S   S seconds after it opened, closes it as a press of its own key does
- *   While it is open the log has its floor, the marker's U, V and the player's point every 2 s ("ScctStrategicMap: ...").
- *
- * Unattended, in a match (the side's kit must be on the pawn; -ScctGearAt=S waits S seconds more, 2 by default, so
- * a gear change still lands inside the swap window after a spawn):
- *   -ScctGear[=spy|merc]       opens the Equipment page, on that side's tab (else the side played)
- *   -ScctGearApply=<side>,...  opens it, picks the gear given and applies (SScctGearPage::RunScript)
- *   -ScctGearKey               raises the ChangeGear command on the controller, as the binding does
+ * Everything degrades without content: no maps, no pictures, the menus' own English captions, silence.
  */
 UCLASS()
-class OPENSCCT_API UScctMenuSubsystem : public UWorldSubsystem
+class OPENSCCT_API UScctMenuSubsystem : public UGameInstanceSubsystem
 {
 	GENERATED_BODY()
 
 public:
-	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
+	static UScctMenuSubsystem* Get(const UObject* WorldContext);
+
+	/** The one instance of the running game, for the widgets (which have no world of their own). */
+	static UScctMenuSubsystem* GetCurrent() { return Current.Get(); }
+
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
-	/** Opens the in-match menu on the Equipment page. False when this level has no in-match menu. */
-	bool OpenGear(int32 Side = -1);
+	// ---- maps and texts --------------------------------------------------------------------------------------
 
-	/** Opens the strategic map on its own over the match. False when the player's state or the level does not allow it. */
-	bool OpenStrategicMap();
+	/** The host list's maps that can be played here (content converted and level imported), in the host list's order. */
+	const TArray<FScctMenuMapInfo>& GetMaps();
+
+	/** Any catalog map by folder name, playable here or not; null when the content does not have it. */
+	const FScctMenuMapInfo* FindMap(const FString& Id);
+
+	/** The name the pages show for a map ("ENHANCED AQUARIUS"), its folder name in capitals when unknown. */
+	FString GetMapTitle(const FString& Id);
+
+	FString GetMapText(const FString& Id, EScctMenuMapText Kind);
+
+	/** What the map says about a mode (index 0..3) for a side: Kind 0 the objective line, 1 the briefing. */
+	FString GetModeText(const FString& Id, int32 ModeIndex, bool bMerc, int32 Kind);
+
+	/** A string of GUI.int from the content, or Fallback. A '|' (the original's line break) becomes a space. */
+	FString Text(const TCHAR* InSection, const TCHAR* Key, const TCHAR* Fallback);
+
+	/** "OpenSCCT 0.8.150" as the bridge was built, empty without the bridge. */
+	FString GetGameVersion();
+
+	const TArray<FScctMenuAction>& GetActions();
+
+	// ---- pictures --------------------------------------------------------------------------------------------
+
+	/** A PNG of the content folder as a brush, read once; null when the file is missing or unreadable. */
+	const FSlateBrush* GetPicture(const FString& File);
+
+	/** The best picture of a map for a wide frame: its banner, else the side's loading picture, else its list picture. */
+	const FSlateBrush* GetMapPicture(const FString& Id, bool bMerc);
+
+	// ---- sound -----------------------------------------------------------------------------------------------
+
+	void PlaySound(EScctUiSound Sound);
+
+	/** Starts or stops the menu music (the content's own menu song, looping). */
+	void SetMusicPlaying(bool bPlaying);
+
+	/** Brings the music's volume up to date with the settings. */
+	void RefreshVolumes();
+
+	/** The mode names and keys of the original's mode box, in its order. */
+	static const TCHAR* ModeKey(int32 ModeIndex);
+	static int32 ModeId(int32 ModeIndex);
+	FString GetModeName(int32 ModeIndex);
 
 private:
-	void OnFrame(float DeltaSeconds);
-	void TickStrategicMap(AScctPlayerController* Player, float DeltaSeconds);
-	class UScctMatchMenuWidget* FindMatchMenu() const;
-	void HandleLocalCommand(FName Name, int32 Arg, bool bPressed);
+	const FScctMenuApi* Connect();
+	void LoadMaps();
+	UScctSoundWave* FindWave(int32 Slot, const FString& File, bool bLoop);
 
-	FDelegateHandle FrameHandle;
-	FDelegateHandle CommandHandle;
-	TWeakObjectPtr<AScctPlayerController> CommandSource;
+	static TWeakObjectPtr<UScctMenuSubsystem> Current;
 
-	/** -ScctGear / -ScctGearApply still to do, and how long the kit has been on the pawn. */
-	bool bGearPending = false;
-	/** -ScctGearKey: raise the ChangeGear command instead of opening the page directly. */
-	bool bGearByCommand = false;
-	int32 GearSide = -1;
-	FString GearScript;
-	float GearDelay = 2.0f;
-	float KitSeconds = 0.0f;
+	const FScctMenuApi* Api = nullptr;
+	bool bMapsLoaded = false;
+	TArray<FScctMenuMapInfo> AllMaps;
+	TArray<FScctMenuMapInfo> PlayableMaps;
+	TArray<FScctMenuAction> Actions;
+	TMap<FString, FString> Strings;
 
-	/** The strategic map's own key while it is open: the keys bound to DisplayStrategicMap, armed once all are up. */
-	TArray<FKey> MapKeys;
-	bool bMapKeysArmed = false;
-	bool bMapWasOpen = false;
-	float MapOpenSeconds = 0.0f;
-	float MapLogTimer = 0.0f;
+	UPROPERTY(Transient)
+	TMap<FString, TObjectPtr<UTexture2D>> Textures;
 
-	/** -ScctStrategicMap and its follow-ups (negative: not asked for, or done). */
-	float MapOpenAt = -1.0f;
-	float MapAllowedSeconds = 0.0f;
-	float MapFloorAt = -1.0f;
-	float MapCloseAt = -1.0f;
+	TMap<FString, TSharedPtr<FSlateBrush>> Brushes;
+
+	FScctSoundCache SoundCache;
+	FString SharedRoot;
+	FString MusicFile;
+
+	UPROPERTY(Transient)
+	TMap<int32, TObjectPtr<UScctSoundWave>> Waves;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> Music;
+
+	bool bMusicWanted = false;
+	double LastMoveSound = 0.0;
 };

@@ -83,6 +83,14 @@ struct FScctLocalMatchOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	bool bSidearms = false;
 
+	/**
+	 * The sidearm the local merc carries when bSidearms is on, in the simulation's numbering (EScctSidearm in
+	 * Runtime/ScctPlayApi.h): 0 suppressed pistol, 1 automatic pistol, 2 .44 Magnum, 3 Desert Eagle, 4 unsuppressed
+	 * pistol; -1 for none. The simulation hands a merc no sidearm unless his machine names one.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	int32 Sidearm = 4;
+
 	/** The mercs may pick OpenSCCT's additional rifles. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	bool bRifles = false;
@@ -98,6 +106,19 @@ struct FScctLocalMatchOptions
 	/** Empty: "Player". */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	FString PlayerName;
+
+	/** The player's own rules over the map's (and over the practice rules); negative keeps what the rules give. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	int32 TimeLimit = -1; // minutes, 0 for no limit
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	int32 SpyLives = -1; // 0 for unlimited
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	int32 MercLives = -1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	int32 RespawnSeconds = -1;
 };
 
 /**

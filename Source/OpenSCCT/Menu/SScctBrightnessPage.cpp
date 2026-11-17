@@ -7,7 +7,7 @@
 #include "Menu/ScctMenuStyle.h"
 #include "OpenSCCT.h"
 #include "Rendering/DrawElements.h"
-#include "Settings/ScctSettings.h"
+#include "Menu/ScctUserSettings.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
@@ -22,7 +22,22 @@ namespace Ui = ScctMenuStyle;
 
 namespace
 {
-	const FName BrightnessKey(TEXT("Display.Brightness"));
+	/** The brightness is the display gamma of the settings (UScctUserSettings::Gamma, the Video tab's Brightness row). */
+	constexpr float GammaMin = 1.6f;
+	constexpr float GammaMax = 3.0f;
+	constexpr float GammaStep = 0.1f;
+
+	float GetBrightness() { return UScctUserSettings::Get()->Gamma; }
+
+	void SetBrightness(float Value)
+	{
+		UScctUserSettings* Settings = UScctUserSettings::Get();
+		Settings->Gamma = FMath::Clamp(FMath::RoundToFloat(Value / GammaStep) * GammaStep, GammaMin, GammaMax);
+		Settings->ApplyAll();
+	}
+
+	/** As the Video tab writes it: the gamma against the engine's 2.2. */
+	FString FormatBrightness(float Value) { return FString::Printf(TEXT("%d %%"), FMath::RoundToInt32(Value / 2.2f * 100.0f)); }
 
 	/** Above the menus and the match's own widgets. */
 	constexpr int32 PageZOrder = 10000;
@@ -76,12 +91,12 @@ namespace
 			const float Half = Side * 0.28f;
 			for (int32 Index = 0; Index < 3; ++Index)
 			{
-				const FVector2D SquareCorner(Gap + Index * (Side + Gap), (Size.Y - Side) * 0.5f);
-				const FVector2D Centre = SquareCorner + FVector2D(Side * 0.5f);
-				FSlateDrawElement::MakeBox(Out, LayerId, Geometry.ToPaintGeometry(FVector2f(Side, Side), FSlateLayoutTransform(FVector2f(SquareCorner))),
+				const FVector2D SwatchCorner(Gap + Index * (Side + Gap), (Size.Y - Side) * 0.5f);
+				const FVector2D Centre = SwatchCorner + FVector2D(Side * 0.5f);
+				FSlateDrawElement::MakeBox(Out, LayerId, Geometry.ToPaintGeometry(FVector2f(Side, Side), FSlateLayoutTransform(FVector2f(SwatchCorner))),
 					White, ESlateDrawEffect::None, Grey(Levels[Index].Frame));
 				FSlateDrawElement::MakeBox(Out, LayerId + 1,
-					Geometry.ToPaintGeometry(FVector2f(Side - Frame * 2.0f, Side - Frame * 2.0f), FSlateLayoutTransform(FVector2f(SquareCorner + FVector2D(Frame)))),
+					Geometry.ToPaintGeometry(FVector2f(Side - Frame * 2.0f, Side - Frame * 2.0f), FSlateLayoutTransform(FVector2f(SwatchCorner + FVector2D(Frame)))),
 					White, ESlateDrawEffect::None, Grey(Levels[Index].Fill));
 
 				const FLinearColor Mark = Grey(Levels[Index].Mark);
@@ -117,13 +132,12 @@ void SScctBrightnessPage::Open()
 	GEngine->GameViewport->AddViewportWidgetContent(Page, PageZOrder);
 	OpenPage = Page;
 	UE_LOG(LogOpenSCCT, Log, TEXT("Brightness: pattern shown (brightness %s, display gamma %.2f)"),
-		*FScctSettings::GetString(BrightnessKey), GEngine->DisplayGamma);
+		*FormatBrightness(GetBrightness()), GEngine->DisplayGamma);
 }
 
 void SScctBrightnessPage::Construct(const FArguments& InArgs)
 {
 	static const FSlateColorBrush Black(FLinearColor::Black);
-	const FScctSettingDesc* Desc = FScctSettings::Find(BrightnessKey);
 
 	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 0.0f, 0.0f, 22.0f)
@@ -151,9 +165,8 @@ void SScctBrightnessPage::Construct(const FArguments& InArgs)
 			SNew(SBox).WidthOverride(1000.0f).HeightOverride(300.0f)[ SNew(SBrightnessPattern) ]
 		];
 
-	if (Desc != nullptr)
 	{
-		const float StepSize = Desc->Step > 0.f ? Desc->Step : (Desc->Max - Desc->Min) / 100.f;
+		const float StepSize = GammaStep;
 		Box->AddSlot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 0.0f, 0.0f, 30.0f)
 		[
 			SNew(SHorizontalBox)
@@ -167,15 +180,15 @@ void SScctBrightnessPage::Construct(const FArguments& InArgs)
 				SNew(SBox).WidthOverride(360.0f)
 				[
 					SNew(SSlider)
-					.MinValue(Desc->Min)
-					.MaxValue(Desc->Max)
+					.MinValue(GammaMin)
+					.MaxValue(GammaMax)
 					.StepSize(StepSize)
 					.MouseUsesStep(true)
 					.IsFocusable(false)
 					.SliderBarColor(FLinearColor(1.0f, 1.0f, 1.0f, 0.25f))
 					.SliderHandleColor(Ui::Accent())
-					.Value(TAttribute<float>::CreateLambda([] { return FScctSettings::GetFloat(BrightnessKey); }))
-					.OnValueChanged(FOnFloatValueChanged::CreateLambda([](float Value) { FScctSettings::SetFloat(BrightnessKey, Value); }))
+					.Value(TAttribute<float>::CreateLambda([] { return GetBrightness(); }))
+					.OnValueChanged(FOnFloatValueChanged::CreateLambda([](float Value) { SetBrightness(Value); }))
 				]
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
@@ -188,9 +201,7 @@ void SScctBrightnessPage::Construct(const FArguments& InArgs)
 				[
 					Ui::Text(TAttribute<FText>::CreateLambda([]
 					{
-						const FScctSettingDesc* Found = FScctSettings::Find(BrightnessKey);
-						const float Value = FScctSettings::GetFloat(BrightnessKey);
-						return Ui::ToText(Found != nullptr && Found->FormatValue ? Found->FormatValue(Value) : FString::Printf(TEXT("%.2f"), Value));
+						return Ui::ToText(FormatBrightness(GetBrightness()));
 					}), 14.0f)
 				]
 			]
@@ -244,11 +255,7 @@ FReply SScctBrightnessPage::OnKeyDown(const FGeometry& MyGeometry, const FKeyEve
 
 void SScctBrightnessPage::Step(int32 By)
 {
-	if (const FScctSettingDesc* Desc = FScctSettings::Find(BrightnessKey))
-	{
-		const float StepSize = Desc->Step > 0.f ? Desc->Step : (Desc->Max - Desc->Min) / 20.f;
-		FScctSettings::SetFloat(BrightnessKey, FScctSettings::GetFloat(BrightnessKey) + By * StepSize);
-	}
+	SetBrightness(GetBrightness() + By * GammaStep);
 }
 
 void SScctBrightnessPage::Close()
@@ -259,9 +266,9 @@ void SScctBrightnessPage::Close()
 	}
 	bClosed = true;
 	// The brightness was applied as it moved; leaving the page keeps it.
-	FScctSettings::Save();
+	UScctUserSettings::Get()->Save();
 	UE_LOG(LogOpenSCCT, Log, TEXT("Brightness: pattern closed, brightness %s kept (display gamma %.2f)"),
-		*FScctSettings::GetString(BrightnessKey), GEngine != nullptr ? GEngine->DisplayGamma : 0.0f);
+		*FormatBrightness(GetBrightness()), GEngine != nullptr ? GEngine->DisplayGamma : 0.0f);
 
 	const TSharedRef<SScctBrightnessPage> Self = SharedThis(this);
 	if (GEngine != nullptr && GEngine->GameViewport != nullptr)

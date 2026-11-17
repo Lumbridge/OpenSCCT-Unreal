@@ -19,7 +19,7 @@ class SOverlay;
  *   Back      closes it
  *
  * The rules are the bridge's (Runtime/ScctMapApi.h over the Godot StrategicMapModel). In a match it opens on the
- * DisplayStrategicMap binding (F7 by default; Menu/ScctMenuSubsystem.h, when the player's state allows it), from
+ * DisplayStrategicMap binding (F7 by default; Menu/ScctMatchCommands.h, when the player's state allows it), from
  * STRATEGIC MAP in the in-match menu, and closes on the same key, Escape or Back. In a lobby it opens from the
  * lobby's STRATEGIC MAP as a plain overview of the lobby's map, without markers; Escape and the right mouse button
  * close it there.

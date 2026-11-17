@@ -30,5 +30,7 @@
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\StrategicMapModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
     <!-- The in-match menu's rules (which entries show for whom, the confirmations), Godot-free. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\InGameMenuModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
+    <!-- Create Session's rules (Online/HostSetupModel.cs): the Godot page's model, which has no Godot in it either. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\UI\CreateSessionModel.cs" Link="Linked\UI\CreateSessionModel.cs" />
   </ItemGroup>
 </Project>

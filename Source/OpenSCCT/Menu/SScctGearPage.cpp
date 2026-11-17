@@ -6,7 +6,8 @@
 #include "Framework/Application/SlateApplication.h"
 #include "ImageCore.h"
 #include "ImageUtils.h"
-#include "Menu/SScctConfirm.h"
+#include "Menu/ScctMenuKit.h"
+#include "Menu/ScctMenuPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "OpenSCCT.h"
 #include "Runtime/ScctLoadoutApi.h"
@@ -333,8 +334,15 @@ void SScctGearPage::RequestBack()
 		return;
 	}
 	const TWeakPtr<SScctGearPage> Weak = SharedThis(this);
-	SScctConfirm::Open(Overlay.ToSharedRef(), TEXT("Leave the equipment page? Your gear changes have not been applied."), TEXT("DISCARD"), TEXT("STAY"),
-		FSimpleDelegate::CreateLambda([Weak] { if (const TSharedPtr<SScctGearPage> Page = Weak.Pin()) { Page->Close(); } }));
+	const TSharedPtr<SScctDialogLayer> Layer = Dialogs.Pin();
+	if (!Layer.IsValid())
+	{
+		// No question can be shown here: CANCEL keeps the page, as STAY would, so nothing is dropped unasked.
+		SetStatus(TEXT("Apply the loadout or reset it before leaving."), true);
+		return;
+	}
+	ScctUi::Confirm(Layer, TEXT("Leave the equipment page"), TEXT("Your gear changes have not been applied."), TEXT("Discard"), TEXT("Stay"),
+		[Weak] { if (const TSharedPtr<SScctGearPage> Page = Weak.Pin()) { Page->Close(); } }, true);
 }
 
 void SScctGearPage::Close()
