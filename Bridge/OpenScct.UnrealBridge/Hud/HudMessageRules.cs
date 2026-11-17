@@ -602,6 +602,12 @@ public static class HudActivity
         {
             entry = Make(HudActivityKind.Match, HudActivityCause.None, CombatDeathTrigger.None, received, now, text, false,
                 HudParticipant.None, HudParticipant.None, HudParticipant.None);
+            if (message == 2)
+            {
+                // The Godot client empties its feed on a match restart before it adds this line (HudMessages.LocalizedMessage).
+                entry.Flags |= HudMessageFlags.ClearsFeed;
+            }
+
             return true;
         }
 

@@ -350,7 +350,11 @@ public sealed class HudEffectState
                 PerturbedUntil = now + e.Location.X;
                 break;
             case "GoggleMessage":
-                GoggleMessage(pc, e.Slot, e.Location.X);
+                // SGoggle.VisionMessage raises it as Notify(owner, GoggleMessage, time, which): the message number
+                // travels in the second value (Location.Y) and the parameter stays 0. OpenSCCT's HudEffects reads the
+                // parameter, so its goggle messages never show; read the value the goggle actually sends, and the
+                // parameter too in case the simulation starts using it.
+                GoggleMessage(pc, e.Slot != 0 ? e.Slot : (int)e.Location.Y, e.Location.X);
                 break;
         }
     }

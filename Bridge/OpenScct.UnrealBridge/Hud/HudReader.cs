@@ -125,6 +125,9 @@ public sealed class HudReader
     private readonly HudTextTable _texts;
     private readonly HudStrings _strings;
     private readonly HashSet<PlayerReplicationInfo> _alive = new();
+    private readonly Dictionary<PlayerReplicationInfo, int> _pawnIds = new();
+    private readonly Dictionary<string, int> _lineIds = new(StringComparer.Ordinal);
+    private readonly List<SObjectiveTrigger> _triggers = new();
     private readonly Dictionary<string, (int U, int V)> _weaponIcons = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Type, int> _classIds = new();
 
@@ -136,9 +139,10 @@ public sealed class HudReader
 
     /// <summary>
     /// Fills <paramref name="f"/> (already cleared) for <paramref name="pc"/>. <paramref name="aimRan"/> says the
-    /// merc's aim point helper ran this tick (SHud.SpotReticule and the laser's target name are current).
+    /// merc's aim point helper ran this tick (SHud.SpotReticule is current); <paramref name="targetNameRan"/> that
+    /// the laser's target name pass ran (SHud.MyTargetName and the HUD tracker's lock are current).
     /// </summary>
-    public void Read(SPlayerController pc, HudFrame f, HudEffectState effects, HudConsoleLines console, bool aimRan)
+    public void Read(SPlayerController pc, HudFrame f, HudEffectState effects, HudConsoleLines console, bool aimRan, bool targetNameRan)
     {
         Level level = pc.XLevel;
         LevelInfo info = pc.Level;
@@ -232,9 +236,27 @@ public sealed class HudReader
                 s.ReticleMessageId = _texts.Id(rm.Message);
             }
 
-            if (aimRan && pawn is SPAWNDEFENSE { TorcheLaser: { bInUse: true, TargetPawn: not null } })
+            if (targetNameRan && (shud.P ?? pawn) is SPAWNDEFENSE { TorcheLaser: { bInUse: true, TargetPawn: { bDeleteMe: false } target } } aimer)
             {
+                // SHud.TargetNameLabel: the name goes over the target's bracket TimeToScanName after the lock began,
+                // in the friend colour for a pawn of the viewer's side.
                 s.TargetNameId = _texts.Id(shud.MyTargetName);
+                s.TargetActorId = target.ActorId;
+                s.TargetNameDelay = shud.TimeToScanName;
+                s.TargetLockTime = now;
+                if (shud.TargetTracker is { } tracker)
+                {
+                    foreach (FLockedObject l in tracker.LockedObjects)
+                    {
+                        if (ReferenceEquals(l.Actor, target))
+                        {
+                            s.TargetLockTime = l.StartTime;
+                            break;
+                        }
+                    }
+                }
+
+                flags |= target.SPawnType == aimer.SPawnType ? HudFlags.TargetFriend : 0;
             }
         }
         else
@@ -244,6 +266,7 @@ public sealed class HudReader
 
         // The same local deadline as s_LyingOnGround's timer, including its final partial second.
         s.SleepSeconds = RemainingSeconds(pc.fLyingOnGroundTime + pc.fLyingOnGroundDuration - now);
+        s.LocationNameId = _texts.Id(LocationName(pc.ViewTarget as Pawn ?? pc.Pawn));
         ReadRespawnWeapon(pc, ref s);
         ReadEffects(pc, pawn, shud, effects, now, ref s, ref fx);
         ReadObjectives(pc, pawn, level, gri, f);
@@ -298,8 +321,44 @@ public sealed class HudReader
                 4 => hud.ForwardArrowTime,
                 _ => hud.BackwardArrowTime,
             };
-            s.ArrowSeconds[i] = whole < until ? until - now : 0f;
+            // Never 0 or less while the original still shows the arrow (its test is on the whole second).
+            s.ArrowSeconds[i] = whole < until ? Math.Max(until - now, 1f / 64f) : 0f;
         }
+    }
+
+    /// <summary>Engine.Volume's class default LocationName: a volume left with it names no place.</summary>
+    private const string UnspecifiedLocation = "unspecified";
+
+    /// <summary>
+    /// The name of the place <paramref name="pawn"/> is in, or "" when the map names none there: the highest-priority
+    /// named volume the pawn touches, else its zone's name, as PlayerReplicationInfo.GetLocationName picks it but on
+    /// this machine (ported from game/Scripts/Hud/HudLocation.cs NameAt: Reloaded's location readout above the radar).
+    /// </summary>
+    private static string LocationName(Pawn? pawn)
+    {
+        if (pawn is null || pawn.bDeleteMe)
+        {
+            return "";
+        }
+
+        Volume? best = null;
+        foreach (Actor a in pawn.Touching)
+        {
+            if (a is Volume v && Named(v.LocationName) && (best is null || v.LocationPriority > best.LocationPriority))
+            {
+                best = v;
+            }
+        }
+
+        if (best is not null)
+        {
+            return best.LocationName;
+        }
+
+        return pawn.Region.Zone is { } zone && Named(zone.LocationName) ? zone.LocationName : "";
+
+        static bool Named(string? name) =>
+            !string.IsNullOrWhiteSpace(name) && !string.Equals(name, UnspecifiedLocation, StringComparison.OrdinalIgnoreCase);
     }
 
     private void ReadPawn(SPlayerController pc, SBasePawn pawn, HudFrame f, ref int flags, ref int fx)
@@ -629,12 +688,13 @@ public sealed class HudReader
     /// </summary>
     private void ReadObjective(SObjective objective, FPointRegion region, bool merc, HudFrame f)
     {
+        GatherTriggers(objective);
         bool anyTriggering = false, anyLocked = false;
         int best = -1;
         int icon = KindOther;
-        foreach (SObjectiveTrigger? t in ObjectiveHud.PresentationTriggers(objective))
+        foreach (SObjectiveTrigger t in _triggers)
         {
-            if (t is not { bDeleteMe: false })
+            if (t.bDeleteMe)
             {
                 continue;
             }
@@ -655,18 +715,24 @@ public sealed class HudReader
 
         if (icon == KindOther)
         {
+            _triggers.Clear();
             return;
         }
 
-        foreach (SObjectiveTrigger? t in ObjectiveHud.PresentationTriggers(objective))
+        // SObjective.ERObjectiveTargetVisibility: the objective's own marker shows while it is not taken and the viewer
+        // does not see its triggers. SObjective.ERTriggerTargetVisibility is then, per trigger, "(the objective's
+        // marker is off, or the viewer is in the trigger's zone) and the trigger is active or locked".
+        bool objectiveShown = !objective.ObjectiveTaken && !SeesTriggersFrom(objective, region);
+        foreach (SObjectiveTrigger t in _triggers)
         {
-            if (t is not { bDeleteMe: false })
+            if (t.bDeleteMe)
             {
                 continue;
             }
 
             int kind = ObjectiveKind(t);
-            if (kind is KindOther or KindHuntDisk || objective.ERTriggerTargetVisibility(t, region) == 0)
+            bool zoneOk = !objectiveShown || t.Region.ZoneNumber == region.ZoneNumber;
+            if (kind is KindOther or KindHuntDisk || !(zoneOk && (t.bActive || t.bLocked)))
             {
                 continue;
             }
@@ -681,11 +747,88 @@ public sealed class HudReader
             f.Objectives.Add(Marker(name, kind, RoleTrigger, t.Location, t.bTriggering, t.bLocked, objective.ObjectiveTaken, percent));
         }
 
-        if (objective.ERObjectiveTargetVisibility(region) != 0)
+        if (objectiveShown)
         {
             f.Objectives.Add(Marker(objective.ObjectiveName, icon, RoleObjective, objective.Location, anyTriggering, anyLocked,
                 objective.ObjectiveTaken, icon == KindDisk ? -1 : best));
         }
+
+        _triggers.Clear();
+    }
+
+    /// <summary>
+    /// The triggers an objective is presented by, into the reused list (deleted ones included, null entries not).
+    /// The same choice as the simulation's ObjectiveHud.PresentationTriggers: the objective's own list, or, when PS2
+    /// triggers were replaced by dynamic ones, its PC triggers and then every PS2 trigger that points back at it.
+    /// It is written out here because that helper is an iterator: walking it for each test (and again inside
+    /// SObjective.ERSeesTriggersFrom) allocated more each tick than the whole client simulation does.
+    /// </summary>
+    private void GatherTriggers(SObjective objective)
+    {
+        _triggers.Clear();
+        bool ps2 = false;
+        foreach (SObjectiveTrigger? t in objective.Triggers)
+        {
+            if (t is { bPS2Objective: true })
+            {
+                ps2 = true;
+                break;
+            }
+        }
+
+        if (ps2 && objective.XLevel is { } level)
+        {
+            foreach (SObjectiveTrigger? t in objective.Triggers)
+            {
+                if (t is { bPS2Objective: false })
+                {
+                    _triggers.Add(t);
+                }
+            }
+
+            foreach (SObjectiveTrigger t in level.AllActors<SObjectiveTrigger>())
+            {
+                if (t.bPS2Objective && !t.bDeleteMe && ReferenceEquals(t.Objective, objective))
+                {
+                    _triggers.Add(t);
+                }
+            }
+
+            return;
+        }
+
+        foreach (SObjectiveTrigger? t in objective.Triggers)
+        {
+            if (t is not null)
+            {
+                _triggers.Add(t);
+            }
+        }
+    }
+
+    /// <summary>
+    /// SObjective.ERSeesTriggersFrom over the gathered triggers: the viewer stands in one of the objective's listed
+    /// zones, in a trigger's zone, or in the objective's own.
+    /// </summary>
+    private bool SeesTriggersFrom(SObjective objective, FPointRegion viewer)
+    {
+        foreach (ZoneInfo? zone in objective.TriggersERVisibilityZones)
+        {
+            if (zone is not null && ReferenceEquals(zone, viewer.Zone))
+            {
+                return true;
+            }
+        }
+
+        foreach (SObjectiveTrigger t in _triggers)
+        {
+            if (t.Region.ZoneNumber == viewer.ZoneNumber)
+            {
+                return true;
+            }
+        }
+
+        return objective.Region.ZoneNumber == viewer.ZoneNumber;
     }
 
     /// <summary>The mission status page's objective list: the mission of the game mode, each objective for the player's side.</summary>
@@ -710,8 +853,15 @@ public sealed class HudReader
                 // In a chained mission everything after the first open objective is still to do.
                 bool open = !o.ObjectiveTaken || (mission.bChained && oneNotTaken);
                 oneNotTaken |= open;
-                string text = (spy ? o.Description : o.DescriptionDEF).Replace('|', ' ');
-                f.ObjectiveLines.Add(new HudObjectiveLine { TextId = _texts.Id(text), Done = open ? 0 : 1 });
+                // The map writes line breaks as '|'; the id is kept per description so no string is built each tick.
+                string raw = (spy ? o.Description : o.DescriptionDEF) ?? "";
+                if (!_lineIds.TryGetValue(raw, out int textId))
+                {
+                    textId = _texts.Id(raw.Replace('|', ' '));
+                    _lineIds[raw] = textId;
+                }
+
+                f.ObjectiveLines.Add(new HudObjectiveLine { TextId = textId, Done = open ? 0 : 1 });
             }
         }
     }
@@ -933,6 +1083,8 @@ public sealed class HudReader
         {
             s.CamNetworkNameId = _texts.Id(GadgetHudRules.CamNetworkName(pc));
             fx |= GadgetHudRules.CamNetworkAlert(shud) ? HudEffectFlags.CamNetworkAlert : 0;
+            // A camera that was shot shows no picture until it reconnects (the Godot HUD blanks the feed and counts down).
+            s.CamNetworkDisabledSeconds = pc.SBPawn?.UsedObject is SCamNetwork { IsShotDisabled: true } camera ? camera.DisabledSeconds : 0;
         }
 
         if ((GadgetHudRules.StickyCamMenu(pc) ?? GadgetHudRules.MineMenu(pc)) is { } menu)
@@ -1087,6 +1239,7 @@ public sealed class HudReader
         if (tp is not null)
         {
             r.WatchedNameId = _texts.Id(tp.PlayerName);
+            r.WatchedPlayerId = tp.PlayerID;
         }
 
         r.ShowSwitchPlayer = pri.bOnlySpectator || (tp?.Team?.Size ?? 0) >= SwitchPlayerTeamSize ? 1 : 0;
@@ -1112,11 +1265,23 @@ public sealed class HudReader
     {
         // Who is known to be alive here: a client has the pawns that are relevant to it, with their PRIs.
         _alive.Clear();
+        _pawnIds.Clear();
         foreach (SBasePawn q in level.AllActors<SBasePawn>())
         {
-            if (!q.bDeleteMe && q.Health > 0 && q.PlayerReplicationInfo is { } owner)
+            // A spy's decoy is a pawn too, but it is not the player's body.
+            if (q.bDeleteMe || q is SpyClone || q.PlayerReplicationInfo is not { } owner)
+            {
+                continue;
+            }
+
+            if (q.Health > 0)
             {
                 _alive.Add(owner);
+                _pawnIds[owner] = q.ActorId;
+            }
+            else
+            {
+                _pawnIds.TryAdd(owner, q.ActorId);
             }
         }
 
@@ -1153,10 +1318,12 @@ public sealed class HudReader
                     Lives = pri.NumLives,
                     Ping = pri.Ping,
                     Rank = pri.SvmRank,
+                    PawnActorId = _pawnIds.GetValueOrDefault(pri),
                 });
             }
         }
 
         _alive.Clear();
+        _pawnIds.Clear();
     }
 }

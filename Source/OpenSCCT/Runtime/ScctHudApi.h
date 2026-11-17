@@ -19,9 +19,12 @@
 //    cache the FString by id (a text keeps its id for the whole session; ids start again with a new session). Id 0 is
 //    the empty text. All text comes from the player's own game content, in its language.
 //  - Messages (DrainMessages) carry their text inline.
+//  - Actor ids (FScctHudState::TargetActorId, FScctHudScoreRow::PawnActorId) are FScctBridgePawn::ActorId values.
+//  - The HUD's own key commands go through SetOption (they touch only the HUD, so FScctBridgeApi::Command does not
+//    know them): EScctHudOption::SwitchEnhancedReality is the original's F9.
 //  - Every struct is made of 4-byte ints and floats (and UTF-16 characters at the end), so there is no padding.
 
-constexpr int32 ScctHudApiVersion = 1;
+constexpr int32 ScctHudApiVersion = 2;
 
 /** Bits of FScctHudState::Flags. */
 namespace EScctHudFlags
@@ -56,6 +59,7 @@ namespace EScctHudFlags
 	constexpr int32 BinocularAim = 1 << 27;       // BinocularDistance and Aim are set (scoped merc)
 	constexpr int32 GadgetUnavailable = 1 << 28;  // the selected gadget cannot work on this level
 	constexpr int32 BinocularHackPrompt = 1 << 29; // binoculars: show HackPromptId
+	constexpr int32 TargetFriend = 1 << 30;       // the laser sight's target (TargetActorId) is on the player's side: friend colour and mark
 }
 
 /** Bits of FScctHudState::EffectFlags: what is disturbing the view or the HUD right now. */
@@ -128,7 +132,7 @@ struct FScctHudState
 	float MinDispersion, MaxDispersion;
 	float SpotX, SpotY;        // the merc's aim point on a 640 x 480 canvas when SpotValid; else the centre
 	int32 ReticleMessageId;    // the message under the reticle while it lasts, or 0
-	int32 TargetNameId;        // the player the laser sight locked on, or 0
+	int32 TargetNameId;        // the player the laser sight locked on, or 0 (see TargetActorId below)
 	float Ballistic;           // the throw charge, 0 when not throwing
 
 	// Gadgets.
@@ -201,6 +205,13 @@ struct FScctHudState
 	int32 DistanceUnitId;      // the distance unit's name
 	float DistanceScale;       // units per uu
 	int32 HackingTextId, SecuredTextId; // "under hacking" and "access denied" for the markers
+
+	// Version 2.
+	int32 LocationNameId;      // the name of the place the viewed pawn is in (the readout above the radar), or 0
+	int32 TargetActorId;       // the pawn the merc's laser sight holds (FScctBridgePawn::ActorId), or 0
+	float TargetLockTime;      // level time that lock began; the original brackets the target from then
+	float TargetNameDelay;     // seconds after TargetLockTime before TargetNameId is typed over the bracket
+	int32 CamNetworkDisabledSeconds; // camera network view: seconds until the shot camera works again (blank the feed), 0 while it works
 };
 
 namespace EScctHudGadgetFlags
@@ -327,6 +338,9 @@ struct FScctHudRound
 	int32 ShowSwitchPlayer; // 1 when the "switch player" hint applies
 	int32 TipId;            // the team's tip of the moment, from the content
 	int32 MapTitleId;       // the map's title, from the content
+
+	// Version 2.
+	int32 WatchedPlayerId;  // FScctHudScoreRow::PlayerId of the watched player (valid while WatchedNameId is not 0)
 };
 
 namespace EScctHudScoreFlags
@@ -352,6 +366,9 @@ struct FScctHudScoreRow
 	int32 Lives;      // 100 or more reads as infinite
 	int32 Ping;       // milliseconds
 	int32 Rank;       // OpenSCCT's packed player rank (0 for guests and bots)
+
+	// Version 2.
+	int32 PawnActorId; // FScctBridgePawn::ActorId of the player's pawn on this machine, or 0 when none is replicated here
 };
 
 /** FScctHudMessage::Kind of an Activity message. */
@@ -376,6 +393,7 @@ namespace EScctHudMessageFlags
 {
 	constexpr int32 InvolvesLocal = 1; // the local player is the actor, the victim or the one who triggered it
 	constexpr int32 Headshot = 2;
+	constexpr int32 ClearsFeed = 4;    // the match restarted: empty the kill feed, then show this line
 }
 
 constexpr int32 ScctHudMessageTextCapacity = 256;
@@ -406,6 +424,7 @@ namespace EScctHudOption
 {
 	constexpr int32 DistanceInFeet = 0; // marker distances in feet (1) or metres (0)
 	constexpr int32 ShowPlayers = 1;    // the player's "show connected players" toggle
+	constexpr int32 SwitchEnhancedReality = 2; // each call flips the objective markers on or off (the original's F9); Value is ignored
 }
 
 /**
@@ -435,8 +454,8 @@ struct FScctHudApi
 
 // The sizes the C# side has (HudProbe prints them); a mismatch means the two files drifted apart.
 static_assert(sizeof(TCHAR) == 2, "The bridge writes UTF-16");
-static_assert(sizeof(FScctHudState) == 428, "FScctHudState must mirror HudState");
-static_assert(sizeof(FScctHudRound) == 116, "FScctHudRound must mirror HudRound");
+static_assert(sizeof(FScctHudState) == 448, "FScctHudState must mirror HudState");
+static_assert(sizeof(FScctHudRound) == 120, "FScctHudRound must mirror HudRound");
 static_assert(sizeof(FScctHudGadget) == 36, "FScctHudGadget must mirror HudGadget");
 static_assert(sizeof(FScctHudInteraction) == 12, "FScctHudInteraction must mirror HudInteraction");
 static_assert(sizeof(FScctHudMenuLine) == 8, "FScctHudMenuLine must mirror HudMenuLine");
@@ -444,6 +463,6 @@ static_assert(sizeof(FScctHudObjective) == 32, "FScctHudObjective must mirror Hu
 static_assert(sizeof(FScctHudObjectiveLine) == 8, "FScctHudObjectiveLine must mirror HudObjectiveLine");
 static_assert(sizeof(FScctHudBlip) == 16, "FScctHudBlip must mirror HudBlip");
 static_assert(sizeof(FScctHudShownMessage) == 16, "FScctHudShownMessage must mirror HudShownMessage");
-static_assert(sizeof(FScctHudScoreRow) == 44, "FScctHudScoreRow must mirror HudScoreRow");
+static_assert(sizeof(FScctHudScoreRow) == 48, "FScctHudScoreRow must mirror HudScoreRow");
 static_assert(sizeof(FScctHudMessage) == 584, "FScctHudMessage must mirror HudMessage");
 static_assert(sizeof(FScctHudApi) == 136, "FScctHudApi must mirror HudApi");

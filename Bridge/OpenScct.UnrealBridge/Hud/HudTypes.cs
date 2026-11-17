@@ -95,6 +95,9 @@ public static class HudFlags
 
     /// <summary>Binoculars: a voice chat target is set, the Hack prompt shows.</summary>
     public const int BinocularHackPrompt = 1 << 29;
+
+    /// <summary>The laser sight's target (<see cref="HudState.TargetActorId"/>) is on the player's side: the friend colour and mark.</summary>
+    public const int TargetFriend = 1 << 30;
 }
 
 /// <summary>Bits of <see cref="HudState.EffectFlags"/>: what is disturbing the view or the HUD right now.</summary>
@@ -389,6 +392,28 @@ public unsafe struct HudState
 
     /// <summary>SHud.ObjectiveHackingSpy ("under hacking") and ObjectiveSecuredSpy ("access denied") for the markers.</summary>
     public int HackingTextId, SecuredTextId;
+
+    // ---- version 2 ----
+    /// <summary>
+    /// The name of the place the viewed pawn is in (the map's named volumes and zones; the readout above the radar),
+    /// or 0 where the map names none.
+    /// </summary>
+    public int LocationNameId;
+
+    /// <summary>
+    /// The pawn the merc's laser sight holds (its ActorId, as in the pawn list), or 0. The original brackets it and
+    /// types <see cref="TargetNameId"/> over the bracket once <see cref="TargetNameDelay"/> seconds have passed since
+    /// <see cref="TargetLockTime"/> (the level time the lock began).
+    /// </summary>
+    public int TargetActorId;
+    public float TargetLockTime;
+    public float TargetNameDelay;
+
+    /// <summary>
+    /// Camera network view: seconds until the camera the merc looks through works again after it was shot (the
+    /// original blanks the feed and counts down), 0 while it works.
+    /// </summary>
+    public int CamNetworkDisabledSeconds;
 }
 
 /// <summary>Bits of <see cref="HudGadget.Flags"/>.</summary>
@@ -605,6 +630,13 @@ public unsafe struct HudRound
 
     /// <summary>The map's title, from the content.</summary>
     public int MapTitleId;
+
+    // ---- version 2 ----
+    /// <summary>
+    /// PRI.PlayerID of the watched player (find the scoreboard row by it for the lives the spectator page shows), or
+    /// 0 when no one is watched. PlayerID 0 is never a watched player here: check <see cref="WatchedNameId"/> too.
+    /// </summary>
+    public int WatchedPlayerId;
 }
 
 /// <summary>Bits of <see cref="HudScoreRow.Flags"/>.</summary>
@@ -651,6 +683,13 @@ public struct HudScoreRow
 
     /// <summary>OpenSCCT's packed player rank (0 for guests and bots).</summary>
     public int Rank;
+
+    // ---- version 2 ----
+    /// <summary>
+    /// The ActorId of the player's pawn on this machine (as in the pawn list), or 0 when none is replicated here:
+    /// what joins a drawn pawn to its player (name labels over teammates).
+    /// </summary>
+    public int PawnActorId;
 }
 
 /// <summary><see cref="HudMessage.Category"/>.</summary>
@@ -691,6 +730,9 @@ public static class HudMessageFlags
     public const int InvolvesLocal = 1;
 
     public const int Headshot = 2;
+
+    /// <summary>The match restarted (SGameMessages switch 2): the original's kill feed empties before it shows this line.</summary>
+    public const int ClearsFeed = 4;
 }
 
 /// <summary>

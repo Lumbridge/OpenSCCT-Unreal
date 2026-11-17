@@ -3,10 +3,13 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using OpenScct.Game.Combat;
 using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Hud;
 
-// HudProbe <content root> [map] [spy|merc] [seconds] [mode]
+// HudProbe <content root> [map] [spy|merc] [seconds] [mode] [api]
+// With "api" as the sixth argument the whole run goes through the two function tables exactly as Unreal calls them
+// (Exports.GetApi and HudExports.GetApi, unmanaged function pointers, raw buffers), instead of the managed methods.
 string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
 string map = args.Length > 1 ? args[1] : "AquaE";
 bool merc = args.Length > 2 && args[2].Equals("merc", StringComparison.OrdinalIgnoreCase);
@@ -19,11 +22,49 @@ Console.WriteLine($"sizes: HudState {Unsafe.SizeOf<HudState>()}, HudRound {Unsaf
     $"HudObjectiveLine {Unsafe.SizeOf<HudObjectiveLine>()}, HudBlip {Unsafe.SizeOf<HudBlip>()}, HudShownMessage {Unsafe.SizeOf<HudShownMessage>()}, " +
     $"HudScoreRow {Unsafe.SizeOf<HudScoreRow>()}, HudMessage {Unsafe.SizeOf<HudMessage>()}, HudApi {Unsafe.SizeOf<HudApi>()}");
 
+if (args.Length > 5 && args[5].Equals("api", StringComparison.OrdinalIgnoreCase))
+{
+    return ApiRun(content, map, mode, merc, seconds);
+}
+
 BridgeSession.Configure(content);
 var load = Stopwatch.StartNew();
 using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+// A stand-in for an exec command that raises a HUD notification: the play session runs the player's commands inside
+// the client tick, after BridgeSession.BeforeTick and right before the world steps, and what they raise is dropped by
+// the step unless the HUD reads it in between. This hook sits where the commands run (it is added before the HUD's).
+double lateAt = 4.2;
+bool lateRaised = false;
+var clock = Stopwatch.StartNew();
+session.Session.Client.BeforeWorldTick += _ =>
+{
+    if (!lateRaised && clock.Elapsed.TotalSeconds > lateAt && session.Session.LocalController is { } local)
+    {
+        lateRaised = true;
+        CombatFx.Notify(local, CombatFx.SetHudPerturbationLength, 2f);
+        Console.WriteLine($"   probe: raised SetHudPerturbationLength(2) between ticks at level time {local.Level.TimeSeconds:F2}");
+    }
+};
+
+// What the HUD's own work after each tick allocates: one handler before the HUD's and one after it.
+long tickMark = 0, tickAllocated = 0, tickPeak = 0, updateAllocated = 0;
+int updateTicks = 0;
+int ticksMeasured = 0, ticksSeen = 0;
+session.Ticked += () => tickMark = GC.GetAllocatedBytesForCurrentThread();
+
 // As Unreal must: the HUD is asked for before the first Update, so the first messages are received.
 HudFeature hud = HudFeature.Of(session);
+session.Ticked += () =>
+{
+    // The first seconds fill the text table and the row buffers; after that a tick should allocate nothing.
+    if (++ticksSeen > 240)
+    {
+        long bytes = GC.GetAllocatedBytesForCurrentThread() - tickMark;
+        tickAllocated += bytes;
+        tickPeak = Math.Max(tickPeak, bytes);
+        ticksMeasured++;
+    }
+};
 hud.SetViewport(1920, 1080);
 Console.WriteLine($"{map} ({mode}, {(merc ? "merc" : "spy")}) loaded in {load.Elapsed.TotalSeconds:F1} s; interface strings {(hud.Strings.Loaded ? "loaded" : "MISSING")}: " +
     $"[HUD] TextChat1 = '{hud.Strings.Get("MagmaDynamic", "HUD", "TextChat1")}', TextChat2 = '{hud.Strings.Get("MagmaDynamic", "HUD", "TextChat2")}'");
@@ -41,7 +82,9 @@ var run = Stopwatch.StartNew();
 double nextReport = 0;
 int ticks = 0, frames = 0, drained = 0, lastClip = -1, lastGadget = -2, lastDamage = 0;
 double readMs = 0;
-bool fired = false;
+bool fired = false, goggled = false, markers = false, lasered = false;
+int lastLaser = 0;
+int lastEr = -1, lastLocation = -1, lastTarget = 0, lastFx = 0;
 int lastVision = 0;
 
 while (run.Elapsed.TotalSeconds < seconds)
@@ -56,7 +99,36 @@ while (run.Elapsed.TotalSeconds < seconds)
         session.Command("Fire", 0);
     }
 
-    ticks += session.Update();
+    if (t > 3 && !goggled)
+    {
+        // An exec command between two ticks: the goggle's message is raised outside a tick and must still arrive.
+        goggled = true;
+        session.Command("SwitchHeadset", 1);
+    }
+
+    if (merc && t > 7.8 && !lasered)
+    {
+        // The laser sight: its target name pass runs each tick from here (lock, then expiry).
+        lasered = true;
+        session.Command("GadLaserSwitch", 0);
+    }
+
+    if (t > 5 && !markers)
+    {
+        // The HUD's own F9 command: the Enhanced Reality flag flips and the original's line is queued.
+        markers = true;
+        hud.SwitchEnhancedReality();
+    }
+
+    long updateMark = GC.GetAllocatedBytesForCurrentThread();
+    int ran = session.Update();
+    ticks += ran;
+    if (ticksSeen > 240)
+    {
+        updateAllocated += GC.GetAllocatedBytesForCurrentThread() - updateMark;
+        updateTicks += ran;
+    }
+
     if (session.Failure is { } failure)
     {
         Console.WriteLine("FAILED: " + failure);
@@ -114,6 +186,38 @@ while (run.Elapsed.TotalSeconds < seconds)
         lastVision = s.VisionMode;
     }
 
+    int er = s.Flags & HudFlags.EnhancedReality;
+    if (valid && er != lastEr)
+    {
+        Console.WriteLine($"   t={t:F1} enhanced reality {(er != 0 ? "on" : "off")}");
+        lastEr = er;
+    }
+
+    if (valid && s.LocationNameId != lastLocation)
+    {
+        Console.WriteLine($"   t={t:F1} location '{hud.Texts.Text(s.LocationNameId)}'");
+        lastLocation = s.LocationNameId;
+    }
+
+    if (valid && s.TargetActorId != lastTarget)
+    {
+        Console.WriteLine($"   t={t:F1} laser target actor {s.TargetActorId} '{hud.Texts.Text(s.TargetNameId)}' friend={(s.Flags & HudFlags.TargetFriend) != 0} locked at {s.TargetLockTime:F1}, name after {s.TargetNameDelay:F1} s");
+        lastTarget = s.TargetActorId;
+    }
+
+    int laser = s.Flags & HudFlags.LaserOn;
+    if (valid && laser != lastLaser)
+    {
+        Console.WriteLine($"   t={t:F1} laser sight {(laser != 0 ? "on" : "off")}, reticle shown={(s.Flags & HudFlags.ShowReticle) != 0}");
+        lastLaser = laser;
+    }
+
+    if (valid && s.EffectFlags != lastFx)
+    {
+        Console.WriteLine($"   t={t:F1} effect flags 0x{lastFx:X} -> 0x{s.EffectFlags:X}{((s.EffectFlags & HudEffectFlags.Perturbed) != 0 ? " (perturbed)" : "")}");
+        lastFx = s.EffectFlags;
+    }
+
     if (s.DamageCount != lastDamage)
     {
         Console.WriteLine($"   t={t:F1} hit #{s.DamageCount}: damage type {s.LastDamageType}, health {s.Health}");
@@ -166,7 +270,7 @@ while (run.Elapsed.TotalSeconds < seconds)
         for (int i = 0; i < Math.Min(rowCount, rows.Length); i++)
         {
             HudScoreRow p = rows[i];
-            Console.WriteLine($"   score: #{p.PlayerId} '{hud.Texts.Text(p.NameId)}' team {p.Team} flags {p.Flags} obj/kills {p.ObjOrKills} k {p.Kills} d {p.Deaths} score {p.Score} lives {p.Lives} ping {p.Ping}");
+            Console.WriteLine($"   score: #{p.PlayerId} '{hud.Texts.Text(p.NameId)}' team {p.Team} flags {p.Flags} obj/kills {p.ObjOrKills} k {p.Kills} d {p.Deaths} score {p.Score} lives {p.Lives} ping {p.Ping} pawn {p.PawnActorId}");
         }
     }
 
@@ -174,6 +278,7 @@ while (run.Elapsed.TotalSeconds < seconds)
 }
 
 Console.WriteLine($"done: {ticks} ticks, {frames} frames, {drained} messages drained of {hud.Messages.Total} queued, {hud.Texts.Count} texts, {hud.Received} HUD calls received");
+Console.WriteLine($"HUD work per tick after warm-up: {(ticksMeasured > 0 ? (double)tickAllocated / ticksMeasured : 0):F1} bytes allocated on average over {ticksMeasured} ticks (largest {tickPeak}); the whole client tick allocates {(updateTicks > 0 ? (double)updateAllocated / updateTicks : 0):F0} bytes");
 return 0;
 
 // The local player's keys over the run: walk forward, cycle gadgets, fire (a merc), reload, then hold Use.
@@ -185,6 +290,135 @@ static unsafe void Drive(double t, ref BridgeInput input)
     input.Buttons[Fire] = (byte)(t is > 6.5 and < 7.5 ? 1 : 0);
     input.Buttons[Reload] = (byte)(t is > 8 and < 8.2 ? 1 : 0);
     input.Buttons[Using] = (byte)(t is > 10 and < 11 ? 1 : 0);
+}
+
+// The same run through the native tables: what Unreal's C++ does, call for call.
+static unsafe int ApiRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeApi bridgeTable;
+    HudApi hudTable;
+    int bridgeVersion = ((delegate* unmanaged<BridgeApi*, int>)&Exports.GetApi)(&bridgeTable);
+    int hudVersion = ((delegate* unmanaged<HudApi*, int>)&HudExports.GetApi)(&hudTable);
+    BridgeApi bridge = bridgeTable;
+    HudApi api = hudTable;
+    Console.WriteLine($"api: bridge table version {bridgeVersion}, HUD table version {hudVersion} (table says {api.Version})");
+
+    HudState state;
+    HudRound round;
+    char* text = stackalloc char[512];
+    string Text(int id)
+    {
+        int length = api.GetText(id, text, 512);
+        return new string(text, 0, Math.Min(length, 511));
+    }
+
+    string Error()
+    {
+        int length = bridge.LastError(text, 512);
+        return new string(text, 0, Math.Min(length, 511));
+    }
+
+    // Before a session: every entry answers 0 and writes nothing harmful.
+    int idleState = api.GetState(&state);
+    int idleDrain = api.DrainMessages(null, 0);
+    Console.WriteLine($"api: no session: GetState {idleState} (valid {state.Valid}), GetState(null) {api.GetState(null)}, GetRound(null) {api.GetRound(null)}, DrainMessages {idleDrain}, GetText(1) length {api.GetText(1, text, 512)}");
+
+    fixed (char* c = content, m = map, g = mode)
+    {
+        if (bridge.Configure(c) == 0 || bridge.StartLocal(m, g, merc ? 1 : 0, 3) == 0)
+        {
+            Console.WriteLine("FAILED: " + Error());
+            return 1;
+        }
+    }
+
+    // As ScctHudApi.h says: one HUD call right after StartLocal, before the first Update.
+    api.GetState(&state);
+    api.SetViewport(1920, 1080);
+    fixed (char* file = "MagmaDynamic", section = "Magma", key = "Inifite_Short")
+    {
+        int length = api.Localize(file, section, key, text, 512);
+        Console.WriteLine($"api: Localize(MagmaDynamic, Magma, Inifite_Short) = '{new string(text, 0, Math.Min(length, 511))}'");
+    }
+
+    HudMessage* messages = stackalloc HudMessage[4];
+    HudGadget* gadgets = stackalloc HudGadget[16];
+    HudScoreRow* rows = stackalloc HudScoreRow[32];
+    HudObjectiveLine* lines = stackalloc HudObjectiveLine[32];
+    HudObjective* objectives = stackalloc HudObjective[64];
+    HudBlip* blips = stackalloc HudBlip[64];
+    HudShownMessage* shown = stackalloc HudShownMessage[32];
+    var run = Stopwatch.StartNew();
+    int ticks = 0, frames = 0, drained = 0;
+    double next = 2;
+    bool switched = false;
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        ticks += bridge.Update();
+        if (bridge.GetState() != (int)BridgeState.Playing)
+        {
+            Console.WriteLine("FAILED: " + Error());
+            return 1;
+        }
+
+        frames++;
+        int valid = api.GetState(&state);
+        api.GetRound(&round);
+        int gadgetCount = api.GetGadgets(gadgets, 16);
+        int rowCount = api.GetScoreboard(rows, 32);
+        int lineCount = api.GetObjectiveLines(lines, 32);
+        int markerCount = api.GetObjectives(objectives, 64);
+        int blipCount = api.GetRadar(blips, 64);
+        int shownCount = api.GetShownMessages(shown, 32);
+        int n;
+        do
+        {
+            // A buffer of four on purpose: a burst needs several calls, and none may be lost or repeated.
+            n = api.DrainMessages(messages, 4);
+            for (int i = 0; i < n; i++)
+            {
+                drained++;
+                Console.WriteLine($"   api message: category {messages[i].Category} kind {messages[i].Kind} actor '{Text(messages[i].ActorNameId)}' flags {messages[i].Flags}: \"{new string(messages[i].Text)}\"");
+            }
+        }
+        while (n == 4);
+
+        if (!switched && run.Elapsed.TotalSeconds > 4 && valid != 0)
+        {
+            switched = true;
+            api.SetOption(HudOption.SwitchEnhancedReality, 1);
+            api.SetOption(HudOption.DistanceInFeet, 1);
+        }
+
+        if (run.Elapsed.TotalSeconds >= next)
+        {
+            next += 3;
+            Console.WriteLine($"api t={run.Elapsed.TotalSeconds:F1}: valid {valid} side {state.Side} flags 0x{state.Flags:X} health {state.Health} lives {state.Lives} state '{Text(state.StateNameId)}' location '{Text(state.LocationNameId)}' " +
+                $"unit '{Text(state.DistanceUnitId)}' x {state.DistanceScale:F4}; round mode {round.GameMode} '{Text(round.MapTitleId)}' left {round.RemainingSeconds} s; " +
+                $"{gadgetCount} gadgets, {rowCount} score rows, {lineCount} objective lines, {markerCount} markers, {blipCount} blips, {shownCount} shown");
+            if (gadgetCount > 0)
+            {
+                // A buffer smaller than the list: only that many rows are written and the full count comes back.
+                HudGadget one;
+                int full = api.GetGadgets(&one, 1);
+                int cut = api.GetText(one.NameId, text, 4);
+                string cutText = new(text);
+                Console.WriteLine($"   api gadget 0 of {full}: {Text(one.ClassId)} '{Text(one.NameId)}' charge {one.Charge}; GetText into 4 chars -> '{cutText}' of full length {cut}");
+            }
+
+            for (int i = 0; i < Math.Min(rowCount, 32); i++)
+            {
+                Console.WriteLine($"   api score: #{rows[i].PlayerId} '{Text(rows[i].NameId)}' team {rows[i].Team} flags {rows[i].Flags} lives {rows[i].Lives} pawn {rows[i].PawnActorId}");
+            }
+        }
+
+        Thread.Sleep(4);
+    }
+
+    bridge.Stop();
+    int afterStop = api.GetState(&state);
+    Console.WriteLine($"api done: {ticks} ticks, {frames} frames, {drained} messages drained; after Stop GetState {afterStop} (valid {state.Valid}), bridge state {bridge.GetState()}");
+    return 0;
 }
 
 static unsafe string Pairs(HudRound r) =>

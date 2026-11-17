@@ -41,6 +41,12 @@ public static class HudOption
 
     /// <summary>The player's "show connected players" toggle (SHud.bShowConnectedPlayers).</summary>
     public const int ShowPlayers = 1;
+
+    /// <summary>
+    /// SwitchEnhancedReality (the original's F9): each call flips the objective markers on or off, whatever the value,
+    /// and puts the original's line about it on the HUD. The EnhancedReality flag shows the result.
+    /// </summary>
+    public const int SwitchEnhancedReality = 2;
 }
 
 public static unsafe class HudExports
@@ -80,6 +86,11 @@ public static unsafe class HudExports
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int GetState(HudState* state)
     {
+        if (state == null)
+        {
+            return 0;
+        }
+
         *state = default;
         try
         {
@@ -96,6 +107,11 @@ public static unsafe class HudExports
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int GetRound(HudRound* round)
     {
+        if (round == null)
+        {
+            return 0;
+        }
+
         *round = default;
         try
         {
@@ -236,6 +252,9 @@ public static unsafe class HudExports
                     break;
                 case HudOption.ShowPlayers:
                     hud.SetShowPlayers(value != 0);
+                    break;
+                case HudOption.SwitchEnhancedReality:
+                    hud.SwitchEnhancedReality();
                     break;
             }
         }

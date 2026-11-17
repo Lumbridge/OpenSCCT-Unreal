@@ -65,7 +65,18 @@ public sealed class HudStrings
             return strings;
         }
 
-        using JsonDocument doc = JsonDocument.Parse(File.ReadAllBytes(path));
+        // A damaged file must not stop the match: the HUD then runs without these few labels.
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(File.ReadAllBytes(path));
+        }
+        catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return strings;
+        }
+
+        using JsonDocument owned = doc;
         if (doc.RootElement.ValueKind != JsonValueKind.Object)
         {
             return strings;

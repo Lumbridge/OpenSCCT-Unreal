@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using OpenScct.Core;
 using OpenScct.Core.Engine;
+using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
 using OpenScct.Net;
 using OpenScct.Server;
@@ -72,8 +73,10 @@ public sealed class HudConsoleLines
 /// </summary>
 public sealed class HudFeature
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
+    private static readonly Name NAME_s_Dead = new("s_Dead");
+    private static readonly Name NAME_s_Binoculars_Def = new("s_Binoculars_Def");
     private static readonly Name NAME_s_MultiSpectating = new("s_MultiSpectating");
     private static readonly Name NAME_s_Spectating_Visitor = new("s_Spectating_Visitor");
     private static readonly Name NAME_s_MultiSpectating_WhenKilled = new("s_MultiSpectating_WhenKilled");
@@ -94,6 +97,14 @@ public sealed class HudFeature
     private SHud? _lastHud;
     private float _aspect = 16f / 9f;
     private bool _feet;
+    private bool _showPlayers;
+
+    // The camera of the tick the merc's aim point is projected through, and the projection itself, made once so the
+    // tick does not allocate a new closure.
+    private FVector _aimCamera;
+    private FRotator _aimView;
+    private float _aimFov;
+    private readonly Func<FVector, (float X, float Y)?> _projectAim;
 
     private HudFeature(BridgeSession bridge)
     {
@@ -101,8 +112,14 @@ public sealed class HudFeature
         _session = bridge.Session;
         Strings = HudStrings.Load(SharedContent.FindRoot(_session.MapFolder));
         _reader = new HudReader(Texts, Strings);
+        _projectAim = p => SHud.ProjectToCanvas(_aimCamera, _aimView, _aimFov, _aspect, p);
         InstallReceiver(_session.Client);
-        bridge.BeforeTick += OnBeforeTick;
+
+        // The late notifications are read from the client's own hook, not BridgeSession.BeforeTick: that one is raised
+        // before the play session applies the player's exec commands (SwitchHeadset, Fire...), and what those raise is
+        // dropped when the world steps. This hook is added after the play session's, so it runs after the commands,
+        // right before the step, as the Godot client's PlayRoot.PostLateHudEvents does.
+        _session.Client.BeforeWorldTick += OnBeforeWorldTick;
         bridge.Ticked += OnTicked;
     }
 
@@ -140,12 +157,44 @@ public sealed class HudFeature
         _lastHud?.HudUnit(feet);
     }
 
-    /// <summary>SHud.bShowConnectedPlayers: the player's "show players" toggle, kept on the SHud as the original does.</summary>
+    /// <summary>
+    /// SHud.bShowConnectedPlayers: the player's "show players" toggle, kept on the SHud as the original does. It is
+    /// remembered, so it also holds for an SHud that arrives later (set before the player has a HUD, or a new HUD
+    /// after a map change), as Reloaded keeps it.
+    /// </summary>
     public void SetShowPlayers(bool show)
     {
+        _showPlayers = show;
         if (_lastHud is { } hud)
         {
             hud.bShowConnectedPlayers = show;
+        }
+    }
+
+    /// <summary>
+    /// SPlayerController.SwitchEnhancedReality (the F9 exec, which only touches the local HUD, so the simulation's
+    /// command list does not run it): the HUD's Enhanced Reality level flips between 0 and 1; a spy gets "Display
+    /// off" / "Display all objective positions" on the stack, a merc "Display intrusions" / "Display all objectives
+    /// and intrusions" on the state area. Dead and spectating controllers ignore it. Ported from
+    /// game/Scripts/Hud/HudCommands.cs. The new level shows in the next tick's EnhancedReality flag, and the line
+    /// arrives as a message.
+    /// </summary>
+    public void SwitchEnhancedReality()
+    {
+        if (Controller is not { myHUD: SHud hud } pc || pc.IsInState(NAME_s_Dead) || pc.IsSpectating())
+        {
+            return;
+        }
+
+        hud.EnhancedRealityLevel = hud.EnhancedRealityLevel >= 1 ? 0 : hud.EnhancedRealityLevel + 1;
+        bool spy = (pc.SBPawn?.SPawnType ?? pc.SPawnType) != PawnType.SPAWNDEFENSE;
+        if (spy)
+        {
+            HudMessageRules.AddMessageToStack(hud, hud.EnhancedRealityLevel == 0 ? pc.EROff : pc.ERAllObjectives, 3, 0);
+        }
+        else
+        {
+            HudMessageRules.AddMessageToAuxiliaryStack(hud, hud.EnhancedRealityLevel == 0 ? pc.ERAlarmsOnly : pc.ERAlarmsAndObjectives, 3, 0);
         }
     }
 
@@ -193,6 +242,12 @@ public sealed class HudFeature
             o.TriggeredByNameId = Texts.Id(m.TriggeredBy.Name);
             string text = m.Text ?? "";
             int length = Math.Min(text.Length, HudMessage.TextCapacity - 1);
+            if (length > 0 && length < text.Length && char.IsHighSurrogate(text[length - 1]))
+            {
+                // Never cut a character in two.
+                length--;
+            }
+
             fixed (char* chars = o.Text)
             {
                 text.AsSpan(0, length).CopyTo(new Span<char>(chars, length));
@@ -244,10 +299,10 @@ public sealed class HudFeature
                 Received++;
                 TeamMessage(pc, pc.PlayerReplicationInfo, call.Text ?? "", call.Name1.IsNone ? "Event" : call.Name1.ToString());
                 return true;
-            case "ClientNotifyNoise" when pc is SPlayerController spc:
+            case "ClientNotifyNoise":
                 // The sound arrows: the simulation's port sets them on this machine's HUD.
                 Received++;
-                spc.ClientNotifyNoise(call.Actor ?? call.Object as Actor, call.Float1);
+                pc.ClientNotifyNoise(call.Actor ?? call.Object as Actor, call.Float1);
                 return true;
             default:
                 return false;
@@ -290,14 +345,15 @@ public sealed class HudFeature
     private SPlayerController? Controller => _session.LocalController is { bDeleteMe: false } pc ? pc : null;
 
     /// <summary>
-    /// Before each client tick: the notifications raised since the last tick ended (a server call that arrived in
-    /// between, such as a ClientDamage's HUD effect) are still in the world's buffer; the step drops them.
+    /// Right before each client world step: the notifications raised since the last tick ended (a server call that
+    /// arrived in between, such as a ClientDamage's HUD effect, or one of the player's exec commands, such as a
+    /// goggle switch's message) are still in the world's buffer; the step drops them.
     /// </summary>
-    private void OnBeforeTick()
+    private void OnBeforeWorldTick(ClientSession client)
     {
-        if (Controller is { } pc)
+        if (Controller is { } pc && ReferenceEquals(pc.XLevel.World, client.World))
         {
-            _effects.Take(pc, pc.XLevel.World.Events.Late, pc.Level.TimeSeconds);
+            _effects.Take(pc, client.World.Events.Late, pc.Level.TimeSeconds);
         }
     }
 
@@ -330,7 +386,7 @@ public sealed class HudFeature
             _lastHud = shud;
             shud.EnhancedRealityLevel = 1;
             shud.HudUnit(_feet);
-            shud.bShowConnectedPlayers = false;
+            shud.bShowConnectedPlayers = _showPlayers;
             ForgetSeen();
         }
 
@@ -341,7 +397,7 @@ public sealed class HudFeature
         _effects.Take(pc, current.Slice(0, current.Length - events.Late.Length), now);
         _effects.Update(pc, now);
         _console.Prune(now);
-        bool aimRan = false;
+        bool aimRan = false, targetName = false;
         if (shud is not null)
         {
             HudMessageRules.Tick(shud, shud.sTutoMap.Length > 4);
@@ -353,16 +409,27 @@ public sealed class HudFeature
             }
 
             aimRan = UpdateMercAim(pc, shud);
-            if (aimRan && shud.TargetNameInAimHelper())
+
+            // The laser sight's target name (SHud.DrawTargetName), once a HUD frame where the Godot client's
+            // HudLayer.Step runs it: on the merc's own page (not scoped, not shut down by an EMP) when the aim point
+            // helper got past its gates, and in the camera network view while the camera works. The lock holds the
+            // target and names it in MyTargetName; then the first expired lock leaves the HUD's tracker. Without
+            // the expiry a lock would stay for good, and looking at the same player again would never restart the
+            // name or the "teammate in sight" sound.
+            bool camNetwork = GadgetHudRules.ViewOf(pc) == GadgetView.CamNetwork;
+            targetName = camNetwork
+                ? pc.SBPawn?.UsedObject is not SCamNetwork { IsShotDisabled: true }
+                : aimRan && !_effects.ShutDown && pc.GetStateName() != NAME_s_Binoculars_Def && shud.TargetNameInAimHelper();
+            if (targetName)
             {
-                // The laser sight's lock (SHud.DrawTargetName): holds the target and names it in MyTargetName.
                 shud.TargetNameLocks();
+                shud.ExpireTargetLocks();
             }
 
             EmitNewMessages(shud, now);
         }
 
-        _reader.Read(pc, _frame, _effects, _console, aimRan);
+        _reader.Read(pc, _frame, _effects, _console, aimRan, targetName);
     }
 
     /// <summary>
@@ -387,11 +454,10 @@ public sealed class HudFeature
 
         // PostRender's merc colour, which the target name writes enemies in.
         (hud.Hud_R, hud.Hud_G, hud.Hud_B) = SHud.MercHudColour;
-        FVector camera = pc.vCamLocation;
-        FRotator view = pc.rCamRotation;
-        float fov = pc.FovAngle;
-        float aspect = _aspect;
-        hud.UpdateSpotReticule(p => SHud.ProjectToCanvas(camera, view, fov, aspect, p));
+        _aimCamera = pc.vCamLocation;
+        _aimView = pc.rCamRotation;
+        _aimFov = pc.FovAngle;
+        hud.UpdateSpotReticule(_projectAim);
         return true;
     }
 
