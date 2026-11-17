@@ -8,6 +8,7 @@ using OpenScct.Game.Equipment;
 using OpenScct.Game.Lighting;
 using OpenScct.Game.SBase;
 using OpenScct.Game.Svm;
+using OpenScct.Physics.Collision;
 using OpenScct.UnrealBridge.Pose;
 using OpenScctGame.Play.Session;
 
@@ -33,6 +34,9 @@ public sealed class EquipmentFeature
     private static readonly Name s_boneLeftHand = new("B L Hand");
     private static readonly Name s_boneHolster = new("HOLSTER");
     private static readonly Name s_boneLaser = new("Laser");
+
+    /// <summary>NativeReplaceLaserDistant (game 0x10a99430): another merc's beam ends this far above his location when he crouches.</summary>
+    private const float DistantRaiseCrouched = 48f;
     private static readonly Name s_firing = new("s_Firing");
     private static readonly Name s_reloading = new("s_Reloading");
     private static readonly Name s_fullReloading = new("s_FullReloading");
@@ -50,6 +54,7 @@ public sealed class EquipmentFeature
     private readonly MercFirstPerson _merc;
     private readonly SpyFirstPerson _spy;
     private BridgeFirstPerson _firstPerson;
+    private SBasePawn? _eyePawn;
     private long _ticks;
     private long _frameTicks = -1;
     private float _frameAlpha = -1f;
@@ -152,6 +157,7 @@ public sealed class EquipmentFeature
     private void DrawFirstPerson(float alpha)
     {
         _firstPerson = default;
+        _eyePawn = null;
         PlaySession play = _session.Session;
         SPlayerController? pc = play.LocalController;
         SBasePawn? local = play.LocalPawn;
@@ -159,6 +165,10 @@ public sealed class EquipmentFeature
         {
             return;
         }
+
+        // The pawn seen from its own eyes (PlayRoot's firstPerson): its body leaves the main view whether or not a
+        // view model is drawn over it (the merc in his scope, the spy's eye view with the pistol put away).
+        _eyePawn = pc.FreeCameraFlying == 0 && (!pc.bBehindView || play.View.SpyFirstPerson) ? local : null;
 
         bool shown = _merc.Draw(pc, _frameDt, alpha, ref _firstPerson);
         if (!shown && play.View.SpyFirstPerson && pc is { SpyFirstPersonActive: true, FreeCameraFlying: 0 } && local is SPawnAttaque spy)
@@ -250,7 +260,8 @@ public sealed class EquipmentFeature
         flags |= pawn.bWet ? BridgeEquipmentFlags.Wet : 0;
         flags |= pawn.bStickySkinned ? BridgeEquipmentFlags.StickySkinned : 0;
         flags |= pawn.bGogglesUp ? 0 : BridgeEquipmentFlags.GogglesDown;
-        flags |= _firstPerson.Kind != BridgeFirstPersonKind.None && _firstPerson.ActorId == pawn.ActorId ? BridgeEquipmentFlags.FirstPerson : 0;
+        flags |= ReferenceEquals(pawn, _eyePawn) ? BridgeEquipmentFlags.FirstPerson : 0;
+        flags |= pawn.bBinocularsOn ? BridgeEquipmentFlags.Binoculars : 0;
         if (gear is not null && gear.Shots > 0 && _ticks - gear.LastShotTick <= FiringTicks)
         {
             flags |= BridgeEquipmentFlags.Firing;
@@ -356,20 +367,27 @@ public sealed class EquipmentFeature
         e.TorchG = colour.G;
         e.TorchB = colour.B;
         e.TorchBrightness = torch.LightBrightness;
-        int flags = torch.LightType != ELightType.LT_None ? BridgeEquipmentFlags.TorchOn : 0;
+        // FlashLightView draws a torch only while its merc lives.
+        int flags = torch.LightType != ELightType.LT_None && merc.Health > 0 ? BridgeEquipmentFlags.TorchOn : 0;
         flags |= torch.bCorona ? BridgeEquipmentFlags.TorchCorona : 0;
-        // Outside a network camera the light points along the Laser bone while the merc has no aim IK.
+        // Inside a network camera the simulation puts the light at the camera (20 uu ahead, 11 aside, 11 above) and
+        // the Torch place and rotation are used as they are. Outside one the light sits on the Laser bone and
+        // points along it while the merc has no aim IK.
         bool inCamera = merc.bUsingCamNetwork && merc.UsedObject is SCamNetwork;
+        flags |= inCamera ? BridgeEquipmentFlags.TorchInCamera : 0;
         flags |= !inCamera && SGadTorche.AimRotation(merc) is null ? BridgeEquipmentFlags.TorchFollowsBone : 0;
         return flags;
     }
 
     /// <summary>
-    /// The merc's laser sight (SGadTorcheLaser, spec/equipment/merc-laser.md). The simulation places the beam only on
-    /// the machine that controls the merc (from the rifle's FX bone pulled back 50 uu to what it hits); for other
-    /// mercs only the flag is known and the beam follows the drawn rifle's FX bone.
+    /// The merc's laser sight (SGadTorcheLaser, spec/equipment/merc-laser.md rules 8 and 9). The beam shows only
+    /// while its merc lives and has the rifle up (WeaponLoaded 2) or looks through a network camera, as
+    /// MercLaserView.Draw decides; switched on with the rifle down only <see cref="BridgeEquipmentFlags.LaserOn"/> is
+    /// set. The local merc's beam is the one the simulation placed (from the rifle's FX bone pulled back 50 uu to
+    /// what it hits). For every other merc the simulation places none, so it is worked out here as the Godot client
+    /// does (<see cref="DistantBeam"/>).
     /// </summary>
-    private static int MercLaser(SPAWNDEFENSE merc, bool isLocal, ref BridgeEquipment e)
+    private int MercLaser(SPAWNDEFENSE merc, bool isLocal, ref BridgeEquipment e)
     {
         if (merc.TorcheLaser is not { bDeleteMe: false, bInUse: true } laser)
         {
@@ -377,24 +395,90 @@ public sealed class EquipmentFeature
         }
 
         int flags = BridgeEquipmentFlags.LaserOn;
-        if (isLocal && laser.BeamStart != default && laser.BeamStart != laser.HitLocation)
+        bool inCamera = merc.bUsingCamNetwork && merc.UsedObject is SCamNetwork;
+        if (merc.Health <= 0 || (merc.WeaponLoaded != 2 && !inCamera))
         {
-            flags |= BridgeEquipmentFlags.LaserBeam;
-            e.LaserStartX = laser.BeamStart.X;
-            e.LaserStartY = laser.BeamStart.Y;
-            e.LaserStartZ = laser.BeamStart.Z;
-            e.LaserEndX = laser.HitLocation.X;
-            e.LaserEndY = laser.HitLocation.Y;
-            e.LaserEndZ = laser.HitLocation.Z;
+            // The simulation stops placing the beam here and keeps its last ends: they are stale, not a beam.
+            return flags;
         }
 
-        return flags;
+        FVector start, end;
+        if (isLocal)
+        {
+            if (laser.BeamStart == default || laser.BeamStart == laser.HitLocation)
+            {
+                return flags;
+            }
+
+            start = laser.BeamStart;
+            end = laser.HitLocation;
+        }
+        else
+        {
+            (start, end) = DistantBeam(merc);
+        }
+
+        e.LaserStartX = start.X;
+        e.LaserStartY = start.Y;
+        e.LaserStartZ = start.Z;
+        e.LaserEndX = end.X;
+        e.LaserEndY = end.Y;
+        e.LaserEndZ = end.Z;
+        return flags | BridgeEquipmentFlags.LaserBeam;
+    }
+
+    /// <summary>
+    /// Another merc's beam (NativeReplaceLaserDistant, decoded game 0x10a99430; port of MercLaserView.DistantBeam):
+    /// from the FX bone of the rifle in his hands along his packed desired aim (the signed pitch and yaw words of
+    /// iDesiredYawPitch) toward his location raised by 55.5 uu (48 crouched) plus 15000 uu of that direction; a line
+    /// to there stops it at the first hit of the world or a pawn, else it ends 15000 uu from the start. The start is
+    /// taken from the pose of the last tick; while the rifle or its file is missing the right hand 24 uu along the
+    /// aim stands in, and without a skeleton a point 40 uu ahead of his chest.
+    /// (Public for the probe, which runs it on the local merc beside the beam the simulation placed.)
+    /// </summary>
+    public (FVector Start, FVector End) DistantBeam(SPAWNDEFENSE merc)
+    {
+        ArgumentNullException.ThrowIfNull(merc);
+        int packed = merc.iDesiredYawPitch;
+        int pitch = (packed >> 16) & 0xFFFF;
+        int yaw = packed & 0xFFFF;
+        var aim = new FRotator(pitch > 0x8000 ? pitch - 0x10000 : pitch, yaw > 0x8000 ? yaw - 0x10000 : yaw, merc.Rotation.Roll);
+        FVector dir = aim.Vector();
+        FVector start = merc.Location + new FVector(0f, 0f, merc.EyeHeight * 0.6f) + (dir * 40f);
+        if (TryBoneWorld(merc, 1, BoneIndex(1, s_boneRightHand), out Xform hand))
+        {
+            NetworkPawnAttachments presentation = NetworkPawnAttachments.For(merc);
+            SWeaponDefense? selected = presentation.ActiveSlot == 0 ? merc.PrimaryWeapon as SWeaponDefense : merc.SidearmWeapon;
+            if ((selected?.Dummy ?? merc.WeaponDummy) is { bDeleteMe: false } dummy && !dummy.Mesh.IsNone &&
+                (presentation.WeaponInHand ?? dummy.InHand) && Model(dummy.Mesh.Path!) is { MuzzleBone: >= 0 } gun)
+            {
+                // The gun hangs on the hand's frame with the scale taken out; its FX bone stays at rest (the
+                // third-person guns have no clips).
+                GlbCharacter c = gun.Character;
+                Xform fx = new Xform(hand.Basis.Orthonormalized(), hand.Origin) * gun.ActorToSkeleton *
+                    gun.Global(gun.MuzzleBone, c.RestPosition, c.RestRotation, c.RestScale);
+                start = RenderSpace.DirectionToUe(fx.Origin) * RenderSpace.UnitsPerMetre;
+            }
+            else
+            {
+                start = (RenderSpace.DirectionToUe(hand.Origin) * RenderSpace.UnitsPerMetre) + (dir * 24f);
+            }
+        }
+
+        float raise = merc.bIsCrouched ? DistantRaiseCrouched : K.LaserEndRaiseStanding;
+        FVector far = merc.Location + (dir * K.TraceLength) + new FVector(0f, 0f, raise);
+        FVector end = GadgetWorld.Line(merc, far, start, ETraceFlags.TRACE_World | ETraceFlags.TRACE_Pawns, out FCheckResult hit)
+            ? hit.Location
+            : start + (dir * K.TraceLength);
+        return (start, end);
     }
 
     /// <summary>
     /// The spy pistol's laser (spec/equipment/spy-shocker.md rule 14): the simulation's view update places a dot (an
     /// SLaserProjector) for every spy pistol and a beam (an SLaserBeam, 1 uu long stretched along its X) for the
-    /// local player's own.
+    /// local player's own. Both are placed from the pistol's measured frame, not from a drawn skeleton: the Godot
+    /// client starts its own beam at the drawn hand (30 X, -4 Y, 8 Z of "B R Hand") or, in the eye view, at the view
+    /// model's "Laser" socket.
     /// </summary>
     private static int SpyLaser(SWeaponAttaque pistol, ref BridgeEquipment e)
     {
@@ -417,10 +501,13 @@ public sealed class EquipmentFeature
         }
         else if (pistol.LaserProjector is { bDeleteMe: false } dot)
         {
+            // The projector sits half its MaxTraceDistance (10 uu) back from what the laser hit, turned along the
+            // line (SWeaponAttaque.PlaceLaser); the dot is on the surface ahead of it.
+            FVector at = dot.Location + (dot.Rotation.Vector() * (0.5f * dot.MaxTraceDistance));
             flags |= BridgeEquipmentFlags.LaserDot;
-            e.LaserEndX = dot.Location.X;
-            e.LaserEndY = dot.Location.Y;
-            e.LaserEndZ = dot.Location.Z;
+            e.LaserEndX = at.X;
+            e.LaserEndY = at.Y;
+            e.LaserEndZ = at.Z;
         }
 
         return flags;
@@ -556,7 +643,7 @@ public sealed class EquipmentFeature
         EquipmentModel? model = Model(asset);
         int boneIndex = BoneIndex(kind, bone);
         int flags = animated ? BridgeAttachmentFlags.Animated : 0;
-        flags |= _firstPerson.Kind != BridgeFirstPersonKind.None && _firstPerson.ActorId == pawn.ActorId ? BridgeAttachmentFlags.OnFirstPersonPawn : 0;
+        flags |= ReferenceEquals(pawn, _eyePawn) ? BridgeAttachmentFlags.OnFirstPersonPawn : 0;
         attachments[count++] = new BridgeAttachment
         {
             ActorId = pawn.ActorId,
@@ -596,7 +683,16 @@ public sealed class EquipmentFeature
             return relative * own;
         }
 
-        // The bone in the pawn's skeleton as posed this frame (its rest pose before the pawn's first tick).
+        // The yaw the pawn is drawn at turns both sides alike, so it is left out.
+        Xform inActor = new Xform(RenderSpace.SkeletonBasis(0, character.RotOrigin, character.MeshScale), Vector3.Zero) *
+            BoneInSkeleton(pawn, character, boneIndex);
+        Xform unscaled = new(inActor.Basis.Orthonormalized(), inActor.Origin);
+        return inActor.AffineInverse() * unscaled * relative * own;
+    }
+
+    /// <summary>A pawn bone in its skeleton's space as posed this frame (its rest pose before the pawn's first tick).</summary>
+    private Xform BoneInSkeleton(SBasePawn pawn, GlbCharacter character, int boneIndex)
+    {
         int posed = _session.GetPawnPose(pawn.ActorId, _pawnPose);
         Xform bone = Xform.Identity;
         bool first = true;
@@ -609,10 +705,26 @@ public sealed class EquipmentFeature
             first = false;
         }
 
-        // The yaw the pawn is drawn at turns both sides alike, so it is left out.
-        Xform inActor = new Xform(RenderSpace.SkeletonBasis(0, character.RotOrigin, character.MeshScale), Vector3.Zero) * bone;
-        Xform unscaled = new(inActor.Basis.Orthonormalized(), inActor.Origin);
-        return inActor.AffineInverse() * unscaled * relative * own;
+        return bone;
+    }
+
+    /// <summary>
+    /// A pawn bone in the world, in render space (metres, Y up), where the pawn stood at the last tick (port of
+    /// SkeletalModel.Place: the mesh at Location + PrePivot turned by the body's yaw, then RotOrigin and scale).
+    /// False when the skeleton lacks the bone.
+    /// </summary>
+    private bool TryBoneWorld(SBasePawn pawn, int kind, int boneIndex, out Xform world)
+    {
+        world = Xform.Identity;
+        if (Character(kind) is not { } character || boneIndex < 0)
+        {
+            return false;
+        }
+
+        FVector at = pawn.Location + pawn.NetworkCorrectionOffset + pawn.PrePivot;
+        world = new Xform(RenderSpace.SkeletonBasis(pawn.Rotation.Yaw, character.RotOrigin, character.MeshScale),
+            RenderSpace.Direction(at) / RenderSpace.UnitsPerMetre) * BoneInSkeleton(pawn, character, boneIndex);
+        return true;
     }
 
     /// <summary>The index of a bone in a pawn kind's skeleton by its UE name (cached), or -1.</summary>

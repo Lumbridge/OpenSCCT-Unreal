@@ -22,6 +22,17 @@ public sealed class EquipmentModel
 {
     private static readonly Dictionary<string, EquipmentModel?> s_loaded = new(StringComparer.OrdinalIgnoreCase);
 
+    private static readonly Dictionary<string, string> s_failures = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Why a mesh file that exists could not be read (by asset name), or null when it was read or never tried.</summary>
+    public static string? FailureOf(string asset)
+    {
+        lock (s_loaded)
+        {
+            return s_failures.GetValueOrDefault(asset);
+        }
+    }
+
     private EquipmentModel(string asset, string path, GlbCharacter character, Xform skeletonFrame)
     {
         Asset = asset;
@@ -99,9 +110,13 @@ public sealed class EquipmentModel
                 {
                     model = new EquipmentModel(asset, path, GlbCharacter.Load(path), ReadSkeletonFrame(path));
                 }
-                catch (Exception e) when (e is IOException or InvalidDataException or JsonException or KeyNotFoundException or InvalidOperationException)
+                catch (Exception e)
                 {
+                    // Whatever is wrong with the file (cut short, not skinned, a node or accessor out of range): the
+                    // pawn then carries nothing drawn for it, and the match goes on. The reason is kept for whoever
+                    // asks why a mesh is missing.
                     model = null;
+                    s_failures[asset] = e.GetType().Name + ": " + e.Message;
                 }
 
                 s_loaded[path] = model;
@@ -173,7 +188,8 @@ public sealed class EquipmentModel
     /// <summary>
     /// The transform of the nodes above the skeleton's root joint. The converter writes the game's own meshes with the
     /// skeleton at the scene's top (identity here); OpenSCCT's own pistols keep theirs under a placed node
-    /// ("MercPistolFrame"), which <see cref="GlbCharacter"/> does not read.
+    /// ("MercPistolFrame"), which <see cref="GlbCharacter"/> does not read. Only the nodes' rest transforms are
+    /// read: a clip that moves one of these nodes (the pistols' "Root") is not followed.
     /// </summary>
     private static Xform ReadSkeletonFrame(string path)
     {

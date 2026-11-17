@@ -21,6 +21,10 @@ namespace OpenScct.UnrealBridge.Equipment;
 /// belong to Unreal's drawing): lighting at the eye, the stencil mask, cosmetics and map outfits on the sleeves, the
 /// aim-down-sights blend of OpenSCCT's own rifles (OpenScctRifles, which this content does not hold) and the view
 /// model of an observed merc in a demo.</para>
+/// <para>Not working yet: OpenSCCT's own pistols (OpenScctSidearms.*_first). Their sight offset, revolver kick and
+/// reload handling are ported below, but the files do not load: their clips animate scene nodes outside the skin
+/// (the gun's parts and a "Root" node above the skeleton), which <see cref="GlbCharacter"/> refuses, so a merc
+/// holding a pistol gets no view model (<see cref="Draw"/> returns false) until GlbCharacter reads such files.</para>
 /// </summary>
 internal sealed class MercFirstPerson
 {

@@ -94,7 +94,8 @@ public struct BridgeEquipment
 
     /// <summary>
     /// The laser beam (unreal units) while <see cref="BridgeEquipmentFlags.LaserBeam"/>: from the gun to what it
-    /// hits. With only <see cref="BridgeEquipmentFlags.LaserDot"/> the end is the dot's place and the start is not set.
+    /// hits. With only <see cref="BridgeEquipmentFlags.LaserDot"/> the end is the dot's place on the surface it hit
+    /// and the start is not set.
     /// </summary>
     public float LaserStartX, LaserStartY, LaserStartZ;
 
@@ -109,10 +110,13 @@ public static class BridgeEquipmentFlags
     /// <summary>The weapon is being reloaded (the local weapon's state, or the body's reload clip for others).</summary>
     public const int Reloading = 1 << 1;
 
-    /// <summary>The laser sight is on (the merc's SGadTorcheLaser, the spy pistol's bLaserOn).</summary>
+    /// <summary>
+    /// The laser sight is switched on (the merc's SGadTorcheLaser, the spy pistol's bLaserOn). A beam or dot is drawn
+    /// only with <see cref="LaserBeam"/> or <see cref="LaserDot"/>: a merc's shows only with the rifle up.
+    /// </summary>
     public const int LaserOn = 1 << 2;
 
-    /// <summary>The merc's torch is lit (its LightType is steady).</summary>
+    /// <summary>The merc's torch is lit (its LightType is steady and he lives).</summary>
     public const int TorchOn = 1 << 3;
 
     /// <summary>The local merc looks through the scope (s_Binoculars_Def).</summary>
@@ -130,7 +134,11 @@ public static class BridgeEquipmentFlags
     /// <summary>The weapon is in a hand (else at the holster bone).</summary>
     public const int WeaponInHand = 1 << 8;
 
-    /// <summary>This pawn is the one whose first-person view model is drawn this frame (<c>GetFirstPerson</c>).</summary>
+    /// <summary>
+    /// The local pawn seen from its own eyes this frame (the merc's view, the spy's eye view): its body and what
+    /// hangs on it leave the main view and only cast shadows, whether or not a view model is drawn
+    /// (<c>GetFirstPerson</c> draws none in the scope or with the spy's pistol put away).
+    /// </summary>
     public const int FirstPerson = 1 << 9;
 
     /// <summary>The torch shows its corona (to everyone but its owner).</summary>
@@ -139,10 +147,13 @@ public static class BridgeEquipmentFlags
     /// <summary>The torch points along its bone, not along the Torch rotation (IK_Type is IKT_NONE).</summary>
     public const int TorchFollowsBone = 1 << 11;
 
-    /// <summary>LaserStart and LaserEnd hold the beam as the simulation placed it.</summary>
+    /// <summary>
+    /// Draw the beam from LaserStart to LaserEnd: the local player's as the simulation placed it, another merc's
+    /// from the FX bone of the rifle in his hands along his aim to the first thing a line hits.
+    /// </summary>
     public const int LaserBeam = 1 << 12;
 
-    /// <summary>LaserEnd holds the laser dot (a spy pistol's projector), with no beam on this machine.</summary>
+    /// <summary>LaserEnd holds the laser dot on the surface it hit (another spy's pistol), with no beam on this machine.</summary>
     public const int LaserDot = 1 << 13;
 
     /// <summary>The goggles are down over the eyes (bGogglesUp is false).</summary>
@@ -150,6 +161,15 @@ public static class BridgeEquipmentFlags
 
     /// <summary>The pawn is a merc (SPawnDefense), else a spy.</summary>
     public const int Merc = 1 << 15;
+
+    /// <summary>bBinocularsOn: the spy looks through his binoculars (known for the local player only; the view's Fov carries the zoom).</summary>
+    public const int Binoculars = 1 << 16;
+
+    /// <summary>
+    /// The merc looks through a network camera and his torch shines from it: place the light at the Torch place and
+    /// rotation as given, not on his bone.
+    /// </summary>
+    public const int TorchInCamera = 1 << 17;
 }
 
 /// <summary>
@@ -224,7 +244,7 @@ public static class BridgeAttachmentFlags
     /// <summary><c>GetAttachmentPose</c> gives the attachment's own bone pose (the spy pistol's slide and stock); else it stays in its rest pose.</summary>
     public const int Animated = 1;
 
-    /// <summary>The pawn that carries it is the first-person pawn: the original does not draw it for the local view.</summary>
+    /// <summary>Its pawn is seen from its own eyes (<see cref="BridgeEquipmentFlags.FirstPerson"/>): it leaves the main view with the body and only casts shadows.</summary>
     public const int OnFirstPersonPawn = 2;
 }
 

@@ -26,20 +26,28 @@ namespace EScctEquipmentFlags
 {
 	constexpr int32 Firing = 1 << 0;           // a shot in the last 0.1 s, or the local rifle is in its firing state
 	constexpr int32 Reloading = 1 << 1;        // the local weapon's reload state, or the body's reload clip for others
-	constexpr int32 LaserOn = 1 << 2;          // the merc's laser sight / the spy pistol's laser is on
-	constexpr int32 TorchOn = 1 << 3;          // the merc's torch is lit
+	constexpr int32 LaserOn = 1 << 2;          // the laser is switched on; draw one only with LaserBeam or LaserDot
+	constexpr int32 TorchOn = 1 << 3;          // the merc's torch is lit (and he lives)
 	constexpr int32 InScope = 1 << 4;          // the local merc looks through the scope (no view model is drawn then)
 	constexpr int32 GogglesGlow = 1 << 5;      // the lit goggle lenses are shown on this machine (attachment slot 2)
 	constexpr int32 Wet = 1 << 6;              // bWet: the original swaps to the wet skins in the vision modes
 	constexpr int32 StickySkinned = 1 << 7;    // shocked by the sticky shocker: the original draws the electric skin
 	constexpr int32 WeaponInHand = 1 << 8;     // the weapon is in a hand, else at the holster bone
-	constexpr int32 FirstPerson = 1 << 9;      // this pawn's first-person view model is drawn this frame (hide its body)
+	constexpr int32 FirstPerson = 1 << 9;      // the local pawn seen from its own eyes: its body and attachments leave the
+	                                           // main view and only cast shadows, with or without a view model
+	                                           // (GetFirstPerson draws none in the scope or with the spy's pistol away)
 	constexpr int32 TorchCorona = 1 << 10;     // the torch shows its corona (everyone but its owner sees it)
 	constexpr int32 TorchFollowsBone = 1 << 11; // point the torch along its bone's X axis, not along Torch pitch/yaw
-	constexpr int32 LaserBeam = 1 << 12;       // LaserStart and LaserEnd hold the beam as the simulation placed it
-	constexpr int32 LaserDot = 1 << 13;        // LaserEnd holds the laser dot only (another spy's pistol)
+	constexpr int32 LaserBeam = 1 << 12;       // draw the beam from LaserStart to LaserEnd (the local player's as the
+	                                           // simulation placed it; another merc's from his rifle's FX bone along
+	                                           // his aim to the first thing a line hits)
+	constexpr int32 LaserDot = 1 << 13;        // LaserEnd holds the laser dot on the surface it hit (another spy's pistol)
 	constexpr int32 GogglesDown = 1 << 14;     // the goggles are down over the eyes
 	constexpr int32 Merc = 1 << 15;            // SPawnDefense, else a spy
+	constexpr int32 Binoculars = 1 << 16;      // the spy looks through his binoculars (local player only; FScctBridgeView::Fov
+	                                           // carries the zoom)
+	constexpr int32 TorchInCamera = 1 << 17;   // the merc looks through a network camera and his torch shines from it:
+	                                           // place the light at Torch X/Y/Z and pitch/yaw as given, not on his bone
 }
 
 /** What one pawn holds and wears this frame. Simulation units are Unreal centimetres, same axes. */
@@ -69,7 +77,7 @@ struct FScctEquipment
 	float TorchR, TorchG, TorchB;              // linear colour as the original computes it, about 0 to 1
 	float TorchBrightness;                     // LightBrightness as the class sets it (304)
 	float LaserStartX, LaserStartY, LaserStartZ; // cm, valid with LaserBeam
-	float LaserEndX, LaserEndY, LaserEndZ;       // cm, valid with LaserBeam or LaserDot
+	float LaserEndX, LaserEndY, LaserEndZ;       // cm, valid with LaserBeam or LaserDot: what the laser hit
 };
 static_assert(sizeof(FScctEquipment) == 136, "FScctEquipment must match BridgeEquipment");
 
@@ -83,7 +91,7 @@ namespace EScctAttachmentSlot
 namespace EScctAttachmentFlags
 {
 	constexpr int32 Animated = 1;          // GetAttachmentPose gives its own bone pose (the spy pistol); else rest pose
-	constexpr int32 OnFirstPersonPawn = 2; // its pawn is seen in first person: the original does not draw it then
+	constexpr int32 OnFirstPersonPawn = 2; // its pawn has EScctEquipmentFlags::FirstPerson: main view off, shadows only
 }
 
 /** One thing hanging on a pawn's bone this frame. (ActorId, Slot) names it from frame to frame. */
@@ -210,7 +218,8 @@ struct FScctEquipmentApi
 
 	/**
 	 * Writes the weapon and gadget mesh files of the content. Returns the entry count (only Capacity are written).
-	 * Works before a session starts, once the content is configured.
+	 * Works before a session starts, once the content is configured. Files the bridge cannot read are left out
+	 * (today the first-person pistols OpenScctSidearms.*_first: no view model is drawn for a merc holding one).
 	 */
 	int32 (__cdecl* GetCatalog)(FScctEquipmentMesh* Meshes, int32 Capacity);
 

@@ -4,13 +4,17 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using OpenScct.Core;
+using OpenScct.Game.SBase;
 using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Equipment;
 using OpenScct.UnrealBridge.Pose;
 
 // A console check of the equipment feature: the catalog of weapon meshes, then a merc round and a spy round on a
 // map with bots, with the weapon keys pressed on a timeline. Each second it prints what Unreal would read; every
-// frame it checks the poses (unit rotations, the same frame read twice gives the same pose, no bone jumps).
+// frame it checks the poses (unit rotations, the same frame read twice gives the same pose, no bone jumps) and
+// counts what the reads allocate. A last short round goes through the exported function tables only, the way
+// Unreal calls them.
 
 string content = args.Length > 0 ? args[0] : @"C:\Users\ryans\source\repos\SVM-Rewrite\.content";
 string map = args.Length > 1 ? args[1] : "AquaE";
@@ -20,7 +24,7 @@ BridgeSession.Configure(content);
 Console.WriteLine($"struct sizes: BridgeEquipment {Unsafe.SizeOf<BridgeEquipment>()}, BridgeAttachment {Unsafe.SizeOf<BridgeAttachment>()}, " +
     $"BridgeFirstPersonPart {Unsafe.SizeOf<BridgeFirstPersonPart>()}, BridgeFirstPerson {Unsafe.SizeOf<BridgeFirstPerson>()}, " +
     $"BridgeEquipmentMesh {Unsafe.SizeOf<BridgeEquipmentMesh>()}, BridgeBone {Unsafe.SizeOf<BridgeBone>()}, EquipmentApi {Unsafe.SizeOf<EquipmentApi>()}");
-if (!Probe.Table())
+if (!Probe.Table(content))
 {
     return 1;
 }
@@ -55,7 +59,12 @@ var spy = new List<Step>
     new(6.6, "holster (fire mode tapped)", _ => Probe.Hold(11, true)),
     new(6.7, "", _ => Probe.Hold(11, false)),
 };
-return Probe.Run(map, merc: false, seconds, spy) ? 0 : 1;
+if (!Probe.Run(map, merc: false, seconds, spy))
+{
+    return 1;
+}
+
+return Probe.ThroughTables(content, map) ? 0 : 1;
 
 internal sealed record Step(double At, string What, Action<BridgeSession> Do);
 
@@ -66,7 +75,7 @@ internal static unsafe class Probe
     public static void Hold(int button, bool down) => s_held[button] = down;
 
     /// <summary>The exported table, called as Unreal calls it: the entries that work without a session.</summary>
-    public static bool Table()
+    public static bool Table(string content)
     {
         EquipmentApi api = default;
         delegate* unmanaged<EquipmentApi*, int> getApi = &EquipmentExports.GetApi;
@@ -84,6 +93,32 @@ internal static unsafe class Probe
             Console.WriteLine("FAILED: the table gave no catalog");
             return false;
         }
+
+        // Every glb in the equipment packages against the catalog: a file the pose code cannot read is left out of it
+        // without a word otherwise. Known: the first-person pistols of OpenScctSidearms animate nodes outside their
+        // skin, which GlbCharacter refuses, so a merc holding a pistol has no view model until that is read.
+        string chars = System.IO.Path.Combine(content, "shared", "chars");
+        int unread = 0;
+        foreach (string package in new[] { "SWeaponFirst", "SGoggle", "OpenScctSidearms", "OpenScctRifles" })
+        {
+            string folder = System.IO.Path.Combine(chars, package);
+            if (!System.IO.Directory.Exists(folder))
+            {
+                continue;
+            }
+
+            foreach (string file in System.IO.Directory.GetFiles(folder, "*.glb"))
+            {
+                string asset = package + "." + System.IO.Path.GetFileNameWithoutExtension(file);
+                if (EquipmentModel.Load(asset, System.IO.Path.Combine(content, "shared")) is null)
+                {
+                    unread++;
+                    Console.WriteLine($"   NOT READ {asset}: {EquipmentModel.FailureOf(asset)}");
+                }
+            }
+        }
+
+        Console.WriteLine($"equipment mesh files the pose code could not read (not in the catalog, never drawn): {unread}");
 
         var info = new BridgeBoneInfo[128];
         char* text = stackalloc char[260];
@@ -116,6 +151,177 @@ internal static unsafe class Probe
         return true;
     }
 
+    /// <summary>
+    /// A short merc round driven only through the exported function tables (the main one and the equipment one), as
+    /// Unreal drives them: every per-frame entry is called through its pointer and checked against the others.
+    /// </summary>
+    public static bool ThroughTables(string content, string map)
+    {
+        BridgeApi bridge = default;
+        EquipmentApi api = default;
+        delegate* unmanaged<BridgeApi*, int> getBridge = &Exports.GetApi;
+        delegate* unmanaged<EquipmentApi*, int> getApi = &EquipmentExports.GetApi;
+        getBridge(&bridge);
+        getApi(&api);
+        Console.WriteLine();
+        Console.WriteLine($"==== {map} as a merc through the exported tables only");
+        var one = new BridgeEquipment[1];
+        fixed (BridgeEquipment* p = one)
+        {
+            int before = api.GetEquipment(p, 1);
+            BridgeFirstPerson none;
+            int shownBefore = api.GetFirstPerson(&none);
+            Console.WriteLine($"before a session: GetEquipment {before}, GetFirstPerson {shownBefore}");
+            if (before != 0 || shownBefore != 0)
+            {
+                Console.WriteLine("FAILED: equipment without a session");
+                return false;
+            }
+        }
+
+        int started;
+        fixed (char* c = content, m = map, mode = "Story")
+        {
+            started = bridge.Configure(c) != 0 ? bridge.StartLocal(m, mode, 1, 3) : 0;
+        }
+
+        if (started == 0)
+        {
+            Console.WriteLine("FAILED: the session did not start: " + LastError(bridge));
+            return false;
+        }
+
+        var pawns = new BridgePawn[64];
+        var equipment = new BridgeEquipment[64];
+        var attachments = new BridgeAttachment[128];
+        var bones = new BridgeBone[160];
+        char* text = stackalloc char[260];
+        int frames = 0, ticks = 0, shownFrames = 0, posedBones = 0, animated = 0, maxEquipped = 0, maxAttached = 0, shots = 0, torchFrames = 0;
+        string weapon = "", viewMesh = "";
+        bool torch = false, fired = false;
+        var input = default(BridgeInput);
+        var run = Stopwatch.StartNew();
+        while (run.Elapsed.TotalSeconds < 4.0)
+        {
+            double t = run.Elapsed.TotalSeconds;
+            if (!torch && t >= 1.0)
+            {
+                torch = true;
+                fixed (char* name = "GadTorcheSwitch")
+                {
+                    bridge.Command(name, 0);
+                }
+            }
+
+            if (!fired && t >= 1.5)
+            {
+                fired = true;
+                fixed (char* name = "Fire")
+                {
+                    bridge.Command(name, 0);
+                }
+            }
+
+            input.Buttons[6] = (byte)(t >= 1.5 && t < 2.5 ? 1 : 0);
+            bridge.SetInput(&input);
+            ticks += bridge.Update();
+            if (bridge.GetState() != (int)BridgeState.Playing)
+            {
+                Console.WriteLine("FAILED: " + LastError(bridge));
+                return false;
+            }
+
+            frames++;
+            int pawnCount, equipped, attached, shown;
+            BridgeFirstPerson view;
+            fixed (BridgePawn* p = pawns)
+            fixed (BridgeEquipment* e = equipment)
+            fixed (BridgeAttachment* a = attachments)
+            fixed (BridgeBone* b = bones)
+            {
+                pawnCount = bridge.GetPawns(p, pawns.Length);
+                equipped = api.GetEquipment(e, equipment.Length);
+                attached = api.GetAttachments(a, attachments.Length);
+                shown = api.GetFirstPerson(&view);
+                if (equipped != pawnCount)
+                {
+                    Console.WriteLine($"FAILED: {pawnCount} pawns but equipment for {equipped}");
+                    return false;
+                }
+
+                for (int i = 0; i < attached; i++)
+                {
+                    if ((attachments[i].Flags & BridgeAttachmentFlags.Animated) != 0)
+                    {
+                        int n = api.GetAttachmentPose(attachments[i].ActorId, attachments[i].Slot, b, bones.Length);
+                        if (n != attachments[i].BoneCount)
+                        {
+                            Console.WriteLine($"FAILED: GetAttachmentPose gave {n} bones, the attachment says {attachments[i].BoneCount}");
+                            return false;
+                        }
+
+                        animated++;
+                    }
+                }
+
+                if (shown != 0)
+                {
+                    int n = api.GetFirstPersonPose(0, b, bones.Length);
+                    if (n != view.Part0.BoneCount || n == 0 || api.GetFirstPersonPose(view.PartCount, b, bones.Length) != 0)
+                    {
+                        Console.WriteLine($"FAILED: GetFirstPersonPose gave {n} bones, the part says {view.Part0.BoneCount}");
+                        return false;
+                    }
+
+                    shownFrames++;
+                    posedBones = n;
+                    api.GetName(view.WeaponClass, text, 260);
+                    weapon = new string(text);
+                    api.GetName(view.Part0.MeshPath, text, 260);
+                    viewMesh = new string(text);
+                }
+            }
+
+            maxEquipped = Math.Max(maxEquipped, equipped);
+            maxAttached = Math.Max(maxAttached, attached);
+            for (int i = 0; i < equipped; i++)
+            {
+                if ((equipment[i].Flags & BridgeEquipmentFlags.FirstPerson) != 0)
+                {
+                    shots = equipment[i].ShotCount;
+                    torchFrames += (equipment[i].Flags & BridgeEquipmentFlags.TorchOn) != 0 ? 1 : 0;
+                }
+            }
+
+            Thread.Sleep(4);
+        }
+
+        bridge.Stop();
+        int after;
+        fixed (BridgeEquipment* p = one)
+        {
+            after = api.GetEquipment(p, 1);
+        }
+
+        Console.WriteLine($"done: {frames} frames, {ticks} ticks; at most {maxEquipped} pawns with equipment and {maxAttached} attachments; {animated} animated attachment poses read; " +
+            $"first person shown in {shownFrames} frames ('{weapon}', {viewMesh}, {posedBones} bones); local shots {shots}; torch on in {torchFrames} frames; " +
+            $"GetEquipment after Stop {after}");
+        if (shownFrames == 0 || maxEquipped == 0 || maxAttached == 0 || shots == 0 || torchFrames == 0 || after != 0)
+        {
+            Console.WriteLine("FAILED: the tables did not show a merc with a torch who fired");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string LastError(BridgeApi bridge)
+    {
+        char* text = stackalloc char[2048];
+        bridge.LastError(text, 2048);
+        return new string(text);
+    }
+
     public static bool Run(string map, bool merc, double seconds, List<Step> steps)
     {
         Array.Clear(s_held);
@@ -138,6 +344,9 @@ internal static unsafe class Probe
         float gripGap = 0f;
         string worstAt = "";
         int frames = 0, shownFrames = 0, ticks = 0, next = 0, lastKind = -1, lastShots = 0, lastFlags = -1;
+        int steadyFrames = 0, allocatingFrames = 0, eyeFrames = 0, eyeOnlyFrames = 0;
+        long steadyBytes = 0;
+        bool comparedBeam = false;
         double nextReport = 0, readMs = 0;
         var run = Stopwatch.StartNew();
         while (run.Elapsed.TotalSeconds < seconds)
@@ -171,12 +380,23 @@ internal static unsafe class Probe
             frames++;
             long reading = Stopwatch.GetTimestamp();
             int pawnCount = session.GetPawns(pawns);
+            for (int i = 0; i < pawnCount; i++)
+            {
+                // Unreal reads every pawn's pose each frame anyway; done first, what the pose code allocates (a body
+                // clip read on its first play) stays out of the equipment's count below.
+                session.GetPawnPose(pawns[i].ActorId, bones);
+            }
+
+            long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
             int equipped = feature.GetEquipment(equipment);
             int attached = feature.GetAttachments(attachments);
             bool shown = feature.GetFirstPerson(out BridgeFirstPerson view);
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
             for (int part = 0; part < view.PartCount; part++)
             {
+                allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
                 int n = feature.GetFirstPersonPose(part, bones);
+                allocated += GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
                 if (feature.GetFirstPersonPose(part, again) != n || !bones.AsSpan(0, n).SequenceEqual(again.AsSpan(0, n)))
                 {
                     Console.WriteLine("FAILED: a second read of the same frame gave another first-person pose");
@@ -251,7 +471,9 @@ internal static unsafe class Probe
                 worstLength = MathF.Max(worstLength, MathF.Abs(Rotation(a.ModelToBone).Length() - 1f));
                 if ((a.Flags & BridgeAttachmentFlags.Animated) != 0)
                 {
+                    allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
                     int n = feature.GetAttachmentPose(a.ActorId, a.Slot, bones);
+                    allocated += GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
                     if (n != a.BoneCount)
                     {
                         Console.WriteLine($"FAILED: attachment pose of #{a.ActorId} has {n} bones, the attachment says {a.BoneCount}");
@@ -268,6 +490,38 @@ internal static unsafe class Probe
 
             readMs += Stopwatch.GetElapsedTime(reading).TotalMilliseconds;
 
+            // What the reads allocated. The first second loads models and gives names their ids; after it a frame's
+            // reads should leave no garbage.
+            if (t >= 1.0)
+            {
+                steadyFrames++;
+                steadyBytes += allocated;
+                allocatingFrames += allocated > 0 ? 1 : 0;
+                if (allocated > 0)
+                {
+                    // Expected only where a view model or pistol clip plays for the first time (GlbClip reads its
+                    // tracks on first use).
+                    Console.WriteLine($"t={t:F2} the reads allocated {allocated} bytes");
+                }
+            }
+
+            // A pawn seen from its own eyes must be flagged in every such frame, view model or not: count the frames
+            // where the local pawn is flagged and the ones where a view model is drawn without the flag.
+            for (int i = 0; i < equipped; i++)
+            {
+                if (IsLocal(pawns, pawnCount, equipment[i].ActorId))
+                {
+                    bool eyes = (equipment[i].Flags & BridgeEquipmentFlags.FirstPerson) != 0;
+                    eyeFrames += eyes ? 1 : 0;
+                    eyeOnlyFrames += eyes && !shown ? 1 : 0;
+                    if (shown && !eyes)
+                    {
+                        Console.WriteLine("FAILED: a view model is drawn for a pawn not flagged FirstPerson");
+                        return false;
+                    }
+                }
+            }
+
             // The local pawn's shots and flag changes as they happen.
             for (int i = 0; i < equipped; i++)
             {
@@ -275,6 +529,29 @@ internal static unsafe class Probe
                 if (!IsLocal(pawns, pawnCount, e.ActorId))
                 {
                     continue;
+                }
+
+                if (!comparedBeam && (e.Flags & BridgeEquipmentFlags.LaserBeam) != 0 && session.Session.LocalPawn is SPAWNDEFENSE own)
+                {
+                    // The beam worked out for mercs the simulation places none for (from the drawn rifle's FX bone
+                    // along the packed aim), run on the local merc, whose beam the simulation did place: the two
+                    // must start near each other (the simulation's is pulled back 50 uu) and point the same way.
+                    comparedBeam = true;
+                    (FVector start, FVector end) = feature.DistantBeam(own);
+                    var simStart = new Vector3(e.LaserStartX, e.LaserStartY, e.LaserStartZ);
+                    var simEnd = new Vector3(e.LaserEndX, e.LaserEndY, e.LaserEndZ);
+                    var ownStart = new Vector3(start.X, start.Y, start.Z);
+                    var ownEnd = new Vector3(end.X, end.Y, end.Z);
+                    float angle = MathF.Acos(Math.Clamp(Vector3.Dot(Vector3.Normalize(simEnd - simStart), Vector3.Normalize(ownEnd - ownStart)), -1f, 1f)) * (180f / MathF.PI);
+                    Console.WriteLine($"t={t:F2} laser of #{e.ActorId}: simulation ({simStart.X:F0},{simStart.Y:F0},{simStart.Z:F0}) to ({simEnd.X:F0},{simEnd.Y:F0},{simEnd.Z:F0}); " +
+                        $"distant-beam port ({ownStart.X:F0},{ownStart.Y:F0},{ownStart.Z:F0}) to ({ownEnd.X:F0},{ownEnd.Y:F0},{ownEnd.Z:F0}): " +
+                        $"starts {Vector3.Distance(simStart, ownStart):F0} uu apart, ends {Vector3.Distance(simEnd, ownEnd):F0} uu apart, {angle:F1} deg between them; " +
+                        $"pawn at ({own.Location.X:F0},{own.Location.Y:F0},{own.Location.Z:F0})");
+                    if (Vector3.Distance(simStart, ownStart) > 120f || angle > 10f)
+                    {
+                        Console.WriteLine("FAILED: the distant beam does not follow the rifle");
+                        return false;
+                    }
                 }
 
                 if (e.ShotCount != lastShots || e.Flags != lastFlags)
@@ -367,6 +644,8 @@ internal static unsafe class Probe
 
         Console.WriteLine($"done: {frames} frames, first person shown in {shownFrames}; worst |q|-1 {worstLength:E1}; largest first-person bone turn between frames {worstStep:F2} deg ({worstAt}); " +
             $"muzzle {muzzleNear:F3} to {muzzleFar:F3} m from the eye");
+        Console.WriteLine($"      reads after the first second: {steadyBytes} bytes allocated over {steadyFrames} frames ({allocatingFrames} frames allocated anything); " +
+            $"local pawn flagged FirstPerson in {eyeFrames} frames, {eyeOnlyFrames} of them with no view model drawn");
         if (!merc)
         {
             Console.WriteLine($"      the spy's right hand and the pistol's grip are at most {gripGap * 1000f:F3} mm apart in the eye view");
@@ -455,7 +734,7 @@ internal static unsafe class Probe
     private static string Flags(int flags)
     {
         string[] names = ["Firing", "Reloading", "LaserOn", "TorchOn", "InScope", "GogglesGlow", "Wet", "StickySkinned", "WeaponInHand",
-            "FirstPerson", "TorchCorona", "TorchFollowsBone", "LaserBeam", "LaserDot", "GogglesDown", "Merc"];
+            "FirstPerson", "TorchCorona", "TorchFollowsBone", "LaserBeam", "LaserDot", "GogglesDown", "Merc", "Binoculars", "TorchInCamera"];
         var on = new List<string>();
         for (int i = 0; i < names.Length; i++)
         {
