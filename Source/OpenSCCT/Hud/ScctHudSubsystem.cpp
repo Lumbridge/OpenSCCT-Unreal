@@ -53,6 +53,8 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Session->OnFrame.AddUObject(this, &UScctHudSubsystem::HandleFrame);
 
 	FParse::Value(FCommandLine::Get(), TEXT("ScctHudLog="), LogEvery);
+	InitGadgetViews();
+	InitIcons();
 
 	// -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1"
 	FString Commands;
@@ -106,6 +108,17 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	{
 		Command.bDone = false;
 	}
+	GadgetMenuCheck.Stage = 0;
+	GadgetViewCheck.Stage = 0;
+	GadgetMenuCheck.NextStep = 0;
+	LastGadgetView = 0;
+	bLastCamAlert = false;
+	LastMenuSignature = 0;
+	GadgetKeysAge = 0.0f;
+	bTextureChecksDone = false;
+	LastCoopIcon = 0;
+	LastRespawnTile = FIntPoint(-1, -1);
+	RespawnKeyAge = -100.0f;
 	if (NewSessionId != 0 && Api == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Error, TEXT("HUD: the bridge has no HUD table (its reason is in the log above); the match plays without a HUD and without goggles"));
@@ -205,6 +218,7 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 	}
 	ProjectMarkers();
 	RunTimedCommands();
+	RunGadgetChecks(DeltaSeconds);
 
 	// The scoreboard follows the player's bindings, which arrive as interface commands.
 	AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController());
@@ -215,6 +229,7 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 	}
 	Model->bScoreboardHeld = bScoreboardForced || bScoreboardKeyHeld || bScoreboardToggled;
 	Model->Advance(DeltaSeconds);
+	ReadIcons(DeltaSeconds);
 
 	if (UScctVisionSubsystem* Vision = GetWorld()->GetSubsystem<UScctVisionSubsystem>())
 	{
@@ -235,9 +250,11 @@ void UScctHudSubsystem::ReadSnapshot()
 
 	ReadRows(M.Gadgets, 16, Api->GetGadgets);
 	ReadRows(M.Interactions, 8, Api->GetInteractions);
+	ReadRows(M.MenuLines, 8, Api->GetMenu);
 	ReadRows(M.Objectives, 48, Api->GetObjectives);
 	ReadRows(M.ObjectiveLines, 16, Api->GetObjectiveLines);
 	ReadRows(M.Scores, 32, Api->GetScoreboard);
+	ReadGadgetViews();
 
 	M.LocalTeam = M.State.Side;
 	for (const FScctHudScoreRow& Row : M.Scores)
@@ -259,6 +276,7 @@ void UScctHudSubsystem::ReadSnapshot()
 			const FScctHudMessage& Message = Messages[Index];
 			UE_LOG(LogOpenSCCT, Log, TEXT("HUD message t=%.1f category %d kind %d cause %d flags %d for %.1f s: \"%s\""),
 				Message.Time, Message.Category, Message.Kind, Message.Cause, Message.Flags, Message.Duration, Message.Text);
+			OnMessage.Broadcast(Message);
 			M.AddMessage(Message);
 		}
 	} while (Count == UE_ARRAY_COUNT(Messages));
@@ -319,9 +337,16 @@ void UScctHudSubsystem::RunTimedCommands()
 		{
 			Model->PreviewWinner = FMath::Clamp(Command.Argument, -1, 1);
 		}
+		else if (Command.Name.Equals(TEXT("PreviewCamAlert"), ESearchCase::IgnoreCase))
+		{
+			Model->bPreviewCamAlert = Command.Argument != 0;
+		}
 		else if (Command.Name.Equals(TEXT("EnhancedReality"), ESearchCase::IgnoreCase))
 		{
 			Api->SetOption(EScctHudOption::SwitchEnhancedReality, 0);
+		}
+		else if (RunIconCommand(Command.Name, Command.Argument))
+		{
 		}
 		else if (AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController()))
 		{

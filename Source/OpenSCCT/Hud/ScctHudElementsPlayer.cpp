@@ -60,7 +60,8 @@ bool ScctHudElements::ShowsPlayerHud(const FScctHudModel& Model)
 	return Model.bHasState
 		&& (Model.State.Flags & EScctHudFlags::HasPawn) != 0
 		&& (Model.State.Flags & (EScctHudFlags::HideHud | EScctHudFlags::Spectating | EScctHudFlags::GameEnded)) == 0
-		&& !ScctVisorEffects::IsHudShutDown(Model); // an EMP keeps the merc's HUD down for 12 s
+		&& !ScctVisorEffects::IsHudShutDown(Model) // an EMP keeps the merc's HUD down for 12 s
+		&& Model.State.GadgetView == 0;
 }
 
 FString ScctHudElements::LivesText(const FScctHudModel& Model, int32 Lives, int32 InfiniteFrom)
@@ -154,21 +155,12 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 	}
 	EdgeWash(Painter, Danger(), Wash);
 
-	// Looking through goggles or a gadget's camera: a thin frame in the side's colour.
+	// Looking through goggles: a thin frame in the side's colour. A gadget's camera has its own page
+	// (PaintCameraPages).
 	const FLinearColor Accent = ScctHudStyle::Accent(State.Side);
 	if (Model.VisionShown > 0.01f)
 	{
 		Brackets(Painter, 16.0f, 22.0f, Fade(Accent, 0.55f * Model.VisionShown));
-	}
-	if (State.GadgetView != 0)
-	{
-		Brackets(Painter, 36.0f, 44.0f, Fade(Accent, 0.8f));
-		Painter.Text(FVector2f(Size.X * 0.5f, 44.0f), Model.Text(State.CamNetworkNameId).ToUpper(), Label(10.0f), Accent, EAlign::Centre);
-		if (State.CamNetworkDisabledSeconds > 0)
-		{
-			Painter.Fill(Whole, FLinearColor(0.0f, 0.0f, 0.0f, 0.85f));
-			Painter.Text(FVector2f(Size.X * 0.5f, Size.Y * 0.5f - 24.0f), FString::FromInt(State.CamNetworkDisabledSeconds), Font(EWeight::Light, 36.0f), Danger(), EAlign::Centre);
-		}
 	}
 }
 

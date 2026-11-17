@@ -6,6 +6,7 @@
 #include "Hud/ScctHudStyle.h"
 #include "Rendering/DrawElements.h"
 #include "Rendering/SlateRenderer.h"
+#include "Styling/SlateBrush.h"
 
 FScctHudPainter::FScctHudPainter(FSlateWindowElementList& InElements, const FGeometry& InGeometry, int32 InLayer)
 	: Elements(InElements)
@@ -215,6 +216,33 @@ void FScctHudPainter::GlowLine(const FVector2f& From, const FVector2f& To, const
 	Line(From, To, ScctHudStyle::Fade(Colour, 0.10f), Thickness + 6.0f);
 	Line(From, To, ScctHudStyle::Fade(Colour, 0.22f), Thickness + 2.5f);
 	Line(From, To, Colour, Thickness);
+}
+
+void FScctHudPainter::Image(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint)
+{
+	// A mirrored box is drawn the right way round with the region's U swapped.
+	FBox2f Drawn = Box;
+	FBox2f Region = UV;
+	if (Drawn.Max.X < Drawn.Min.X)
+	{
+		Swap(Drawn.Min.X, Drawn.Max.X);
+		Swap(Region.Min.X, Region.Max.X);
+	}
+	if (Drawn.Max.Y < Drawn.Min.Y)
+	{
+		Swap(Drawn.Min.Y, Drawn.Max.Y);
+		Swap(Region.Min.Y, Region.Max.Y);
+	}
+	const FLinearColor Final = ScctHudStyle::Fade(Tint, Opacity);
+	if (Drawn.GetSize().GetMin() <= 0.0f || Final.A <= 0.002f || Brush.GetResourceObject() == nullptr)
+	{
+		return;
+	}
+
+	// The draw element copies the brush, so a copy on the stack carries the region.
+	FSlateBrush Part = Brush;
+	Part.SetUVRegion(Region);
+	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Drawn), &Part, ESlateDrawEffect::None, Final);
 }
 
 void FScctHudPainter::Arc(const FVector2f& Centre, float Radius, float StartDegrees, float EndDegrees, const FLinearColor& Colour, float Thickness, float Glow)
