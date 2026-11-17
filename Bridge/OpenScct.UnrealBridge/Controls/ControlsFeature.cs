@@ -62,6 +62,12 @@ public static class ControlsStore
         get => s_bindings;
         set => s_bindings = value ?? throw new ArgumentNullException(nameof(value));
     }
+
+    /// <summary>
+    /// The bindings as the file has them (read or written last), as the JSON a save writes; null before either. The
+    /// bindings editor compares with it and goes back to it when the player leaves without saving.
+    /// </summary>
+    public static string? SavedBindingsJson { get; set; }
 }
 
 /// <summary>
@@ -94,7 +100,7 @@ public sealed class ControlsFeature
     {
         _session = bridge.Session;
         _merc = _session.Settings.Side == PlaySide.Merc;
-        Keys = new InputMapper(_session.Input, ControlsStore.Bindings.Of(_merc).Keys, _merc, ControlsStore.Settings);
+        Keys = new InputMapper(_session.Input, ControlsStore.Bindings.KeysOf(_merc), _merc, ControlsStore.Settings);
         Pad = new PadMapper(Keys, _session);
         Keys.AutoHackToggled += on =>
         {
@@ -135,7 +141,9 @@ public sealed class ControlsFeature
 
         ControlSettings settings = ControlsStore.Settings;
         SideBindings side = ControlsStore.Bindings.Of(_merc);
-        Keys.SetLayout(side.Keys, _merc);
+        // The bindings editor's Apply replaces the store's bindings and a key bound from the console changes a layout
+        // in place: either way the mapper sees it here, so a rebind plays from this frame.
+        Keys.SetLayout(ControlsStore.Bindings.KeysOf(_merc), _merc);
         bool play = (raw.Flags & BridgeRawInputFlags.Play) != 0;
         double delta = float.IsFinite(raw.DeltaSeconds) && raw.DeltaSeconds > 0f ? raw.DeltaSeconds : 0.0;
         fixed (byte* keys = raw.Keys)

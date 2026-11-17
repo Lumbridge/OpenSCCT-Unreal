@@ -39,10 +39,15 @@ param(
     # game must come back to the front end and say why.
     [double] $KillServerAfter = 0,
     [string] $Tag = 'join',
+    # Human players the server waits for before it starts a match on its own once they are ready (a number over
+    # the players that join keeps it from starting by itself, for a look at the lobby's LAUNCH button).
+    [int] $MinPlayers = 1,
     # Join without starting a server (the failure check).
     [switch] $NoServer,
     # Do not say ready: the game stays in the lobby (for a look at it).
     [switch] $StayInLobby,
+    # A practice server (unlimited lives, the in-match menu's Switch Team).
+    [switch] $Practice,
     # Join from the menus instead of -ScctJoin: a menu script (Source/OpenSCCT/Menu/ScctMenuDriver.h) that opens
     # the join-by-address page, types 127.0.0.1:<Port> and presses CONNECT, for example. Its shots go to the same folder.
     [string] $MenuDo = '',
@@ -75,7 +80,8 @@ try {
             name = 'Unreal online check'; port = $Port; lanPort = 0; loopbackOnly = $true; maxPlayers = 4
             maps = (Join-Path $Content 'svmap')
             rotation = @(@{ map = $Map; mode = 'Story'; timeLimit = $TimeLimit }, @{ map = $SecondMap; mode = 'Story' })
-            minPlayersToLaunch = 1; launchCountdownSeconds = 2; resultsSeconds = 6; bansFile = $null; matchLog = $null
+            minPlayersToLaunch = $MinPlayers; launchCountdownSeconds = 2; resultsSeconds = 6; bansFile = $null; matchLog = $null
+            practice = [bool] $Practice
         } | ConvertTo-Json -Depth 4 | Set-Content -Path $config -Encoding utf8
 
         # The server's output goes straight to a file (cmd's redirection), so nothing here has to keep reading it;

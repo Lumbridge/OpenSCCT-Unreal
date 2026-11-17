@@ -32,7 +32,7 @@ namespace
 	constexpr int32 MusicSlot = 100;
 
 	template <typename TRead>
-	FString ReadText(TRead&& Read)
+	FString ReadMenuSubsystemText(TRead&& Read)
 	{
 		TArray<TCHAR> Buffer;
 		Buffer.SetNumZeroed(1024);
@@ -96,7 +96,7 @@ const FScctMenuApi* UScctMenuSubsystem::Connect()
 		}
 		if (Api != nullptr)
 		{
-			SharedRoot = ReadText([this](TCHAR* Buffer, int32 Capacity) { return Api->GetText(static_cast<int32>(EScctMenuText::SharedRoot), Buffer, Capacity); });
+			SharedRoot = ReadMenuSubsystemText([this](TCHAR* Buffer, int32 Capacity) { return Api->GetText(static_cast<int32>(EScctMenuText::SharedRoot), Buffer, Capacity); });
 		}
 	}
 	return Api;
@@ -188,13 +188,13 @@ FString UScctMenuSubsystem::GetMapTitle(const FString& Id)
 FString UScctMenuSubsystem::GetMapText(const FString& Id, EScctMenuMapText Kind)
 {
 	const FScctMenuApi* Menu = Connect();
-	return Menu == nullptr ? FString() : ReadText([&](TCHAR* Buffer, int32 Capacity) { return Menu->GetMapText(*Id, static_cast<int32>(Kind), Buffer, Capacity); });
+	return Menu == nullptr ? FString() : ReadMenuSubsystemText([&](TCHAR* Buffer, int32 Capacity) { return Menu->GetMapText(*Id, static_cast<int32>(Kind), Buffer, Capacity); });
 }
 
 FString UScctMenuSubsystem::GetModeText(const FString& Id, int32 ModeIndex, bool bMerc, int32 Kind)
 {
 	const FScctMenuApi* Menu = Connect();
-	return Menu == nullptr ? FString() : ReadText([&](TCHAR* Buffer, int32 Capacity) { return Menu->GetModeText(*Id, ModeId(ModeIndex), bMerc ? 1 : 0, Kind, Buffer, Capacity); });
+	return Menu == nullptr ? FString() : ReadMenuSubsystemText([&](TCHAR* Buffer, int32 Capacity) { return Menu->GetModeText(*Id, ModeId(ModeIndex), bMerc ? 1 : 0, Kind, Buffer, Capacity); });
 }
 
 FString UScctMenuSubsystem::Text(const TCHAR* InSection, const TCHAR* Key, const TCHAR* Fallback)
@@ -209,7 +209,7 @@ FString UScctMenuSubsystem::Text(const TCHAR* InSection, const TCHAR* Key, const
 	{
 		return Known->IsEmpty() ? FString(Fallback) : *Known;
 	}
-	FString Found = ReadText([&](TCHAR* Buffer, int32 Capacity) { return Menu->Localize(TEXT("GUI"), InSection, Key, Buffer, Capacity); });
+	FString Found = ReadMenuSubsystemText([&](TCHAR* Buffer, int32 Capacity) { return Menu->Localize(TEXT("GUI"), InSection, Key, Buffer, Capacity); });
 	// The original breaks its lines with '|'; the pages wrap their own.
 	Found.ReplaceInline(TEXT("||"), TEXT(" "));
 	Found.ReplaceInline(TEXT("|"), TEXT(" "));
@@ -221,7 +221,7 @@ FString UScctMenuSubsystem::Text(const TCHAR* InSection, const TCHAR* Key, const
 FString UScctMenuSubsystem::GetGameVersion()
 {
 	const FScctMenuApi* Menu = Connect();
-	return Menu == nullptr ? FString() : ReadText([&](TCHAR* Buffer, int32 Capacity) { return Menu->GetText(static_cast<int32>(EScctMenuText::GameVersion), Buffer, Capacity); });
+	return Menu == nullptr ? FString() : ReadMenuSubsystemText([&](TCHAR* Buffer, int32 Capacity) { return Menu->GetText(static_cast<int32>(EScctMenuText::GameVersion), Buffer, Capacity); });
 }
 
 const TArray<FScctMenuAction>& UScctMenuSubsystem::GetActions()
@@ -360,7 +360,7 @@ void UScctMenuSubsystem::SetMusicPlaying(bool bPlaying)
 	if (MusicFile.IsEmpty())
 	{
 		// The front end level's own song (the Entry map's), as the original's menus play it.
-		const FString ContentRoot = ReadText([this](TCHAR* Buffer, int32 Capacity) { return Api->GetText(static_cast<int32>(EScctMenuText::ContentRoot), Buffer, Capacity); });
+		const FString ContentRoot = ReadMenuSubsystemText([this](TCHAR* Buffer, int32 Capacity) { return Api->GetText(static_cast<int32>(EScctMenuText::ContentRoot), Buffer, Capacity); });
 		const FString Candidates[] = {
 			ContentRoot / TEXT("svmap/Entry/audio/streams/Interface/Menu_music1.ogg"),
 			ContentRoot / TEXT("svmap/Lobby/audio/streams/Interface/Menu_music1.ogg"),

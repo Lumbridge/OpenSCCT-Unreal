@@ -128,6 +128,7 @@ namespace EScctStartFlags
 	constexpr int32 Sidearms = 1;     // the mercs carry OpenSCCT's sidearms
 	constexpr int32 Rifles = 2;       // the mercs may pick OpenSCCT's additional rifles
 	constexpr int32 OfflineRules = 4; // practice rules: no time limit, unlimited lives, 5 s respawn
+	constexpr int32 UnlimitedGear = 8; // Visit a Map practice: unlimited gear, instant gear changes, Switch Team
 }
 
 /** What StartLocalEx starts. Zero it, set Size = sizeof(FScctBridgeStartOptions), then the fields. */
