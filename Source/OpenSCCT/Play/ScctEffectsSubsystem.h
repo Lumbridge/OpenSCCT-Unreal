@@ -4,6 +4,7 @@
 #include "Play/ScctEffectsParticles.h"
 #include "Runtime/ScctEventsApi.h"
 #include "Runtime/ScctProjectionsApi.h"
+#include "Runtime/ScctWorldApi.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctEffectsSubsystem.generated.h"
 
@@ -33,7 +34,10 @@ class UTexture2D;
  *     out at the end of its life (Play/ScctEffectsProjections.cpp);
  *   - effect actors: grenades, mines and gadgets as their original meshes (imported by
  *     Tools/Effects/build_effect_assets.py; a small glowing stand-in shape where a mesh is missing), explosions,
- *     smoke, sparks, flares and trails as particles, and the lights the simulation gives them.
+ *     smoke, sparks, flares and trails as particles, and the lights the simulation gives them. The PS2 modem's
+ *     destruction preset (Ps2ModemEffect) is drawn as its own three emitters (Play/ScctEffectsDevices.cpp);
+ *   - device faults: a network camera a spy's shocker has put out shows an orange cross on its lens with sparks and
+ *     smoke for as long as it is out, read from the level state's markers (Play/ScctEffectsDevices.cpp).
  *
  * Particles are the subsystem's own pooled sprites (see FScctFxSprites for why not Niagara); lights, meshes and
  * decals come from pools made once per world. Nothing is allocated per frame.
@@ -44,6 +48,7 @@ class UTexture2D;
  *   -ScctFxTimeScale=K     effects run at K times real speed (0.1: a flash lasts a second), so a screenshot
  *                          taken at any moment shows them
  *   -ScctFxLog             log every flash, tracer, impact and effect actor as it starts or ends
+ * A camera fault ('camnet fault <name>') and a modem's destruction ('Ps2ModemEffect start') are always logged.
  */
 UCLASS()
 class OPENSCCT_API UScctEffectsSubsystem : public UWorldSubsystem
@@ -85,6 +90,7 @@ private:
 		Water,
 		Gas,
 		Puff,       // any other emitter: one small puff of dust
+		Ps2Modem,   // the PS2 modem's destruction preset: two smokes and a flash, once (Play/ScctEffectsDevices.cpp)
 	};
 
 	struct FActorFx
@@ -178,6 +184,31 @@ private:
 
 	void UpdateEffectActors(float DeltaSeconds);
 	void UpdateLights(float DeltaSeconds);
+
+	/**
+	 * A network camera a spy's shocker has put out, drawn as the Godot client's CamnetDisabledView draws it: an
+	 * orange cross on the lens that throbs, a few sparks every 1.6 s and a thin wisp of smoke, while the camera is
+	 * out. Play/ScctEffectsDevices.cpp.
+	 */
+	struct FCamnetFault
+	{
+		TWeakObjectPtr<UStaticMeshComponent> Bars[2];
+		TWeakObjectPtr<UMaterialInstanceDynamic> Look;
+		/** The level's actor for the camera, looked for when the fault starts; unset when the level has none. */
+		TWeakObjectPtr<AActor> Camera;
+		FString Name;
+		float Age = 0.0f;
+		float NextSpark = 0.0f;
+		float SmokeDebt = 0.0f;
+		uint32 SeenFrame = 0;
+		bool bOut = false;
+	};
+
+	/** The marked devices' own effects: the shocked network cameras' faults. Play/ScctEffectsDevices.cpp. */
+	void UpdateDevices(float DeltaSeconds);
+	void ResetDevices();
+	/** Ps2ModemEffect's three sprite emitters, as the original preset sets them, from At turned by Rotation. */
+	void SpawnPs2ModemEffect(const FVector& At, const FRotator& Rotation);
 
 	void StartActor(FActorFx& Fx, const FScctEffectActor& Record);
 	void EndActor(FActorFx& Fx, bool bKilled);
@@ -284,6 +315,19 @@ private:
 	/** By the bridge's name id of the asset name; null for one that was looked for and not found. */
 	UPROPERTY(Transient)
 	TMap<int32, TObjectPtr<UTexture2D>> ProjectionTextures;
+
+	/** The bars of the network cameras' fault crosses, two per fault, kept for the next fault when one ends. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> FaultBarPool;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> FaultLookPool;
+
+	const FScctWorldApi* WorldApi = nullptr;
+	TArray<FScctWorldMarker> DeviceMarkers;
+	TMap<int32, FCamnetFault> CamnetFaults;
+	int32 NumCamnetFaults = 0;
+	int32 NumModemEffects = 0;
 
 	const FScctProjectionsApi* Projections = nullptr;
 	TArray<FProjectionSlot> ProjectionSlots;

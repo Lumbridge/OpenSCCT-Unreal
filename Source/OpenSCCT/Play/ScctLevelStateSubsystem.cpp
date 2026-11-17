@@ -164,7 +164,7 @@ void UScctLevelStateSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	bLog = FParse::Param(FCommandLine::Get(), TEXT("ScctLevelLog"));
 
 	// -ScctLevelDo="movers@8;breaklights@14" (also flare: a merc flare thrown from the camera; dirtyfeet: every pawn's
-	// next steps leave footprints). -ScctMarkTest shoots the nearest doors and panes, then opens the
+	// next steps leave footprints; camnetoff, modem and modemhit: the header says). -ScctMarkTest shoots the nearest doors and panes, then opens the
 	// doors and breaks the panes, so the marks can be seen to go with them.
 	FString Actions;
 	FParse::Value(FCommandLine::Get(), TEXT("ScctLevelDo="), Actions, false);
@@ -705,6 +705,20 @@ void UScctLevelStateSubsystem::RunDebugActions()
 			const int32 Pawns = Debug->DirtyFeet();
 			UE_LOG(LogOpenSCCT, Log, TEXT("Level state: dirty feet on %d pawns of the client's world"), Pawns);
 			Queued = Pawns > 0 ? 1 : 0;
+		}
+		else if (Action.What == TEXT("camnetoff"))
+		{
+			Queued = Debug->CamnetOff();
+		}
+		else if (Action.What == TEXT("modem"))
+		{
+			// On the wall straight ahead of the camera, at its own height.
+			const FVector Direction = FRotator(0.0f, View.Yaw, 0.0f).Vector();
+			Queued = Debug->PlaceModem(View.X, View.Y, View.Z, Direction.X, Direction.Y, Direction.Z);
+		}
+		else if (Action.What == TEXT("modemhit"))
+		{
+			Queued = Debug->ShootModems();
 		}
 		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: -ScctLevelDo '%s' at %.1f s (camera at %.0f, %.0f, %.0f): %s"), *Action.What, MatchSeconds, View.X, View.Y, View.Z,
 			Queued == 1 ? TEXT("handed to the server") : Queued == 0 ? TEXT("no local server to do it") : TEXT("not a known action"));

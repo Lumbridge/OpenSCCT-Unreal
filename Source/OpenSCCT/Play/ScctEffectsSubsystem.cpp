@@ -179,6 +179,7 @@ void UScctEffectsSubsystem::ResetMatch()
 		Surface = FMarkSurface();
 	}
 	ResetProjections();
+	ResetDevices();
 	Sprites.Clear();
 	MatchSeconds = 0.0f;
 	bFireHeld = bAltFireHeld = false;
@@ -328,6 +329,7 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 	UpdateImpactMarks();
 	UpdateProjections();
 	UpdateEffectActors(FxSeconds);
+	UpdateDevices(FxSeconds);
 	UpdateLights(FxSeconds);
 	UpdateBodyFill();
 
@@ -810,6 +812,9 @@ void UScctEffectsSubsystem::StartActor(FActorFx& Fx, const FScctEffectActor& Rec
 		break;
 	case EStyle::Puff:
 		SpawnDust(Fx.Location, FVector::UpVector, 5, FLinearColor(0.35f, 0.33f, 0.3f, 0.35f), 30.0f);
+		break;
+	case EStyle::Ps2Modem:
+		SpawnPs2ModemEffect(Fx.Location, FRotator(Record.Pitch, Record.Yaw, Record.Roll));
 		break;
 	default:
 		break;
@@ -1351,6 +1356,7 @@ UScctEffectsSubsystem::EStyle UScctEffectsSubsystem::FindStyle(int32 ClassId)
 
 	// The class names are the original's (French and English mixed): the first word that fits decides.
 	static const TPair<const TCHAR*, EStyle> Words[] = {
+		{ TEXT("Ps2ModemEffect"), EStyle::Ps2Modem },
 		{ TEXT("Douille"), EStyle::None },        // shell casings: drawn with the gun, not here
 		{ TEXT("FootPrint"), EStyle::None },
 		{ TEXT("FlashBang"), EStyle::FlashBang },

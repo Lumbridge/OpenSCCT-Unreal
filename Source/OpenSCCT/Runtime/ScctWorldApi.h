@@ -148,6 +148,7 @@ namespace EScctWorldMarkerKind
 	constexpr int32 VolumetricSensor = 8; // SVolumetricSensor. State: bLightState (0 broken, 1 off, 2 green, 3 red)
 	constexpr int32 LaserTrigger = 9;     // SLaserTrigger. State: 0 working, 1 beam switched off, 2 broken
 	constexpr int32 Disk = 10;            // SDisk, a Disk Hunt dog tag (hidden in the other modes)
+	constexpr int32 CamNetwork = 11;      // SCamNetwork, a camera of the merc ring. State: 1 while shocked out (flag Disabled); TimeLeft the seconds left
 }
 
 namespace EScctWorldMarkerFlags
@@ -159,6 +160,7 @@ namespace EScctWorldMarkerFlags
 	constexpr int32 Hidden = 16;     // the actor is hidden (not part of this game mode, or not shown yet)
 	constexpr int32 Secondary = 32;  // a secondary objective
 	constexpr int32 Gone = 64;       // not on this client now (out of network relevancy): the values are the last known
+	constexpr int32 Disabled = 128;  // out of order (a network camera shot with the sticky shocker)
 }
 
 /** One gameplay object a client marks in the world, as of the last tick. */

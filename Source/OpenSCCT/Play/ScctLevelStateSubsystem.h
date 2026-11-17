@@ -62,7 +62,10 @@ struct FScctWorldDebugApi;
  *                              breakable props nearest the camera, "emitters" fires every map Emitter's tag
  *                              (the waiting ones start, the running ones stop), "shootmovers" puts bullet marks on
  *                              the two movers nearest the camera and "shootprops" on the three breakable props
- *                              nearest it (to see marks follow a door and go with a pane).
+ *                              nearest it (to see marks follow a door and go with a pane), "camnetoff" puts every
+ *                              network camera out as a spy's shocker does (a spy must be playing), "modem" places a
+ *                              PS2 sabotage modem (at the map's PS2 target, else on the wall ahead of the camera
+ *                              with a stand-in mesh) and "modemhit" shoots every modem (its smoke and flash).
  *                              Example: -ScctLevelDo="movers@8;breaklights@14"
  *   -ScctMarkTest              the same as -ScctLevelDo="shootmovers@4;shootprops@4.5;movers@9;props@15"
  */
