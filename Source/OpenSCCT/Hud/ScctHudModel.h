@@ -24,6 +24,11 @@ enum class EScctHudLabel : uint8
 	EmfVision,
 	YouWin,
 	YouLose,
+	Finished,
+	SpectatorMode,
+	Watching,
+	RespawnIn,
+	NoRespawn,
 	Count,
 };
 
@@ -94,6 +99,7 @@ public:
 	float Spread = 0.0f;          // 0 tightest .. 1 widest, eased
 	float AmmoPulse = 0.0f;       // 1 when the clip changed
 	int32 ClipCapacity = 0;       // the fullest clip seen for the weapon held
+	int32 GasMaskCapacity = 0;    // the most air seen in the mask, in seconds: the gauge's full mark
 	float GadgetPulse = 0.0f;     // 1 when another gadget was selected
 	float PromptShown = 0.0f;     // 0..1 the interaction prompt
 	FString PromptText;           // kept while it fades out

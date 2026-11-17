@@ -10,9 +10,36 @@ using ScctHudElements::HudBox;
 
 namespace
 {
+	/** Deathmatch and Merc Deathmatch: the score column counts kills for both sides and there are no objectives. */
 	bool IsDeathmatch(const FScctHudRound& Round)
 	{
 		return Round.GameMode == 6 || Round.GameMode == 7;
+	}
+
+	/** Merc Deathmatch: everyone is on the mercs and plays for himself, to a kill limit, with unlimited lives. */
+	bool IsFreeForAll(const FScctHudRound& Round)
+	{
+		return Round.GameMode == 7;
+	}
+
+	/** The scoreboard row of the player at this machine, or null before it has arrived. */
+	const FScctHudScoreRow* LocalRow(const FScctHudModel& Model)
+	{
+		return Model.Scores.FindByPredicate([](const FScctHudScoreRow& Row) { return (Row.Flags & EScctHudScoreFlags::Local) != 0; });
+	}
+
+	/** The player with the most kills who is not the local one, or null when he plays alone. */
+	const FScctHudScoreRow* LeadingRival(const FScctHudModel& Model)
+	{
+		const FScctHudScoreRow* Best = nullptr;
+		for (const FScctHudScoreRow& Row : Model.Scores)
+		{
+			if ((Row.Flags & (EScctHudScoreFlags::Local | EScctHudScoreFlags::Spectator)) == 0 && (Best == nullptr || Row.Kills > Best->Kills))
+			{
+				Best = &Row;
+			}
+		}
+		return Best;
 	}
 
 	const FString& TeamName(const FScctHudModel& Model, int32 Team)
@@ -54,23 +81,39 @@ void ScctHudElements::PaintRound(FScctHudPainter& Painter, const FScctHudModel& 
 	const FLinearColor ClockColour = bLastMinute ? Fade(Danger(), 0.75f + 0.25f * FMath::Sin(Model.Clock * 5.0f)) : Text();
 	Painter.Text(FVector2f(CentreX, Y + 8.0f), ClockText(Seconds), Font(EWeight::Light, 21.0f, 40), ClockColour, EAlign::Centre);
 
-	// A team each side: its name in the team's colour and what it has left (lives, or the score in a deathmatch).
-	for (int32 Team = 0; Team < 2; ++Team)
+	// One block each side of the clock: a name in small capitals and a number; the player's own is underlined.
+	const auto Side = [&](bool bLeft, const FString& Name, const FString& Number, const FLinearColor& Colour, bool bOwn)
 	{
-		const bool bLeft = Team == 0;
-		const FLinearColor Colour = Accent(Team);
-		const FString Number = IsDeathmatch(Round) ? FString::FromInt(Round.TeamScore[Team]) : LivesText(Model, Round.TeamLives[Team], 1000);
 		const float Edge = bLeft ? X + 18.0f : X + Width - 18.0f;
 		const EAlign Align = bLeft ? EAlign::Left : EAlign::Right;
-		const FVector2f NameSize = Painter.Text(FVector2f(Edge, Y + 17.0f), TeamName(Model, Team).ToUpper(), Label(8.0f), Fade(Colour, 0.9f), Align);
+		const FVector2f NameSize = Painter.Text(FVector2f(Edge, Y + 17.0f), Name.ToUpper(), Label(8.0f), Fade(Colour, 0.9f), Align);
 		const float NumberX = bLeft ? Edge + NameSize.X + 10.0f : Edge - NameSize.X - 10.0f;
 		Painter.Text(FVector2f(NumberX, Y + 12.0f), Number, Font(EWeight::Bold, 13.0f), Text(), Align);
-
-		// The player's own team is underlined.
-		if (Team == Model.LocalTeam)
+		if (bOwn)
 		{
 			const float From = bLeft ? Edge : Edge - NameSize.X;
 			Painter.GlowLine(FVector2f(From, Y + Height - 1.0f), FVector2f(From + NameSize.X, Y + Height - 1.0f), Colour, 1.5f);
+		}
+	};
+
+	if (IsFreeForAll(Round))
+	{
+		// Everyone for himself: the player's kills on the left, the best of the others on the right.
+		if (const FScctHudScoreRow* Local = LocalRow(Model))
+		{
+			Side(true, Model.Text(Local->NameId), FString::FromInt(Local->Kills), Accent(Model.LocalTeam), true);
+		}
+		if (const FScctHudScoreRow* Rival = LeadingRival(Model))
+		{
+			Side(false, Model.Text(Rival->NameId), FString::FromInt(Rival->Kills), Accent(-1), false);
+		}
+	}
+	else
+	{
+		// A team each side with the lives it has left (a team deathmatch is lost when they run out, too).
+		for (int32 Team = 0; Team < 2; ++Team)
+		{
+			Side(Team == 0, TeamName(Model, Team), LivesText(Model, Round.TeamLives[Team], 1000), Accent(Team), Team == Model.LocalTeam);
 		}
 	}
 
@@ -259,15 +302,91 @@ void ScctHudElements::PaintMarkers(FScctHudPainter& Painter, const FScctHudModel
 	}
 }
 
+void ScctHudElements::PaintSpectator(FScctHudPainter& Painter, const FScctHudModel& Model)
+{
+	if (!Model.bHasState || !Model.bHasRound || (Model.State.Flags & EScctHudFlags::Spectating) == 0
+		|| (Model.State.Flags & (EScctHudFlags::HideHud | EScctHudFlags::GameEnded)) != 0)
+	{
+		return;
+	}
+
+	const FScctHudRound& Round = Model.Round;
+	const FVector2f Size = Painter.Size();
+	const float CentreX = Size.X * 0.5f;
+	constexpr float Width = 420.0f, Pad = 20.0f;
+	const FSlateFontInfo ValueFont = Font(EWeight::Regular, 12.0f);
+
+	// What the block says, top to bottom: whom the player watches, how long until he plays again (or that he
+	// will not), and the team's tip of the moment.
+	const FString& Watched = Model.Text(Round.WatchedNameId);
+	int32 WatchedTeam = -1;
+	for (const FScctHudScoreRow& Row : Model.Scores)
+	{
+		if (Round.WatchedNameId != 0 && Row.PlayerId == Round.WatchedPlayerId)
+		{
+			WatchedTeam = Row.Team;
+		}
+	}
+	const bool bCountdown = Round.RespawnIn > 0;
+	const bool bOut = !bCountdown && Round.NoRespawn != 0;
+	TArray<FString> TipLines;
+	const FSlateFontInfo TipFont = Font(EWeight::Light, 11.0f);
+	Painter.Wrap(Model.Text(Round.TipId), TipFont, Width - Pad * 2.0f, 5, TipLines);
+	const float TipLineHeight = Painter.Measure(TEXT("Ag"), TipFont).Y + 3.0f;
+
+	const int32 Rows = (Watched.IsEmpty() ? 0 : 1) + (bCountdown || bOut ? 1 : 0);
+	const float Height = 40.0f + Rows * 24.0f + (TipLines.Num() > 0 ? TipLines.Num() * TipLineHeight + 9.0f : 0.0f) + 6.0f;
+	const float X = CentreX - Width * 0.5f;
+	const float Y = Size.Y - Margin - 96.0f - Height;
+
+	Painter.Glass(HudBox(X, Y, Width, Height), Corner);
+	Painter.Text(FVector2f(CentreX, Y + 13.0f), Model.Label(EScctHudLabel::SpectatorMode).ToUpper(), Label(8.0f), TextDim(), EAlign::Centre);
+	Painter.Line(FVector2f(X + Pad, Y + 32.0f), FVector2f(X + Width - Pad, Y + 32.0f), Fade(Text(), 0.10f), 1.0f);
+
+	float RowY = Y + 40.0f;
+	if (!Watched.IsEmpty())
+	{
+		Painter.Text(FVector2f(X + Pad, RowY + 3.0f), Model.Label(EScctHudLabel::Watching).ToUpper(), Label(8.0f), TextDim());
+		Painter.Text(FVector2f(X + Width - Pad, RowY), Watched, ValueFont, Accent(WatchedTeam), EAlign::Right);
+		RowY += 24.0f;
+	}
+	if (bCountdown)
+	{
+		// The wait: the seconds, and a ring that closes as the last ten run out.
+		Painter.Text(FVector2f(X + Pad, RowY + 3.0f), Model.Label(EScctHudLabel::RespawnIn).ToUpper(), Label(8.0f), TextDim());
+		const FVector2f NumberSize = Painter.Text(FVector2f(X + Width - Pad, RowY), FString::FromInt(Round.RespawnIn), Font(EWeight::Bold, 12.0f), Text(), EAlign::Right);
+		const FVector2f Ring(X + Width - Pad - NumberSize.X - 16.0f, RowY + 9.0f);
+		Painter.Arc(Ring, 6.0f, 0.0f, 360.0f, Fade(Text(), 0.2f), 1.5f);
+		Painter.Arc(Ring, 6.0f, 0.0f, 360.0f * FMath::Clamp(Round.RespawnIn / 10.0f, 0.0f, 1.0f), Accent(Model.LocalTeam), 1.5f);
+		RowY += 24.0f;
+	}
+	else if (bOut)
+	{
+		Painter.Text(FVector2f(CentreX, RowY + 1.0f), Model.Label(EScctHudLabel::NoRespawn), ValueFont, Danger(), EAlign::Centre);
+		RowY += 24.0f;
+	}
+	if (TipLines.Num() > 0)
+	{
+		RowY += 6.0f;
+		for (const FString& Line : TipLines)
+		{
+			Painter.Text(FVector2f(CentreX, RowY), Line, TipFont, TextDim(), EAlign::Centre);
+			RowY += TipLineHeight;
+		}
+	}
+}
+
 void ScctHudElements::PaintBanner(FScctHudPainter& Painter, const FScctHudModel& Model)
 {
 	const FVector2f Size = Painter.Size();
 	const float CentreX = Size.X * 0.5f;
 
-	// The round is over: who won, in the game's own words, until the next match.
-	if (Model.EndAge >= 0.0f && Model.bHasRound && Model.Round.WinningTeam <= 1)
+	// The round is over: who won, in the game's own words, until the next match. A tutorial has no winner and
+	// ends on the original's plain "finished" line.
+	const bool bTutorial = Model.bHasState && Model.State.TutorialId != 0;
+	if (Model.EndAge >= 0.0f && Model.bHasRound && (bTutorial || (Model.Round.WinningTeam >= 0 && Model.Round.WinningTeam <= 1)))
 	{
-		const bool bWon = Model.Round.WinningTeam == Model.LocalTeam;
+		const bool bWon = bTutorial || Model.Round.WinningTeam == Model.LocalTeam;
 		const float In = EaseOut(Model.EndAge / 0.5f);
 		const float Y = Size.Y * 0.34f;
 		const FLinearColor Colour = bWon ? Accent(Model.LocalTeam) : Danger();
@@ -275,12 +394,15 @@ void ScctHudElements::PaintBanner(FScctHudPainter& Painter, const FScctHudModel&
 		Painter.Blur(HudBox(0.0f, Y, Size.X, 120.0f), 10.0f);
 		Painter.Gradient(HudBox(0.0f, Y, CentreX, 120.0f), FLinearColor(0.0f, 0.0f, 0.0f, 0.0f), FLinearColor(0.0f, 0.0f, 0.0f, 0.55f), false);
 		Painter.Gradient(HudBox(CentreX, Y, CentreX, 120.0f), FLinearColor(0.0f, 0.0f, 0.0f, 0.55f), FLinearColor(0.0f, 0.0f, 0.0f, 0.0f), false);
-		const FString Title = Model.Label(bWon ? EScctHudLabel::YouWin : EScctHudLabel::YouLose).ToUpper();
+		const FString Title = Model.Label(bTutorial ? EScctHudLabel::Finished : (bWon ? EScctHudLabel::YouWin : EScctHudLabel::YouLose)).ToUpper();
 		const FVector2f TitleSize = Painter.Text(FVector2f(CentreX, Y + 26.0f), Title, Font(EWeight::Light, 34.0f, 320), Colour, EAlign::Centre);
 		const float Reach = TitleSize.X * 0.5f + 28.0f;
 		Painter.GlowLine(FVector2f(CentreX - Reach - 160.0f * In, Y + 60.0f), FVector2f(CentreX - Reach, Y + 60.0f), Colour, 1.5f);
 		Painter.GlowLine(FVector2f(CentreX + Reach, Y + 60.0f), FVector2f(CentreX + Reach + 160.0f * In, Y + 60.0f), Colour, 1.5f);
-		Painter.Text(FVector2f(CentreX, Y + 84.0f), TeamName(Model, Model.Round.WinningTeam).ToUpper(), Label(9.0f), Fade(Accent(Model.Round.WinningTeam), 0.9f), EAlign::Centre);
+		if (!bTutorial)
+		{
+			Painter.Text(FVector2f(CentreX, Y + 84.0f), TeamName(Model, Model.Round.WinningTeam).ToUpper(), Label(9.0f), Fade(Accent(Model.Round.WinningTeam), 0.9f), EAlign::Centre);
+		}
 		Painter.SetOpacity(1.0f);
 		return;
 	}
@@ -315,18 +437,26 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 	const FVector2f Size = Painter.Size();
 	const FScctHudRound& Round = Model.Round;
 
-	// The rows of each team; spectators are not on the board.
-	TArray<const FScctHudScoreRow*, TInlineAllocator<16>> Teams[2];
+	// One table per team; in a free-for-all a single table of everyone, the most kills first. Spectators are not
+	// on the board.
+	const bool bFreeForAll = IsFreeForAll(Round);
+	const int32 TableCount = bFreeForAll ? 1 : 2;
+	TArray<const FScctHudScoreRow*, TInlineAllocator<16>> Tables[2];
 	for (const FScctHudScoreRow& Row : Model.Scores)
 	{
 		if ((Row.Flags & EScctHudScoreFlags::Spectator) == 0 && Row.Team >= 0 && Row.Team <= 1)
 		{
-			Teams[Row.Team].Add(&Row);
+			Tables[bFreeForAll ? 0 : Row.Team].Add(&Row);
 		}
 	}
-	const int32 MostRows = FMath::Max3(Teams[0].Num(), Teams[1].Num(), 1);
+	if (bFreeForAll)
+	{
+		Tables[0].StableSort([](const FScctHudScoreRow& A, const FScctHudScoreRow& B) { return A.Kills > B.Kills; });
+	}
+	const int32 MostRows = FMath::Max3(Tables[0].Num(), Tables[1].Num(), 1);
 
-	constexpr float Width = 1040.0f, Pad = 28.0f, ColumnGap = 36.0f, RowHeight = 30.0f;
+	constexpr float Pad = 28.0f, ColumnGap = 36.0f, RowHeight = 30.0f, ColumnWidth = 474.0f;
+	const float Width = Pad * 2.0f + TableCount * ColumnWidth + (TableCount - 1) * ColumnGap;
 	const float Height = 150.0f + MostRows * RowHeight;
 	const float X = (Size.X - Width) * 0.5f;
 	const float Y = (Size.Y - Height) * 0.5f - 20.0f + (1.0f - EaseOut(Shown)) * 14.0f;
@@ -343,20 +473,19 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 	Painter.Text(FVector2f(X + Width - Pad, Y + 19.0f), ClockText(Seconds), Font(EWeight::Light, 15.0f, 40), Text(), EAlign::Right);
 	Painter.Line(FVector2f(X + Pad, Y + 56.0f), FVector2f(X + Width - Pad, Y + 56.0f), Fade(Text(), 0.10f), 1.0f);
 
-	const float ColumnWidth = (Width - Pad * 2.0f - ColumnGap) * 0.5f;
-	for (int32 Team = 0; Team < 2; ++Team)
+	for (int32 Table = 0; Table < TableCount; ++Table)
 	{
-		const float Left = X + Pad + Team * (ColumnWidth + ColumnGap);
+		const int32 Team = bFreeForAll ? Model.LocalTeam : Table;
+		const float Left = X + Pad + Table * (ColumnWidth + ColumnGap);
 		const float Right = Left + ColumnWidth;
 		const FLinearColor Colour = Accent(Team);
 		float RowY = Y + 74.0f;
 
-		// The team: its name, and what it has left on the right.
+		// The team's name, and the lives it has left on the right (a free-for-all has none to count).
 		Painter.Text(FVector2f(Left, RowY), TeamName(Model, Team).ToUpper(), Font(EWeight::Bold, 12.0f, 220), Colour);
-		const FString Left0 = IsDeathmatch(Round) ? FString::FromInt(Round.TeamScore[Team]) : LivesText(Model, Round.TeamLives[Team], 1000);
-		const FVector2f NumberSize = Painter.Text(FVector2f(Right, RowY - 1.0f), Left0, Font(EWeight::Bold, 13.0f), Text(), EAlign::Right);
-		if (!IsDeathmatch(Round))
+		if (!bFreeForAll)
 		{
+			const FVector2f NumberSize = Painter.Text(FVector2f(Right, RowY - 1.0f), LivesText(Model, Round.TeamLives[Team], 1000), Font(EWeight::Bold, 13.0f), Text(), EAlign::Right);
 			Painter.Text(FVector2f(Right - NumberSize.X - 10.0f, RowY + 3.0f), Model.Label(EScctHudLabel::Lives).ToUpper(), Label(7.5f), TextDim(), EAlign::Right);
 		}
 		RowY += 26.0f;
@@ -364,12 +493,13 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 		RowY += 10.0f;
 
 		// Column headings, right-aligned over their numbers. The first is what the original's score column
-		// counts for that side: objectives for spies (kills in a deathmatch), kills for mercs.
+		// counts for that side: objectives for spies (kills in a deathmatch), kills for mercs. A free-for-all has
+		// unlimited lives, so that column is left out.
 		const bool bObjectives = Team == 0 && !IsDeathmatch(Round);
 		const FString Headings[] = {
 			Model.Label(bObjectives ? EScctHudLabel::Objectives : EScctHudLabel::Kills),
 			Model.Label(EScctHudLabel::Deaths),
-			Model.Label(EScctHudLabel::Lives),
+			bFreeForAll ? FString() : Model.Label(EScctHudLabel::Lives),
 			Model.Label(EScctHudLabel::Ping),
 		};
 		const float Columns[] = { Right - 246.0f, Right - 158.0f, Right - 82.0f, Right - 12.0f };
@@ -379,7 +509,7 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 		}
 		RowY += 20.0f;
 
-		for (const FScctHudScoreRow* Row : Teams[Team])
+		for (const FScctHudScoreRow* Row : Tables[Table])
 		{
 			const bool bLocal = (Row->Flags & EScctHudScoreFlags::Local) != 0;
 			const bool bOut = (Row->Flags & EScctHudScoreFlags::OutOfLives) != 0;
@@ -402,7 +532,10 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 			const FLinearColor NumberColour = bOut ? TextFaint() : Fade(Text(), 0.86f);
 			Painter.Text(FVector2f(Columns[0], RowY + 6.0f), FString::FromInt(Row->ObjOrKills), Font(EWeight::Bold, 11.5f), bOut ? TextFaint() : Text(), EAlign::Right);
 			Painter.Text(FVector2f(Columns[1], RowY + 6.0f), FString::FromInt(Row->Deaths), NumberFont, NumberColour, EAlign::Right);
-			Painter.Text(FVector2f(Columns[2], RowY + 6.0f), LivesText(Model, Row->Lives, 100), NumberFont, NumberColour, EAlign::Right);
+			if (!bFreeForAll)
+			{
+				Painter.Text(FVector2f(Columns[2], RowY + 6.0f), LivesText(Model, Row->Lives, 100), NumberFont, NumberColour, EAlign::Right);
+			}
 			const FLinearColor PingColour = Row->Ping > 150 ? Danger() : (Row->Ping > 80 ? Text() : Fade(Good(), 0.9f));
 			Painter.Text(FVector2f(Columns[3], RowY + 6.0f), FString::FromInt(Row->Ping), NumberFont, bOut ? TextFaint() : PingColour, EAlign::Right);
 			RowY += RowHeight;

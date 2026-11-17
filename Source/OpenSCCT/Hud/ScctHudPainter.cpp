@@ -56,9 +56,14 @@ void FScctHudPainter::Blur(const FBox2f& Box, float Strength, float Corner)
 		return;
 	}
 
+	// The blur pass draws with its viewport set to the box, and the renderer wants the scissor inside that
+	// viewport: without a clip of the same box the scissor is the whole window and D3D12 raises an ensure
+	// ("Scissor invalid with current Viewport"). SBackgroundBlur clips to itself for the same reason.
+	Elements.PushClip(FSlateClippingZone(Geometry.MakeChild(Box.GetSize(), FSlateLayoutTransform(Box.Min))));
 	FSlateDrawElement::MakePostProcessBlur(Elements, ++Layer, PaintGeometry,
 		FVector4f(static_cast<float>(KernelSize), ComputedStrength, static_cast<float>(Width), static_cast<float>(Height)),
 		Downsample, FVector4f(Corner * Scale));
+	Elements.PopClip();
 }
 
 void FScctHudPainter::Fill(const FBox2f& Box, const FLinearColor& Colour, float Corner, const FLinearColor& Outline, float OutlineWidth)

@@ -49,6 +49,9 @@ namespace ScctHudElements
 	/** Above the status block: the player's own state lines, zones and chat. */
 	void PaintLog(FScctHudPainter& Painter, const FScctHudModel& Model);
 
+	/** Bottom centre while dead or visiting: who is watched, the wait for the respawn and the team's tip. */
+	void PaintSpectator(FScctHudPainter& Painter, const FScctHudModel& Model);
+
 	/** The map's name as the round starts, and who won as it ends. */
 	void PaintBanner(FScctHudPainter& Painter, const FScctHudModel& Model);
 

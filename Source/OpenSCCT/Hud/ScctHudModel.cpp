@@ -29,6 +29,11 @@ namespace
 		{ TEXT("GUI"), TEXT("AlternateModeSettings"), TEXT("EMFVision.Caption") },
 		{ TEXT("Magma"), TEXT("A_YouWin"), TEXT("Text1") },
 		{ TEXT("Magma"), TEXT("A_YouLose"), TEXT("Text1") },
+		{ TEXT("Magma"), TEXT("A_Finish"), TEXT("Text1") },
+		{ TEXT("Magma"), TEXT("A_Spectator"), TEXT("textSpectator") },
+		{ TEXT("Magma"), TEXT("A_Spectator"), TEXT("textWatching") },
+		{ TEXT("Magma"), TEXT("A_Spectator"), TEXT("textRespawnInTime") },
+		{ TEXT("Magma"), TEXT("A_Spectator"), TEXT("textNoRespawnLeft") },
 	};
 	static_assert(UE_ARRAY_COUNT(LabelSources) == static_cast<int32>(EScctHudLabel::Count), "One source per label");
 
@@ -227,6 +232,9 @@ void FScctHudModel::Advance(float DeltaSeconds)
 		AmmoPulse = 1.0f;
 	}
 	AmmoPulse = FMath::Max(AmmoPulse - DeltaSeconds / 0.25f, 0.0f);
+
+	// The gas mask's gauge is full at the most air it has held.
+	GasMaskCapacity = FMath::Max(GasMaskCapacity, State.GasMaskAirSeconds);
 
 	if (State.SelectedGadget != LastSelectedGadget)
 	{

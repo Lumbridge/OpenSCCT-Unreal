@@ -126,6 +126,11 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 	{
 		Wash = FMath::Max(Wash, 0.10f + 0.06f * FMath::Sin(Model.Clock * 3.2f));
 	}
+	else if (bAlive && State.Health <= 0)
+	{
+		// Down: the pawn is still the player's until the simulation takes it away, and the red stays with it.
+		Wash = FMath::Max(Wash, 0.30f);
+	}
 	EdgeWash(Painter, Danger(), Wash);
 
 	// Looking through goggles or a gadget's camera: a thin frame in the side's colour.
@@ -371,7 +376,7 @@ void ScctHudElements::PaintStatus(FScctHudPainter& Painter, const FScctHudModel&
 	if (State.GasMaskAirSeconds >= 0)
 	{
 		const bool bLowAir = (State.EffectFlags & EScctHudEffectFlags::GasMaskLowAir) != 0;
-		Gauge(Painter, GaugeCentre, State.GasMaskAirSeconds / 30.0f, bLowAir ? Danger() : Good(), FString::FromInt(State.GasMaskAirSeconds));
+		Gauge(Painter, GaugeCentre, static_cast<float>(State.GasMaskAirSeconds) / FMath::Max(Model.GasMaskCapacity, 1), bLowAir ? Danger() : Good(), FString::FromInt(State.GasMaskAirSeconds));
 		NextGauge();
 	}
 	if (State.BinocularMode == 2)

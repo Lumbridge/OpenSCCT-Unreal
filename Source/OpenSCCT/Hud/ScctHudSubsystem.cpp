@@ -76,6 +76,13 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UScctHudSubsystem::Deinitialize()
 {
+	if (UScctSessionSubsystem* Session = GetWorld() != nullptr ? GetWorld()->GetSubsystem<UScctSessionSubsystem>() : nullptr)
+	{
+		Session->OnSessionChanged.RemoveAll(this);
+		Session->OnMatchStopped.RemoveAll(this);
+		Session->OnFrame.RemoveAll(this);
+		Session->OnBeforeTicks.RemoveAll(this);
+	}
 	HideWidget();
 	Super::Deinitialize();
 }
@@ -96,7 +103,7 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	}
 	if (NewSessionId != 0 && Api == nullptr)
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("HUD: the bridge has no HUD table; nothing will be drawn"));
+		UE_LOG(LogOpenSCCT, Error, TEXT("HUD: the bridge has no HUD table (its reason is in the log above); the match plays without a HUD and without goggles"));
 	}
 }
 
@@ -320,13 +327,14 @@ void UScctHudSubsystem::LogSnapshot(float DeltaSeconds)
 	const FScctHudRound& R = M.Round;
 	const FString Selected = M.Gadgets.IsValidIndex(S.SelectedGadget) ? M.Text(M.Gadgets[S.SelectedGadget].NameId) : FString();
 	UE_LOG(LogOpenSCCT, Log,
-		TEXT("HUD t=%.1f valid %d side %d flags 0x%x fx 0x%x health %d lives %d energy %.0f/%d vision %d | weapon '%s' clip %d ammo %d mode '%s' spread %.2f | gadgets %d selected %d '%s' | prompt '%s' location '%s' | round valid %d mode %d left %d s team lives %d:%d score %d:%d objectives left %d of %d | %d rows, %d objective lines, %d markers, feed %d headlines %d log %d"),
+		TEXT("HUD t=%.1f valid %d side %d flags 0x%x fx 0x%x health %d lives %d energy %.0f/%d vision %d | weapon '%s' clip %d ammo %d mode '%s' spread %.2f | gadgets %d selected %d '%s' | prompt '%s' location '%s' | round valid %d mode %d left %d s team lives %d:%d score %d:%d objectives left %d of %d | %d rows, %d objective lines, %d markers, feed %d headlines %d log %d | hits %d | watching '%s' respawn in %d none left %d"),
 		S.TimeSeconds, M.bHasState ? 1 : 0, S.Side, S.Flags, S.EffectFlags, S.Health, S.Lives, S.EnergyLevel, S.EnergyLevelMax, S.VisionMode,
 		*M.Text(S.WeaponNameId), S.ClipAmmo, S.Ammo, *M.Text(S.FireModeNameId), S.Accuracy,
 		M.Gadgets.Num(), S.SelectedGadget, *Selected,
 		*M.Text(S.UsePromptId), *M.Text(S.LocationNameId),
 		M.bHasRound ? 1 : 0, R.GameMode, R.RemainingSeconds, R.TeamLives[0], R.TeamLives[1], R.TeamScore[0], R.TeamScore[1], R.ObjectivesLeft, R.NumObjectives,
-		M.Scores.Num(), M.ObjectiveLines.Num(), M.Markers.Num(), M.Feed.Num(), M.Headlines.Num(), M.Log.Num());
+		M.Scores.Num(), M.ObjectiveLines.Num(), M.Markers.Num(), M.Feed.Num(), M.Headlines.Num(), M.Log.Num(),
+		S.DamageCount, *M.Text(R.WatchedNameId), R.RespawnIn, R.NoRespawn);
 
 	// The scoreboard's rows while it is up (and once near the start), for the same check.
 	constexpr float FirstRows = 2.0f;
