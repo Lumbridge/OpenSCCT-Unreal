@@ -149,6 +149,12 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 				: Wanted;
 			Materials[Index]->SetScalarParameterValue(GainParameter, NightGain);
 		}
+		else if (Index == NightIndex)
+		{
+			// Goggles off: the next time they come on the gain starts from that picture, not from wherever the
+			// last use left it (another room).
+			NightGain = 0.0f;
+		}
 		Volume->Settings.WeightedBlendables.Array[Index].Weight = Amount > 0.0f ? 1.0f : 0.0f;
 		bAnyShown |= Amount > 0.0f;
 	}

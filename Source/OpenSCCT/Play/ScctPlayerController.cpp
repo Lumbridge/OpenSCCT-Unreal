@@ -29,12 +29,9 @@ namespace
 	constexpr float JumpFrameSeconds = 0.1f;
 
 	/**
-	 * The horizontal angle of a 4:3 picture that is VerticalFov high, degrees. The view pawn's camera takes its
-	 * field of view in that form (the simulation's own) and keeps the vertical angle on any screen.
-	 */
-	/**
 	 * The radius of the sphere round the camera that holds its near plane at any rotation, plus one unit: the
-	 * distance from the eye to a corner of the near plane.
+	 * distance from the eye to a corner of the near plane. At the 3 cm plane this is under the bridge's own least
+	 * clearance (SpyPerspectiveCamera.DefaultClearance, 8), which then holds; it counts if the plane is moved out.
 	 */
 	float NearPlaneClearance(float VerticalFov, float Aspect)
 	{
@@ -44,6 +41,10 @@ namespace
 		return FMath::Sqrt(Near * Near + HalfWidth * HalfWidth + HalfHeight * HalfHeight) + 1.0f;
 	}
 
+	/**
+	 * The horizontal angle of a 4:3 picture that is VerticalFov high, degrees. The view pawn's camera takes its
+	 * field of view in that form (the simulation's own) and keeps the vertical angle on any screen.
+	 */
 	float FourByThreeFov(float VerticalFov)
 	{
 		const float HalfVertical = FMath::DegreesToRadians(VerticalFov * 0.5f);
