@@ -19,4 +19,10 @@
     'boot'          = @{ Timeout = 120; Tags = @('needs-content', 'fixture'); Fixture = 'Content/OpenSCCT/Test/TestBox.umap' }
     'testbox'       = @{ Timeout = 180; Tags = @('needs-content', 'fixture'); Fixture = 'Content/OpenSCCT/Test/TestBox.umap' }
     'play-exit'     = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    # The frame-time tests (Test/ScctFrameTests.cpp); each writes Saved/Test/frames-<name>.csv. Vertical sync is only
+    # judged with -Windowed.
+    'frame-rate'    = @{ Map = 'AquaE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
+    'smooth'        = @{ Map = 'AquaE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
+    'play-hitch'    = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'first-use'     = @{ Map = 'AquaE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
 }

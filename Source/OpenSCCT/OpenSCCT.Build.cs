@@ -30,6 +30,8 @@ public class OpenSCCT : ModuleRules
 			"Json",
 			"Projects",
 			"RenderCore",
+			// The frame recorder of the named tests reads the GPU frame time and the pipeline cache's counters (Test/ScctFrameRecorder).
+			"RHI",
 			"Slate",
 			"SlateCore",
 			// The game's sounds are loose Ogg Vorbis and PCM files decoded at run time (Play/ScctSoundData).
