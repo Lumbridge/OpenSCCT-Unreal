@@ -1307,7 +1307,8 @@ void SScctTable::Rebuild()
 				.Text(FText::FromString(Row.Cells.IsValidIndex(Index) ? Row.Cells[Index] : FString()))
 				.Font(Index == 0 ? ScctUi::Body() : ScctUi::Small())
 				.ColorAndOpacity(Colour)
-				.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+				// A long server or map name takes a second line rather than being cut off.
+				.AutoWrapText(true)
 			];
 			if (Column.Fill > 0.0f)
 			{
@@ -1325,7 +1326,7 @@ void SScctTable::Rebuild()
 			.OnFocused(FSimpleDelegate::CreateLambda([this, Id] { Select(Id); }))
 			.OnActivated(FSimpleDelegate::CreateLambda([this, Id] { Select(Id); OnActivated.ExecuteIfBound(Id); }))
 			[
-				SNew(SBox).HeightOverride(40.0f)[ Line ]
+				SNew(SBox).MinDesiredHeight(40.0f).Padding(FMargin(0.0f, 4.0f))[ Line ]
 			];
 		RowBox->AddSlot().AutoHeight()[ Widget ];
 		if (Id == SelectedId || !FocusTarget.IsValid())

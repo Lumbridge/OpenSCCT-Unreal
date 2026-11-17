@@ -45,6 +45,11 @@ namespace
 		FSlateApplication& Slate = FSlateApplication::Get();
 		const FKeyEvent Event(Key, FModifierKeysState(), 0, false, 0, 0);
 		Slate.ProcessKeyDownEvent(Event);
+		if (Key == EKeys::BackSpace)
+		{
+			// A text field rubs out on the character a real Backspace also sends.
+			Slate.ProcessKeyCharEvent(FCharacterEvent(TEXT('\b'), FModifierKeysState(), 0, false));
+		}
 		Slate.ProcessKeyUpEvent(Event);
 	}
 }

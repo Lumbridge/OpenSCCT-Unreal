@@ -72,8 +72,8 @@ namespace
 					+ SVerticalBox::Slot().AutoHeight()
 					[
 						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, 10.0f, 0.0f)[ ScctUi::Card(ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), 0, TEXT("Spy")) + TEXT("s"), SAssignNew(SpyList, SVerticalBox), FMargin(18.0f, 16.0f)) ]
-						+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(10.0f, 0.0f, 0.0f, 0.0f)[ ScctUi::Card(ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), 1, TEXT("Mercenary")) + TEXT("ies"), SAssignNew(MercList, SVerticalBox), FMargin(18.0f, 16.0f)) ]
+						+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, 10.0f, 0.0f)[ ScctUi::Card(TEXT("Spies"), SAssignNew(SpyList, SVerticalBox), FMargin(18.0f, 16.0f)) ]
+						+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(10.0f, 0.0f, 0.0f, 0.0f)[ ScctUi::Card(TEXT("Mercenaries"), SAssignNew(MercList, SVerticalBox), FMargin(18.0f, 16.0f)) ]
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 10.0f, 0.0f, 0.0f)
 					[
@@ -118,8 +118,13 @@ namespace
 					[
 						SNew(SVerticalBox)
 						+ SVerticalBox::Slot().AutoHeight()[ SAssignNew(MapCard, SBox) ]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 0.0f)[ SAssignNew(SetupCard, SBox) ]
-						+ SVerticalBox::Slot().FillHeight(1.0f)
+						// The setup scrolls in what is left, so the buttons under it are always on screen.
+						+ SVerticalBox::Slot().FillHeight(1.0f).Padding(0.0f, 14.0f, 0.0f, 14.0f)
+						[
+							SNew(SScrollBox)
+							.ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll)
+							+ SScrollBox::Slot()[ SAssignNew(SetupCard, SBox) ]
+						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
 						[
 							SNew(STextBlock).Font(ScctUi::H2()).ColorAndOpacity(ScctUi::Accent()).Justification(ETextJustify::Center)
@@ -168,7 +173,12 @@ namespace
 								{
 									UScctOnlineSubsystem* V = Weak.Get();
 									if (V == nullptr) { return; }
-									if (V->HasFlag(EScctOnlineStatusFlags::CanLaunch)) { V->Launch(); }
+									if (V->HasFlag(EScctOnlineStatusFlags::CanLaunch))
+									{
+										// The server starts a match only when everyone is ready, the one launching it too.
+										if (!V->HasFlag(EScctOnlineStatusFlags::LocalReady)) { V->SetReady(true); }
+										V->Launch();
+									}
 									else { V->SetReady(!V->HasFlag(EScctOnlineStatusFlags::LocalReady)); }
 								}))
 							]
@@ -332,9 +342,10 @@ namespace
 							SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(bReady ? FLinearColor(0.35f, 0.9f, 0.55f) : FLinearColor(1.0f, 1.0f, 1.0f, 0.18f))
 						]
 					]
-					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 10.0f, 0.0f)
+					// The rank, when the player has one (a guest and a bot have none, and leave no gap).
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, Rank.IsEmpty() ? 0.0f : 10.0f, 0.0f)
 					[
-						SNew(SBox).WidthOverride(46.0f)
+						SNew(SBox).WidthOverride(46.0f).Visibility(Rank.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
 						[
 							ScctUi::Label(Rank, ScctUi::Accent(), 11.0f)
 						]
@@ -372,10 +383,10 @@ namespace
 			const FString ModeName = Menu != nullptr ? Menu->GetModeName(LobbyModeIndex(Status.Mode)) : Visit->GetModeName();
 			return ScctUi::Card(TEXT("Next match"),
 				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Picture(Menu != nullptr ? Menu->GetMapPicture(Map, Status.LocalTeam == 1) : nullptr, 472.0f, 210.0f) ]
+				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Picture(Menu != nullptr ? Menu->GetMapPicture(Map, Status.LocalTeam == 1) : nullptr, 472.0f, 170.0f) ]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 2.0f)
 				[
-					SNew(STextBlock).Font(ScctUi::H1()).ColorAndOpacity(ScctHudStyle::Text()).Text(FText::FromString(Menu != nullptr ? Menu->GetMapTitle(Map) : Map))
+					SNew(STextBlock).Font(ScctUi::H2()).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true).Text(FText::FromString(Menu != nullptr ? Menu->GetMapTitle(Map) : Map))
 				]
 				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Label(ModeName.ToUpper(), ScctUi::Accent(), 12.0f) ]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)
@@ -425,9 +436,16 @@ namespace
 			];
 			const auto Option = [&Rows, Weak](const FString& Caption, const TCHAR* Description, const TCHAR* Name, TArray<int32> Values, TFunction<FString(int32)> Show)
 			{
+				const FString Key = Name;
+				// A value the server was given some other way (its config, the console) is offered too, in its place.
+				const int32 Current = Weak.IsValid() ? Weak->GetSetupOption(*Key, Values[0]) : Values[0];
+				if (!Values.Contains(Current))
+				{
+					Values.Add(Current);
+					Values.Sort();
+				}
 				TArray<FString> Shown;
 				for (const int32 Value : Values) { Shown.Add(Show(Value)); }
-				const FString Key = Name;
 				Rows->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 3.0f)
 				[
 					SNew(SScctStepper)

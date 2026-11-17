@@ -569,7 +569,8 @@ public:
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
 	virtual FNavigationReply OnNavigation(const FGeometry& MyGeometry, const FNavigationEvent& InNavigationEvent) override;
-	virtual bool SupportsKeyboardFocus() const override { return true; }
+	/** Only while a dialog is up: closed, it is never where the arrows take the focus. */
+	virtual bool SupportsKeyboardFocus() const override { return bOpen; }
 
 	void Show(const FScctDialog& Dialog);
 	bool IsOpen() const { return bOpen; }
