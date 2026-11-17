@@ -30,6 +30,8 @@ public class OpenSCCT : ModuleRules
 			// A sound wave class of our own (Play/ScctSoundWave) links against the audio proxy interfaces.
 			"AudioExtensions",
 			"Json",
+			// The loading page is shown by the engine's movie player while a level loads (Menu/ScctLoadingSubsystem).
+			"MoviePlayer",
 			"Projects",
 			"RenderCore",
 			"Slate",
