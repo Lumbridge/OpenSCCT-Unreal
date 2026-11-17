@@ -27,6 +27,11 @@ public class OpenSCCT : ModuleRules
 			"AssetRegistry",
 			// A sound wave class of our own (Play/ScctSoundWave) links against the audio proxy interfaces.
 			"AudioExtensions",
+			// Voice chat's microphone (Voice/ScctVoiceCapture): the AudioCapture plugin's device back ends, and the
+			// lock-free ring its samples cross threads in.
+			"AudioCapture",
+			"AudioCaptureCore",
+			"SignalProcessing",
 			"Json",
 			"Projects",
 			"RenderCore",
