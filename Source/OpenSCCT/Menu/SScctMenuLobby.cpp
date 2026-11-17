@@ -22,12 +22,29 @@
 //   -ScctLobbyApplyAfter=S        seconds (on the clock) before APPLY is pressed, counted from when enough players are in
 //                                 the lobby (default 4)
 //   -ScctLobbyApplyWhen=N         how many players that is (default 1: the host alone)
+//   -ScctLobbyShow=<what>[,...]   open a lobby dialog unattended: scoreboard (each new last-round scoreboard, once it is
+//                                 in), briefing (once per run), plan (the briefing on its second page)
+//   -ScctLobbyRecord=1|0          set "Record my matches" once the lobby is reached, as the switch would
+//
+// Extras for every player (Menu/SScctLobbyExtras.h, the Godot lobby's LobbyRoomScreen.Scoreboard, BriefingPanel and
+// RankIcons): under the map, the last game's map and outcome with VIEW SCOREBOARD (the round's final scoreboard, both
+// sides and a player's breakdown) once this visit has played a round; BRIEFING (the setup's map and mode for the
+// player's side, the level picture and the plan); a rank badge in its emblem colour on each ranked player's row, its
+// words in a tooltip; and the personal "Record my matches" switch with the server's answer under it (the same option
+// as the Online tab's "Record online matches", which applies from the next round). The loadout summary and the
+// strategic map are the row above (Menu/ScctOverlayPages.h). Godot's Cosmetics button opens the Armoury, which this
+// client does not have, so it is not offered.
 
 #include "Menu/ScctMenuPage.h"
 #include "Menu/ScctOverlayPages.h"
 
 #include "Framework/Application/SlateApplication.h"
+#include "Demo/ScctDemoSubsystem.h"
+#include "Engine/GameInstance.h"
+#include "Menu/SScctLobbyExtras.h"
 #include "Menu/SScctSessionOptions.h"
+#include "Online/ScctLobbyExtras.h"
+#include "Settings/ScctSettings.h"
 #include "Menu/ScctBotNavPrompt.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Misc/CommandLine.h"
@@ -76,16 +93,6 @@ namespace
 		return 0;
 	}
 
-	FString LobbyRank(int32 Packed)
-	{
-		if (Packed == 0)
-		{
-			return FString();
-		}
-		const int32 Level = Packed & 0xFF;
-		const int32 Prestige = (Packed >> 8) & 0xFF;
-		return Prestige > 0 ? FString::Printf(TEXT("P%d · %d"), Prestige, Level) : FString::Printf(TEXT("%d"), Level);
-	}
 
 	const FScctOnlinePlayer* LobbyLocalPlayer(const UScctOnlineSubsystem& Visit)
 	{
@@ -189,6 +196,11 @@ namespace
 								]
 							], FMargin(18.0f, 16.0f))
 					]
+					// The personal demo recording (the Godot lobby's PersonalRecordDemos) and what the server says of it.
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)
+					[
+						BuildRecording()
+					]
 				]
 				// The map, the setup and the buttons.
 				+ SHorizontalBox::Slot().AutoWidth()
@@ -252,6 +264,11 @@ namespace
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
 						[
 							ScctOverlayPages::MakeRow(Weak, [this] { OpenGear(); }, [this] { OpenStrategicMap(); })
+						]
+						// BRIEFING and, once a round was played, VIEW SCOREBOARD (Menu/SScctLobbyExtras.h).
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
+						[
+							BuildExtrasRow()
 						]
 						+ SVerticalBox::Slot().AutoHeight()
 						[
@@ -330,6 +347,8 @@ namespace
 				]
 				// The Equipment page and the strategic map open over the lobby.
 				+ SOverlay::Slot()[ SAssignNew(PageLayer, SOverlay) ]
+				// The match scoreboard and the briefing open over the lobby too.
+				+ SOverlay::Slot()[ SAssignNew(ExtrasLayer, SOverlay) ]
 			];
 			DefaultFocus = ReadyButton;
 			ReadUnattended();
@@ -365,8 +384,8 @@ namespace
 		/** Escape or B: closes Session Options (its draft kept), else the same question as Leave (Stay has the focus). */
 		virtual bool HandleBack() override
 		{
-			// A page over the lobby goes back first.
-			if (ScctOverlayPages::Back(PageLayer))
+			// A dialog or a page over the lobby goes back first.
+			if (ScctLobbyPanels::Back(ExtrasLayer) || ScctOverlayPages::Back(PageLayer))
 			{
 				return true;
 			}
@@ -406,7 +425,7 @@ namespace
 
 		virtual bool HandleShortcut(const FKey& Key) override
 		{
-			if (!bOptionsOpen && (Key == EKeys::T || Key == EKeys::Enter))
+			if (!bOptionsOpen && !ScctLobbyPanels::IsOpen(ExtrasLayer) && (Key == EKeys::T || Key == EKeys::Enter))
 			{
 				FSlateApplication::Get().SetKeyboardFocus(ChatBox, EFocusCause::SetDirectly);
 				return true;
@@ -446,6 +465,106 @@ namespace
 
 		/** The Equipment page and the strategic map, over the lobby. */
 		TSharedPtr<SOverlay> PageLayer;
+
+		/** The match scoreboard and the briefing, over the lobby. */
+		TSharedPtr<SOverlay> ExtrasLayer;
+
+		// ---- extras for every player ----------------------------------------------------------------------------
+
+		/** BRIEFING, and VIEW SCOREBOARD while this visit has a last round's scoreboard. */
+		TSharedRef<SWidget> BuildExtrasRow()
+		{
+			return SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 10.0f, 0.0f)
+				[
+					SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
+					.Text_Lambda([this] { return FText::FromString(LastGame.IsEmpty() ? FString(TEXT("No game played on this server yet.")) : LastGame); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)
+				[
+					SNew(SScctButton)
+					.Visibility_Lambda([this] { return LastGame.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+					.Text(FText::FromString(TEXT("VIEW SCOREBOARD")))
+					.Description(FText::FromString(TEXT("The last game's scoreboard: both sides' tables and each player's round totals.")))
+					.OnPressed(FSimpleDelegate::CreateLambda([this] { ScctLobbyPanels::OpenScoreboard(ExtrasLayer); }))
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(SScctButton)
+					.Text(FText::FromString(ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Briefing"), TEXT("Briefing")).ToUpper()))
+					.Description(FText::FromString(TEXT("The map and mode of the next match for your side: the main objective, the plan of the map and its legend.")))
+					.OnPressed(FSimpleDelegate::CreateLambda([this] { ScctLobbyPanels::OpenBriefing(ExtrasLayer); }))
+				];
+		}
+
+		/** "Record my matches" and the server's answer (the personal demo; the Online tab's "Record online matches"). */
+		TSharedRef<SWidget> BuildRecording()
+		{
+			const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Host.Online;
+			return SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SScctToggle)
+					.Label(FText::FromString(TEXT("Record my matches")))
+					.Description(FText::FromString(TEXT("Save the replay of each round you play here to Saved/Demos on this computer. Applies from the next round; stay connected after a round until its download finishes.")))
+					.Get([] { return UScctDemoSubsystem::SavesOnline(); })
+					.Set([](bool bOn) { SetRecording(bOn); })
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 4.0f, 0.0f, 0.0f)
+				[
+					SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
+					.Text_Lambda([Weak]
+					{
+						const UGameInstance* Game = Weak.IsValid() ? Weak->GetGameInstance() : nullptr;
+						const UScctDemoSubsystem* Demos = Game != nullptr ? Game->GetSubsystem<UScctDemoSubsystem>() : nullptr;
+						return FText::FromString(Demos != nullptr ? Demos->GetOnlineStatus() : FString());
+					})
+				];
+		}
+
+		static void SetRecording(bool bOn)
+		{
+			UScctDemoSubsystem::RegisterOptions();
+			FScctSettings::SetBool(UScctDemoSubsystem::RecordOnlineSetting, bOn);
+			FScctSettings::Save();
+			UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby turns personal match recording %s"), bOn ? TEXT("on") : TEXT("off"));
+		}
+
+		/** The lobby's "Last game" lines and, once per new scoreboard, its rows in the log. */
+		void RefreshLastGame()
+		{
+			int32 Sequence = 0;
+			const bool bHas = ScctLobbyExtras::HasLastScoreboard(&Sequence);
+			LastGame = bHas ? ScctLobbyExtras::LastScoreboardSummary().Replace(TEXT("\n"), TEXT("  ·  ")) : FString();
+			if (bHas && Sequence != SeenScoreboard)
+			{
+				SeenScoreboard = Sequence;
+				UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby has the last game's scoreboard: %s"), *LastGame);
+			}
+		}
+
+		/** One log line with every player's rank whenever a rank or the players change (the badges the rows show). */
+		void LogRanks(const UScctOnlineSubsystem& Visit)
+		{
+			TArray<FString> Parts;
+			for (const FScctOnlinePlayer& Player : Visit.GetPlayers())
+			{
+				const FString Badge = ScctLobbyExtras::RankBadge(Player.Rank);
+				Parts.Add(FString::Printf(TEXT("%s=%s"), Player.Name, Badge.IsEmpty() ? TEXT("none") : *FString::Printf(TEXT("%s (%s, #%s)"), *Badge,
+					*ScctLobbyExtras::RankWords(Player.Rank), *ScctLobbyExtras::RankColour(Player.Rank).ToFColor(true).ToHex().Left(6))));
+			}
+			const FString Line = FString::Join(Parts, TEXT("; "));
+			if (Line != LoggedRanks)
+			{
+				LoggedRanks = Line;
+				UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby ranks: %s"), *Line);
+			}
+		}
+
+		/** The lobby's "Last game" lines, empty before the visit's first round. */
+		FString LastGame;
+		int32 SeenScoreboard = 0;
+		FString LoggedRanks;
 
 		// The chat: the other team's chat line in the match HUD is separate (Play/ScctHudWidget).
 		void SendChat(const FText& Text, ETextCommit::Type Commit)
@@ -718,6 +837,23 @@ namespace
 					PendingManage = ManageSwitch;
 				}
 			}
+			FString Show;
+			if (FParse::Value(CommandLine, TEXT("ScctLobbyShow="), Show, false))
+			{
+				TArray<FString> Parts;
+				Show.ParseIntoArray(Parts, TEXT(","), true);
+				for (const FString& Part : Parts)
+				{
+					LobbyShowScoreboard() |= Part.Equals(TEXT("scoreboard"), ESearchCase::IgnoreCase);
+					LobbyShowBriefing() |= Part.Equals(TEXT("briefing"), ESearchCase::IgnoreCase) || Part.Equals(TEXT("plan"), ESearchCase::IgnoreCase);
+					LobbyShowPlan() |= Part.Equals(TEXT("plan"), ESearchCase::IgnoreCase);
+				}
+			}
+			FString Record;
+			if (FParse::Value(CommandLine, TEXT("ScctLobbyRecord="), Record, false) && !Record.IsEmpty())
+			{
+				PendingRecord = Record.ToBool() ? 1 : 0;
+			}
 			if (FParse::Value(CommandLine, TEXT("ScctLobbyApply="), PendingApply, false) && !PendingApply.IsEmpty())
 			{
 				ApplyAfter = 4.0f;
@@ -732,6 +868,36 @@ namespace
 			if (Visit == nullptr)
 			{
 				return;
+			}
+			// -ScctLobbyRecord: the switch, once the visit's lobby is reached.
+			if (PendingRecord >= 0 && Visit->GetStatus().LocalId >= 0)
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("Menu: -ScctLobbyRecord sets Record my matches %s"), PendingRecord != 0 ? TEXT("on") : TEXT("off"));
+				SetRecording(PendingRecord != 0);
+				PendingRecord = -1;
+			}
+			// -ScctLobbyShow: each new last-round scoreboard once it is in; the briefing once per run, when the setup is known.
+			if (!ScctLobbyPanels::IsOpen(ExtrasLayer) && (!Host.Dialogs.IsValid() || !Host.Dialogs->IsOpen()))
+			{
+				int32 Sequence = 0;
+				if (LobbyShowScoreboard() && ScctLobbyExtras::HasLastScoreboard(&Sequence) && Sequence != LobbyShownScoreboard())
+				{
+					LobbyShownScoreboard() = Sequence;
+					UE_LOG(LogOpenSCCT, Log, TEXT("Menu: -ScctLobbyShow opens the match scoreboard"));
+					ScctLobbyPanels::OpenScoreboard(ExtrasLayer);
+				}
+				else if (LobbyShowBriefing() && !Visit->GetSetupMap().IsEmpty() && Visit->GetStatus().LocalId >= 0)
+				{
+					LobbyShowBriefing() = false;
+					UE_LOG(LogOpenSCCT, Log, TEXT("Menu: -ScctLobbyShow opens the briefing%s"), LobbyShowPlan() ? TEXT(" on its second page") : TEXT(""));
+					if (ScctLobbyPanels::OpenBriefing(ExtrasLayer) && LobbyShowPlan())
+					{
+						if (IScctDriven* Flip = IScctDriven::Find(TEXT("NEXT")))
+						{
+							Flip->DrivenPress();
+						}
+					}
+				}
 			}
 			// The moderation question for a named player once he is in and this player may moderate.
 			if (!PendingManage.IsEmpty() && Visit->CanModerate() && Host.Dialogs.IsValid() && !Host.Dialogs->IsOpen())
@@ -779,6 +945,8 @@ namespace
 			SeenRevision = Visit->GetRevision();
 			SeenChat = Visit->GetChat().Num();
 			const FScctOnlineStatus& Status = Visit->GetStatus();
+			RefreshLastGame();
+			LogRanks(*Visit);
 
 			// The sides.
 			SpyList->ClearChildren();
@@ -863,7 +1031,8 @@ namespace
 			if (bBot) { Badges += TEXT("BOT  "); }
 			if (Player.MapState == 2) { Badges += TEXT("NO MAP  "); }
 			else if (Player.MapState == 3) { Badges += TEXT("OTHER MAP VERSION  "); }
-			const FString Rank = LobbyRank(Player.Rank);
+			const FString Rank = ScctLobbyExtras::RankBadge(Player.Rank);
+			const FLinearColor RankColour = ScctLobbyExtras::RankColour(Player.Rank);
 			return SNew(SBorder)
 				.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 				.BorderBackgroundColor(bLocal ? ScctUi::Accent().CopyWithNewOpacity(0.16f) : FLinearColor(1.0f, 1.0f, 1.0f, 0.04f))
@@ -880,9 +1049,19 @@ namespace
 					// The rank, when the player has one (a guest and a bot have none, and leave no gap).
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, Rank.IsEmpty() ? 0.0f : 10.0f, 0.0f)
 					[
-						SNew(SBox).WidthOverride(46.0f).Visibility(Rank.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+						// RankIcons' emblem as a badge in its colour (the emblem art is drawn by the Godot client's own
+						// code, not in the converted content); the rank's words in the tooltip.
+						SNew(SBox).MinDesiredWidth(46.0f).Visibility(Rank.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+						.ToolTipText(FText::FromString(ScctLobbyExtras::RankWords(Player.Rank)))
 						[
-							ScctUi::Label(Rank, ScctUi::Accent(), 11.0f)
+							SNew(SBorder)
+							.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+							.BorderBackgroundColor(RankColour.CopyWithNewOpacity(0.18f))
+							.Padding(FMargin(6.0f, 2.0f))
+							.HAlign(HAlign_Center)
+							[
+								ScctUi::Label(Rank, RankColour, 11.0f)
+							]
 						]
 					]
 					+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
@@ -1133,7 +1312,12 @@ namespace
 		/** Said in the chat line's hint about the last send (a team line without a side). */
 		FString ChatNotice;
 
-		// Unattended.
+		// Unattended. What -ScctLobbyShow still opens is kept for the run: the page is built again after each round.
+		static bool& LobbyShowScoreboard() { static bool bValue = false; return bValue; }
+		static bool& LobbyShowBriefing() { static bool bValue = false; return bValue; }
+		static bool& LobbyShowPlan() { static bool bValue = false; return bValue; }
+		static int32& LobbyShownScoreboard() { static int32 Value = 0; return Value; }
+		int32 PendingRecord = -1;
 		bool bOpenOptionsAtStart = false;
 		FString PendingManage;
 		FString PendingManageAction;

@@ -37,5 +37,9 @@
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\InGameMenuModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
     <!-- Create Session's rules (Online/HostSetupModel.cs): the Godot page's model, which has no Godot in it either. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\CreateSessionModel.cs" Link="Linked\UI\CreateSessionModel.cs" />
+    <!-- The lobby's extras (Online/LobbyExtras.cs): the round scoreboard's columns and words and the map briefing's
+         pages, both Godot-free models of the Godot pages. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\UI\RoundScoreboardModel.cs" Link="Linked\UI\RoundScoreboardModel.cs" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\UI\BriefingPages.cs" Link="Linked\UI\BriefingPages.cs" />
   </ItemGroup>
 </Project>
