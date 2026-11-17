@@ -25,7 +25,7 @@ using ScctVideoOptions::SetCVar;
 
 namespace
 {
-	const TCHAR* const Page = TEXT("Performance");
+	const TCHAR* const PerformancePage = TEXT("Performance");
 
 	const FName VSyncKey(TEXT("Performance.VSync"));
 	const FName MaxFpsKey(TEXT("Performance.MaxFps"));
@@ -106,10 +106,10 @@ namespace
 void ScctPerformanceSettings::Register()
 {
 	int32 Order = 0;
-	FScctSettings::Register(Option(TEXT("Performance.VSync"), Page, TEXT("Frame pacing"), TEXT("Vertical sync"),
+	FScctSettings::Register(Option(TEXT("Performance.VSync"), PerformancePage, TEXT("Frame pacing"), TEXT("Vertical sync"),
 		TEXT("Waits for the screen's refresh before showing a frame: no tearing, a little more input lag."), EScctSettingType::Bool, TEXT("false"), Order++));
 	{
-		FScctSettingDesc Desc = Option(TEXT("Performance.MaxFps"), Page, TEXT("Frame pacing"), TEXT("Max FPS"),
+		FScctSettingDesc Desc = Option(TEXT("Performance.MaxFps"), PerformancePage, TEXT("Frame pacing"), TEXT("Max FPS"),
 			TEXT("The frame rate limit in menus, the lobby and matches. All the way left matches the refresh rate of the monitor the game is on; all the way right is unlimited. Vertical sync can still limit it."),
 			EScctSettingType::Int, FString::FromInt(FollowMonitor), Order++);
 		Desc.Min = FollowMonitor;
@@ -124,14 +124,14 @@ void ScctPerformanceSettings::Register()
 		FScctSettings::Register(Desc);
 	}
 	{
-		FScctSettingDesc Desc = Option(TEXT("Performance.LowLatency"), Page, TEXT("Latency"), TEXT("Reduce input lag"),
+		FScctSettingDesc Desc = Option(TEXT("Performance.LowLatency"), PerformancePage, TEXT("Latency"), TEXT("Reduce input lag"),
 			TEXT("How far the game may prepare frames ahead of the screen. On waits for the previous frame to be handed to the graphics card; Ultra waits for it to be shown, the least lag at some cost in frame rate."),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		Desc.Choices = ScctVideoOptions::Texts({ TEXT("Off"), TEXT("On"), TEXT("Ultra") });
 		FScctSettings::Register(Desc);
 	}
 	{
-		FScctSettingDesc Desc = Option(TEXT("Performance.Renderer"), Page, TEXT("Renderer"), TEXT("Renderer (applies after restart)"),
+		FScctSettingDesc Desc = Option(TEXT("Performance.Renderer"), PerformancePage, TEXT("Renderer"), TEXT("Renderer (applies after restart)"),
 			*FString::Printf(TEXT("The graphics interface the game draws with. Takes effect the next time the game starts; this run uses %s."), *FApp::GetGraphicsRHI()),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		Desc.Choices = VulkanAvailable() ? ScctVideoOptions::Texts({ TEXT("DirectX 12"), TEXT("Vulkan") }) : ScctVideoOptions::Texts({ TEXT("DirectX 12") });

@@ -9,7 +9,7 @@ using ScctVideoOptions::SetCVar;
 
 namespace
 {
-	const TCHAR* const Page = TEXT("Graphics");
+	const TCHAR* const GraphicsPage = TEXT("Graphics");
 
 	const FName QualityKey(TEXT("Graphics.Quality"));
 	const FName RenderScaleKey(TEXT("Graphics.RenderScale"));
@@ -58,7 +58,7 @@ void ScctGraphicsSettings::Register()
 {
 	int32 Order = 0;
 	{
-		FScctSettingDesc Desc = Option(TEXT("Graphics.Quality"), Page, TEXT("Quality"), TEXT("Overall quality"),
+		FScctSettingDesc Desc = Option(TEXT("Graphics.Quality"), GraphicsPage, TEXT("Quality"), TEXT("Overall quality"),
 			TEXT("Sets every group below that is on \"Same as overall\". Lower is faster."), EScctSettingType::Choice, TEXT("3"), Order++);
 		for (const TCHAR* Level : Levels)
 		{
@@ -68,7 +68,7 @@ void ScctGraphicsSettings::Register()
 	}
 	for (const FGroup& Group : Groups)
 	{
-		FScctSettingDesc Desc = Option(Group.Key, Page, TEXT("Quality"), Group.Label, Group.Tooltip, EScctSettingType::Choice, TEXT("0"), Order++);
+		FScctSettingDesc Desc = Option(Group.Key, GraphicsPage, TEXT("Quality"), Group.Label, Group.Tooltip, EScctSettingType::Choice, TEXT("0"), Order++);
 		Desc.Choices.Add(FText::FromString(TEXT("Same as overall")));
 		for (const TCHAR* Level : Levels)
 		{
@@ -78,7 +78,7 @@ void ScctGraphicsSettings::Register()
 	}
 
 	{
-		FScctSettingDesc Desc = Option(TEXT("Graphics.RenderScale"), Page, TEXT("Image"), TEXT("Render scale"),
+		FScctSettingDesc Desc = Option(TEXT("Graphics.RenderScale"), GraphicsPage, TEXT("Image"), TEXT("Render scale"),
 			TEXT("The 3D picture's resolution against the screen's. Lower is faster and softer; the HUD and menus stay sharp."),
 			EScctSettingType::Float, TEXT("1.0"), Order++);
 		Desc.Min = 0.5f;
@@ -88,7 +88,7 @@ void ScctGraphicsSettings::Register()
 		FScctSettings::Register(Desc);
 	}
 	{
-		FScctSettingDesc Desc = Option(TEXT("Graphics.AutoScaleFps"), Page, TEXT("Image"), TEXT("Automatic render scale"),
+		FScctSettingDesc Desc = Option(TEXT("Graphics.AutoScaleFps"), GraphicsPage, TEXT("Image"), TEXT("Automatic render scale"),
 			TEXT("Lowers the 3D resolution, down to 50%, while the frame rate is under the chosen rate, and raises it again when there is room. Render scale is the highest it goes."),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		for (const int32 Target : AutoScaleTargets)
@@ -98,19 +98,19 @@ void ScctGraphicsSettings::Register()
 		FScctSettings::Register(Desc);
 	}
 	{
-		FScctSettingDesc Desc = Option(TEXT("Graphics.AntiAliasing"), Page, TEXT("Image"), TEXT("Anti-aliasing"),
+		FScctSettingDesc Desc = Option(TEXT("Graphics.AntiAliasing"), GraphicsPage, TEXT("Image"), TEXT("Anti-aliasing"),
 			TEXT("TSR is the sharpest and also upscales a lower render scale. TAA is cheaper, FXAA cheaper still and blurrier; Off leaves jagged edges."),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		Desc.Choices = ScctVideoOptions::Texts({ TEXT("TSR"), TEXT("TAA"), TEXT("FXAA"), TEXT("Off") });
 		FScctSettings::Register(Desc);
 	}
 	{
-		FScctSettingDesc Desc = Option(TEXT("Graphics.TextureFiltering"), Page, TEXT("Image"), TEXT("Texture filtering"),
+		FScctSettingDesc Desc = Option(TEXT("Graphics.TextureFiltering"), GraphicsPage, TEXT("Image"), TEXT("Texture filtering"),
 			TEXT("Keeps floors and walls seen at a slant sharp."), EScctSettingType::Choice, TEXT("3"), Order++);
 		Desc.Choices = ScctVideoOptions::Texts({ TEXT("Trilinear (off)"), TEXT("2x anisotropic"), TEXT("4x anisotropic"), TEXT("8x anisotropic"), TEXT("16x anisotropic") });
 		FScctSettings::Register(Desc);
 	}
-	FScctSettings::Register(Option(TEXT("Graphics.AmbientOcclusion"), Page, TEXT("Image"), TEXT("Ambient occlusion"),
+	FScctSettings::Register(Option(TEXT("Graphics.AmbientOcclusion"), GraphicsPage, TEXT("Image"), TEXT("Ambient occlusion"),
 		TEXT("Contact shading in corners and under objects (screen-space and Lumen's short-range occlusion)."), EScctSettingType::Bool, TEXT("true"), Order++));
 }
 

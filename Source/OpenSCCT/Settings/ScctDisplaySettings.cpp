@@ -30,7 +30,7 @@ namespace Ui = ScctMenuStyle;
 
 namespace
 {
-	const TCHAR* const Page = TEXT("Display");
+	const TCHAR* const DisplayPage = TEXT("Display");
 
 	/** Where the registry keeps its values (Settings/ScctSettings.cpp). */
 	const TCHAR* const SettingsSection = TEXT("OpenSCCT.Settings");
@@ -53,7 +53,7 @@ namespace
 	 * Display.Resolution's sizes after "Desktop" (Godot's list, OptionsMenu.Resolutions). A fixed list, so a stored
 	 * choice means the same size on every monitor; a size the monitor cannot take is fitted when it is applied.
 	 */
-	const FIntPoint Sizes[] = { { 1280, 720 }, { 1366, 768 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 }, { 1024, 768 }, { 1600, 1200 } };
+	const FIntPoint WindowSizes[] = { { 1280, 720 }, { 1366, 768 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 }, { 1024, 768 }, { 1600, 1200 } };
 
 	enum class EPlace : int32 { Centred, TopLeft, Fill };
 
@@ -133,7 +133,7 @@ namespace
 		const int32 Resolution = FScctSettings::GetInt(ResolutionKey);
 		const FMonitor Monitor = FindMonitor(FScctSettings::GetInt(MonitorKey));
 		return FString::Printf(TEXT("%s, %s on monitor %d"), ModeNames[Mode],
-			Mode == 0 || Resolution <= 0 || Resolution > UE_ARRAY_COUNT(Sizes) ? *FString::Printf(TEXT("desktop size %s"), *SizeText(Monitor.Desktop)) : *SizeText(Sizes[Resolution - 1]),
+			Mode == 0 || Resolution <= 0 || Resolution > UE_ARRAY_COUNT(WindowSizes) ? *FString::Printf(TEXT("desktop size %s"), *SizeText(Monitor.Desktop)) : *SizeText(WindowSizes[Resolution - 1]),
 			Monitor.Index + 1);
 	}
 }
@@ -175,7 +175,7 @@ void UScctDisplaySettings::RegisterDisplay()
 {
 	int32 Order = 0;
 	{
-		FScctSettingDesc Desc = Option(TEXT("Display.Mode"), Page, TEXT("Screen"), TEXT("Display mode"),
+		FScctSettingDesc Desc = Option(TEXT("Display.Mode"), DisplayPage, TEXT("Screen"), TEXT("Display mode"),
 			TEXT("Borderless covers the monitor with a window, so switching away is quick. Fullscreen takes the monitor over and can use another resolution. A change asks to be kept."),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		for (const TCHAR* Name : ModeNames)
@@ -188,7 +188,7 @@ void UScctDisplaySettings::RegisterDisplay()
 		FDisplayMetrics Metrics;
 		FDisplayMetrics::RebuildDisplayMetrics(Metrics);
 		int32 Primary = 0;
-		FScctSettingDesc Desc = Option(TEXT("Display.Monitor"), Page, TEXT("Screen"), TEXT("Monitor"),
+		FScctSettingDesc Desc = Option(TEXT("Display.Monitor"), DisplayPage, TEXT("Screen"), TEXT("Monitor"),
 			TEXT("The monitor the game is shown on."), EScctSettingType::Choice, TEXT("0"), Order++);
 		for (int32 Index = 0; Index < Metrics.MonitorInfo.Num(); ++Index)
 		{
@@ -205,29 +205,29 @@ void UScctDisplaySettings::RegisterDisplay()
 		FScctSettings::Register(Desc);
 	}
 	{
-		FScctSettingDesc Desc = Option(TEXT("Display.Resolution"), Page, TEXT("Screen"), TEXT("Resolution"),
+		FScctSettingDesc Desc = Option(TEXT("Display.Resolution"), DisplayPage, TEXT("Screen"), TEXT("Resolution"),
 			TEXT("The window's size, or the fullscreen mode's (the nearest one the monitor offers). A borderless window is always the monitor's size. A change asks to be kept."),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		Desc.Choices.Add(FText::FromString(TEXT("Desktop")));
-		for (const FIntPoint& Size : Sizes)
+		for (const FIntPoint& Size : WindowSizes)
 		{
 			Desc.Choices.Add(FText::FromString(SizeText(Size)));
 		}
 		FScctSettings::Register(Desc);
 	}
 	{
-		FScctSettingDesc Desc = Option(TEXT("Display.WindowPosition"), Page, TEXT("Screen"), TEXT("Window position (windowed)"),
+		FScctSettingDesc Desc = Option(TEXT("Display.WindowPosition"), DisplayPage, TEXT("Screen"), TEXT("Window position (windowed)"),
 			TEXT("Where the window goes on its monitor. Fill the screen sizes it to the monitor's work area, above the taskbar."),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		Desc.Choices = ScctVideoOptions::Texts({ TEXT("Centred"), TEXT("Top left"), TEXT("Fill the screen") });
 		FScctSettings::Register(Desc);
 	}
 
-	FScctSettings::Register(Option(TEXT("Display.Widescreen"), Page, TEXT("Widescreen layout"), TEXT("Wider field of view on widescreen"),
+	FScctSettings::Register(Option(TEXT("Display.Widescreen"), DisplayPage, TEXT("Widescreen layout"), TEXT("Wider field of view on widescreen"),
 		TEXT("Keeps the original 4:3 picture's height and shows more at the sides; off stretches the 4:3 picture across the screen."),
 		EScctSettingType::Bool, TEXT("true"), Order++));
 	{
-		FScctSettingDesc Desc = Option(TEXT("Display.MercFovCap"), Page, TEXT("Widescreen layout"), TEXT("Mercenary field of view cap"),
+		FScctSettingDesc Desc = Option(TEXT("Display.MercFovCap"), DisplayPage, TEXT("Widescreen layout"), TEXT("Mercenary field of view cap"),
 			TEXT("The widest the mercenary's horizontal field of view may get on a wide screen, in degrees."),
 			EScctSettingType::Float, TEXT("112"), Order++);
 		Desc.Min = 95.0f;
@@ -238,7 +238,7 @@ void UScctDisplaySettings::RegisterDisplay()
 	}
 
 	{
-		FScctSettingDesc Desc = Option(TEXT("Display.Brightness"), Page, TEXT("Picture"), TEXT("Brightness"),
+		FScctSettingDesc Desc = Option(TEXT("Display.Brightness"), DisplayPage, TEXT("Picture"), TEXT("Brightness"),
 			TEXT("The brightness of the 3D picture (its display gamma). Set it against the test pattern: CALIBRATE BRIGHTNESS above."),
 			EScctSettingType::Float, TEXT("1.0"), Order++);
 		Desc.Min = 0.5f;
@@ -450,7 +450,7 @@ namespace
 		const FIntPoint WorkSize(Monitor.Work.Right - Monitor.Work.Left, Monitor.Work.Bottom - Monitor.Work.Top);
 
 		FIntPoint& Size = Plan.Size;
-		Size = Choice > 0 && Choice <= UE_ARRAY_COUNT(Sizes) ? Sizes[Choice - 1] : Monitor.Desktop;
+		Size = Choice > 0 && Choice <= UE_ARRAY_COUNT(WindowSizes) ? WindowSizes[Choice - 1] : Monitor.Desktop;
 		if (Plan.Mode == EWindowMode::WindowedFullscreen)
 		{
 			Size = Monitor.Desktop;

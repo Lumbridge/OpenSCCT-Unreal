@@ -25,7 +25,7 @@ namespace
 	constexpr int32 MaxAreas = 64;
 
 	/** The world a console command without one means: the first game world that plays. */
-	UWorld* GameWorld(UWorld* World)
+	UWorld* GrabAreaGameWorld(UWorld* World)
 	{
 		if (World != nullptr && World->IsGameWorld())
 		{
@@ -46,7 +46,7 @@ namespace
 
 	void GrabAreaCommand(const TArray<FString>& Args, UWorld* World, FOutputDevice& Output)
 	{
-		UWorld* Game = GameWorld(World);
+		UWorld* Game = GrabAreaGameWorld(World);
 		UScctGrabAreaSubsystem* Subsystem = Game != nullptr ? Game->GetSubsystem<UScctGrabAreaSubsystem>() : nullptr;
 		if (Subsystem == nullptr)
 		{

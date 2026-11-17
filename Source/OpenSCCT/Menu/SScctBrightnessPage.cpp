@@ -76,12 +76,12 @@ namespace
 			const float Half = Side * 0.28f;
 			for (int32 Index = 0; Index < 3; ++Index)
 			{
-				const FVector2D Corner(Gap + Index * (Side + Gap), (Size.Y - Side) * 0.5f);
-				const FVector2D Centre = Corner + FVector2D(Side * 0.5f);
-				FSlateDrawElement::MakeBox(Out, LayerId, Geometry.ToPaintGeometry(FVector2f(Side, Side), FSlateLayoutTransform(FVector2f(Corner))),
+				const FVector2D SwatchCorner(Gap + Index * (Side + Gap), (Size.Y - Side) * 0.5f);
+				const FVector2D Centre = SwatchCorner + FVector2D(Side * 0.5f);
+				FSlateDrawElement::MakeBox(Out, LayerId, Geometry.ToPaintGeometry(FVector2f(Side, Side), FSlateLayoutTransform(FVector2f(SwatchCorner))),
 					White, ESlateDrawEffect::None, Grey(Levels[Index].Frame));
 				FSlateDrawElement::MakeBox(Out, LayerId + 1,
-					Geometry.ToPaintGeometry(FVector2f(Side - Frame * 2.0f, Side - Frame * 2.0f), FSlateLayoutTransform(FVector2f(Corner + FVector2D(Frame)))),
+					Geometry.ToPaintGeometry(FVector2f(Side - Frame * 2.0f, Side - Frame * 2.0f), FSlateLayoutTransform(FVector2f(SwatchCorner + FVector2D(Frame)))),
 					White, ESlateDrawEffect::None, Grey(Levels[Index].Fill));
 
 				const FLinearColor Mark = Grey(Levels[Index].Mark);

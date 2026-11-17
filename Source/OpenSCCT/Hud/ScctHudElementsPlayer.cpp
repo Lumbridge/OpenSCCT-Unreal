@@ -27,7 +27,7 @@ namespace
 	}
 
 	/** Corner brackets just inside the edge of the picture: the frame of a vision mode or a gadget's camera. */
-	void Brackets(FScctHudPainter& Painter, float Inset, float Length, const FLinearColor& Colour)
+	void PlayerBrackets(FScctHudPainter& Painter, float Inset, float Length, const FLinearColor& Colour)
 	{
 		const FVector2f Size = Painter.Size();
 		const float Left = Inset, Top = Inset, Right = Size.X - Inset, Bottom = Size.Y - Inset;
@@ -160,7 +160,7 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 	const FLinearColor Accent = ScctHudStyle::Accent(State.Side);
 	if (Model.VisionShown > 0.01f)
 	{
-		Brackets(Painter, 16.0f, 22.0f, Fade(Accent, 0.55f * Model.VisionShown));
+		PlayerBrackets(Painter, 16.0f, 22.0f, Fade(Accent, 0.55f * Model.VisionShown));
 	}
 }
 
