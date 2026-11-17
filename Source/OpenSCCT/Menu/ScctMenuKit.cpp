@@ -518,7 +518,7 @@ void SScctButton::Construct(const FArguments& InArgs)
 	const bool bMenu = Look == EScctButtonLook::Menu;
 	const bool bSmall = Look == EScctButtonLook::Chip;
 	const FSlateFontInfo Font = bMenu ? ScctHudStyle::Font(EWeight::Light, 25.0f, 90) : ScctUi::Caps(bSmall ? 12.0f : 13.0f);
-	const FMargin Padding = bMenu ? FMargin(24.0f, 11.0f, 28.0f, 11.0f) : bSmall ? FMargin(14.0f, 8.0f) : Look == EScctButtonLook::Tab ? FMargin(20.0f, 12.0f) : FMargin(24.0f, 13.0f);
+	const FMargin Padding = bMenu ? FMargin(24.0f, InArgs._Compact ? 6.0f : 11.0f, 28.0f, InArgs._Compact ? 6.0f : 11.0f) : bSmall ? FMargin(14.0f, 8.0f) : Look == EScctButtonLook::Tab ? FMargin(20.0f, 12.0f) : FMargin(24.0f, 13.0f);
 
 	// The caption's colour follows what the button is doing.
 	const TAttribute<FSlateColor> TextColour = TAttribute<FSlateColor>::CreateLambda([this]

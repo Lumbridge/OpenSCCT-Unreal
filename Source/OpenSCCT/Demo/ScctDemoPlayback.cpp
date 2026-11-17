@@ -150,11 +150,12 @@ bool UScctDemoPlayback::Watch(const FString& Path)
 	}
 
 	OpenedMap = Map;
+	// LevelOf can be a URL (the runtime level with ?ScctMap=), so whether the map can be drawn is IsPlayable's answer.
 	const FString Level = UScctOnlineSubsystem::LevelOf(OpenedMap);
-	if (!FPackageName::DoesPackageExist(Level))
+	if (!UScctOnlineSubsystem::IsPlayable(OpenedMap))
 	{
 		Table->Stop();
-		Fail(FString::Printf(TEXT("The demo is on %s, which has not been imported into this game yet."), *OpenedMap));
+		Fail(FString::Printf(TEXT("The demo is on %s, which this game has neither imported nor can build from render files."), *OpenedMap));
 		return false;
 	}
 
