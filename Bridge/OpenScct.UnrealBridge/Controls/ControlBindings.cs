@@ -115,6 +115,7 @@ public static class ControlActions
         new("hidehud", "Interface", "Toggle HUD visibility", "HideHud"),
         new("freecam", "Interface", "Toggle cinematic free camera", "FreeCam"),
         new("menu", "Interface", "Open game menu", "ShowMenu"),
+        new("grabarea", "Interface", "Practice: show grab areas", "GrabArea"),
     ];
 
     private static readonly Dictionary<string, List<KeyAction>> s_resolved = Build();

@@ -63,7 +63,7 @@ values back.
 An imported level starts a local match with bots when it opens. Game URL options (all optional, see
 `Source/OpenSCCT/Play/ScctGameMode.h`): `?Side=spy|merc`, `?Bots=3`, `?Mode=Story`,
 `?Difficulty=easy|normal|hard|expert`, `?Sidearms=1`, `?Rifles=1`, `?Practice=1` (no time limit, unlimited
-lives), `?Name=Sam`, `?ScctMap=AquaE`. The converted content folder comes from `-ScctContent=<folder>`, else
+lives, unlimited gear and the practice aids such as `scct.GrabArea`), `?Name=Sam`, `?ScctMap=AquaE`. The converted content folder comes from `-ScctContent=<folder>`, else
 the `SVM_CONTENT` variable, else `ContentRoot` under `[OpenSCCT]` in the game ini.
 
 `Tools\Run-Offscreen.ps1 -Map AquaE -Content <folder> -Shots 3` plays a level with no window, saves
