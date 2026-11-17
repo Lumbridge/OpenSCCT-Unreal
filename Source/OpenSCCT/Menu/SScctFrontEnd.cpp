@@ -183,6 +183,12 @@ void SScctFrontEnd::ShowPageNamed(const FString& Name)
 	{
 		ShowPage(EPage::Servers);
 	}
+	else if (Name.Equals(TEXT("start"), ESearchCase::IgnoreCase))
+	{
+		// Unattended: the offline page with its choices as they stand, and its START pressed.
+		ShowPage(EPage::Offline);
+		StartOffline();
+	}
 }
 
 void SScctFrontEnd::ShowPage(EPage NewPage)

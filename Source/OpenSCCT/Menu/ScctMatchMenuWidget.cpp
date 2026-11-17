@@ -25,6 +25,7 @@ public:
 		/** The level presents an online round (it was opened with the online option). */
 		SLATE_ARGUMENT(bool, bOnlineLevel)
 		SLATE_EVENT(FSimpleDelegate, OnResume)
+		SLATE_EVENT(FSimpleDelegate, OnLeave)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs)
@@ -32,7 +33,7 @@ public:
 		Online = InArgs._Online;
 		bOnlineLevel = InArgs._bOnlineLevel;
 		OnResume = InArgs._OnResume;
-		const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Online;
+		OnLeave = InArgs._OnLeave;
 		const bool bOnline = bOnlineLevel;
 
 		ChildSlot
@@ -80,22 +81,7 @@ public:
 						]
 						+ SVerticalBox::Slot().AutoHeight()
 						[
-							Ui::Button(Ui::ToText(bOnline ? TEXT("LEAVE THE SERVER") : TEXT("MAIN MENU")), FOnClicked::CreateLambda([Weak, bOnline]
-							{
-								if (UScctOnlineSubsystem* Visit = Weak.Get())
-								{
-									if (bOnline)
-									{
-										// The front end opens by itself once the visit is over.
-										Visit->Leave();
-									}
-									else
-									{
-										Visit->OpenFrontEnd();
-									}
-								}
-								return FReply::Handled();
-							}))
+							Ui::Button(Ui::ToText(bOnline ? TEXT("LEAVE THE SERVER") : TEXT("MAIN MENU")), FOnClicked::CreateLambda([this] { OnLeave.ExecuteIfBound(); return FReply::Handled(); }))
 						])
 				]
 			]
@@ -195,6 +181,7 @@ private:
 
 	TWeakObjectPtr<UScctOnlineSubsystem> Online;
 	FSimpleDelegate OnResume;
+	FSimpleDelegate OnLeave;
 	TSharedPtr<SVerticalBox> ResultRows;
 	bool bOnlineLevel = false;
 	bool bResultsShown = false;
@@ -211,7 +198,8 @@ TSharedRef<SWidget> UScctMatchMenuWidget::RebuildWidget()
 		{
 			SetMenuOpen(false);
 			OnResumed.ExecuteIfBound();
-		}));
+		}))
+		.OnLeave(FSimpleDelegate::CreateUObject(this, &UScctMatchMenuWidget::LeaveMatch));
 	Overlay->bMenuOpen = bMenuOpen;
 	return Overlay.ToSharedRef();
 }
@@ -220,6 +208,25 @@ void UScctMatchMenuWidget::ReleaseSlateResources(bool bReleaseChildren)
 {
 	Super::ReleaseSlateResources(bReleaseChildren);
 	Overlay.Reset();
+}
+
+void UScctMatchMenuWidget::LeaveMatch()
+{
+	UScctOnlineSubsystem* Visit = UScctOnlineSubsystem::Get(this);
+	const UWorld* World = GetWorld();
+	if (Visit == nullptr || World == nullptr)
+	{
+		return;
+	}
+	if (World->URL.HasOption(UScctOnlineSubsystem::OnlineOption))
+	{
+		// The front end opens by itself once the visit is over.
+		Visit->Leave();
+	}
+	else
+	{
+		Visit->OpenFrontEnd();
+	}
 }
 
 void UScctMatchMenuWidget::SetMenuOpen(bool bOpen)

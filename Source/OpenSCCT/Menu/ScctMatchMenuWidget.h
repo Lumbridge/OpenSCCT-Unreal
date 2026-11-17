@@ -20,6 +20,9 @@ public:
 	void SetMenuOpen(bool bOpen);
 	bool IsMenuOpen() const { return bMenuOpen; }
 
+	/** The menu's last button: leaves the server (online round) or goes back to the main menu (local match). */
+	void LeaveMatch();
+
 	/** Raised when the menu's own "resume" closes it. */
 	FSimpleDelegate OnResumed;
 

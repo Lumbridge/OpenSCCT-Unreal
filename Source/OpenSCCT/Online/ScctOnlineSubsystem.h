@@ -48,7 +48,7 @@ DECLARE_MULTICAST_DELEGATE(FScctOnlineChanged);
  *   -ScctLeaveAfter=S         leave the server S seconds after the first round started
  *   -ScctChat=<text>          say this once in the lobby
  *   -ScctListServers          ask the master for its server list once and log it
- *   -ScctOnlineLog=S          seconds between the status lines in the log (default 2; 0 turns them off)
+ *   -ScctOnlineLog=S          seconds between the status lines in the log (default: 2 with -ScctJoin, else off)
  */
 UCLASS()
 class OPENSCCT_API UScctOnlineSubsystem : public UGameInstanceSubsystem
@@ -74,7 +74,8 @@ public:
 
 	/**
 	 * Joins "host", "host:port" or "[v6]:port". PreferredTeam: 0 spies, 1 mercs, 255 watch, -1 the smaller side.
-	 * A local match that is running is stopped first. False when the visit could not start (GetNotice says why).
+	 * Meant to be called from the front end; a local match still running in the open level is ended when the
+	 * first round arrives. False when the visit could not start (GetNotice says why).
 	 */
 	bool Join(const FString& Address, const FString& Password = FString(), int32 PreferredTeam = -1);
 
@@ -175,6 +176,9 @@ private:
 	void DrainChat();
 	void HandleStateChange(EScctOnlineState Old, EScctOnlineState New);
 
+	/** Clears the pending travel once the world it was asked in has been replaced. */
+	void ForgetFinishedTravel();
+
 	/** Opens the level the visit needs when it is not the one that is open. */
 	void FollowLevel();
 
@@ -235,6 +239,6 @@ private:
 	float LeaveAfter = 0.0f;
 	float MatchSeconds = -1.0f;
 	bool bLeftOnTimer = false;
-	float LogEvery = 2.0f;
+	float LogEvery = 0.0f;
 	float LogTimer = 0.0f;
 };

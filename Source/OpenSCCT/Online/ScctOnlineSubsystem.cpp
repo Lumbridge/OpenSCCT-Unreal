@@ -110,6 +110,8 @@ void UScctOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	bAutoWalk = FParse::Param(CommandLine, TEXT("ScctAutoWalk"));
 	FParse::Value(CommandLine, TEXT("ScctLeaveAfter="), LeaveAfter);
 	FParse::Value(CommandLine, TEXT("ScctChat="), AutoChat, false);
+	// The status lines are for unattended runs; a player's log is not filled with them.
+	LogEvery = AutoJoin.IsEmpty() ? 0.0f : 2.0f;
 	FParse::Value(CommandLine, TEXT("ScctOnlineLog="), LogEvery);
 
 	LastTickSeconds = FPlatformTime::Seconds();
@@ -421,6 +423,10 @@ void UScctOnlineSubsystem::TickVisit()
 	const float DeltaSeconds = static_cast<float>(FMath::Clamp(Now - LastTickSeconds, 0.0, 1.0));
 	LastTickSeconds = Now;
 
+	// Before anything that needs the bridge: a game that never went online travels too (main menu from a local
+	// match), and its next travel must not find this one still pending.
+	ForgetFinishedTravel();
+
 	if (Api == nullptr)
 	{
 		// The bridge is brought up by the first thing that needs it (a join, the server list, the map list), not
@@ -597,24 +603,25 @@ void UScctOnlineSubsystem::OpenFrontEnd()
 	}
 }
 
+void UScctOnlineSubsystem::ForgetFinishedTravel()
+{
+	// The travel that was asked for happens at the start of the engine's next frame; it is over once another
+	// world is open and playing (the level asked for or, if it could not be loaded, the engine's default).
+	const UWorld* World = GetGameInstance()->GetWorld();
+	if (!PendingLevel.IsEmpty() && World != nullptr && World->HasBegunPlay() && PendingFrom.Get() != World)
+	{
+		PendingLevel.Reset();
+		TravelDelay = 0.0f;
+	}
+}
+
 void UScctOnlineSubsystem::FollowLevel()
 {
 	const UWorld* World = GetGameInstance()->GetWorld();
-	if (World == nullptr || !World->HasBegunPlay())
+	if (World == nullptr || !World->HasBegunPlay() || !PendingLevel.IsEmpty())
 	{
+		// Nothing new is asked while a travel is pending.
 		return;
-	}
-
-	if (!PendingLevel.IsEmpty())
-	{
-		// The travel that was asked for happens at the start of the engine's next frame; nothing new is asked
-		// until another world is open (the level asked for or, if it could not be loaded, the engine's default).
-		if (PendingFrom.Get() == World)
-		{
-			return;
-		}
-		PendingLevel.Reset();
-		TravelDelay = 0.0f;
 	}
 
 	const FString Current = LevelPackageOf(*World);

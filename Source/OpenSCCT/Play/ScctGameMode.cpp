@@ -1,10 +1,12 @@
 #include "Play/ScctGameMode.h"
 
 #include "Blueprint/UserWidget.h"
+#include "Engine/GameViewportClient.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Menu/ScctMatchMenuWidget.h"
+#include "Misc/App.h"
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
@@ -76,6 +78,16 @@ void AScctGameMode::InitGame(const FString& MapName, const FString& Options, FSt
 	Match.PlayerName = UGameplayStatics::ParseOption(Options, TEXT("Name"));
 	bOnline = ParseSwitch(Options, UScctOnlineSubsystem::OnlineOption);
 	FParse::Value(FCommandLine::Get(), TEXT("ScctMatchMenu="), OpenMenuIn);
+
+	// -ScctLeaveMatchAfter counts for the first -ScctLeaveMatchTimes levels of the run (default 1), so a run that
+	// goes menu, match, menu, match comes to an end.
+	static int32 LeavesAsked = 0;
+	int32 LeaveTimes = 1;
+	FParse::Value(FCommandLine::Get(), TEXT("ScctLeaveMatchTimes="), LeaveTimes);
+	if (LeavesAsked < LeaveTimes && FParse::Value(FCommandLine::Get(), TEXT("ScctLeaveMatchAfter="), LeaveMatchIn))
+	{
+		++LeavesAsked;
+	}
 }
 
 void AScctGameMode::StartPlay()
@@ -124,6 +136,7 @@ void AScctGameMode::Tick(float DeltaSeconds)
 		}
 		MatchMenu->OnResumed.BindUObject(this, &AScctGameMode::SetMenuOpen, false);
 		MatchMenu->AddToViewport(30);
+		GiveInputToGame(Player);
 	}
 
 	if (Player->WasInputKeyJustPressed(EKeys::Escape))
@@ -138,6 +151,41 @@ void AScctGameMode::Tick(float DeltaSeconds)
 			SetMenuOpen(true);
 		}
 	}
+	if (LeaveMatchIn >= 0.0f)
+	{
+		LeaveMatchIn -= DeltaSeconds;
+		if (LeaveMatchIn < 0.0f)
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("-ScctLeaveMatchAfter: leaving the match as the in-match menu's last button does"));
+			MatchMenu->LeaveMatch();
+		}
+	}
+}
+
+void AScctGameMode::GiveInputToGame(APlayerController* Player)
+{
+	// The input mode belongs to the game's viewport, which outlives the level: after the front end (whose menu
+	// takes all input) the viewport would go on ignoring the keyboard and the mouse in the match.
+	UGameViewportClient* Viewport = GetWorld()->GetGameViewport();
+	const bool bWasIgnored = Viewport != nullptr && Viewport->IgnoreInput();
+	if (FApp::IsUnattended())
+	{
+		// Nobody is at the keyboard and the window is off-screen: the game takes input again, but the mouse is
+		// neither captured nor locked to a window the person at this machine cannot see.
+		if (Viewport != nullptr)
+		{
+			Viewport->SetIgnoreInput(false);
+		}
+	}
+	else
+	{
+		Player->SetInputMode(FInputModeGameOnly());
+	}
+	Player->SetShowMouseCursor(false);
+	if (bWasIgnored)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Level %s: the keyboard and mouse are the game's again (a menu had them)"), *Match.Map);
+	}
 }
 
 void AScctGameMode::SetMenuOpen(bool bOpen)
@@ -150,9 +198,9 @@ void AScctGameMode::SetMenuOpen(bool bOpen)
 
 	// The match goes on underneath (it is the server's, or the bots'): the menu only takes the mouse.
 	MatchMenu->SetMenuOpen(bOpen);
-	Player->SetShowMouseCursor(bOpen);
 	if (bOpen)
 	{
+		Player->SetShowMouseCursor(true);
 		FInputModeGameAndUI Mode;
 		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 		Mode.SetHideCursorDuringCapture(false);
@@ -160,6 +208,6 @@ void AScctGameMode::SetMenuOpen(bool bOpen)
 	}
 	else
 	{
-		Player->SetInputMode(FInputModeGameOnly());
+		GiveInputToGame(Player);
 	}
 }

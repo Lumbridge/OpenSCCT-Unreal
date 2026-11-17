@@ -28,6 +28,9 @@ class UScctMatchMenuWidget;
  *
  * Unattended switch (off by default):
  *   -ScctMatchMenu=S    open the in-match menu S seconds after the level started (for screenshots)
+ *   -ScctLeaveMatchAfter=S  S seconds after the level started, do what the in-match menu's last button does: back
+ *                       to the main menu from a local match, leave the server from an online round
+ *   -ScctLeaveMatchTimes=N  -ScctLeaveMatchAfter counts in the first N levels of the run (default 1)
  */
 UCLASS()
 class OPENSCCT_API AScctGameMode : public AGameModeBase
@@ -45,6 +48,9 @@ private:
 	/** Opens or closes the in-match menu and hands the mouse to it or back to the game. */
 	void SetMenuOpen(bool bOpen);
 
+	/** Gives the keyboard and the mouse to the match (the front end's menu, or the in-match menu, had them). */
+	void GiveInputToGame(APlayerController* Player);
+
 	FScctLocalMatchOptions Match;
 
 	/** The level was opened for the online visit's round. */
@@ -55,4 +61,7 @@ private:
 
 	/** -ScctMatchMenu: seconds until the menu is opened once; negative when not asked for or done. */
 	float OpenMenuIn = -1.0f;
+
+	/** -ScctLeaveMatchAfter: seconds until the match is left once; negative when not asked for or done. */
+	float LeaveMatchIn = -1.0f;
 };

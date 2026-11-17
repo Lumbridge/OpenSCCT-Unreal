@@ -14,6 +14,7 @@ class UScctFrontEndWidget;
  *
  * Unattended switch (off by default):
  *   -ScctMenuPage=offline|join|servers   open the menu on that page (for screenshots)
+ *   -ScctMenuPage=start                  open the offline page and press its START (each time the menu is shown)
  */
 UCLASS()
 class OPENSCCT_API AScctFrontEndGameMode : public AGameModeBase

@@ -31,6 +31,9 @@ param(
     [double] $Every = 6,
     # Seconds into the first round at which the game leaves the server (0: it stays).
     [double] $LeaveAfter = 0,
+    # Seconds after the game was started at which the server is stopped under it (0: it runs to the end): the
+    # game must come back to the front end and say why.
+    [double] $KillServerAfter = 0,
     [string] $Tag = 'join',
     # Join without starting a server (the failure check).
     [switch] $NoServer,
@@ -105,9 +108,14 @@ try {
         $Extra
     ) -join ' '
     $run = Start-Process -FilePath "$Engine\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" -ArgumentList $arguments `
-        -NoNewWindow -Wait -PassThru `
+        -NoNewWindow -PassThru `
         -RedirectStandardOutput (Join-Path $logs "online-$Tag.stdout.txt") `
         -RedirectStandardError (Join-Path $logs "online-$Tag.stderr.txt")
+    if ($server -and $KillServerAfter -gt 0 -and -not $run.WaitForExit([int]($KillServerAfter * 1000))) {
+        $server.Kill($true)
+        "server stopped under the game after $KillServerAfter s"
+    }
+    $run.WaitForExit()
     "game exit code $($run.ExitCode)"
 }
 finally {
@@ -121,5 +129,5 @@ finally {
     if ($work) { Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue }
 }
 
-Select-String -Path $log -Pattern 'LogOpenSCCT: (Online|Session|Level|Menu)|LogOpenSCCT: (Error|Warning)' |
+Select-String -Path $log -Pattern 'LogOpenSCCT: (Online|Session|Level|Menu|-Scct)|LogOpenSCCT: (Error|Warning)' |
     ForEach-Object { $_.Line -replace '^\[[^\]]+\]\[[^\]]+\]', '' } | Select-Object -First 120
