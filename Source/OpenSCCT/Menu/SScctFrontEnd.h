@@ -19,7 +19,7 @@ class UScctOnlineSubsystem;
  *   Home      play offline, join by address, server list, quit
  *   Offline   map, mode, side, bots and their skill, start
  *   Join      name, address, password, side
- *   Servers   the master's list, refresh, sign in
+ *   Servers   the server list: master, LAN and saved servers with pings (Menu/SScctServerBrowserPage.h)
  *   Host      Create Session: map, rules and hosting choices, create (Menu/SScctHostPage.h)
  *   Visit     shown instead of the above while UScctOnlineSubsystem::IsVisiting
  */
@@ -67,10 +67,8 @@ private:
 	TSharedRef<SWidget> BuildHome();
 	TSharedRef<SWidget> BuildOffline();
 	TSharedRef<SWidget> BuildJoin();
-	TSharedRef<SWidget> BuildServers();
 	TSharedRef<SWidget> BuildVisit();
 
-	void RefillServers();
 	void StartOffline();
 	void StartJoin();
 
@@ -98,6 +96,4 @@ private:
 	TSharedPtr<SEditableTextBox> PasswordBox;
 	int32 JoinSideIndex = 0;
 
-	// Servers page.
-	TSharedPtr<SVerticalBox> ServerRows;
 };

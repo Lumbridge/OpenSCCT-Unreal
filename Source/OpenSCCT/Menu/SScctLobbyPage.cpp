@@ -54,7 +54,7 @@ namespace
 	}
 
 	/** Sets Key in an options line, replacing its value or adding it at the end. */
-	FString WithOption(const FString& Line, const FString& Key, const FString& Value)
+	FString LobbyWithOption(const FString& Line, const FString& Key, const FString& Value)
 	{
 		TArray<TPair<FString, FString>> List = Pairs(Line);
 		bool bFound = false;
@@ -396,7 +396,7 @@ void SScctLobbyPage::FillDraft(const FString& Line)
 			bAlternateOpen = Pair.Value.Equals(TEXT("alternate"), ESearchCase::IgnoreCase);
 			continue;
 		}
-		Next = WithOption(Next, Key, Pair.Value);
+		Next = LobbyWithOption(Next, Key, Pair.Value);
 	}
 	Next = ScctHostSetup::Text(EScctSetupText::Normalize, Next, FString(), PlayersOf(Next));
 	if (!Next.IsEmpty())

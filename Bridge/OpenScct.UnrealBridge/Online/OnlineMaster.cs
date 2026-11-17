@@ -58,6 +58,9 @@ public sealed class OnlineMaster : IDisposable
     /// <summary>The last list, as the master sent it.</summary>
     public IReadOnlyList<ServerEntry> Servers => _servers;
 
+    /// <summary>Goes up with every list the master sent (the server browser merges a new one once).</summary>
+    public int ListRevision { get; private set; }
+
     /// <summary>The master's message of the day from the last list, or null.</summary>
     public string? Motd { get; private set; }
 
@@ -148,21 +151,45 @@ public sealed class OnlineMaster : IDisposable
     /// </summary>
     public void JoinListed(int index, string? password, int preferredTeam)
     {
+        if (index < 0 || index >= _servers.Count)
+        {
+            _bridge.FailJoin(_client is null ? Error ?? "No master server is set." : "That server is no longer on the list.");
+            return;
+        }
+
+        JoinEntry(_servers[index], password, preferredTeam);
+    }
+
+    /// <summary>Joins a server the master listed (the server browser keeps its own copy of the list's entries).</summary>
+    public void JoinEntry(ServerEntry entry, string? password, int preferredTeam)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
         if (Need() is not { } client)
         {
             _bridge.FailJoin(Error ?? "No master server is set.");
             return;
         }
 
-        if (index < 0 || index >= _servers.Count)
+        _bridge.BeginListedJoin();
+        _join = new PendingJoin(client.JoinAsync(entry.Id), entry.RequireAccounts, password, preferredTeam, null, false);
+    }
+
+    /// <summary>
+    /// Joins a LAN or saved server that is listed on the master too (the Godot browser's ticket join): the master is
+    /// asked for the player's ticket by the server's id, then the visit goes straight to <paramref name="direct"/>. When
+    /// the master gives no ticket the join goes on without one, unless the server takes signed-in players only.
+    /// </summary>
+    public void JoinDirect(string serverId, JoinTarget direct, string? password, int preferredTeam, bool requireAccounts, bool loopbackOnly)
+    {
+        ArgumentNullException.ThrowIfNull(direct);
+        if (_client is not { } client)
         {
-            _bridge.FailJoin("That server is no longer on the list.");
+            _bridge.Join(direct, password, ticket: null, preferredTeam, loopbackOnly);
             return;
         }
 
-        ServerEntry entry = _servers[index];
         _bridge.BeginListedJoin();
-        _join = new PendingJoin(client.JoinAsync(entry.Id), entry, password, preferredTeam);
+        _join = new PendingJoin(client.JoinAsync(serverId), requireAccounts, password, preferredTeam, direct, loopbackOnly);
     }
 
     /// <summary>Drops a listed join still waiting for the master (the player left the connecting screen).</summary>
@@ -231,6 +258,7 @@ public sealed class OnlineMaster : IDisposable
             {
                 _servers.Clear();
                 _servers.AddRange(list.Result.Servers);
+                ListRevision++;
                 Motd = list.Result.Motd;
                 State = OnlineMasterState.Ready;
                 Error = null;
@@ -257,18 +285,25 @@ public sealed class OnlineMaster : IDisposable
     {
         if (!Succeeded(join.Answer, out string? error))
         {
+            if (join.Direct is { } fallback && !join.RequireAccounts)
+            {
+                // Only the ticket was asked for: join without it.
+                _bridge.Join(fallback, join.Password, ticket: null, join.PreferredTeam, join.LoopbackOnly);
+                return;
+            }
+
             _bridge.FailJoin(error!);
             return;
         }
 
         JoinResponse answer = join.Answer.Result;
-        if ((answer.RequireAccounts || join.Entry.RequireAccounts) && answer.Ticket is null)
+        if ((answer.RequireAccounts || join.RequireAccounts) && answer.Ticket is null)
         {
             _bridge.FailJoin(answer.TicketProblem ?? "This server takes signed-in players only. Sign in to join it.");
             return;
         }
 
-        _bridge.Join(JoinTarget.FromJoin(answer, Path), join.Password, answer.Ticket, join.PreferredTeam);
+        _bridge.Join(join.Direct ?? JoinTarget.FromJoin(answer, Path), join.Password, answer.Ticket, join.PreferredTeam, join.LoopbackOnly);
     }
 
     private void PumpAccount()
@@ -406,5 +441,9 @@ public sealed class OnlineMaster : IDisposable
         _join = null;
     }
 
-    private sealed record PendingJoin(Task<JoinResponse> Answer, ServerEntry Entry, string? Password, int PreferredTeam);
+    /// <summary>
+    /// A join waiting for the master: <see cref="Direct"/> is the address to join with the ticket (a LAN or saved server
+    /// listed on the master too), or null to go the way the answer says (a server of the list).
+    /// </summary>
+    private sealed record PendingJoin(Task<JoinResponse> Answer, bool RequireAccounts, string? Password, int PreferredTeam, JoinTarget? Direct, bool LoopbackOnly);
 }

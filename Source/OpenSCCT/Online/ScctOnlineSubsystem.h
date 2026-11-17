@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
+#include "Runtime/ScctBrowserApi.h"
 #include "Runtime/ScctHostApi.h"
 #include "Runtime/ScctLobbyApi.h"
 #include "Runtime/ScctOnlineApi.h"
@@ -93,6 +94,8 @@ DECLARE_MULTICAST_DELEGATE(FScctOnlineChanged);
  *   -ScctChatWhen=N           -ScctChatTeam waits until N players are in the lobby (default 1)
  *   -ScctKickAfter=<name>,S   the host or admin kicks the player called <name> S seconds after he is in the lobby;
  *                             -ScctBanAfter and -ScctVoiceBanAfter do the same with a ban and a voice ban
+ *   -ScctLan                  a test host (-ScctHost without -ScctHostPublic) answers LAN searches on loopback, and
+ *                             the server browser's LAN search asks this machine only (no broadcast, no firewall prompt)
  *   -ScctAdmin=<pw>;cmd;cmd   on a dedicated server: log in as an admin, then send each command once logged in (one a
  *                             second); on the player's own server the commands go to the host's console, no login
  *
@@ -267,6 +270,58 @@ public:
 	/** The name a guest joins under; kept in the user's settings. */
 	void SetPlayerName(const FString& Name);
 
+	// ---- the server browser (ScctServerBrowser.cpp) ----------------------------------------------------------
+
+	/**
+	 * Starts a new search of the server browser (Runtime/ScctBrowserApi.h): the master's list, the LAN on the Online
+	 * page's LAN port and the page's saved servers, each pinged. With -ScctLan the LAN search asks this machine only.
+	 * False when the bridge is not up or no UDP socket could be opened (GetBrowserText(Status) says why).
+	 */
+	bool OpenBrowser();
+
+	/** Stops the browser's search (its page closed). */
+	void CloseBrowser();
+
+	/** Goes up whenever a row or the browser's status changed; -1 when the browser cannot be used. */
+	int32 GetBrowserRevision() const;
+
+	/** The browser's rows, in its own order (the page sorts them). */
+	void GetBrowserRows(TArray<FScctBrowserRow>& OutRows) const;
+
+	FString GetBrowserText(EScctBrowserText Kind) const;
+
+	/** The players of the browser's row at Index by side ("Spies: a, b     Mercenaries: c"), or empty. */
+	FString GetBrowserPlayers(int32 Index) const;
+
+	/**
+	 * Joins the browser's row at Index with a password and a side (0 spies, 1 mercs, 255 watch, -1 the smaller side),
+	 * the way the row is reached (a listed server through the master with the connect mode, a LAN or saved one
+	 * straight to its address). False when refused: OutRefusal says why.
+	 */
+	bool JoinBrowserRow(int32 Index, const FString& Password, int32 PreferredTeam, FString& OutRefusal);
+
+	/** The Online page's saved servers (host or host:port), in the order they were saved. */
+	static TArray<FString> GetSavedServers();
+
+	/** Adds an address to the saved servers (Join by Address does it). False when it is empty or already there. */
+	static bool AddSavedServer(const FString& Address);
+
+	/** Removes an address from the saved servers. */
+	static void RemoveSavedServer(const FString& Address);
+
+	/** The Online page's connect mode: 0 Auto, 1 Direct, 2 NAT punch, 3 Relay (applied to listed joins at once). */
+	static int32 GetConnectMode();
+	static void SetConnectMode(int32 Mode);
+
+	/** Sets the master and invite key on the Online page (applied at once) and saves them. */
+	static void SetMasterSettings(const FString& Url, const FString& InviteKey);
+
+	/** The Online page's LAN port. */
+	static int32 GetLanPort();
+
+	/** -ScctLan: LAN searches and a test host's LAN beacon stay on this machine (loopback). */
+	static bool IsLanLoopbackTest();
+
 	/** Asks the master for its server list; GetServers changes when the answer is in. */
 	void RequestServerList();
 	const TArray<FScctOnlineServerEntry>& GetServers() const { return Servers; }
@@ -337,6 +392,9 @@ private:
 	// Moderation (ScctOnlineModeration.cpp).
 
 	const FScctLobbyApi* ConnectLobby() const;
+
+	// The server browser (ScctServerBrowser.cpp).
+	const FScctBrowserApi* ConnectBrowser() const;
 	bool CanActOn(int32 PlayerId, const TCHAR* What) const;
 	void ReadModerationSwitches();
 	void RunUnattendedModeration(float DeltaSeconds);

@@ -7,6 +7,7 @@
 #include "HAL/PlatformMisc.h"
 #include "Menu/SScctHostPage.h"
 #include "Menu/SScctLobbyPage.h"
+#include "Menu/SScctServerBrowserPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -36,19 +37,6 @@ namespace
 	const int32 JoinSides[] = { -1, 0, 1, 255 };
 
 	constexpr float PageWidth = 560.0f;
-
-	/** A server's mode as the lobby names it (EGameMode). */
-	const TCHAR* ModeNameOf(int32 Mode)
-	{
-		switch (Mode)
-		{
-		case 4: return TEXT("Disk Hunt");
-		case 5: return TEXT("Story");
-		case 6: return TEXT("Deathmatch");
-		case 7: return TEXT("Merc Deathmatch");
-		default: return TEXT("");
-		}
-	}
 
 	TArray<FString> ToStrings(TConstArrayView<const TCHAR*> Texts)
 	{
@@ -136,15 +124,6 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 		VisitView = FindVisitView();
 		Rebuild();
 	}
-
-	if (Visit->GetRevision() != SeenRevision)
-	{
-		SeenRevision = Visit->GetRevision();
-		if (Page == EPage::Servers)
-		{
-			RefillServers();
-		}
-	}
 }
 
 SScctFrontEnd::EVisitView SScctFrontEnd::FindVisitView() const
@@ -195,25 +174,22 @@ void SScctFrontEnd::ShowPageNamed(const FString& Name)
 void SScctFrontEnd::ShowPage(EPage NewPage)
 {
 	Page = NewPage;
-	if (Page == EPage::Servers && Online.IsValid())
-	{
-		Online->RequestServerList();
-	}
 	Rebuild();
 }
 
 void SScctFrontEnd::Rebuild()
 {
-	ServerRows.Reset();
-
 	TSharedRef<SWidget> Content = SNullWidget::NullWidget;
 	switch (Page)
 	{
 	case EPage::Home: Content = BuildHome(); break;
 	case EPage::Offline: Content = BuildOffline(); break;
 	case EPage::Join: Content = BuildJoin(); break;
-	case EPage::Servers: Content = BuildServers(); break;
 	case EPage::Visit: Content = BuildVisit(); break;
+	case EPage::Servers:
+		// The server list (Menu/SScctServerBrowserPage.h): the master, the LAN and the saved servers, with pings.
+		Content = SNew(SScctServerBrowserPage).Online(Online).OnBack(FSimpleDelegate::CreateLambda([this] { ShowPage(EPage::Home); }));
+		break;
 	case EPage::Host:
 		// Create Session (Menu/SScctHostPage.h); a hosted game's lobby then takes the screen over as any visit does.
 		Content = SNew(SScctHostPage).Online(Online).OnBack(FSimpleDelegate::CreateLambda([this] { ShowPage(EPage::Home); }));
@@ -402,142 +378,9 @@ void SScctFrontEnd::StartJoin()
 	Visit->SetPlayerName(NameBox->GetText().ToString());
 	GConfig->SetString(MenuUserSection, TEXT("LastAddress"), *Address, GGameUserSettingsIni);
 	GConfig->Flush(false, GGameUserSettingsIni);
+	// The server list asks every saved server for its info (and offers to remove it).
+	UScctOnlineSubsystem::AddSavedServer(Address);
 	Visit->Join(Address, PasswordBox->GetText().ToString(), JoinSides[JoinSideIndex]);
-}
-
-TSharedRef<SWidget> SScctFrontEnd::BuildServers()
-{
-	const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Online;
-	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ Ui::Title(Ui::ToText(TEXT("SERVER LIST")), 24.0f) ];
-
-	// What the master is doing, or why there is no list.
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 16.0f)
-	[
-		Ui::Text(TAttribute<FText>::CreateLambda([Weak]
-		{
-			const UScctOnlineSubsystem* Visit = Weak.Get();
-			if (Visit == nullptr || !Visit->HasMaster())
-			{
-				return Ui::ToText(TEXT("No master server is set for this game ([OpenSCCT.Online] MasterUrl in Config/DefaultGame.ini)."));
-			}
-			switch (static_cast<EScctOnlineMasterState>(Visit->GetStatus().MasterState))
-			{
-			case EScctOnlineMasterState::Busy: return Ui::ToText(TEXT("Asking the master server..."));
-			case EScctOnlineMasterState::Failed: return Ui::ToText(Visit->GetMasterError());
-			case EScctOnlineMasterState::Ready: return FText::FromString(FString::Printf(TEXT("%d server(s) online"), Visit->GetServers().Num()));
-			default: return FText::GetEmpty();
-			}
-		}), 11.0f, FSlateColor(ScctHudStyle::TextDim()), ScctHudStyle::EWeight::Regular, true)
-	];
-	Box->AddSlot().AutoHeight().MaxHeight(420.0f)
-	[
-		SNew(SScrollBox)
-		+ SScrollBox::Slot()[ SAssignNew(ServerRows, SVerticalBox) ]
-	];
-	Box->AddSlot().AutoHeight().Padding(0.0f, 14.0f)[ Ui::Rule() ];
-
-	// The account: the official servers take signed-in players only.
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)
-	[
-		SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-		[
-			Ui::Text(TAttribute<FText>::CreateLambda([Weak]
-			{
-				const UScctOnlineSubsystem* Visit = Weak.Get();
-				if (Visit == nullptr)
-				{
-					return FText::GetEmpty();
-				}
-				switch (static_cast<EScctOnlineAccountState>(Visit->GetStatus().AccountState))
-				{
-				case EScctOnlineAccountState::SignedIn: return FText::FromString(FString::Printf(TEXT("Signed in as %s"), *Visit->GetAccountName()));
-				case EScctOnlineAccountState::SigningIn:
-					return Visit->GetSignInCode().IsEmpty()
-						? Ui::ToText(TEXT("Opening the sign-in page in your browser..."))
-						: FText::FromString(FString::Printf(TEXT("Finish signing in in your browser. Code: %s"), *Visit->GetSignInCode()));
-				case EScctOnlineAccountState::Failed: return Ui::ToText(Visit->GetAccountError());
-				default: return Ui::ToText(TEXT("Not signed in. Servers marked ACCOUNT take signed-in players only."));
-				}
-			}), 11.0f, FSlateColor(ScctHudStyle::TextDim()), ScctHudStyle::EWeight::Regular, true)
-		]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(12.0f, 0.0f, 0.0f, 0.0f)
-		[
-			Ui::Button(TAttribute<FText>::CreateLambda([Weak]
-			{
-				return Ui::ToText(Weak.IsValid() && Weak->GetStatus().AccountState == static_cast<int32>(EScctOnlineAccountState::SignedIn) ? TEXT("SIGN OUT") : TEXT("SIGN IN"));
-			}), FOnClicked::CreateLambda([Weak]
-			{
-				if (UScctOnlineSubsystem* Visit = Weak.Get())
-				{
-					if (Visit->GetStatus().AccountState == static_cast<int32>(EScctOnlineAccountState::SignedIn))
-					{
-						Visit->SignOut();
-					}
-					else
-					{
-						Visit->BeginSignIn();
-					}
-				}
-				return FReply::Handled();
-			}))
-		]
-	];
-	Box->AddSlot().AutoHeight()
-	[
-		SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
-		[
-			Ui::Button(Ui::ToText(TEXT("REFRESH")), FOnClicked::CreateLambda([Weak]
-			{
-				if (Weak.IsValid())
-				{
-					Weak->RequestServerList();
-				}
-				return FReply::Handled();
-			}), false, Ui::Accent(), 150.0f)
-		]
-		+ SHorizontalBox::Slot().AutoWidth()
-		[
-			Ui::Button(Ui::ToText(TEXT("BACK")), FOnClicked::CreateSP(this, &SScctFrontEnd::HandleShowPage, EPage::Home))
-		]
-	];
-	return SNew(SBox).WidthOverride(760.0f)[ Ui::Glass(Box) ];
-}
-
-void SScctFrontEnd::RefillServers()
-{
-	const UScctOnlineSubsystem* Visit = Online.Get();
-	if (Visit == nullptr || !ServerRows.IsValid())
-	{
-		return;
-	}
-
-	ServerRows->ClearChildren();
-	const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Online;
-	const TArray<FScctOnlineServerEntry>& Servers = Visit->GetServers();
-	for (int32 Index = 0; Index < Servers.Num(); ++Index)
-	{
-		const FScctOnlineServerEntry& Server = Servers[Index];
-		FString Marks;
-		if ((Server.Flags & EScctOnlineServerFlags::Password) != 0) { Marks += TEXT("  PASSWORD"); }
-		if ((Server.Flags & EScctOnlineServerFlags::RequireAccounts) != 0) { Marks += TEXT("  ACCOUNT"); }
-		if ((Server.Flags & EScctOnlineServerFlags::SameBuild) == 0) { Marks += TEXT("  OTHER VERSION"); }
-		if ((Server.Flags & EScctOnlineServerFlags::Full) != 0) { Marks += TEXT("  FULL"); }
-		const FString Line = FString::Printf(TEXT("%s    %s  %s    %d/%d%s"), Server.Name, Server.Map, ModeNameOf(Server.Mode), Server.Players, Server.MaxPlayers, *Marks);
-		ServerRows->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)
-		[
-			Ui::Button(Ui::ToText(Line), FOnClicked::CreateLambda([Weak, Index]
-			{
-				if (Weak.IsValid())
-				{
-					Weak->JoinListed(Index);
-				}
-				return FReply::Handled();
-			}))
-		];
-	}
 }
 
 // ---- the visit ----------------------------------------------------------------------------------------------------

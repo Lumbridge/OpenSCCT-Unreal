@@ -33,7 +33,8 @@ using OpenScct.UnrealBridge.Online;
 // One thing is not the exported path, and only this: the join itself goes through OnlineBridge.Join with a
 // loopback-only socket (the exported Join binds every interface, which can raise a firewall prompt on a test
 // machine).
-return args.Length > 0 && args[0] == "host" ? HostProbe.Run(args[1..]) : args.Length > 0 && args[0] == "setup" ? SetupProbe.Run(args[1..]) : Probe.Run(args);
+return args.Length > 0 && args[0] == "host" ? HostProbe.Run(args[1..]) : args.Length > 0 && args[0] == "setup" ? SetupProbe.Run(args[1..])
+    : args.Length > 0 && args[0] == "lan" ? LanProbe.Run(args[1..]) : Probe.Run(args);
 
 internal static unsafe class Probe
 {
@@ -156,7 +157,10 @@ internal static unsafe class Probe
             ("OnlineResultRow", sizeof(OnlineResultRow), 120),
             ("OnlineServerEntry", sizeof(OnlineServerEntry), 424),
             ("OnlineApi", sizeof(OnlineApi), 8 + 26 * sizeof(void*)),
-            ("HostApi", sizeof(HostApi), 8 + 7 * sizeof(void*)),
+            ("HostApi", sizeof(HostApi), 8 + 8 * sizeof(void*)),
+            ("LobbyApi", sizeof(LobbyApi), 8 + 4 * sizeof(void*)),
+            ("BrowserApi", sizeof(BrowserApi), 8 + 7 * sizeof(void*)),
+            ("BrowserRowData", sizeof(BrowserRowData), 8 * 4 + (96 + 64 + 32 + 16 + 64 + 48) * 2),
         ];
         bool ok = true;
         foreach ((string name, int size, int expected) in sizes)

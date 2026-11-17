@@ -55,6 +55,7 @@ public sealed partial class OnlineBridge : IDisposable
     public OnlineBridge()
     {
         Master = new OnlineMaster(this);
+        Browser = new ServerBrowser(this);
     }
 
     /// <summary>The one online bridge of the process, made on first use (the entry points and the probe use it).</summary>
@@ -73,6 +74,9 @@ public sealed partial class OnlineBridge : IDisposable
 
     /// <summary>The master's list, listed joins and the account.</summary>
     public OnlineMaster Master { get; }
+
+    /// <summary>The server browser: the master's list, the LAN and the saved addresses, with pings (Online/ServerBrowser.cs).</summary>
+    public ServerBrowser Browser { get; }
 
     /// <summary>
     /// The maps this client plays (every installed map with its play loader), read on first use. It is read again
@@ -417,6 +421,7 @@ public sealed partial class OnlineBridge : IDisposable
     {
         Master.Pump();
         PumpHost();
+        Browser.Pump();
         if (Client is not { } client)
         {
             return 0;
@@ -567,6 +572,7 @@ public sealed partial class OnlineBridge : IDisposable
         EndVisit();
         StopHosting();
         Master.Dispose();
+        Browser.Dispose();
         if (ReferenceEquals(s_instance, this))
         {
             s_instance = null;

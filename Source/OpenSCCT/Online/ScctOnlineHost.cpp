@@ -154,6 +154,82 @@ void UScctOnlineSubsystem::ReadMasterSettings(FString& OutUrl, FString& OutInvit
 	OutInviteKey = FScctSettings::GetString(KeyInviteKey).TrimStartAndEnd();
 }
 
+TArray<FString> UScctOnlineSubsystem::GetSavedServers()
+{
+	RegisterOnlineSettings();
+	TArray<FString> Parts, Saved;
+	FScctSettings::GetString(KeySavedServers).ParseIntoArray(Parts, TEXT(";"), true);
+	for (const FString& Part : Parts)
+	{
+		const FString Address = Part.TrimStartAndEnd();
+		if (!Address.IsEmpty() && !Saved.ContainsByPredicate([&Address](const FString& Other) { return Other.Equals(Address, ESearchCase::IgnoreCase); }))
+		{
+			Saved.Add(Address);
+		}
+	}
+	return Saved;
+}
+
+bool UScctOnlineSubsystem::AddSavedServer(const FString& Address)
+{
+	// A ';' would split the address into two entries of the list.
+	const FString Trimmed = Address.TrimStartAndEnd().Replace(TEXT(";"), TEXT(""));
+	TArray<FString> Saved = GetSavedServers();
+	if (Trimmed.IsEmpty() || Saved.ContainsByPredicate([&Trimmed](const FString& Other) { return Other.Equals(Trimmed, ESearchCase::IgnoreCase); }))
+	{
+		return false;
+	}
+	Saved.Add(Trimmed);
+	FScctSettings::SetString(KeySavedServers, FString::Join(Saved, TEXT(";")));
+	FScctSettings::Save();
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: saved server %s (%d saved)"), *Trimmed, Saved.Num());
+	return true;
+}
+
+void UScctOnlineSubsystem::RemoveSavedServer(const FString& Address)
+{
+	TArray<FString> Saved = GetSavedServers();
+	if (Saved.RemoveAll([&Address](const FString& Other) { return Other.Equals(Address.TrimStartAndEnd(), ESearchCase::IgnoreCase); }) > 0)
+	{
+		FScctSettings::SetString(KeySavedServers, FString::Join(Saved, TEXT(";")));
+		FScctSettings::Save();
+		UE_LOG(LogOpenSCCT, Log, TEXT("Online: removed saved server %s (%d saved)"), *Address, Saved.Num());
+	}
+}
+
+int32 UScctOnlineSubsystem::GetConnectMode()
+{
+	RegisterOnlineSettings();
+	return FMath::Clamp(FScctSettings::GetInt(KeyConnectMode), 0, 3);
+}
+
+void UScctOnlineSubsystem::SetConnectMode(int32 Mode)
+{
+	RegisterOnlineSettings();
+	// The registry's change notice applies it to the bridge (HandleSettingChanged).
+	FScctSettings::SetInt(KeyConnectMode, FMath::Clamp(Mode, 0, 3));
+	FScctSettings::Save();
+}
+
+void UScctOnlineSubsystem::SetMasterSettings(const FString& Url, const FString& InviteKey)
+{
+	RegisterOnlineSettings();
+	FScctSettings::SetString(KeyMasterUrl, Url.TrimStartAndEnd());
+	FScctSettings::SetString(KeyInviteKey, InviteKey.TrimStartAndEnd());
+	FScctSettings::Save();
+}
+
+int32 UScctOnlineSubsystem::GetLanPort()
+{
+	RegisterOnlineSettings();
+	return FScctSettings::GetInt(KeyLanPort);
+}
+
+bool UScctOnlineSubsystem::IsLanLoopbackTest()
+{
+	return FParse::Param(FCommandLine::Get(), TEXT("ScctLan"));
+}
+
 FScctHostRequest FScctHostRequest::Default()
 {
 	UScctOnlineSubsystem::RegisterOnlineSettings();
@@ -412,7 +488,8 @@ void UScctOnlineSubsystem::RunUnattendedHost()
 			Request.bLoopbackOnly = true;
 			Request.bListed = false;
 			Request.bUpnp = false;
-			Request.bLan = false;
+			// -ScctLan: the LAN beacon too, bound to loopback like the game port, so a browser on this machine finds it.
+			Request.bLan = IsLanLoopbackTest();
 		}
 		UE_LOG(LogOpenSCCT, Log, TEXT("Online: -ScctHost: hosting %s, launching once %d player(s) are in the lobby"), *Request.SetupOptions, LaunchWhen);
 		Host(Request);
