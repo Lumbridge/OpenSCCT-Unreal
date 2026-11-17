@@ -22,8 +22,8 @@ namespace OpenScct.UnrealBridge.Hub;
 /// <para>It can also host the hub it joins (<see cref="HostAndJoin"/>): an in-process <see cref="HubServer"/> on its
 /// own thread, as "Host a hub on this PC" does in the Godot client, listed in the master's hub list when asked. The
 /// master's hub list, its pings and joins of a listed hub are in HubBridge.Master.cs.</para>
-/// <para>Not ported yet: the pads' matches (the hub's match offer is logged and refused), voice chat, emotes, the
-/// activities' props and sounds.</para>
+/// <para>The pads' matches (the hub's offer, the online visit to the match and the way back) and the pad laptop are in
+/// HubBridge.Pads.cs. Not ported yet: voice chat, the activities' props and sounds.</para>
 /// <para>Single-threaded: everything is called from Unreal's game thread; only the hosted hub's log lines arrive on
 /// its own thread, and they are queued.</para>
 /// </summary>
@@ -47,7 +47,6 @@ public sealed partial class HubBridge : IDisposable
     private long _ticks;
     private BridgeSession? _adopted;
     private bool _loadReported;
-    private bool _offerLogged;
     private string _target = string.Empty;
     private string _name = "Player";
     private int _team;
@@ -105,7 +104,8 @@ public sealed partial class HubBridge : IDisposable
         {
             if (Client is null)
             {
-                return _pendingJoin is not null ? HubState.Connecting : _error is null ? HubState.Idle : HubState.Failed;
+                return _trip is not null ? HubState.InMatch
+                    : _pendingJoin is not null ? HubState.Connecting : _error is null ? HubState.Idle : HubState.Failed;
             }
 
             return Round is not null ? HubState.InHub : Client.Welcomed ? HubState.Loading : HubState.Connecting;
@@ -214,7 +214,7 @@ public sealed partial class HubBridge : IDisposable
         _name = string.IsNullOrWhiteSpace(name) ? "Player" : name.Trim();
         _team = team == 1 ? 1 : 0;
         _target = target;
-        _offerLogged = false;
+        _offerTaken = null;
         // A hub on this machine is reached through a socket on the loopback addresses only: a socket on every
         // interface makes Windows ask the player about the firewall, for nothing.
         var transport = LiteNetLibTransport.CreateClient(loopbackOnly: IsThisMachine(target));
@@ -237,11 +237,14 @@ public sealed partial class HubBridge : IDisposable
             HostKey = Host?.HostKey,
             // The master's ticket is for the listed hub it was asked about only (a hosted or typed-in hub gets none).
             Ticket = _masterId is not null ? _ticket : null,
+            // Back from a pad's match: the hub puts the player beside that pad.
+            ReturnPad = _returnPad,
         }, ownsTransport: true);
         client.Play.Clock = () => _clock.NowMicroseconds / 1_000_000.0;
+        client.LaptopOpened += OnLaptopOpened;
         Client = client;
         _status = $"Connecting to {target}...";
-        Log($"connecting to {target} as '{_name}' ({(_team == 1 ? "merc" : "spy")})");
+        Log($"connecting to {target} as '{_name}' ({(_team == 1 ? "merc" : "spy")})" + (_returnPad is null ? string.Empty : $", back from the match of {_returnPad}"));
         Touch();
     }
 
@@ -292,6 +295,7 @@ public sealed partial class HubBridge : IDisposable
 
     private void EndVisit()
     {
+        EndTrip();
         _pendingJoin = null;
         _attempts.Clear();
         StopRound();
@@ -370,8 +374,10 @@ public sealed partial class HubBridge : IDisposable
     public int Update()
     {
         PumpMaster();
+        PumpMatch();
         if (Client is not { } client)
         {
+            LogState();
             return 0;
         }
 
@@ -395,12 +401,15 @@ public sealed partial class HubBridge : IDisposable
             return 0;
         }
 
-        if (client.Offer is { } offer && !_offerLogged)
+        if (client.Offer is { } offer && !ReferenceEquals(offer, _offerTaken))
         {
-            // The pads' matches come with the hub page; until then the player stays in the hub.
-            _offerLogged = true;
-            Log($"the hub offered the match of pad {offer.PadId}; joining pad matches is not supported by this client yet");
+            // The hub sent the player to a pad's match: the hub connection closes and the online visit plays it.
+            GoToMatch(client, offer);
+            LogState();
+            return 0;
         }
+
+        PumpPadRun(client);
 
         if (Round is { } drawn)
         {
@@ -459,6 +468,12 @@ public sealed partial class HubBridge : IDisposable
             round.Update();
         }
 
+        LogState();
+        return ran;
+    }
+
+    private void LogState()
+    {
         HubState state = State;
         if (state != _lastState)
         {
@@ -466,8 +481,6 @@ public sealed partial class HubBridge : IDisposable
             _lastState = state;
             Touch();
         }
-
-        return ran;
     }
 
     /// <summary>The hub map and the controller are in: a remote play session takes over ticking the connection (HubService.Enter).</summary>

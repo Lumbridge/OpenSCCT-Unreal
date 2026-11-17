@@ -225,6 +225,16 @@ public sealed class OnlineMaster : IDisposable
     /// <summary>Forgets the account here (the saved token should be deleted too). The master's sign-in is not ended.</summary>
     public void SignOut() => SetAccountToken(null);
 
+    /// <summary>A newer description of the signed-in account (Social/AccountService: a claimed or changed name): joins use its name.</summary>
+    internal void Remember(AccountInfo account)
+    {
+        if (AccountToken is not null && AccountName != account.Name)
+        {
+            AccountName = account.Name;
+            _bridge.Touch();
+        }
+    }
+
     // ---- answers ------------------------------------------------------------------------------------------------
 
     /// <summary>Picks up the answers that arrived since the last frame.</summary>

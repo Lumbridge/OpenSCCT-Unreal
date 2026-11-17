@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading;
 using OpenScct.Core;
@@ -20,6 +21,7 @@ namespace OpenScct.UnrealBridge.Hub;
 public sealed class HubHost : IDisposable
 {
     private readonly CancellationTokenSource _stop = new();
+    private readonly ConcurrentQueue<Action<HubServer>> _work = new();
     private readonly Thread _thread;
     private bool _disposed;
 
@@ -112,11 +114,29 @@ public sealed class HubHost : IDisposable
     {
         try
         {
-            Server.RunRealtime(new StopwatchClock(), _stop.Token);
+            Server.RunRealtime(new StopwatchClock(), _stop.Token, RunWork);
         }
         catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException or ArgumentException or System.IO.IOException)
         {
             Failure = e;
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> on the host thread after its next tick (the hub belongs to that thread): what the
+    /// game does to its own hub, such as placing the host's player for an unattended run.
+    /// </summary>
+    public void Post(Action<HubServer> work)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        _work.Enqueue(work);
+    }
+
+    private void RunWork(HubServer server)
+    {
+        while (_work.TryDequeue(out Action<HubServer>? work))
+        {
+            work(server);
         }
     }
 

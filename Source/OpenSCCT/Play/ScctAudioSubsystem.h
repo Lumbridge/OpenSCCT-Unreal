@@ -61,6 +61,10 @@ public:
 	/** The original's gain of a 3D source at Distance: 1 inside MinDistance, falling with distance beyond it (Radius is not used: there is no cut-off). */
 	static float DistanceGain(float Distance, float MinDistance, float Radius);
 
+	/** Asked for notes of sounds played outside this subsystem (the hub's jukebox), appended to every audio summary. */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnSummary, TArray<FString>& /*Notes*/);
+	static FOnSummary& OnSummary();
+
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 
