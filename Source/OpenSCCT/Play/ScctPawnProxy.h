@@ -128,6 +128,10 @@ private:
 	TMap<FString, int32> MeshBonesByKey;
 	int32 Kind = INDEX_NONE;
 	bool bHasModel = false;
+
+	/** A pose has been written to the body (for the play inspector's -ScctTestFreezePose, which keeps that first one). */
+	bool bPosedOnce = false;
+	TArray<FTransform> FrozenBones;
 	float NearFade = 0.0f;
 	bool bHeadHidden = false;
 };

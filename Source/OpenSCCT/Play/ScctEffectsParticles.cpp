@@ -170,6 +170,7 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 				Transform = HiddenInstance;
 				continue;
 			}
+			Particle.Velocity += Particle.Acceleration * DeltaSeconds;
 			Particle.Velocity.Z -= Particle.Gravity * DeltaSeconds;
 			Particle.Velocity *= FMath::Max(0.0f, 1.0f - Particle.Drag * DeltaSeconds);
 			Particle.Position += Particle.Velocity * DeltaSeconds;

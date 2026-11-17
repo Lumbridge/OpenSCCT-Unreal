@@ -16,15 +16,17 @@ class SVerticalBox;
  *             textures, effects, anti-aliasing, view distance, foliage, shading), render scale, motion blur,
  *             brightness, the field of view
  *   AUDIO     master, effects, ambience, music, menu music, menu sounds
- *   CONTROLS  mouse speed and inversions, each side's look speeds, hold or toggle, the controller's switches and
- *             dead zones
- *   BINDINGS  every action of a side on the keyboard and mouse or on the controller: capture, conflict warning, reset
+ *   CONTROLS  mouse speed and inversions, each side's look speeds, hold or toggle
+ *   CONTROLLER the controller on or off, the connected controllers, its sticks, dead zones, speeds and eight-way
+ *             movement, vibration and its test, and every action's controller binding with Hold B and the
+ *             combinations (Menu/SScctPadPanel.h)
+ *   BINDINGS  every action of a side on the keyboard and mouse: capture, conflict warning, reset
  *   GAME      units, auto-hack, the wheel, the content's language
  *   PROFILE   the player's name and the account
  *   ...       one tab per page of the settings registry (Settings/ScctSettings.h) that no tab above holds (HUD,
  *             Online...), each registered option drawn by its type; the registry's Display, Graphics and Performance
- *             options are drawn at the end of VIDEO, Audio at the end of AUDIO, Spy, Mercenary and Controller at the end
- *             of CONTROLS
+ *             options are drawn at the end of VIDEO, Audio at the end of AUDIO, Spy and Mercenary at the end of
+ *             CONTROLS, Controller at the end of CONTROLLER
  *
  * Every change is in force at once (so its effect is seen and heard behind the page) and written when the page
  * closes, except the window mode and the resolution, which wait for APPLY and a confirmation.
@@ -61,6 +63,8 @@ private:
 	TSharedRef<SWidget> BuildVideo();
 	TSharedRef<SWidget> BuildAudio();
 	TSharedRef<SWidget> BuildControls();
+	TSharedRef<SWidget> BuildController();
+	void ResetController();
 	TSharedRef<SWidget> BuildBindings();
 	TSharedRef<SWidget> BuildGame();
 	TSharedRef<SWidget> BuildProfile();

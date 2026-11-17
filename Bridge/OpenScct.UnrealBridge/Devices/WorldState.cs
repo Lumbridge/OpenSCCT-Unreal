@@ -19,9 +19,10 @@ namespace OpenScct.UnrealBridge.Devices;
 /// (MeshFollower, AnimatedMeshView, the trigger light switches, Rebind, the drop zone lids),
 /// Views/CameraMountViews.cs, Views/GlassBreakViews.cs (when a pane breaks), Fx/LaserTriggerView.cs and
 /// Render/WorldLights.cs (Modulation) and, for lights only, Views/AttachedEffects.cs (a light that rides a mover or
-/// hangs on a prop's bone). Not ported: conveyors (Views/ConveyorViews.cs, an OpenSCCT addition the stock maps do
-/// not use), the emitters that ride a mover or a bone (AttachedEffects), the bHardAttach frame of a rider (no
-/// Enhanced map sets it), the PS2 objective computers' own animation, and the animation studio's poses.</para>
+/// hangs on a prop's bone). The emitters that ride a mover or a bone (AttachedEffects) are in
+/// <see cref="WorldEmitters"/> (Devices/WorldEmitterExports.cs). Not ported: conveyors (Views/ConveyorViews.cs, an
+/// OpenSCCT addition the stock maps do not use), the bHardAttach frame of a rider (no Enhanced map sets it), the PS2
+/// objective computers' own animation, and the animation studio's poses.</para>
 /// </summary>
 public sealed class WorldState
 {
@@ -293,6 +294,7 @@ public sealed class WorldState
         SCamera => BridgeWorldMarkerKind.Camera,
         SVolumetricSensor => BridgeWorldMarkerKind.VolumetricSensor,
         SLaserTrigger => BridgeWorldMarkerKind.LaserTrigger,
+        SCamNetwork => BridgeWorldMarkerKind.CamNetwork,
         _ => 0,
     };
 
@@ -450,8 +452,18 @@ public sealed class WorldState
         _spawnScanActorCount = level.ActorCount;
         foreach (SBasicGamePlayObject a in level.DynamicActors<SBasicGamePlayObject>())
         {
-            if (a.bDeleteMe || a.GetType() != typeof(SBasicGamePlayObject) || a.StaticMesh.IsNone ||
-                _spawnedActors.Contains(a) || _nameOfActor.ContainsKey(a))
+            if (a.bDeleteMe || a.StaticMesh.IsNone || _spawnedActors.Contains(a) || _nameOfActor.ContainsKey(a))
+            {
+                continue;
+            }
+
+            if (a is Ps2Modem modem)
+            {
+                FollowModem(modem);
+                continue;
+            }
+
+            if (a.GetType() != typeof(SBasicGamePlayObject))
             {
                 continue;
             }
@@ -487,8 +499,28 @@ public sealed class WorldState
             var slot = new Slot(NameOf(name), name, a);
             _spawnedActors.Add(a);
             _nameOfActor[a] = name;
-            AddFollower(new Follower(this, slot));
+            AddFollower(new Follower(this, slot, nameof(SBasicGamePlayObject)));
         }
+    }
+
+    /// <summary>
+    /// The PS2 sabotage modem a spy sticks on the wall by a target (Ps2ModemRules.TryPlace): a shootable prop of its
+    /// own, spawned in play with the target's modem mesh, which the Godot client draws as a mesh (EffectViews, the
+    /// Ps2Modem branch). It is named by its actor id, as no map record or owner names it (its owner is cleared as it
+    /// begins), and dropped like any spawned prop when it is shot or its capture ends.
+    /// </summary>
+    private void FollowModem(Ps2Modem modem)
+    {
+        int name = Intern("Ps2Modem_" + modem.ActorId);
+        if (_followerByName.ContainsKey(name))
+        {
+            return;
+        }
+
+        var slot = new Slot(NameOf(name), name, modem);
+        _spawnedActors.Add(modem);
+        _nameOfActor[modem] = name;
+        AddFollower(new Follower(this, slot, nameof(Ps2Modem)));
     }
 
     /// <summary>How far a replicated prop may stand from where its owner spawned it and still be taken as that owner's (DeviceViews.BindCovers: 3 units).</summary>
@@ -858,7 +890,8 @@ public sealed class WorldState
         }
 
         /// <summary>A prop spawned during play: drawn wherever it is from the start.</summary>
-        public Follower(WorldState world, Slot slot)
+        /// <param name="className">The class name C++ is given for it (what it reports and logs).</param>
+        public Follower(WorldState world, Slot slot, string className)
         {
             _world = world;
             Slot = slot;
@@ -870,7 +903,7 @@ public sealed class WorldState
             _visible0 = true;
             _simDecidesHidden = true;
             _asset0 = actor.StaticMesh.Path;
-            Info = MakeInfo(world, slot, nameof(SBasicGamePlayObject), _asset0, null, actor.DrawScale3D * actor.DrawScale,
+            Info = MakeInfo(world, slot, className, _asset0, null, actor.DrawScale3D * actor.DrawScale,
                 actor.PrePivot, _location0, _rotation0, BridgeWorldActorInfoFlags.Spawned);
             Start(actor);
             _moved = true;
@@ -985,7 +1018,7 @@ public sealed class WorldState
                 if (broken && !_broken && !first && !pane.bDeleteMe)
                 {
                     bool hit = pane.GlassImpactSerial > 0;
-                    _world.Emit(BridgeWorldEventKind.GlassBroken, Slot.NameId, hit ? 1 : 0, 0,
+                    _world.Emit(BridgeWorldEventKind.GlassBroken, Slot.NameId, hit ? 1 : 0, hit ? pane.GlassImpactSerial : 0,
                         hit ? pane.GlassImpactLocation : _location, hit ? pane.GlassImpactDirection : default);
                 }
 
@@ -1409,6 +1442,14 @@ public sealed class WorldState
                     break;
                 case SLaserTrigger laser:
                     state = laser.bIsBroken ? 2 : laser.bLaserHidden ? 1 : 0;
+                    break;
+                case SCamNetwork network when network.IsShotDisabled:
+                    // The replicated countdown (CamnetDisabledView reads IsShotDisabled): the count goes in TimeLeft,
+                    // so the state changes only when the camera goes out and comes back.
+                    state = 1;
+                    flags |= BridgeWorldMarkerFlags.Disabled;
+                    timeLeft = network.DisabledSeconds;
+                    progress = Math.Clamp(1f - (network.DisabledSeconds / SCamNetwork.ShotDisableDuration), 0f, 1f);
                     break;
             }
 

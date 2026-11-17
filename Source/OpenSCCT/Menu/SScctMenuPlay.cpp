@@ -5,6 +5,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Menu/ScctBotNavPrompt.h"
 #include "Menu/SScctGearPage.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Misc/ConfigCacheIni.h"
@@ -505,7 +506,25 @@ namespace
 
 		// ---- starting ---------------------------------------------------------------------------------------------
 
+		/** START MATCH: with bots, the map's prebuilt bot navigation is offered first (Menu/ScctBotNavPrompt.h). */
 		void StartMatch()
+		{
+			if (!MapIds.IsValidIndex(MapIndex))
+			{
+				return;
+			}
+			if (Bots <= 0)
+			{
+				LaunchMatch();
+				return;
+			}
+			const TWeakPtr<SWidget> WeakPage = AsShared();
+			ScctBotNavPrompt::OfferThenLaunch(Host.Dialogs, MapIds[MapIndex],
+				[WeakPage] { return WeakPage.IsValid(); },
+				[WeakPage, this] { if (WeakPage.IsValid()) { LaunchMatch(); } });
+		}
+
+		void LaunchMatch()
 		{
 			UScctOnlineSubsystem* Visit = Host.Online.Get();
 			UWorld* World = Visit != nullptr ? Visit->GetWorld() : nullptr;

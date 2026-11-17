@@ -52,6 +52,8 @@ public:
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 	virtual bool SupportsKeyboardFocus() const override { return bOwnKeys; }
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
+	/** The D-pad and the stick stay on this page: the menu's entries under it are not where they go. */
+	virtual FNavigationReply OnNavigation(const FGeometry& MyGeometry, const FNavigationEvent& InNavigationEvent) override { return FNavigationReply::Stop(); }
 	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 
 	/** Up and Down, as the buttons do. True when the floor changed. */

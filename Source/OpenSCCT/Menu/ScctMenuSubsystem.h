@@ -36,8 +36,8 @@ struct FScctMenuMapInfo
 
 /**
  * What every menu shares and what must outlive a level: the map catalog and the game's own strings (through the
- * bridge's menu table, Runtime/ScctMenuApi.h), the pictures read from the content folder, the interface sounds and
- * the menu music. It also puts the saved settings in force when the game starts (Menu/ScctUserSettings.h).
+ * bridge's menu table, Runtime/ScctMenuApi.h), the pictures read from the content folder, the interface sounds (the menu music is
+ * Play/ScctFrontEndAudio.h's). -ScctMenuSoundLog logs every interface sound played. It also puts the saved settings in force when the game starts (Menu/ScctUserSettings.h).
  *
  * Everything degrades without content: no maps, no pictures, the menus' own English captions, silence.
  */
@@ -62,6 +62,9 @@ public:
 
 	/** Any catalog map by folder name, playable here or not; null when the content does not have it. */
 	const FScctMenuMapInfo* FindMap(const FString& Id);
+
+	/** Reads the map list again on next use: a map was downloaded or removed (Menu/SScctMenuContent.cpp). */
+	void RefreshMaps();
 
 	/** The name the pages show for a map ("ENHANCED AQUARIUS"), its folder name in capitals when unknown. */
 	FString GetMapTitle(const FString& Id);
@@ -91,8 +94,14 @@ public:
 
 	void PlaySound(EScctUiSound Sound);
 
-	/** Starts or stops the menu music (the content's own menu song, looping). */
+	/** Loads a sound ahead of its first use (the first PlaySound of a sound only starts its decode). */
+	void PrepareSound(EScctUiSound Sound);
+
+	/** Allows or silences the menu music, which follows the page on screen (Play/ScctFrontEndAudio.h). */
 	void SetMusicPlaying(bool bPlaying);
+
+	/** The converted content's folder, empty without the bridge. */
+	FString GetContentRoot();
 
 	/** Brings the music's volume up to date with the settings. */
 	void RefreshVolumes();
@@ -123,14 +132,11 @@ private:
 
 	FScctSoundCache SoundCache;
 	FString SharedRoot;
-	FString MusicFile;
 
 	UPROPERTY(Transient)
 	TMap<int32, TObjectPtr<UScctSoundWave>> Waves;
 
-	UPROPERTY(Transient)
-	TObjectPtr<UAudioComponent> Music;
-
-	bool bMusicWanted = false;
+	/** -ScctMenuSoundLog: every interface sound is logged. */
+	bool bLogSounds = false;
 	double LastMoveSound = 0.0;
 };

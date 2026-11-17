@@ -9,7 +9,10 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
+#include "Online/ScctContentDownloads.h"
+#include "Online/ScctMapFolders.h"
 #include "OpenSCCT.h"
+#include "Online/ScctMapPacks.h"
 #include "Online/ScctTokenStore.h"
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
@@ -18,6 +21,7 @@
 
 const TCHAR* const UScctOnlineSubsystem::FrontEndLevel = TEXT("/Game/OpenSCCT/Maps/L_FrontEnd");
 const TCHAR* const UScctOnlineSubsystem::OnlineOption = TEXT("ScctOnline");
+const TCHAR* const UScctOnlineSubsystem::RuntimeLevel = TEXT("/Game/OpenSCCT/RuntimeMap/L_RuntimeMap");
 
 namespace
 {
@@ -65,30 +69,82 @@ UScctOnlineSubsystem* UScctOnlineSubsystem::Get(const UObject* WorldContext)
 	return Instance != nullptr ? Instance->GetSubsystem<UScctOnlineSubsystem>() : nullptr;
 }
 
-FString UScctOnlineSubsystem::LevelOf(const FString& Map)
+FString UScctOnlineSubsystem::ImportedLevelOf(const FString& Map)
 {
 	return FString::Printf(TEXT("/Game/Imported/Maps/%s/%s"), *Map, *Map);
 }
 
-TArray<FString> UScctOnlineSubsystem::FindImportedMaps()
+FString UScctOnlineSubsystem::LevelOf(const FString& Map)
 {
-	// The maps a match can be played on are the ones the bridge has converted content for; of those, the ones
-	// with an imported level can be shown.
+	const FString Imported = ImportedLevelOf(Map);
+	if (Map.IsEmpty() || FPackageName::DoesPackageExist(Imported) || !FPackageName::DoesPackageExist(RuntimeLevel))
+	{
+		return Imported;
+	}
+	return FString::Printf(TEXT("%s?ScctMap=%s"), RuntimeLevel, *Map);
+}
+
+FString UScctOnlineSubsystem::LevelPackageOfMap(const FString& Map)
+{
+	FString Level = LevelOf(Map);
+	int32 Options = INDEX_NONE;
+	if (Level.FindChar(TEXT('?'), Options))
+	{
+		Level.LeftInline(Options);
+	}
+	return Level;
+}
+
+bool UScctOnlineSubsystem::IsPlayable(const FString& Map)
+{
+	if (Map.IsEmpty())
+	{
+		return false;
+	}
+	if (FPackageName::DoesPackageExist(ImportedLevelOf(Map)))
+	{
+		return true;
+	}
+	return FPackageName::DoesPackageExist(RuntimeLevel) && ScctMapFolders::CanBuild(Map);
+}
+
+bool UScctOnlineSubsystem::IsLevelOf(const UWorld& World, const FString& Map)
+{
+	if (LevelPackageOf(World) != LevelPackageOfMap(Map))
+	{
+		return false;
+	}
+	// The runtime level plays whichever map its URL names.
+	return LevelPackageOf(World) != RuntimeLevel || World.URL.GetOption(TEXT("ScctMap="), TEXT("")) == Map;
+}
+
+TArray<FString> UScctOnlineSubsystem::FindPlayableMaps()
+{
+	// The maps a match can be played on are the ones the bridge has converted content for (in any of its map
+	// folders); of those, the ones with an imported level, or with the render files the runtime level is built
+	// from, can be shown.
 	TArray<FString> Maps;
 	const FScctOnlineApi* Online = ScctFeature<FScctOnlineApi>();
 	if (Online == nullptr)
 	{
 		return Maps;
 	}
+	ScctMapFolders::Apply();
 
 	TArray<TCHAR> Buffer;
 	Buffer.SetNumZeroed(Online->GetText(static_cast<int32>(EScctOnlineText::InstalledMaps), nullptr, 0) + 1);
 	Online->GetText(static_cast<int32>(EScctOnlineText::InstalledMaps), Buffer.GetData(), Buffer.Num());
 	TArray<FString> Installed;
 	FString(Buffer.GetData()).ParseIntoArrayLines(Installed);
+	const bool bRuntimeLevel = FPackageName::DoesPackageExist(RuntimeLevel);
+	TSet<FString> Renderable;
+	if (bRuntimeLevel)
+	{
+		Renderable.Append(ScctMapFolders::RenderableMaps());
+	}
 	for (const FString& Map : Installed)
 	{
-		if (FPackageName::DoesPackageExist(LevelOf(Map)))
+		if (FPackageName::DoesPackageExist(ImportedLevelOf(Map)) || Renderable.Contains(Map))
 		{
 			Maps.Add(Map);
 		}
@@ -115,12 +171,15 @@ void UScctOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	FParse::Value(CommandLine, TEXT("ScctLeaveAfter="), LeaveAfter);
 	FParse::Value(CommandLine, TEXT("ScctChat="), AutoChat, false);
 	ReadHostSwitches();
+	ReadModerationSwitches();
 	// The status lines are for unattended runs; a player's log is not filled with them.
 	LogEvery = AutoJoin.IsEmpty() && AutoHostPort < 0 ? 0.0f : 2.0f;
 	FParse::Value(CommandLine, TEXT("ScctOnlineLog="), LogEvery);
 
 	RegisterOnlineSettings();
 	SettingsChangedHandle = FScctSettings::OnChanged().AddUObject(this, &UScctOnlineSubsystem::HandleSettingChanged);
+	// Missing-map downloads: -ScctAutoDownload and the log of maps that come in (Online/ScctContentDownloads.h).
+	ScctContentDownloads::Start(this);
 
 	LastTickSeconds = FPlatformTime::Seconds();
 	TickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &UScctOnlineSubsystem::TickFromTicker));
@@ -335,19 +394,24 @@ void UScctOnlineSubsystem::SendChat(const FString& Text, bool bTeamOnly)
 	}
 }
 
-bool UScctOnlineSubsystem::SetMatchMap(const FString& Map)
-{
-	return Api != nullptr && Api->SetMatch(*Map, -1) != 0;
-}
-
 bool UScctOnlineSubsystem::SetMatch(const FString& Map, int32 Mode)
 {
-	return Api != nullptr && Api->SetMatch(Map.IsEmpty() ? nullptr : *Map, Mode) != 0;
+	if (Api == nullptr || Api->SetMatch(*Map, Mode) == 0)
+	{
+		return false;
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: asked the server for the next match: map %s, mode %d, the map's own settings"), Map.IsEmpty() ? *SetupMap : *Map, Mode);
+	return true;
 }
 
 bool UScctOnlineSubsystem::SetSetupOptions(const FString& Options)
 {
-	return Api != nullptr && Api->SetSetupOptions(*Options) != 0;
+	if (Api == nullptr || Options.IsEmpty() || Api->SetSetupOptions(*Options) == 0)
+	{
+		return false;
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("Online: asked the server to change the setup: %s"), *Options);
+	return true;
 }
 
 int32 UScctOnlineSubsystem::GetSetupOption(const TCHAR* Name, int32 Fallback) const
@@ -361,30 +425,6 @@ int32 UScctOnlineSubsystem::GetSetupOption(const TCHAR* Name, int32 Fallback) co
 	}
 	const FString Value = SetupOptions.Mid(At + Key.Len());
 	return Value.IsEmpty() ? Fallback : FCString::Atoi(*Value);
-}
-
-void UScctOnlineSubsystem::AdminLogin(const FString& Password)
-{
-	if (Api != nullptr && !Password.IsEmpty())
-	{
-		Api->AdminLogin(*Password);
-	}
-}
-
-void UScctOnlineSubsystem::AdminCommand(const FString& Command)
-{
-	if (Api != nullptr && !Command.TrimStartAndEnd().IsEmpty())
-	{
-		Api->AdminCommand(*Command.TrimStartAndEnd());
-	}
-}
-
-void UScctOnlineSubsystem::BackToLobby()
-{
-	if (Api != nullptr)
-	{
-		Api->BackToLobby();
-	}
 }
 
 bool UScctOnlineSubsystem::GetResults(FScctOnlineResults& OutResults, TArray<FScctOnlineResultRow>& OutRows) const
@@ -552,6 +592,36 @@ void UScctOnlineSubsystem::RefreshTexts()
 	SetupOptions = ReadText(EScctOnlineText::SetupOptions);
 	Motd = ReadText(EScctOnlineText::MasterMotd);
 
+	// The setup and the lobby's players into the log when they change: what the host set up, and who it un-readied.
+	const FString NewSetup = ReadText(EScctOnlineText::SetupOptions);
+	if (NewSetup != SetupOptions)
+	{
+		SetupOptions = NewSetup;
+		if (!SetupOptions.IsEmpty())
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("Online: the lobby's setup is now %s (%s)"), *SetupOptions, *SetupDescription);
+		}
+	}
+	FString Roster;
+	if (GetState() == EScctOnlineState::Lobby)
+	{
+		for (const FScctOnlinePlayer& Player : Players)
+		{
+			static const TCHAR* const MapStates[] = { TEXT("map ?"), TEXT("map ok"), TEXT("map MISSING"), TEXT("map OTHER VERSION") };
+			Roster += FString::Printf(TEXT("%s%s (%s, %s, %s)"), Roster.IsEmpty() ? TEXT("") : TEXT(", "), Player.Name,
+				Player.Team == 0 ? TEXT("spy") : Player.Team == 1 ? TEXT("merc") : TEXT("watching"),
+				(Player.Flags & EScctOnlinePlayerFlags::Ready) != 0 ? TEXT("ready") : TEXT("not ready"), MapStates[FMath::Clamp(Player.MapState, 0, 3)]);
+		}
+	}
+	if (Roster != LoggedRoster)
+	{
+		LoggedRoster = Roster;
+		if (!Roster.IsEmpty())
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("Online: lobby players: %s"), *Roster);
+		}
+	}
+
 	if (Status.MasterState != LastMasterState)
 	{
 		LastMasterState = Status.MasterState;
@@ -614,7 +684,10 @@ void UScctOnlineSubsystem::DrainChat()
 		Entry.Team = Line.Team;
 		Entry.Sender = Line.Sender;
 		Entry.Text = Line.Text;
-		UE_LOG(LogOpenSCCT, Log, TEXT("Online chat: %s%s"), Entry.bSystem ? TEXT("[server] ") : *FString::Printf(TEXT("<%s> "), *Entry.Sender), *Entry.Text);
+		// A team line says so, and whose side it was for: only that side's players receive one.
+		const FString Team = Entry.bTeamOnly ? FString::Printf(TEXT("[team only, %s] "), Entry.Team == 0 ? TEXT("spies") : Entry.Team == 1 ? TEXT("mercs") : TEXT("?")) : FString();
+		UE_LOG(LogOpenSCCT, Log, TEXT("Online chat: %s%s%s"), *Team, Entry.bSystem ? TEXT("[server] ") : *FString::Printf(TEXT("<%s> "), *Entry.Sender), *Entry.Text);
+		++ChatReceived;
 		bAny = true;
 	}
 	if (bAny)
@@ -638,7 +711,7 @@ void UScctOnlineSubsystem::HandleStateChange(EScctOnlineState Old, EScctOnlineSt
 		{
 			Notice = TEXT("The connection to the server was lost.");
 		}
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Online: the visit failed%s: %s"), HasFlag(EScctOnlineStatusFlags::Kicked) ? TEXT(" (the server ended it)") : TEXT(""), *Notice);
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Online: the visit failed%s: %s"), HasFlag(EScctOnlineStatusFlags::Kicked) ? TEXT(" (status Kicked: the server kicked or banned this player)") : TEXT(""), *Notice);
 	}
 	else if (New == EScctOnlineState::Match && MatchSeconds < 0.0f)
 	{
@@ -696,22 +769,58 @@ void UScctOnlineSubsystem::FollowLevel()
 		return;
 	}
 
-	const FString Current = LevelPackageOf(*World);
 	const bool bInOnlineLevel = World->URL.HasOption(OnlineOption);
 	FString Wanted;
 	if (IsOnARoundsMap(GetState()) && !MapToLoad.IsEmpty() && !HasFlag(EScctOnlineStatusFlags::RoundRefused))
 	{
-		const FString Level = LevelOf(MapToLoad);
-		if (!FPackageName::DoesPackageExist(Level))
+		FString Level = LevelOf(MapToLoad);
+		if (!FPackageName::DoesPackageExist(ImportedLevelOf(MapToLoad)) && UScctMapPacks::CanMountPacks())
+		{
+			// A packaged game has no imported levels of its own: the map's cooked pack is downloaded and mounted
+			// (OpenSCCT-Unreal-Content), for the version of the map this player's svmap is.
+			if (LevelFetchMap != MapToLoad)
+			{
+				LevelFetchMap = MapToLoad;
+				LevelFetchError.Reset();
+				if (UScctMapPacks* Packs = GetGameInstance()->GetSubsystem<UScctMapPacks>())
+				{
+					UE_LOG(LogOpenSCCT, Log, TEXT("Online: the server plays %s, which has no level in this game: fetching its pack"), *MapToLoad);
+					TWeakObjectPtr<UScctOnlineSubsystem> WeakThis(this);
+					const FString Map = MapToLoad;
+					Packs->EnsureMapLevel(Map, UScctMapPacks::ContentHashOfInstalledMap(Map), FScctMapLevelReady::CreateLambda(
+						[WeakThis, Map](bool bOk, const FString& LevelOrReason)
+						{
+							UScctOnlineSubsystem* Self = WeakThis.Get();
+							if (Self != nullptr && Self->LevelFetchMap == Map)
+							{
+								Self->LevelFetchError = bOk ? FString() : LevelOrReason;
+								Self->Touch();
+							}
+						}));
+				}
+			}
+			if (LevelFetchError.IsEmpty() && !FPackageName::DoesPackageExist(ImportedLevelOf(MapToLoad)))
+			{
+				// Still downloading: the travel waits (UScctMapPacks::GetProgress has the line and the fraction).
+				return;
+			}
+			// The pack's level is mounted now, or the fetch failed and the render files may still build the map.
+			Level = LevelOf(MapToLoad);
+		}
+		if (!IsPlayable(MapToLoad))
 		{
 			// The simulation could play it, but there is nothing to draw: the visit ends with the reason.
-			UE_LOG(LogOpenSCCT, Error, TEXT("Online: the server plays %s, which has no imported level (%s)"), *MapToLoad, *Level);
+			UE_LOG(LogOpenSCCT, Error, TEXT("Online: the server plays %s, which has no imported level (%s) and no render files to build one from"), *MapToLoad, *Level);
 			Api->Leave();
-			Notice = FString::Printf(TEXT("The server plays %s, which has not been imported into this game yet."), *MapToLoad);
+			Notice = LevelFetchError.IsEmpty()
+				? FString::Printf(TEXT("The server plays %s, which this game can neither find imported nor build from its render files."), *MapToLoad)
+				: LevelFetchError;
+			LevelFetchMap.Reset();
+			LevelFetchError.Reset();
 			Touch();
 			return;
 		}
-		if (Current != Level || !bInOnlineLevel)
+		if (!IsLevelOf(*World, MapToLoad) || !bInOnlineLevel)
 		{
 			Wanted = FString::Printf(TEXT("%s?%s=1"), *Level, OnlineOption);
 		}
@@ -751,7 +860,7 @@ void UScctOnlineSubsystem::ReportLoadedWhenReady()
 
 	const UWorld* World = GetGameInstance()->GetWorld();
 	if (World == nullptr || !World->HasBegunPlay() || World->GetTimeSeconds() < LoadedAfterSeconds
-		|| !World->URL.HasOption(OnlineOption) || LevelPackageOf(*World) != LevelOf(MapToLoad))
+		|| !World->URL.HasOption(OnlineOption) || !IsLevelOf(*World, MapToLoad))
 	{
 		return;
 	}
@@ -812,6 +921,7 @@ void UScctOnlineSubsystem::RunUnattended(float DeltaSeconds)
 			SendChat(AutoChat);
 		}
 	}
+	RunUnattendedModeration(DeltaSeconds);
 
 	if (MatchSeconds >= 0.0f && !bLeftOnTimer && LeaveAfter > 0.0f)
 	{
