@@ -43,6 +43,14 @@
 			"Name": "EditorScriptingUtilities",
 			"Enabled": true,
 			"TargetAllowList": [ "Editor" ]
+		},
+		{
+			"Name": "AudioCapture",
+			"Enabled": true
+		},
+		{
+			"Name": "ResonanceAudio",
+			"Enabled": true
 		}
 	]
 }

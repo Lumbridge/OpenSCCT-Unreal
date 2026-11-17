@@ -15,6 +15,7 @@
 #include "Engine/GameInstance.h"
 #include "OpenSCCT.h"
 #include "Play/ScctAudioMix.h"
+#include "Play/ScctAudioOutput.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Play/ScctSoundWave.h"
@@ -33,6 +34,11 @@ namespace
 		const UScctUserSettings* Settings = UScctUserSettings::Get();
 		return Settings == nullptr ? 1.0f : Settings->GetGain(bMusic ? EScctSoundKind::Music : bObjective ? EScctSoundKind::Objective : bAmbient ? EScctSoundKind::Ambient : EScctSoundKind::Effects);
 	}
+}
+
+float UScctAudioSubsystem::SettingsGainOf(const FVoice& Voice)
+{
+	return AudioSettingsGain(Voice.bMusic, Voice.AmbientId != 0, Voice.Category == static_cast<uint8>(EScctAudioCategory::Objective));
 }
 
 namespace
@@ -158,7 +164,10 @@ void UScctAudioSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	ZoneEffects.Reset();
 	ListenerZone = INDEX_NONE;
 	ActiveZone = -2;
-	NumStarted = NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
+	ProbeCalls.Reset();
+	bLastListenerSet = false;
+	NumStarted =NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
+	NumHrtfStarted = NumPannedStarted = 0;
 }
 
 void UScctAudioSubsystem::HandleMatchStarted()
@@ -183,6 +192,12 @@ void UScctAudioSubsystem::HandleMatchStarted()
 
 	// Harmless when the bridge already started the feature with the session.
 	Events->Begin();
+
+	FString AcousticError;
+	Acoustics = ScctFeature<FScctAcousticApi>(&AcousticError);
+	UE_CLOG(Acoustics == nullptr, LogOpenSCCT, Warning, TEXT("Audio: walls do not change sound this match, the bridge's acoustic table is missing: %s"), *AcousticError);
+	ReadAcousticSwitches();
+	ReadAudioViewSwitches();
 
 	FString Song;
 	if (FParse::Value(FCommandLine::Get(), TEXT("ScctAudioMusic="), Song, false))
@@ -221,6 +236,8 @@ void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
 	const FScctBridgeView& View = Session->GetView();
 	bListenerValid = View.Valid != 0;
 	Listener = FVector(View.X, View.Y, View.Z);
+	// The scope's audio zoom and the listener's velocity (Play/ScctAudioView.cpp).
+	UpdateAudioView(DeltaSeconds);
 
 	if (CheckSongIn >= 0.0f)
 	{
@@ -234,8 +251,10 @@ void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
 		}
 	}
 
+	UpdateAudioProbe(DeltaSeconds);
 	DrainSounds();
 	UpdateAmbient();
+	UpdateAcoustics(DeltaSeconds);
 	UpdateVoices(DeltaSeconds);
 	UpdateReverb();
 
@@ -389,6 +408,7 @@ void UScctAudioSubsystem::Play(const FScctSound& Record)
 	Voice.Category = static_cast<uint8>(bObjective ? EScctAudioCategory::Objective : EScctAudioCategory::World);
 	// A timed loop of a sequence ends by the clock; any other loop runs until it is stopped.
 	Voice.LifeLeft = Record.PlaySeconds > 0.0f ? Record.PlaySeconds : -1.0f;
+	Voice.bProbe = ProbeCalls.Contains(Record.CallId);
 	Voices.Add(Voice);
 
 	// Start the decode now, so a delayed entry of a sequence is ready when its time comes.
@@ -706,24 +726,23 @@ void UScctAudioSubsystem::UpdateVoices(float DeltaSeconds)
 					break;
 				}
 			}
+			if (Voice.bPositional)
+			{
+				Voice.Location = FindVoiceLocation(Voice);
+			}
+			// The scope's audio zoom on its volume and the Doppler shift on its pitch (Play/ScctAudioView.cpp).
+			UpdateZoomAndDoppler(Voice, DeltaSeconds);
 			if (UAudioComponent* Component = Voice.Component.Get())
 			{
 				if (Voice.bPositional)
 				{
-					Voice.Location = FindVoiceLocation(Voice);
-					Component->SetWorldLocation(Voice.Location);
+					// Heard from where its sound reaches the listener (an opening when a wall is in the way).
+					Component->SetWorldLocation(Voice.Location + Voice.AcousticOffset);
 				}
-				// The ambience follows the map's volumes; every voice follows the settings' volume of its kind.
-				const float Wanted = Voice.Volume * AudioSettingsGain(Voice.bMusic, Voice.AmbientId != 0, Voice.Category == static_cast<uint8>(EScctAudioCategory::Objective));
-				if (!FMath::IsNearlyEqual(Voice.AppliedVolume, Wanted, 0.005f))
-				{
-					Voice.AppliedVolume = Wanted;
-					Component->SetVolumeMultiplier(Wanted);
-				}
-			}
-			else if (Voice.bPositional)
-			{
-				Voice.Location = FindVoiceLocation(Voice);
+				// The ambience follows the map's volumes, every voice the settings' volume of its kind (SettingsGainOf),
+				// a 3D voice its sound through walls and the audio zoom, and its pitch the Doppler shift: ApplyAcoustics
+				// sets them.
+				ApplyAcoustics(Voice, false);
 			}
 			break;
 
@@ -772,7 +791,11 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 		Voice.LifeLeft = Pcm->Seconds() / Voice.Pitch + 0.1f;
 	}
 	Voice.State = EVoiceState::Playing;
-	Voice.AppliedVolume = Voice.Volume * AudioSettingsGain(Voice.bMusic, Voice.AmbientId != 0, Voice.Category == static_cast<uint8>(EScctAudioCategory::Objective));
+	// Its first frame has no movement yet: only the listener's own counts toward the Doppler shift.
+	Voice.bHasLastLocation = false;
+	UpdateZoomAndDoppler(Voice, 0.0f);
+	Voice.AppliedVolume = HeardVolumeOf(Voice);
+	Voice.AppliedPitch = Voice.Pitch * Voice.DopplerPitch;
 	++NumStarted;
 
 	if (bHasDevice)
@@ -788,13 +811,26 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 			// play flat but are in the room all the same; music and the interface's flat sounds are not.
 			Component->AttenuationSettings = Voice.bPositional ? FindOrCreateAttenuation(Voice.MinDistance, Voice.Radius)
 				: (Voice.bAtListener && !Voice.bMusic ? FindOrCreateOwnSoundSettings() : nullptr);
+			if (Voice.bPositional && Component->AttenuationSettings != nullptr)
+			{
+				const bool bHrtf = Component->AttenuationSettings->Attenuation.SpatializationAlgorithm == ESoundSpatializationAlgorithm::SPATIALIZATION_HRTF;
+				int32& Count = bHrtf ? NumHrtfStarted : NumPannedStarted;
+				UE_CLOG(Count == 0, LogOpenSCCT, Log, TEXT("ScctAudio: first 3D voice %s ('%s')"),
+					bHrtf ? TEXT("created with HRTF (Headphones)") : TEXT("created with panning (Speakers)"), *GetName(Voice.FileId));
+				++Count;
+			}
 			Component->bIsMusic = Voice.bMusic;
 			// The category's class routes the voice to its submix (the reverb, the peaks); the player's volume of its
 			// kind is in AppliedVolume (Menu/ScctUserSettings.h), so the submix itself is not turned down again.
 			Component->SoundClassOverride = Mix != nullptr ? Mix->GetClass(static_cast<EScctAudioCategory>(Voice.Category)) : nullptr;
 			Component->SetVolumeMultiplier(Voice.AppliedVolume);
-			Component->SetPitchMultiplier(Voice.Pitch);
-			Component->SetWorldLocation(Voice.Location);
+			Component->SetPitchMultiplier(Voice.AppliedPitch);
+			Component->SetWorldLocation(Voice.Location + Voice.AcousticOffset);
+			// A reused component keeps the filter of its last voice: every voice sets its own. Before Play the
+			// component's own properties are what the new engine voice starts with (the setters reach only a playing one).
+			Voice.AppliedLowPass = Voice.AcousticLowPass;
+			Component->bEnableLowPassFilter = Voice.AcousticLowPass < 19999.0f;
+			Component->LowPassFilterFrequency = Voice.AcousticLowPass;
 			if (Voice.FadeIn > 0.0f)
 			{
 				Component->FadeIn(Voice.FadeIn, 1.0f);
@@ -921,7 +957,12 @@ USoundAttenuation* UScctAudioSubsystem::FindOrCreateAttenuation(float MinDistanc
 	// Whole centimetres are fine enough, and keep the number of distinct settings small.
 	const uint32 MinKey = static_cast<uint32>(FMath::RoundToInt(FMath::Max(MinDistance, 1.0f)));
 	const uint32 RadiusKey = static_cast<uint32>(FMath::RoundToInt(FMath::Max(Radius, 0.0f)));
-	TObjectPtr<USoundAttenuation>& Found = Attenuations.FindOrAdd((static_cast<uint64>(MinKey) << 32) | RadiusKey);
+	// Headphones renders 3D voices by HRTF through the spatialization plugin (Play/ScctAudioOutput.h), Speakers pans
+	// them. Each has its own settings: a voice already playing keeps the ones it started with, as the engine cannot
+	// change a playing voice's spatialization.
+	const bool bHrtf = UScctAudioOutputSubsystem::UseHrtf();
+	const uint64 SettingsKey = (static_cast<uint64>(MinKey & 0x7fffffffu) << 32) | RadiusKey | (bHrtf ? (1ull << 63) : 0ull);
+	TObjectPtr<USoundAttenuation>& Found = Attenuations.FindOrAdd(SettingsKey);
 	if (Found != nullptr)
 	{
 		return Found;
@@ -939,6 +980,7 @@ USoundAttenuation* UScctAudioSubsystem::FindOrCreateAttenuation(float MinDistanc
 	FSoundAttenuationSettings& Settings = Found->Attenuation;
 	Settings.bAttenuate = true;
 	Settings.bSpatialize = true;
+	Settings.SpatializationAlgorithm = bHrtf ? ESoundSpatializationAlgorithm::SPATIALIZATION_HRTF : ESoundSpatializationAlgorithm::SPATIALIZATION_Default;
 	Settings.AttenuationShape = EAttenuationShape::Sphere;
 	Settings.AttenuationShapeExtents = FVector(Min, 0.0, 0.0);
 	Settings.FalloffDistance = Falloff;
@@ -1202,6 +1244,11 @@ void UScctAudioSubsystem::LogSummary() const
 	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: %d voices now (%d playing, %d waiting, %d ambient, peak %d), %d Unreal components in use of %d made; since the match began %d started, %d stopped, %d played beyond 100 x their radius, %d refused by the slot rule, %d replaced, %d objective jingles skipped; files: %d decoded (%.1f MB held), %d failed to decode, %d plays lost to them; listener at (%.0f, %.0f, %.0f)"),
 		Voices.Num(), Playing, Waiting, Ambient, PeakVoices, Sounding, Components.Num(), NumStarted, NumStopped, NumOutOfReach, NumRefused, NumStolen, NumObjectiveSkipped,
 		Cache.GetNumDecoded(), Cache.GetBytes() / (1024.0 * 1024.0), Cache.GetNumFailed(), NumFailedFiles, Listener.X, Listener.Y, Listener.Z);
+	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: 3D voices started %d with HRTF, %d panned; output mode %s%s"), NumHrtfStarted, NumPannedStarted,
+		UScctAudioOutputSubsystem::HeadphonesChosen() ? TEXT("Headphones") : TEXT("Speakers"),
+		UScctAudioOutputSubsystem::SpatializerProblem().IsEmpty() ? TEXT("") : *(TEXT(" (") + UScctAudioOutputSubsystem::SpatializerProblem() + TEXT(")")));
+	LogAcousticSummary();
+	LogAudioViewSummary();
 	TArray<FString> Notes;
 	OnSummary().Broadcast(Notes);
 	UE_CLOG(Notes.Num() > 0, LogOpenSCCT, Log, TEXT("Audio summary: also %s"), *FString::Join(Notes, TEXT("; ")));

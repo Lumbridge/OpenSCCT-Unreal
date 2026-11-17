@@ -11,6 +11,7 @@
 #include "Misc/App.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
+#include "Play/ScctAudioOutput.h"
 #include "Play/ScctControlSettings.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctFeatures.h"
@@ -633,6 +634,35 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildAudio()
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Hub")) ];
 	Volume(TEXT("Jukebox music"), TEXT("How loud the hub's jukebox plays when you stand near it."), &Settings->HubJukeboxVolume);
 	Volume(TEXT("Activity chimes"), TEXT("How loud the chimes of the hub's courses, aim range and ball game play."), &Settings->HubChimesVolume);
+
+	// The output device and mode (Play/ScctAudioOutput.h): kept in the settings registry, drawn here because the device
+	// list changes while the page is open (a device plugged in or out).
+	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Output")) ];
+	Rows->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 3.0f)
+	[
+		SNew(SScctStepper)
+			.Label(FText::FromString(TEXT("Output device")))
+			.Description(FText::FromString(TEXT("Where the game's sound plays. Default follows the system's default device; a device that is unplugged falls back to it until it is back.")))
+			.Wrap(false)
+			.GetOptions([]
+			{
+				const UScctAudioOutputSubsystem* Output = UScctAudioOutputSubsystem::GetCurrent();
+				return Output != nullptr ? Output->DeviceChoices() : TArray<FString>{ TEXT("Default") };
+			})
+			.Get([] { const UScctAudioOutputSubsystem* Output = UScctAudioOutputSubsystem::GetCurrent(); return Output != nullptr ? Output->ChosenDeviceIndex() : 0; })
+			.Set([](int32 Index) { if (UScctAudioOutputSubsystem* Output = UScctAudioOutputSubsystem::GetCurrent()) { Output->ChooseDevice(Index); } })
+	];
+	Rows->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 3.0f)
+	[
+		SNew(SScctStepper)
+			.Label(FText::FromString(TEXT("Output mode")))
+			.Description(FText::FromString(TEXT("Headphones renders the sounds around you binaurally (HRTF), so above, below and behind can be told apart. Speakers pans them between the speakers. A change reaches the sounds that start after it.")))
+			.Wrap(false)
+			.Options({ TEXT("Speakers"), TEXT("Headphones") })
+			.Get([] { return UScctAudioOutputSubsystem::HeadphonesChosen() ? 1 : 0; })
+			.Set([](int32 Index) { FScctSettings::SetInt(TEXT("Audio.OutputMode"), Index); FScctSettings::Save(); })
+	];
+
 	for (const FName Page : RegistryPagesOfTab(1))
 	{
 		AddRegistryRows(Rows, Page);

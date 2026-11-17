@@ -33,6 +33,10 @@ param(
     # Run the audio engine without a sound device (the engine's non-realtime renderer, -DeterministicAudio)
     # instead of no audio engine at all (-nosound): voices really play, into nothing. Never audible.
     [switch] $NullAudio,
+    # Run the audio engine on the machine's real output devices (neither -nosound nor -DeterministicAudio): the device
+    # list and the spatialization plugin are only there then. An off-screen window has no focus, so the engine plays it
+    # at its unfocused volume.
+    [switch] $DeviceAudio,
     [string] $Engine = 'F:\UE_5.8',
     # A level to open instead of the imported map (-Map still names the log): /Game/OpenSCCT/Maps/L_FrontEnd for the menu.
     [string] $Level = ''
@@ -55,7 +59,7 @@ $arguments = @(
     "`"$project\OpenSCCTUnreal.uproject`"",
     "`"$(if ($Level) { $Level } else { "/Game/Imported/Maps/$Map/$Map" })$Options`"",
     '-game', '-RenderOffscreen', '-ResX=1920', '-ResY=1080', '-ForceRes', '-unattended', '-nosplash',
-    $(if ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
+    $(if ($DeviceAudio) { '' } elseif ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
     (Format-Switch 'ScctContent' $contentDir),
     "-ScctShots=$Shots",
     "-ScctShotEvery=$Every",

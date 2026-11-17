@@ -8,7 +8,10 @@
 #include "Menu/ScctMenuSubsystem.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Engine/GameInstance.h"
 #include "Styling/CoreStyle.h"
+#include "Voice/SScctVoiceLobbyControls.h"
+#include "Voice/ScctVoiceSubsystem.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -436,6 +439,11 @@ namespace
 			if (Player.MapState == 2) { Badges += TEXT("NO MAP  "); }
 			else if (Player.MapState == 3) { Badges += TEXT("OTHER MAP VERSION  "); }
 			const FString Rank = LobbyRank(Player.Rank);
+			// Voice chat's part of the row (Voice/SScctVoiceLobbyControls): speaking mark, volume, mute, the host's voice ban.
+			const UScctOnlineSubsystem* Visit = Host.Online.Get();
+			const TWeakObjectPtr<UScctVoiceSubsystem> VoiceChat = Visit != nullptr && Visit->GetGameInstance() != nullptr ? Visit->GetGameInstance()->GetSubsystem<UScctVoiceSubsystem>() : nullptr;
+			const FScctOnlinePlayer* LocalRow = Visit != nullptr ? Visit->GetPlayers().FindByPredicate([Visit](const FScctOnlinePlayer& P) { return P.Id == Visit->GetStatus().LocalId; }) : nullptr;
+			const bool bLocalAdmin = LocalRow != nullptr && (LocalRow->Flags & (EScctOnlinePlayerFlags::Host | EScctOnlinePlayerFlags::Admin)) != 0;
 			return SNew(SBorder)
 				.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 				.BorderBackgroundColor(bLocal ? ScctUi::Accent().CopyWithNewOpacity(0.16f) : FLinearColor(1.0f, 1.0f, 1.0f, 0.04f))
@@ -464,6 +472,11 @@ namespace
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.0f, 0.0f)
 					[
 						ScctUi::Label(Badges.TrimEnd(), ScctHudStyle::TextDim(), 10.0f)
+					]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)
+					[
+						SNew(SScctVoiceLobbyControls).Voice(VoiceChat).PlayerName(FString(Player.Name)).PlayerId(Player.Id).Team(Player.Team)
+						.Local(bLocal).Bot(bBot).CanBan(bLocalAdmin && !bLocal).VoiceBanned((Player.Flags & EScctOnlinePlayerFlags::VoiceBanned) != 0)
 					]
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 					[
