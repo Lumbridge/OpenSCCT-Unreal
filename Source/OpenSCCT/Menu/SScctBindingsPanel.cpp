@@ -697,6 +697,27 @@ bool ScctBindings::HasUnsaved()
 	return Bindings != nullptr && Bindings->HasUnsaved() != 0;
 }
 
+bool ScctBindings::OpenCapture(const FString& Title, const FString& Description, const FLinearColor& Colour, bool bCanClear,
+	TFunction<FString(const FString&)> Validate, TFunction<void(const FString&)> OnCaptured, TFunction<void()> OnClear)
+{
+	const TSharedPtr<SOverlay> Host = SScctOptionsPage::ModalHost();
+	if (!Host.IsValid())
+	{
+		return false;
+	}
+	const TSharedRef<SScctBindingCapture> Capture = SNew(SScctBindingCapture)
+		.Title(Title)
+		.Description(Description)
+		.bDoubleTapAllowed(false)
+		.bCanClear(bCanClear)
+		.Colour(Colour)
+		.Validate(MoveTemp(Validate))
+		.OnCaptured(MoveTemp(OnCaptured))
+		.OnClear(MoveTemp(OnClear));
+	Capture->Show(Host.ToSharedRef());
+	return true;
+}
+
 void ScctBindings::RunUnattendedTest()
 {
 	static bool bDone = false;

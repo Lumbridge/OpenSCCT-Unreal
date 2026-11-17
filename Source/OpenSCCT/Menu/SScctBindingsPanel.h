@@ -61,6 +61,14 @@ namespace ScctBindings
 	bool HasUnsaved();
 
 	/**
+	 * Opens the key capture over the Options screen for a key that is not an action's (the mouse section's clutch
+	 * keys): the same box, keys, combinations and Escape. Validate says why a key cannot be taken ("" when it can);
+	 * OnClear runs for CLEAR, Delete or Backspace when bCanClear. False when no Options screen is on show.
+	 */
+	bool OpenCapture(const FString& Title, const FString& Description, const FLinearColor& Colour, bool bCanClear,
+		TFunction<FString(const FString&)> Validate, TFunction<void(const FString&)> OnCaptured, TFunction<void()> OnClear);
+
+	/**
 	 * -ScctBindTest=<side>,<key>,<action id>[,replace|swap|share][;...] and -ScctBindTest=<side>,reset: binds the
 	 * key to the action in place of its primary key, through Commit as a capture would (a conflict is answered with
 	 * the mode given, replace by default), or resets the side's keys; then applies and saves, as SAVE would. Each

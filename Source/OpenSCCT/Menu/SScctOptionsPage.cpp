@@ -5,6 +5,7 @@
 #include "Menu/SScctBindingsPanel.h"
 #include "Menu/SScctBrightnessPage.h"
 #include "Menu/SScctConfirm.h"
+#include "Menu/SScctMouseAimPanel.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
@@ -35,10 +36,24 @@ namespace
 	constexpr float BodyHeight = 500.0f;
 	constexpr float LabelShare = 0.42f;
 
-	TMap<FName, FScctOptionsSection>& Sections()
+	/** The sections of each page, drawn in the order they were registered. */
+	TMap<FName, TArray<FScctOptionsSection>>& Sections()
 	{
-		static TMap<FName, FScctOptionsSection> Registered;
+		static TMap<FName, TArray<FScctOptionsSection>> Registered;
 		return Registered;
+	}
+
+	/** Runs Body on every registered section, page by page and on a page in the order they were registered. */
+	template <typename TBody>
+	void ForEachSection(TBody&& Body)
+	{
+		for (const TPair<FName, TArray<FScctOptionsSection>>& Page : Sections())
+		{
+			for (const FScctOptionsSection& Section : Page.Value)
+			{
+				Body(Section);
+			}
+		}
 	}
 
 	/** The overlay of the screen built last (one is on show at a time). */
@@ -139,7 +154,7 @@ namespace
 
 void SScctOptionsPage::RegisterSection(FName Page, const FScctOptionsSection& Section)
 {
-	Sections().Add(Page, Section);
+	Sections().FindOrAdd(Page).Add(Section);
 }
 
 TSharedPtr<SOverlay> SScctOptionsPage::ModalHost()
@@ -169,6 +184,8 @@ void SScctOptionsPage::Construct(const FArguments& InArgs)
 	{
 		RegisterDemoOptions();
 	}
+	// The mouse above the long list of keys.
+	SScctMouseAimPanel::RegisterSections();
 	SScctBindingsPanel::RegisterSections();
 	const TArray<FName> Pages = FindPages();
 	CurrentPage = Pages.Contains(InArgs._InitialPage) ? InArgs._InitialPage : Pages.Num() > 0 ? Pages[0] : NAME_None;
@@ -284,9 +301,9 @@ FReply SScctOptionsPage::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent&
 TArray<FName> SScctOptionsPage::FindPages() const
 {
 	TArray<FName> Pages = FScctSettings::Pages();
-	for (const TPair<FName, FScctOptionsSection>& Section : Sections())
+	for (const TPair<FName, TArray<FScctOptionsSection>>& Page : Sections())
 	{
-		Pages.AddUnique(Section.Key);
+		Pages.AddUnique(Page.Key);
 	}
 	// The registry's order first, every other page after them as they came.
 	Algo::StableSortBy(Pages, [](FName Page)
@@ -375,10 +392,16 @@ void SScctOptionsPage::RebuildBody()
 	}
 
 	bool bAnything = false;
-	if (const FScctOptionsSection* Section = Sections().Find(CurrentPage); Section != nullptr && Section->Build)
+	if (const TArray<FScctOptionsSection>* PageSections = Sections().Find(CurrentPage))
 	{
-		Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ Section->Build() ];
-		bAnything = true;
+		for (const FScctOptionsSection& Section : *PageSections)
+		{
+			if (Section.Build)
+			{
+				Box->AddSlot().AutoHeight().Padding(0.0f, bAnything ? 14.0f : 0.0f, 0.0f, 10.0f)[ Section.Build() ];
+				bAnything = true;
+			}
+		}
 	}
 
 	// Options of one group together, the groups in the order their first option comes.
@@ -579,14 +602,9 @@ bool SScctOptionsPage::HasEdits() const
 	{
 		return true;
 	}
-	for (const TPair<FName, FScctOptionsSection>& Section : Sections())
-	{
-		if (Section.Value.HasEdits && Section.Value.HasEdits())
-		{
-			return true;
-		}
-	}
-	return false;
+	bool bAny = false;
+	ForEachSection([&bAny](const FScctOptionsSection& Section) { bAny = bAny || (Section.HasEdits && Section.HasEdits()); });
+	return bAny;
 }
 
 bool SScctOptionsPage::HasApplied() const
@@ -595,14 +613,9 @@ bool SScctOptionsPage::HasApplied() const
 	{
 		return true;
 	}
-	for (const TPair<FName, FScctOptionsSection>& Section : Sections())
-	{
-		if (Section.Value.HasUnsaved && Section.Value.HasUnsaved())
-		{
-			return true;
-		}
-	}
-	return false;
+	bool bAny = false;
+	ForEachSection([&bAny](const FScctOptionsSection& Section) { bAny = bAny || (Section.HasUnsaved && Section.HasUnsaved()); });
+	return bAny;
 }
 
 bool SScctOptionsPage::HasUnsavedChanges() const
@@ -632,13 +645,7 @@ void SScctOptionsPage::Apply()
 		Online->SetPlayerName(EditedName);
 		UE_LOG(LogOpenSCCT, Log, TEXT("Options: player name is now '%s'"), *PlayerName(Online.Get()));
 	}
-	for (const TPair<FName, FScctOptionsSection>& Section : Sections())
-	{
-		if (Section.Value.Apply)
-		{
-			Section.Value.Apply();
-		}
-	}
+	ForEachSection([](const FScctOptionsSection& Section) { if (Section.Apply) { Section.Apply(); } });
 	UE_LOG(LogOpenSCCT, Log, TEXT("Options: applied %d change(s)"), Count);
 }
 
@@ -651,13 +658,7 @@ void SScctOptionsPage::Save()
 		Written += FString::Printf(TEXT("%s%s=%s"), Written.IsEmpty() ? TEXT("") : TEXT(", "), *Applied.Key.ToString(), *FScctSettings::GetString(Applied.Key));
 	}
 	FScctSettings::Save();
-	for (const TPair<FName, FScctOptionsSection>& Section : Sections())
-	{
-		if (Section.Value.Save)
-		{
-			Section.Value.Save();
-		}
-	}
+	ForEachSection([](const FScctOptionsSection& Section) { if (Section.Save) { Section.Save(); } });
 	UE_LOG(LogOpenSCCT, Log, TEXT("Options: saved [%s] to %s (%d changed since the last save%s%s)"), SettingsSection, *GGameUserSettingsIni,
 		AppliedFrom.Num(), Written.IsEmpty() ? TEXT("") : TEXT(": "), *Written);
 	AppliedFrom.Reset();
@@ -679,13 +680,7 @@ void SScctOptionsPage::Discard()
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Options: changes thrown away (%d applied option(s) put back)"), AppliedFrom.Num());
 	AppliedFrom.Reset();
-	for (const TPair<FName, FScctOptionsSection>& Section : Sections())
-	{
-		if (Section.Value.Discard)
-		{
-			Section.Value.Discard();
-		}
-	}
+	ForEachSection([](const FScctOptionsSection& Section) { if (Section.Discard) { Section.Discard(); } });
 	EditedName = PlayerName(Online.Get());
 	NameBox->SetText(Ui::ToText(EditedName));
 }
@@ -696,9 +691,15 @@ void SScctOptionsPage::ResetPage(FName Page)
 	{
 		Edit(*Desc, Desc->Default);
 	}
-	if (const FScctOptionsSection* Section = Sections().Find(Page); Section != nullptr && Section->ResetToDefaults)
+	if (const TArray<FScctOptionsSection>* PageSections = Sections().Find(Page))
 	{
-		Section->ResetToDefaults();
+		for (const FScctOptionsSection& Section : *PageSections)
+		{
+			if (Section.ResetToDefaults)
+			{
+				Section.ResetToDefaults();
+			}
+		}
 	}
 }
 
@@ -775,6 +776,13 @@ void SScctOptionsPage::RunUnattendedSwitches()
 		Search = Typed.TrimStartAndEnd();
 		RebuildTabs();
 		RebuildBody();
+	}
+
+	// -ScctOptionsScroll=<px>: scroll the page's body down that far, to screenshot what is below the fold.
+	float Scroll = 0.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("ScctOptionsScroll="), Scroll) && Scroll > 0.0f)
+	{
+		Body->SetScrollOffset(Scroll);
 	}
 
 	if (FParse::Param(FCommandLine::Get(), TEXT("ScctBrightness")))

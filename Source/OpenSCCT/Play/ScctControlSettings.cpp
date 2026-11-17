@@ -4,6 +4,7 @@
 #include "Misc/Paths.h"
 #include "OpenSCCT.h"
 #include "Runtime/ScctFeatures.h"
+#include "Runtime/ScctMouseAimApi.h"
 
 namespace
 {
@@ -194,6 +195,49 @@ bool UScctControlSettings::Refresh()
 	FScctControlSettings Now = {};
 	Controls->GetSettings(&Now);
 	FromBridge(Now);
+	return true;
+}
+
+FString UScctControlSettings::GetClutchKey(int32 Which) const
+{
+	const FScctMouseAimApi* MouseAim = ScctFeature<FScctMouseAimApi>();
+	return MouseAim == nullptr ? FString()
+		: ReadText([MouseAim, Which](TCHAR* Buffer, int32 Capacity) { return MouseAim->GetClutchKey(Which, Buffer, Capacity); });
+}
+
+bool UScctControlSettings::SetClutchKey(int32 Which, const FString& Key)
+{
+	EnsureLoaded();
+	const FScctMouseAimApi* MouseAim = ScctFeature<FScctMouseAimApi>(&LastError);
+	if (MouseAim == nullptr)
+	{
+		return false;
+	}
+	if (MouseAim->SetClutchKey(Which, *Key) == 0)
+	{
+		LastError = ReadText([MouseAim](TCHAR* Buffer, int32 Capacity) { return MouseAim->LastError(Buffer, Capacity); });
+		return false;
+	}
+	return true;
+}
+
+FString UScctControlSettings::CheckClutchKey(const FString& Key) const
+{
+	const FScctMouseAimApi* MouseAim = ScctFeature<FScctMouseAimApi>();
+	return MouseAim == nullptr ? FString(TEXT("The bridge is not running."))
+		: ReadText([MouseAim, &Key](TCHAR* Buffer, int32 Capacity) { return MouseAim->CheckClutchKey(*Key, Buffer, Capacity); });
+}
+
+bool UScctControlSettings::GetDefaults(UScctControlSettings& Into)
+{
+	const FScctMouseAimApi* MouseAim = ScctFeature<FScctMouseAimApi>(&LastError);
+	if (MouseAim == nullptr)
+	{
+		return false;
+	}
+	FScctControlSettings Defaults = {};
+	MouseAim->GetDefaults(&Defaults);
+	Into.FromBridge(Defaults);
 	return true;
 }
 

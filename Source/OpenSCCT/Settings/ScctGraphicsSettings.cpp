@@ -5,7 +5,6 @@
 #include "Settings/ScctVideoOptions.h"
 
 using ScctVideoOptions::Option;
-using ScctVideoOptions::SetCVar;
 
 namespace
 {
@@ -145,12 +144,12 @@ void ScctGraphicsSettings::Apply()
 
 	// Automatic render scale: dynamic resolution, as the game user settings ask for it, within a frame time budget.
 	const int32 Target = AutoScaleTargets[FMath::Clamp(FScctSettings::GetInt(AutoScaleKey), 0, static_cast<int32>(UE_ARRAY_COUNT(AutoScaleTargets)) - 1)];
-	SetCVar(TEXT("r.DynamicRes.OperationMode"), 1);
-	SetCVar(TEXT("r.DynamicRes.MinScreenPercentage"), FMath::Min(AutoScaleMinPercent, RenderScale * 100.0f));
-	SetCVar(TEXT("r.DynamicRes.MaxScreenPercentage"), RenderScale * 100.0f);
+	ScctVideoOptions::SetCVar(TEXT("r.DynamicRes.OperationMode"), 1);
+	ScctVideoOptions::SetCVar(TEXT("r.DynamicRes.MinScreenPercentage"), FMath::Min(AutoScaleMinPercent, RenderScale * 100.0f));
+	ScctVideoOptions::SetCVar(TEXT("r.DynamicRes.MaxScreenPercentage"), RenderScale * 100.0f);
 	if (Target > 0)
 	{
-		SetCVar(TEXT("r.DynamicRes.FrameTimeBudget"), 1000.0f / Target);
+		ScctVideoOptions::SetCVar(TEXT("r.DynamicRes.FrameTimeBudget"), 1000.0f / Target);
 	}
 	Settings->SetDynamicResolutionEnabled(Target > 0);
 
@@ -158,12 +157,12 @@ void ScctGraphicsSettings::Apply()
 
 	// After the scalability groups, which set some of the same variables at a lower priority.
 	const int32 Method = AntiAliasingMethods[FMath::Clamp(FScctSettings::GetInt(AntiAliasingKey), 0, 3)];
-	SetCVar(TEXT("r.AntiAliasingMethod"), Method);
+	ScctVideoOptions::SetCVar(TEXT("r.AntiAliasingMethod"), Method);
 	const int32 MaxAnisotropy = Anisotropy[FMath::Clamp(FScctSettings::GetInt(FilteringKey), 0, 4)];
-	SetCVar(TEXT("r.MaxAnisotropy"), MaxAnisotropy);
+	ScctVideoOptions::SetCVar(TEXT("r.MaxAnisotropy"), MaxAnisotropy);
 	const bool bAmbientOcclusion = FScctSettings::GetBool(AmbientOcclusionKey);
-	SetCVar(TEXT("r.AmbientOcclusionLevels"), bAmbientOcclusion ? -1 : 0);
-	SetCVar(TEXT("r.Lumen.ScreenProbeGather.ShortRangeAO"), bAmbientOcclusion ? 1 : 0);
+	ScctVideoOptions::SetCVar(TEXT("r.AmbientOcclusionLevels"), bAmbientOcclusion ? -1 : 0);
+	ScctVideoOptions::SetCVar(TEXT("r.Lumen.ScreenProbeGather.ShortRangeAO"), bAmbientOcclusion ? 1 : 0);
 
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctGraphics: applied overall %d (%s),%s; render scale %.0f%% (r.ScreenPercentage %s), automatic %s (dynamic resolution %s, budget %s ms); r.AntiAliasingMethod %d, r.MaxAnisotropy %d, ambient occlusion %s; sg.ShadowQuality %s sg.GlobalIlluminationQuality %s sg.PostProcessQuality %s"),
 		Overall, QualityLevels[Overall], *GroupText, RenderScale * 100.0f, *ScctVideoOptions::GetCVar(TEXT("r.ScreenPercentage")),

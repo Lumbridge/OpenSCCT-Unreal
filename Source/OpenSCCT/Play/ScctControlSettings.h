@@ -188,6 +188,24 @@ public:
 	 */
 	FSimpleMulticastDelegate OnRebound;
 
+	/**
+	 * The key (binding name: "Alt", "MiddleMouse", "Ctrl+V") held for clutch 1 or 2, empty for none. The clutch keys
+	 * are kept by the bridge alone (controls.json's clutch_one_key and clutch_two_key), not in a property here.
+	 */
+	FString GetClutchKey(int32 Which) const;
+
+	/**
+	 * Sets the key of clutch 1 or 2 ("" for none) in the settings in play: a running match reads it from its next
+	 * frame; Save writes it. False with the reason (a wheel direction or a double tap cannot be held).
+	 */
+	bool SetClutchKey(int32 Which, const FString& Key);
+
+	/** Why Key cannot be a clutch key, or empty when it can. */
+	FString CheckClutchKey(const FString& Key) const;
+
+	/** Fills Into's properties with the settings a new player starts with (what a reset goes back to). False without the bridge. */
+	bool GetDefaults(UScctControlSettings& Into);
+
 	/** Why the last call here that returned false did. */
 	UFUNCTION(BlueprintPure, Category = "OpenSCCT|Controls")
 	const FString& GetLastError() const { return LastError; }

@@ -21,7 +21,6 @@
 #endif
 
 using ScctVideoOptions::Option;
-using ScctVideoOptions::SetCVar;
 
 namespace
 {
@@ -203,11 +202,11 @@ void ScctPerformanceSettings::Apply(bool bAtStart)
 	Settings->ApplyNonResolutionSettings();
 	// ApplyNonResolutionSettings sets these through the engine; set at the game setting priority as well, so the
 	// project's ini cannot win over them.
-	SetCVar(TEXT("r.VSync"), bVSync ? 1 : 0);
-	SetCVar(TEXT("t.MaxFPS"), static_cast<float>(Limit));
+	ScctVideoOptions::SetCVar(TEXT("r.VSync"), bVSync ? 1 : 0);
+	ScctVideoOptions::SetCVar(TEXT("t.MaxFPS"), static_cast<float>(Limit));
 
 	const int32 LowLatency = FMath::Clamp(FScctSettings::GetInt(LowLatencyKey), 0, 2);
-	SetCVar(TEXT("r.GTSyncType"), LowLatency);
+	ScctVideoOptions::SetCVar(TEXT("r.GTSyncType"), LowLatency);
 
 	const int32 Renderer = FScctSettings::GetInt(RendererKey);
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctPerformance: applied%s vsync %s, max FPS %s -> limit %d (t.MaxFPS %s, r.VSync %s; monitor %.0f Hz), r.GTSyncType %d; renderer %s chosen, %s running"),

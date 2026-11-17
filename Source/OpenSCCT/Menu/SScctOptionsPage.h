@@ -59,6 +59,7 @@ struct FScctOptionsSection
  *                                        whole run instead: Settings/ScctSettingsForced.h)
  *   -ScctBrightness                      open the brightness pattern over the screen once it has opened
  *   -ScctOptionsSearch=<Text>            type that into the search box
+ *   -ScctOptionsScroll=<px>              scroll the page's body down that far
  *   -ScctOptionsSave                     press SAVE once the screen has opened (once per run)
  *   -ScctOptionsDemo                     register a few test options on the Display, Hud and Audio pages, so the
  *                                        screen can be looked at before the features have registered their own
@@ -81,7 +82,7 @@ public:
 		SLATE_EVENT(FSimpleDelegate, OnClose)
 	SLATE_END_ARGS()
 
-	/** Adds a section drawn above Page's options (one per page; a second replaces the first). */
+	/** Adds a section drawn above Page's options; a page's sections are drawn, applied and reset in the order they were added. */
 	static void RegisterSection(FName Page, const FScctOptionsSection& Section);
 
 	/**

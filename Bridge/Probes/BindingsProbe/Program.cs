@@ -96,10 +96,20 @@ BindingsEditor.SetSplit(true);
 BindingsEditor.ResetKeys(false);
 Check(Keys(false, "use") == "Shift" && Keys(true, "use") == "F", "split again: the merc keeps the shared layout, the spy's reset to the defaults");
 
+Console.WriteLine("Clutch keys (the mouse and aim section):");
+ControlsStore.Settings = new ControlSettings();
+Check(ClutchKeys.Set(1, "ctrl+V", out string clutchError) && ClutchKeys.Get(1) == "Ctrl+V" && ControlSettings.FromJson(ControlsStore.Settings.ToJson()).ClutchOneKey == "Ctrl+V",
+    $"clutch one on Ctrl+V, kept through the settings file's JSON ({ClutchKeys.Get(1)}) {clutchError}");
+Check(!ClutchKeys.Set(2, "MouseWheelUp", out clutchError) && ClutchKeys.Get(2) == "", $"a wheel direction is refused: {clutchError}");
+Check(!ClutchKeys.Set(2, "Double+G", out clutchError) && clutchError.Contains("double"), $"a double tap is refused: {clutchError}");
+Check(ClutchKeys.Set(2, "MiddleMouse", out _) && ClutchKeys.Set(1, "", out _) && ClutchKeys.Get(1) == "" && ClutchKeys.Get(2) == "MiddleMouse",
+    "clutch two on the middle mouse button, clutch one cleared");
+
 unsafe
 {
-    // The size Source/OpenSCCT/Runtime/ScctBindingsApi.h asserts for its mirror.
+    // The sizes Source/OpenSCCT/Runtime/ScctBindingsApi.h and ScctMouseAimApi.h assert for their mirrors.
     Check(sizeof(BindingsApi) == 128, $"table size for the C++ mirror: {sizeof(BindingsApi)}");
+    Check(sizeof(MouseAimApi) == 48, $"mouse and aim table size for the C++ mirror: {sizeof(MouseAimApi)}");
 }
 
 Console.WriteLine(failures == 0 ? "All bindings editor checks passed." : $"{failures} check(s) FAILED.");
