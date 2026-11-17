@@ -7,6 +7,7 @@
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Menu/ScctMatchMenuWidget.h"
+#include "Menu/ScctMenuNav.h"
 #include "Hub/ScctHubSubsystem.h"
 #include "Misc/App.h"
 #include "Misc/CommandLine.h"
@@ -288,6 +289,8 @@ void AScctGameMode::HandlePlayError(const FScctPlayError& Error)
 		ScctPlayer->SetMenuOpen(true);
 	}
 	CloseKeys.AddUnique(EKeys::Escape);
+	// The controller's Start, B and Back too: a player on a pad alone has no key bound to ShowMenu.
+	CloseKeys.Append(ScctMenuNav::PadCloseKeys());
 	bCloseKeysArmed = false;
 	Player->SetShowMouseCursor(true);
 	FInputModeGameAndUI Mode;
@@ -376,6 +379,8 @@ void AScctGameMode::SetMenuOpen(bool bOpen)
 	{
 		CloseKeys = ScctPlayer != nullptr ? ScctPlayer->FindKeysBoundTo(TEXT("ShowMenu")) : TArray<FKey>();
 		CloseKeys.AddUnique(EKeys::Escape);
+		// The controller's Start, B and Back too: a player on a pad alone has no key bound to ShowMenu.
+		CloseKeys.Append(ScctMenuNav::PadCloseKeys());
 		bCloseKeysArmed = false;
 	}
 	MatchMenu->SetMenuOpen(bOpen);

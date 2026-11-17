@@ -5,6 +5,7 @@
 #include "GameFramework/GameUserSettings.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Menu/SScctBrightnessPage.h"
+#include "Menu/SScctPadPanel.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctUserSettings.h"
 #include "Misc/App.h"
@@ -22,7 +23,9 @@
 
 namespace
 {
-	const TCHAR* const SettingsTabNames[] = { TEXT("video"), TEXT("audio"), TEXT("controls"), TEXT("bindings"), TEXT("game"), TEXT("profile") };
+	const TCHAR* const SettingsTabNames[] = { TEXT("video"), TEXT("audio"), TEXT("controls"), TEXT("controller"), TEXT("bindings"), TEXT("game"), TEXT("profile") };
+	/** The registry's own tabs come after the fixed ones. */
+	constexpr int32 FirstRegistryTab = UE_ARRAY_COUNT(SettingsTabNames);
 	const TCHAR* const QualityNames[] = { TEXT("Low"), TEXT("Medium"), TEXT("High"), TEXT("Epic"), TEXT("Cinematic") };
 	const int32 FrameLimits[] = { 0, 30, 60, 90, 120, 144, 165, 240 };
 
@@ -103,6 +106,29 @@ namespace
 		return Name.Len() <= 3 ? Name.ToUpper() : Name;
 	}
 
+	/** The settings the CONTROLLER tab shows (what its reset puts back, and what the CONTROLS tab's reset keeps). */
+	void CopyControllerSettings(const UScctControlSettings& From, UScctControlSettings& To)
+	{
+		To.bPadEnabled = From.bPadEnabled;
+		To.bPadMove = From.bPadMove;
+		To.bPadAim = From.bPadAim;
+		To.bPadBinds = From.bPadBinds;
+		To.bPadSlowWalk = From.bPadSlowWalk;
+		To.bPadSpyMove8 = From.bPadSpyMove8;
+		To.bPadMercMove8 = From.bPadMercMove8;
+		To.PadDeadzoneLeft = From.PadDeadzoneLeft;
+		To.PadDeadzoneRight = From.PadDeadzoneRight;
+		To.PadVerticalScale = From.PadVerticalScale;
+		To.PadRunThreshold = From.PadRunThreshold;
+		To.PadTriggerThreshold = From.PadTriggerThreshold;
+		To.PadLookScale = From.PadLookScale;
+		To.bPadRumble = From.bPadRumble;
+		To.PadRumbleStrength = From.PadRumbleStrength;
+		To.SpyPad.FreeLook = From.SpyPad.FreeLook;
+		To.SpyPad.Look = From.SpyPad.Look;
+		To.MercPad.Look = From.MercPad.Look;
+	}
+
 	FString Percent(float Value) { return FString::Printf(TEXT("%d %%"), FMath::RoundToInt32(Value)); }
 	FString Times(float Value) { return FString::Printf(TEXT("%.2f x"), Value); }
 }
@@ -113,7 +139,8 @@ TArray<FName> SScctSettingsPanel::RegistryPagesOfTab(int32 Tab)
 	{
 	case 0: return { TEXT("Display"), TEXT("Graphics"), TEXT("Performance") };
 	case 1: return { TEXT("Audio"), TEXT("Voice") };
-	case 2: return { TEXT("Spy"), TEXT("Mercenary"), TEXT("Controller") };
+	case 2: return { TEXT("Spy"), TEXT("Mercenary") };
+	case 3: return { TEXT("Controller") };
 	default: return {};
 	}
 }
@@ -159,6 +186,7 @@ void SScctSettingsPanel::Construct(const FArguments& InArgs, const FScctMenuHost
 		ScctUi::GameText(TEXT("All_Settings"), TEXT("BTNVideo.Caption"), TEXT("Video")),
 		ScctUi::GameText(TEXT("All_Settings"), TEXT("BTNAudio.Caption"), TEXT("Audio")),
 		TEXT("Controls"),
+		TEXT("Controller"),
 		TEXT("Key bindings"),
 		ScctUi::GameText(TEXT("All_Settings"), TEXT("BTNGame.Caption"), TEXT("Game")),
 		TEXT("Profile"),
@@ -170,7 +198,7 @@ void SScctSettingsPanel::Construct(const FArguments& InArgs, const FScctMenuHost
 	}
 	// The registry's pages no fixed tab holds, each a tab of its own.
 	TArray<FName> Held;
-	for (int32 Tab = 0; Tab < 3; ++Tab)
+	for (int32 Tab = 0; Tab < FirstRegistryTab; ++Tab)
 	{
 		Held.Append(RegistryPagesOfTab(Tab));
 	}
@@ -258,7 +286,11 @@ void SScctSettingsPanel::ShowSub(const FString& Sub)
 	if (!Rest.IsEmpty())
 	{
 		bBindMerc = Rest.Contains(TEXT("merc"));
-		bBindPad = Rest.Contains(TEXT("pad"));
+		if (Rest.Contains(TEXT("pad")))
+		{
+			// "bindings/merc/pad": the controller's buttons are on the CONTROLLER tab.
+			Tab = TEXT("controller");
+		}
 	}
 	const int32 Index = TabNames.IndexOfByPredicate([&Tab](const FString& Name) { return Name.Equals(Tab, ESearchCase::IgnoreCase); });
 	if (Index != INDEX_NONE)
@@ -293,10 +325,11 @@ void SScctSettingsPanel::Rebuild()
 	case 0: Rows = BuildVideo(); break;
 	case 1: Rows = BuildAudio(); break;
 	case 2: Rows = BuildControls(); break;
-	case 3: Rows = BuildBindings(); break;
-	case 4: Rows = BuildGame(); break;
-	case 5: Rows = BuildProfile(); break;
-	default: Rows = RegistryTabs.IsValidIndex(Tabs->GetTab() - 6) ? BuildRegistryTab(RegistryTabs[Tabs->GetTab() - 6]) : BuildProfile(); break;
+	case 3: Rows = BuildController(); break;
+	case 4: Rows = BuildBindings(); break;
+	case 5: Rows = BuildGame(); break;
+	case 6: Rows = BuildProfile(); break;
+	default: Rows = RegistryTabs.IsValidIndex(Tabs->GetTab() - FirstRegistryTab) ? BuildRegistryTab(RegistryTabs[Tabs->GetTab() - FirstRegistryTab]) : BuildProfile(); break;
 	}
 	Body->SetContent(
 		SNew(SScrollBox)
@@ -322,16 +355,20 @@ void SScctSettingsPanel::ResetTab()
 		case 2:
 		{
 			// The bridge holds the defaults: an empty settings object, clamped by Apply, is not them, so the file is
-			// read again after it is removed.
+			// read again after it is removed. The controller's settings have a tab of their own and are kept.
+			UScctControlSettings* Kept = NewObject<UScctControlSettings>();
+			CopyControllerSettings(*Controls, *Kept);
 			IFileManager::Get().Delete(*UScctControlSettings::GetSettingsFile());
 			Controls->Load();
+			CopyControllerSettings(*Kept, *Controls);
 			Controls->Apply();
 			bControlsDirty = true;
 			break;
 		}
-		case 3: Controls->ResetBindings(bBindMerc); bBindingsDirty = true; break;
-		case 4: Settings->ResetInterface(); Settings->ApplyAll(); Controls->bAutoHackComms = false; Controls->bMouseWheelSpeed = false; ApplyControls(); break;
-		default: if (RegistryTabs.IsValidIndex(Tab - 6)) { FScctSettings::ResetPage(RegistryTabs[Tab - 6]); } break;
+		case 3: ResetController(); break;
+		case 4: Controls->ResetBindings(bBindMerc); bBindingsDirty = true; break;
+		case 5: Settings->ResetInterface(); Settings->ApplyAll(); Controls->bAutoHackComms = false; Controls->bMouseWheelSpeed = false; ApplyControls(); break;
+		default: if (RegistryTabs.IsValidIndex(Tab - FirstRegistryTab)) { FScctSettings::ResetPage(RegistryTabs[Tab - FirstRegistryTab]); } break;
 		}
 		for (const FName Page : RegistryPagesOfTab(Tab))
 		{
@@ -670,24 +707,44 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildControls()
 	HoldToggle(TEXT("Walk key "), TEXT("Walk while the key is held, or switch walking on and off."), &FScctLookOptions::bWalkHold, true);
 	HoldToggle(TEXT("Scope key"), TEXT("Look through the scope while the key is held, or switch."), &FScctLookOptions::bScopeHold, true);
 
-	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Controller")) ];
-	Switch(TEXT("Controller"), TEXT("Play with a controller at all."), [Controls] { return Controls->bPadEnabled; }, [Controls](bool bValue) { Controls->bPadEnabled = bValue; });
-	Switch(TEXT("Move with the left stick"), TEXT("The left stick moves."), [Controls] { return Controls->bPadMove; }, [Controls](bool bValue) { Controls->bPadMove = bValue; });
-	Switch(TEXT("Look with the right stick"), TEXT("The right stick looks."), [Controls] { return Controls->bPadAim; }, [Controls](bool bValue) { Controls->bPadAim = bValue; });
-	Switch(TEXT("Controller buttons"), TEXT("The buttons act (off: the sticks only)."), [Controls] { return Controls->bPadBinds; }, [Controls](bool bValue) { Controls->bPadBinds = bValue; });
-	Switch(TEXT("Speed follows the stick"), TEXT("A part push of the left stick walks slower."), [Controls] { return Controls->bPadSlowWalk; }, [Controls](bool bValue) { Controls->bPadSlowWalk = bValue; });
-	Speed(TEXT("Spy look (controller)"), TEXT("The spy's look with the stick."), &Controls->SpyPad.Look, 0.05f, 10.0f, 0.05f);
-	Speed(TEXT("Mercenary look (controller)"), TEXT("The mercenary's look with the stick."), &Controls->MercPad.Look, 0.05f, 10.0f, 0.05f);
-	Speed(TEXT("Turning speed"), TEXT("A multiplier over the look stick's speed. 1 is OpenSCCT Enhanced's."), &Controls->PadLookScale, 0.25f, 5.0f, 0.05f);
-	Speed(TEXT("Up and down speed"), TEXT("The look stick's vertical speed against its sideways speed."), &Controls->PadVerticalScale, 0.1f, 3.0f, 0.05f);
-	Speed(TEXT("Left stick dead zone"), TEXT("Travel at the centre of the left stick that does nothing. Raise it if the player creeps with the stick untouched."), &Controls->PadDeadzoneLeft, 0.0f, 0.9f, 0.01f);
-	Speed(TEXT("Right stick dead zone"), TEXT("Travel at the centre of the right stick that does nothing. Raise it if the view drifts."), &Controls->PadDeadzoneRight, 0.0f, 0.9f, 0.01f);
-	Speed(TEXT("Trigger threshold"), TEXT("How far a trigger goes down before it counts as pressed."), &Controls->PadTriggerThreshold, 0.0f, 0.99f, 0.01f);
+	// The controller's switches, dead zones and speeds are on the CONTROLLER tab (Menu/SScctPadPanel.h).
 	for (const FName Page : RegistryPagesOfTab(2))
 	{
 		AddRegistryRows(Rows, Page);
 	}
 	return Rows;
+}
+
+// ---- controller -----------------------------------------------------------------------------------------------------
+
+TSharedRef<SWidget> SScctSettingsPanel::BuildController()
+{
+	const TSharedRef<SVerticalBox> Rows = SNew(SVerticalBox);
+	const TSharedRef<SScctPadPanel> Pad = SNew(SScctPadPanel, Host)
+		.bMerc(bBindMerc)
+		.OnControlsChanged([this] { ApplyControls(); })
+		.OnBindingsChanged([this] { bBindingsDirty = true; });
+	Rows->AddSlot().AutoHeight()[ Pad ];
+	DefaultFocus = Pad->GetFirstRow();
+	for (const FName Page : RegistryPagesOfTab(3))
+	{
+		AddRegistryRows(Rows, Page);
+	}
+	return Rows;
+}
+
+void SScctSettingsPanel::ResetController()
+{
+	// Only the controller's settings: the defaults are the bridge's, read into a scratch object.
+	UScctControlSettings* Controls = UScctControlSettings::Get();
+	UScctControlSettings* Defaults = NewObject<UScctControlSettings>();
+	if (!Controls->GetDefaults(*Defaults))
+	{
+		Toast(Controls->GetLastError(), true);
+		return;
+	}
+	CopyControllerSettings(*Defaults, *Controls);
+	ApplyControls();
 }
 
 // ---- bindings -------------------------------------------------------------------------------------------------------
@@ -707,12 +764,8 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildBindings()
 		.Get([this] { return bBindMerc ? 1 : 0; })
 		.Set([this](int32 Value) { bBindMerc = Value == 1; Rebuild(); }));
 	DefaultFocus = First;
-	Add(SNew(SScctStepper)
-		.Label(FText::FromString(TEXT("Device")))
-		.Description(FText::FromString(TEXT("The keyboard and mouse, or the controller's buttons.")))
-		.Options({ TEXT("Keyboard and mouse"), TEXT("Controller") })
-		.Get([this] { return bBindPad ? 1 : 0; })
-		.Set([this](int32 Value) { bBindPad = Value == 1; Rebuild(); }));
+	// The keyboard and mouse here; the controller's buttons, with Hold B and the combinations, on the CONTROLLER tab.
+	bBindPad = false;
 	Rows->AddSlot().AutoHeight().HAlign(HAlign_Right).Padding(0.0f, 4.0f, 16.0f, 4.0f)
 	[
 		SNew(SScctButton)

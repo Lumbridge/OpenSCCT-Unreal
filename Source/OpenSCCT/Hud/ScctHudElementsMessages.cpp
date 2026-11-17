@@ -36,7 +36,7 @@ void ScctHudElements::PaintFeed(FScctHudPainter& Painter, const FScctHudModel& M
 	const FSlateFontInfo NameFont = Font(EWeight::Regular, 10.5f);
 	const FSlateFontInfo TextFont = Font(EWeight::Regular, 10.0f);
 	const FSlateFontInfo CauseFont = Font(EWeight::Regular, 8.5f, 20);
-	constexpr float NameRowHeight = 26.0f, CauseRowHeight = 13.0f, RowGap = 4.0f, Pad = 12.0f, Mark = 40.0f, IconSize = 15.0f, IconGap = 9.0f;
+	constexpr float NameRowHeight = 26.0f, CauseRowHeight = 13.0f, RowGap = 4.0f, Pad = 12.0f, Mark = 40.0f, FeedIconSize = 15.0f, IconGap = 9.0f;
 
 	float Y = Margin;
 	for (const FScctHudLine& Line : Model.Feed)
@@ -56,9 +56,9 @@ void ScctHudElements::PaintFeed(FScctHudPainter& Painter, const FScctHudModel& M
 		const float ActorWidth = bKill ? Painter.Measure(Line.Actor, NameFont).X : 0.0f;
 		const float VictimWidth = bKill ? Painter.Measure(Line.Victim, NameFont).X : 0.0f;
 		const float MainWidth = bKill ? ActorWidth + Mark + VictimWidth : Painter.Measure(Line.Text, TextFont).X;
-		const float Width = Pad * 2.0f + IconSize + IconGap + FMath::Max(MainWidth, CauseWidth);
+		const float Width = Pad * 2.0f + FeedIconSize + IconGap + FMath::Max(MainWidth, CauseWidth);
 		const float X = Right - Width + Slide;
-		const float TextX = X + Pad + IconSize + IconGap;
+		const float TextX = X + Pad + FeedIconSize + IconGap;
 
 		Painter.SetOpacity(Alpha);
 		Painter.Blur(HudBox(X, Y, Width, RowHeight), 10.0f, 4.0f);
@@ -68,7 +68,7 @@ void ScctHudElements::PaintFeed(FScctHudPainter& Painter, const FScctHudModel& M
 		const bool bLethalLine = static_cast<EScctHudActivity>(Line.Kind) == EScctHudActivity::Kill
 			|| static_cast<EScctHudActivity>(Line.Kind) == EScctHudActivity::Death || static_cast<EScctHudActivity>(Line.Kind) == EScctHudActivity::Suicide;
 		const FLinearColor IconColour = bLocal ? Accent(Model.LocalTeam) : (bLethalLine ? Fade(Text(), 0.85f) : TextDim());
-		PaintActivityIcon(Painter, FVector2f(X + Pad + IconSize * 0.5f, Y + RowHeight * 0.5f), IconSize, Line, IconColour);
+		PaintActivityIcon(Painter, FVector2f(X + Pad + FeedIconSize * 0.5f, Y + RowHeight * 0.5f), FeedIconSize, Line, IconColour);
 
 		if (!Cause.IsEmpty())
 		{
