@@ -6,6 +6,8 @@
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Fonts/FontMeasure.h"
+#include "Input/HittestGrid.h"
+#include "Layout/WidgetPath.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Rendering/DrawElements.h"
 #include "Rendering/SlateRenderer.h"
@@ -19,6 +21,7 @@
 #include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/SWindow.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -172,8 +175,47 @@ namespace
 
 // ---- the namespace's pieces -------------------------------------------------------------------------------------
 
+namespace
+{
+	/** ScctUi::Navigate's search, from the control that has the focus. */
+	TSharedPtr<SWidget> NavigateFromFocus(EUINavigation Type)
+	{
+		FSlateApplication& Slate = FSlateApplication::Get();
+		const TSharedPtr<SWidget> Focused = Slate.GetKeyboardFocusedWidget();
+		FWidgetPath Path;
+		if (!Focused.IsValid() || !Slate.FindPathToWidget(Focused.ToSharedRef(), Path) || Path.Widgets.Num() == 0)
+		{
+			return nullptr;
+		}
+		const FArrangedWidget& Root = Path.Widgets[0];
+		const TSharedPtr<SWidget> Found = Path.GetWindow()->GetHittestGrid().FindNextFocusableWidget(Path.Widgets.Last(), Type, FNavigationReply::Escape(), Root, 0);
+		if (Found.IsValid())
+		{
+			return Found;
+		}
+		// Nothing that way on screen (or no hit test data, as in an off-screen run): the page's order.
+		const EUINavigation Order = Type == EUINavigation::Down || Type == EUINavigation::Right ? EUINavigation::Next : EUINavigation::Previous;
+		const FWidgetPath Next = FWeakWidgetPath(Path).ToNextFocusedPath(Order, FNavigationReply::Escape(), Root);
+		return Next.IsValid() && Next.Widgets.Num() > 0 && Next.Widgets.Last().Widget != Focused ? TSharedPtr<SWidget>(Next.Widgets.Last().Widget) : nullptr;
+	}
+}
+
 namespace ScctUi
 {
+	FNavigationReply Navigate(const FNavigationEvent& Event)
+	{
+		switch (Event.GetNavigationType())
+		{
+		case EUINavigation::Up:
+		case EUINavigation::Down:
+		case EUINavigation::Left:
+		case EUINavigation::Right:
+			return FNavigationReply::Custom(FNavigationDelegate::CreateStatic(&NavigateFromFocus));
+		default:
+			return FNavigationReply::Escape();
+		}
+	}
+
 	FSlateFontInfo Display(float Size) { return ScctHudStyle::Font(EWeight::Light, Size, 120); }
 	FSlateFontInfo H1() { return ScctHudStyle::Font(EWeight::Light, 30.0f, 180); }
 	FSlateFontInfo H2() { return ScctHudStyle::Font(EWeight::Regular, 19.0f, 120); }
@@ -362,6 +404,18 @@ IScctDriven* IScctDriven::Find(const FString& Label)
 	for (int32 Index = DrivenWidgets.Num() - 1; Index >= 0; --Index)
 	{
 		if (DrivenWidgets[Index]->GetDrivenLabel().StartsWith(Label, ESearchCase::IgnoreCase))
+		{
+			return DrivenWidgets[Index];
+		}
+	}
+	return nullptr;
+}
+
+IScctDriven* IScctDriven::FindByWidget(const SWidget* Widget)
+{
+	for (int32 Index = DrivenWidgets.Num() - 1; Widget != nullptr && Index >= 0; --Index)
+	{
+		if (&DrivenWidgets[Index]->GetDrivenWidget().Get() == Widget)
 		{
 			return DrivenWidgets[Index];
 		}
@@ -1332,6 +1386,10 @@ void SScctDialogLayer::Construct(const FArguments& InArgs)
 
 void SScctDialogLayer::Show(const FScctDialog& Dialog)
 {
+	if (!bOpen)
+	{
+		FocusBefore = FSlateApplication::Get().GetKeyboardFocusedWidget();
+	}
 	Current = Dialog;
 	bOpen = true;
 	Shown = 0.0f;
@@ -1402,7 +1460,13 @@ void SScctDialogLayer::Answer(int32 Index)
 	bOpen = false;
 	TextField.Reset();
 	DialogBox->SetContent(SNullWidget::NullWidget);
-	if (const TSharedPtr<SWidget> Back = FocusAfter.Pin())
+	const TSharedPtr<SWidget> Before = FocusBefore.Pin();
+	FocusBefore.Reset();
+	if (Before.IsValid() && Before->GetVisibility().IsVisible() && Before->SupportsKeyboardFocus())
+	{
+		FSlateApplication::Get().SetKeyboardFocus(Before, EFocusCause::SetDirectly);
+	}
+	else if (const TSharedPtr<SWidget> Back = FocusAfter.Pin())
 	{
 		FSlateApplication::Get().SetKeyboardFocus(Back, EFocusCause::SetDirectly);
 	}
@@ -1423,9 +1487,38 @@ FReply SScctDialogLayer::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent&
 	{
 		ScctUi::Play(EScctUiSound::Back);
 		Answer(Current.CancelButton);
+		return FReply::Handled();
 	}
 	// Nothing under an open dialog hears a key.
 	return FReply::Handled();
+}
+
+FNavigationReply SScctDialogLayer::OnNavigation(const FGeometry& MyGeometry, const FNavigationEvent& InNavigationEvent)
+{
+	if (!bOpen)
+	{
+		return FNavigationReply::Escape();
+	}
+	// Left and right (arrows, pad, Tab) go from button to button, and the focus never leaves the dialog for the page
+	// under it.
+	const EUINavigation Type = InNavigationEvent.GetNavigationType();
+	const int32 Step = Type == EUINavigation::Left || Type == EUINavigation::Previous ? -1
+		: Type == EUINavigation::Right || Type == EUINavigation::Next ? 1 : 0;
+	return FNavigationReply::Custom(FNavigationDelegate::CreateSPLambda(this, [this, Step](EUINavigation) -> TSharedPtr<SWidget>
+	{
+		int32 Focused = INDEX_NONE;
+		for (int32 Index = 0; Index < Current.Buttons.Num(); ++Index)
+		{
+			IScctDriven* Button = IScctDriven::Find(Current.Buttons[Index].Label);
+			if (Button != nullptr && Button->GetDrivenWidget()->HasKeyboardFocus())
+			{
+				Focused = Index;
+			}
+		}
+		const int32 Wanted = Focused == INDEX_NONE ? Current.FocusButton : FMath::Clamp(Focused + Step, 0, Current.Buttons.Num() - 1);
+		IScctDriven* Target = Current.Buttons.IsValidIndex(Wanted) ? IScctDriven::Find(Current.Buttons[Wanted].Label) : nullptr;
+		return Target != nullptr ? TSharedPtr<SWidget>(Target->GetDrivenWidget()) : TSharedPtr<SWidget>();
+	}));
 }
 
 void SScctDialogLayer::Toast(const FString& Message, const FLinearColor& Colour)

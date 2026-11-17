@@ -154,6 +154,14 @@ void FScctMenuDriver::Tick(float DeltaSeconds, const FHost& Host)
 		UE_LOG(LogOpenSCCT, Log, TEXT("Menu script: screenshot %s"), *File);
 		Run.Wait = 0.5f;
 	}
+	else if (Verb.Equals(TEXT("where"), ESearchCase::IgnoreCase))
+	{
+		// Which control has the keyboard's focus: proof that keys and the controller move through a page.
+		const TSharedPtr<SWidget> Focused = FSlateApplication::Get().GetKeyboardFocusedWidget();
+		const IScctDriven* Driven = IScctDriven::FindByWidget(Focused.Get());
+		UE_LOG(LogOpenSCCT, Log, TEXT("Menu script: focus on %s%s%s"), Focused.IsValid() ? *Focused->GetTypeAsString() : TEXT("nothing"),
+			Driven != nullptr ? TEXT(" ") : TEXT(""), Driven != nullptr ? *FString::Printf(TEXT("'%s'"), *Driven->GetDrivenLabel()) : TEXT(""));
+	}
 	else if (Verb.Equals(TEXT("log"), ESearchCase::IgnoreCase))
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("Menu script: %s"), *Rest);

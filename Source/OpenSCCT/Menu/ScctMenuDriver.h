@@ -19,6 +19,7 @@
  *   hover LABEL     draw it as under the pointer until "hover" with another caption or none
  *   type TEXT       type into the focused text field
  *   shot NAME       save Saved/ScctShots/NAME.png (or under -ScctShotDir), the interface included
+ *   where           log which control has the keyboard focus
  *   log TEXT        a line in the log
  *   quit            end the game
  * The script goes on through level changes: the front end and the match overlay both run it.

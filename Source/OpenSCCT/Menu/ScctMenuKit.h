@@ -54,6 +54,13 @@ namespace ScctUi
 
 	void Play(EScctUiSound Sound);
 
+	/**
+	 * How a page, the in-match menu and the dialogs answer the arrows and the pad: the nearest control that way on
+	 * screen (Slate's own search), and when there is none there, the next or previous control in the page's order,
+	 * so the focus never sticks.
+	 */
+	FNavigationReply Navigate(const FNavigationEvent& Event);
+
 	/** The description of the control that has the focus; a page's help pane shows it. */
 	void Describe(const FText& Title, const FText& Body);
 	const FText& GetDescriptionTitle();
@@ -125,6 +132,8 @@ public:
 	virtual void SetDrivenHover(bool bHover) {}
 
 	static IScctDriven* Find(const FString& Label);
+	/** The control on screen made of this widget, if there is one. */
+	static IScctDriven* FindByWidget(const SWidget* Widget);
 
 protected:
 	void Register();
@@ -559,6 +568,7 @@ public:
 	void Construct(const FArguments& InArgs);
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
+	virtual FNavigationReply OnNavigation(const FGeometry& MyGeometry, const FNavigationEvent& InNavigationEvent) override;
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 
 	void Show(const FScctDialog& Dialog);
@@ -570,6 +580,8 @@ public:
 
 	/** The widget to give the focus back to when a dialog closes. */
 	TWeakPtr<SWidget> FocusAfter;
+	/** The control that had the focus when the dialog opened: it has it again when the dialog closes. */
+	TWeakPtr<SWidget> FocusBefore;
 
 private:
 	struct FToast

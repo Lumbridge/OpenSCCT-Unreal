@@ -70,6 +70,7 @@ void SScctMatchMenu::Construct(const FArguments& InArgs)
 	OnWantsOpen = InArgs._OnWantsOpen;
 
 	SAssignNew(Dialogs, SScctDialogLayer);
+	Dialogs->FocusAfter = SharedThis(this);
 	Host.Online = Online;
 	Host.Dialogs = Dialogs;
 	Host.bInMatch = true;
@@ -249,13 +250,37 @@ FReply SScctMatchMenu::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& I
 			return FReply::Handled();
 		}
 	}
-	// The focus fell off the page: an arrow or a stick push brings it back.
-	if (HasKeyboardFocus() && FSlateApplication::Get().GetNavigationDirectionFromKey(InKeyEvent) != EUINavigation::Invalid)
+	const EUINavigation Navigation = FSlateApplication::Get().GetNavigationDirectionFromKey(InKeyEvent);
+	if (Navigation != EUINavigation::Invalid)
 	{
-		FocusDefault();
-		return FReply::Handled();
+		// The focus fell off the page: an arrow or a pad push brings it back.
+		if (HasKeyboardFocus())
+		{
+			FocusDefault();
+			return FReply::Handled();
+		}
+		// The menu sits in the game's viewport, which takes every key that reaches it for the game (its input mode
+		// is game and UI, so the match goes on underneath): the menu moves the focus itself.
+		return FReply::Handled().SetNavigation(Navigation, ENavigationGenesis::Keyboard, ENavigationSource::FocusedWidget);
 	}
+	// Other keys go on: the game mode closes the menu on the player's own menu key, and the controls hold
+	// everything else back while the menu is open.
 	return FReply::Unhandled();
+}
+
+FReply SScctMatchMenu::OnAnalogValueChanged(const FGeometry& MyGeometry, const FAnalogInputEvent& InAnalogInputEvent)
+{
+	if (!bOpen)
+	{
+		return FReply::Unhandled();
+	}
+	// The left stick moves the focus as the pad's arrows do (the navigation config spaces out the repeats).
+	const EUINavigation Navigation = Dialogs->IsOpen() ? EUINavigation::Invalid : FSlateApplication::Get().GetNavigationDirectionFromAnalog(InAnalogInputEvent);
+	if (Navigation != EUINavigation::Invalid)
+	{
+		return FReply::Handled().SetNavigation(Navigation, ENavigationGenesis::Controller, ENavigationSource::FocusedWidget);
+	}
+	return FReply::Handled();
 }
 
 void SScctMatchMenu::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)

@@ -61,6 +61,9 @@ public:
 	/** A key no control of the page took (a shortcut such as R for refresh). */
 	virtual bool HandleShortcut(const FKey& Key) { return false; }
 
+	/** The arrows and the pad move the focus as everywhere in the menus (ScctUi::Navigate). */
+	virtual FNavigationReply OnNavigation(const FGeometry& MyGeometry, const FNavigationEvent& InNavigationEvent) override { return ScctUi::Navigate(InNavigationEvent); }
+
 protected:
 	FScctMenuHost Host;
 	TWeakPtr<SWidget> DefaultFocus;
