@@ -27,6 +27,11 @@ class UScctHudWidget;
  *        cycles; ShowMenu; SwitchLaser ...), which presses the key the current side has it on, so it takes the
  *        path a real key takes. A command no key is bound to is refused with a log line.
  *        PreviewCamAlert 1/0 shows or hides the camera network page's Alert box without a spy hacking.
+ *        PreviewCoop N shows coop icon N (1 offer a ladder, 2 climb on the mate, 3 offer a hoist, 4 be boosted up;
+ *        0 takes it away) as if the game offered it. Die kills the local pawn on the local match's server (lives
+ *        left as they are), e.g. to see the Merc Deathmatch respawn weapon pick.
+ *   -ScctHudTexture=Package.Name[,Package.Name...]
+ *        loads those textures of the content as the session starts and logs their size ("ScctHudTextures: ...").
  *   -ScctHudLog=S
  *        seconds between the snapshot lines in the log (default 1; 0 turns them off)
  *   -ScctGadgetMenu=sticky|mine[,At[,Hold[,Down;Down...]]]
@@ -106,6 +111,18 @@ private:
 		int32 Stage = 0;
 		float StageAt = 0.0f;    // when the current stage began
 	} GadgetViewCheck;
+
+	// The HUD's pictures (ScctHudIcons.cpp): the coop icon's clip and the respawn pick's Use key into the model, the
+	// -ScctHudTexture check, and the timed commands PreviewCoop N and Die.
+	void InitIcons();
+	void ReadIcons(float DeltaSeconds);
+	bool RunIconCommand(const FString& Name, int32 Argument);
+
+	TArray<FString> TextureChecks; // -ScctHudTexture=Package.Name[,Package.Name...]
+	bool bTextureChecksDone = false;
+	int32 LastCoopIcon = 0;
+	FIntPoint LastRespawnTile = FIntPoint(-1, -1);
+	float RespawnKeyAge = -100.0f;
 
 	float GadgetKeysAge = 0.0f;
 	int32 LastGadgetView = 0;

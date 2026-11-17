@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Runtime/ScctHudApi.h"
 #include "Runtime/ScctHudGadgetApi.h"
+#include "Runtime/ScctHudTextureApi.h"
 
 /**
  * The HUD's own labels. Their text is the original game's, read from the player's content with the bridge's
@@ -98,6 +99,22 @@ public:
 		FString Cameras; // the network's next / previous camera: Use, and the back-to-wall key when bound
 		FString Exit;    // Alt-fire leaves the view
 	} GadgetKeys;
+
+	/**
+	 * The coop icon shown (1 offer a ladder .. 4 be boosted up, 0 none: State.CoopIcon or the preview) and its clip's
+	 * pictures at this moment, in page units of the 640 x 480 Magma page; CoopBounds is the page box every pose of
+	 * the shown clip stays in. Filled by the HUD subsystem (ScctHudIcons.cpp).
+	 */
+	int32 CoopIcon = 0;
+	float CoopAge = 0.0f;
+	TArray<FScctHudTextureLayer> CoopLayers;
+	FBox2f CoopBounds = FBox2f(ForceInit);
+
+	/** Unattended look check only (-ScctHudCommands "PreviewCoop N"): shows coop icon N as if the game offered it; 0 off. */
+	int32 PreviewCoopIcon = 0;
+
+	/** The name of the Use key, which cycles the Merc Deathmatch respawn weapon (empty when unbound). */
+	FString RespawnUseKey;
 
 	/** The team of the player at this machine (0 spies, 1 mercs), from the scoreboard, else the side played. */
 	int32 LocalTeam = 0;

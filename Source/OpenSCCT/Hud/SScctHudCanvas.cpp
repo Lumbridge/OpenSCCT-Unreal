@@ -45,7 +45,9 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 		PaintEquipment(Painter, *Model);
 		PaintPrompt(Painter, *Model);
 		PaintGadgetMenu(Painter, *Model);
+		PaintCoopIcon(Painter, *Model);
 		PaintSpectator(Painter, *Model);
+		PaintRespawnWeapon(Painter, *Model);
 		PaintBanner(Painter, *Model);
 		PaintScoreboard(Painter, *Model);
 	}

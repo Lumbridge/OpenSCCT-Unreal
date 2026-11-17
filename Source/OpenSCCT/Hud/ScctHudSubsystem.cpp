@@ -52,6 +52,7 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	FParse::Value(FCommandLine::Get(), TEXT("ScctHudLog="), LogEvery);
 	InitGadgetViews();
+	InitIcons();
 
 	// -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1"
 	FString Commands;
@@ -112,6 +113,10 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	bLastCamAlert = false;
 	LastMenuSignature = 0;
 	GadgetKeysAge = 0.0f;
+	bTextureChecksDone = false;
+	LastCoopIcon = 0;
+	LastRespawnTile = FIntPoint(-1, -1);
+	RespawnKeyAge = -100.0f;
 	if (NewSessionId != 0 && Api == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Error, TEXT("HUD: the bridge has no HUD table (its reason is in the log above); the match plays without a HUD and without goggles"));
@@ -218,6 +223,7 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 	}
 	Model->bScoreboardHeld = bScoreboardForced || bScoreboardKeyHeld || bScoreboardToggled;
 	Model->Advance(DeltaSeconds);
+	ReadIcons(DeltaSeconds);
 
 	if (UScctVisionSubsystem* Vision = GetWorld()->GetSubsystem<UScctVisionSubsystem>())
 	{
@@ -328,6 +334,9 @@ void UScctHudSubsystem::RunTimedCommands()
 		else if (Command.Name.Equals(TEXT("EnhancedReality"), ESearchCase::IgnoreCase))
 		{
 			Api->SetOption(EScctHudOption::SwitchEnhancedReality, 0);
+		}
+		else if (RunIconCommand(Command.Name, Command.Argument))
+		{
 		}
 		else if (AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController()))
 		{

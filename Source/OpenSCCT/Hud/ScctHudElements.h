@@ -47,6 +47,18 @@ namespace ScctHudElements
 	 */
 	void PaintGadgetMenu(FScctHudPainter& Painter, const FScctHudModel& Model);
 
+	/**
+	 * Above the status block, a spy's coop icon while a team move with the mate is possible: the content's A_Coop clip
+	 * (offer a ladder, climb on the mate, offer a hoist, be boosted up) with its own fades. ScctHudElementsIcons.cpp.
+	 */
+	void PaintCoopIcon(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/**
+	 * Bottom right while a dead Merc Deathmatch merc picks his respawn weapon: the weapon's tile of the content's weapon
+	 * icons and the name of the Use key that cycles it. ScctHudElementsIcons.cpp.
+	 */
+	void PaintRespawnWeapon(FScctHudPainter& Painter, const FScctHudModel& Model);
+
 	/** Top centre: the clock, both teams, objectives done and the countdowns. */
 	void PaintRound(FScctHudPainter& Painter, const FScctHudModel& Model);
 

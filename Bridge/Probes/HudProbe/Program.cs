@@ -30,9 +30,16 @@ if (args.Length > 5 && args[5].Equals("api", StringComparison.OrdinalIgnoreCase)
     return ApiRun(content, map, mode, merc, seconds);
 }
 
+Console.WriteLine($"sizes: HudTextureLayer {Unsafe.SizeOf<HudTextureLayer>()}, HudTextureApi {Unsafe.SizeOf<HudTextureApi>()}");
+
 if (args.Length > 5 && args[5].Equals("menu", StringComparison.OrdinalIgnoreCase))
 {
     return MenuRun(content, map, mode, merc, seconds);
+}
+
+if (args.Length > 5 && args[5].Equals("icons", StringComparison.OrdinalIgnoreCase))
+{
+    return IconsRun(content, map, mode, merc, seconds);
 }
 
 BridgeSession.Configure(content);
@@ -519,6 +526,89 @@ static unsafe int MenuRun(string content, string map, string mode, bool merc, do
         {
             lastView = view;
             Console.WriteLine($"t={t:F1} camera view: {view}");
+        }
+
+        Thread.Sleep(4);
+    }
+
+    return 0;
+}
+
+// The HUD's pictures: the textures the coop icons and the respawn pick draw from, the coop clips at a few moments, then
+// a match where the local pawn is killed on the server at 3 s (Merc Deathmatch: the respawn weapon pick comes up, Use
+// at 7 s cycles it) and the CoopIcon and RespawnWeapon fields are printed whenever they change.
+static unsafe int IconsRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    foreach ((string package, string name) in new[] { ("SHudTextures", "Icones_Weapons"), ("SHudTextures", "Icones_Gadgets"), ("Hud", "Move_coop"), ("Hud", "Move_coop02"), ("Hud", "heart"), ("Hud", "nothing_here") })
+    {
+        HudPng.Image? image = HudTextureExports.ReadTexture(package, name, out string? error);
+        string lit = image is null ? "" : $", {image.Bgra.Where((_, i) => i % 4 == 3).Count(a => a > 0)} texels not transparent, first opaque BGRA " +
+            string.Join(",", image.Bgra.Chunk(4).FirstOrDefault(p => p[3] > 128) ?? []);
+        Console.WriteLine($"texture {package}.{name}: {(image is null ? "missing (" + error + ")" : $"{image.Width}x{image.Height}{lit}")}");
+    }
+
+    HudTextureLibrary? library = HudTextureLibrary.Current(out _);
+    Console.WriteLine(library is not null && library.Material("Hud", "heart", out string tex, out int u0, out int v0, out int u1, out int v1)
+        ? $"material Hud.heart: {tex} ({u0},{v0})-({u1},{v1})" : "material Hud.heart: missing");
+    HudCoopIcons? icons = HudCoopIcons.Current(out string? coopError);
+    Console.WriteLine(icons is null ? $"coop icons: missing ({coopError})" : $"coop icons: bounds {icons.Bounds}");
+    for (int icon = 1; icon <= 4 && icons is not null; icon++)
+    {
+        Console.WriteLine($"   coop {icon} {icons.ClipName(icon)} bounds {icons.BoundsOf(icon)}");
+        foreach (float at in new[] { 0f, 0.5f, 1.5f, 4f })
+        {
+            var layers = HudTextureExports.ReadCoopLayers(icon, at);
+            Console.WriteLine($"   coop {icon} {icons.ClipName(icon)} at {at:F1} s: " + string.Join(" | ", layers.Select(l =>
+                $"{l.Texture} ({l.U0},{l.V0})-({l.U1},{l.V1}) at ({l.L:F0},{l.T:F0})-({l.R:F0},{l.B:F0}) rgba {l.Red:F2},{l.Green:F2},{l.Blue:F2},{l.Alpha:F2}")));
+        }
+    }
+
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+    HudFeature hud = HudFeature.Of(session);
+    hud.SetViewport(1920, 1080);
+    var input = default(BridgeInput);
+    var run = Stopwatch.StartNew();
+    bool killed = false;
+    string last = "";
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        const int Use = 10;
+        input.Buttons[Use] = (byte)(t is > 7 and < 7.3 ? 1 : 0);
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        if (!killed && t > 3 && session.Session.LocalController?.PlayerReplicationInfo is { } pri && session.Session.Host is { } host)
+        {
+            killed = true;
+            int id = pri.PlayerID;
+            void Kill(OpenScct.Server.ServerHost running)
+            {
+                running.BeforeWorldTick -= Kill;
+                Console.WriteLine($"t={run.Elapsed.TotalSeconds:F1} KillOnServer(player {id}) -> {HudTextureExports.KillOnServer(running, id)}");
+            }
+
+            host.BeforeWorldTick += Kill;
+        }
+
+        hud.GetState(out HudState s);
+        hud.GetRound(out HudRound r);
+        string now = $"state '{hud.Texts.Text(s.StateNameId)}' mode {r.GameMode} health {s.Health} lives {s.Lives} | CoopIcon {s.CoopIcon} | " +
+            $"RespawnWeapon icon ({s.RespawnWeaponIconU},{s.RespawnWeaponIconV}) class '{hud.Texts.Text(s.RespawnWeaponClassId)}'";
+        if (now != last)
+        {
+            last = now;
+            Console.WriteLine($"t={t:F1} {now}");
         }
 
         Thread.Sleep(4);
