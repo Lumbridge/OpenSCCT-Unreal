@@ -51,6 +51,10 @@
 		{
 			"Name": "ResonanceAudio",
 			"Enabled": true
+		},
+		{
+			"Name": "Interchange",
+			"Enabled": true
 		}
 	]
 }

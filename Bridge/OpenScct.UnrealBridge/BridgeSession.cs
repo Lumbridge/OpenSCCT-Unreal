@@ -148,7 +148,10 @@ public sealed class BridgeSession : IDisposable
     {
         // The bridge's own folder stands for the exe's: its maps/ holds the maps shipped with the bridge (TestBox).
         // The runtime Unreal hosts has no base directory of its own, so the default catalog cannot find them there.
-        ContentPaths.Configure(contentRoot, exeDir: Path.GetDirectoryName(typeof(BridgeSession).Assembly.Location));
+        // OPENSCCT_PACKS moves the downloaded packs' folder (default %LOCALAPPDATA%\OpenSCCT\packs), so a test process
+        // can run without the maps downloaded on this machine (a lobby guest that lacks the host's map).
+        ContentPaths.Configure(contentRoot, exeDir: Path.GetDirectoryName(typeof(BridgeSession).Assembly.Location),
+            packs: Environment.GetEnvironmentVariable("OPENSCCT_PACKS"));
     }
 
     /// <summary>Hosts <paramref name="map"/> locally and joins it. Blocks while the map loads.</summary>
@@ -170,6 +173,8 @@ public sealed class BridgeSession : IDisposable
             Sidearms = match.Sidearms,
             Rifles = match.Rifles,
             OfflineRules = match.OfflineRules,
+            // The map folders Unreal names (-ScctMaps, maps next to the game) and the content's maps.
+            MapRoots = Online.MapFolders.ExtraRoots(),
             UnlimitedGear = match.OfflineRules || match.UnlimitedGear,
             StartAt = match.StartAt,
             Rules = match.PlayLevel ? PlayRules.PlayLevel : PlayRules.MapSettings,

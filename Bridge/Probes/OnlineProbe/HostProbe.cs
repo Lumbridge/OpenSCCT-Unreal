@@ -20,7 +20,9 @@ using OpenScct.UnrealBridge.Online;
 ///      are listed in the host's lobby and in the host's own status text, the host first;
 ///   4. a LAN search on the beacon's port answers with the server's name and player count;
 ///   5. a host command ("players") answers as system chat lines;
-///   6. the host leaves: hosting stops and the guest's visit fails with the server closing.
+///   6. the lobby table (LobbyExports.GetApi): its size, a rank as text, a voice ban of the guest and its lift (the
+///      player flag follows), and a second guest kicked (its visit fails with the Kicked flag, the lobby shrinks);
+///   7. the host leaves: hosting stops and the guest's visit fails with the server closing.
 /// With "upnp" it also looks for the router with an SSDP search (nothing is mapped).
 /// </summary>
 internal static unsafe class HostProbe
@@ -151,7 +153,10 @@ internal static unsafe class HostProbe
                 Console.WriteLine("host log: " + new string(buffer));
             }
 
-            // 6. The host leaves.
+            // 6. The lobby table: a voice ban and its lift on the guest, then a second guest kicked.
+            ok &= Moderation(port, g);
+
+            // 7. The host leaves.
             s_online.Leave();
             int hostingAfter = s_host.IsHosting();
             wait.Restart();
@@ -172,6 +177,76 @@ internal static unsafe class HostProbe
 
         Console.WriteLine(ok ? "PROBE OK" : "PROBE FAILED");
         return ok ? 0 : 1;
+    }
+
+    private static bool Moderation(int port, OnlineBridge guest)
+    {
+        int expected = 8 + 4 * sizeof(void*);
+        LobbyApi lobby = default;
+        int version = ((delegate* unmanaged<LobbyApi*, int>)&LobbyExports.GetApi)(&lobby);
+        Console.WriteLine($"layout: LobbyApi {sizeof(LobbyApi)} bytes{(sizeof(LobbyApi) == expected ? string.Empty : $" BUT THE HEADER ASSERTS {expected}")}, version {version}");
+        bool ok = sizeof(LobbyApi) == expected && version == LobbyExports.ApiVersion;
+
+        // A rank as the lobby's column shows it (level 41 at the second prestige, no title).
+        string rank = LobbyExports.RankOf(41 | (2 << 8));
+        Console.WriteLine($"rank text of a packed P2 41: '{rank}', of none: '{LobbyExports.RankOf(0)}'");
+        ok &= rank == "P2 41" && LobbyExports.RankOf(0).Length == 0;
+
+        int guestId = guest.Client!.Lobby.LocalId;
+        ok &= lobby.SetVoiceBanned(guestId, 1) == 1;
+        bool banned = WaitForFlag(guestId, OnlinePlayerFlagsVoiceBanned, true, guest);
+        ok &= lobby.SetVoiceBanned(guestId, 0) == 1;
+        bool lifted = WaitForFlag(guestId, OnlinePlayerFlagsVoiceBanned, false, guest);
+        Console.WriteLine($"voice ban of player {guestId}: flag set {banned}, lifted {lifted}");
+        ok &= banned && lifted;
+
+        using var second = new OnlineBridge();
+        second.SetIdentity("ProbeKicked", null, null);
+        second.Join("127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture), null, preferredTeam: 0, loopbackOnly: true);
+        OnlineStatus status = WaitFor(s => s.PlayerCount >= 3 && second.State == OnlineState.Lobby, 20, guest, second);
+        int secondId = second.Client?.Lobby.LocalId ?? -1;
+        ok &= lobby.Kick(secondId) == 1;
+        var wait = Stopwatch.StartNew();
+        while (wait.Elapsed.TotalSeconds < 6 && second.State != OnlineState.Failed)
+        {
+            Frame(guest, second);
+            Thread.Sleep(10);
+        }
+
+        // The host's own list loses the player with the server's next lobby update.
+        status = WaitFor(s => s.PlayerCount == 2, 5, guest, second);
+        Console.WriteLine($"kick of player {secondId}: kicked visit {second.State}, kicked flag {second.Client?.Kicked}, error '{second.Error}', host's lobby now {status.PlayerCount} players");
+        ok &= second.State == OnlineState.Failed && second.Client?.Kicked == true && status.PlayerCount == 2;
+        return ok;
+    }
+
+    private const int OnlinePlayerFlagsVoiceBanned = 1024;
+
+    private static bool WaitForFlag(int playerId, int flag, bool set, OnlineBridge guest)
+    {
+        var players = new OnlinePlayer[8];
+        var wait = Stopwatch.StartNew();
+        while (wait.Elapsed.TotalSeconds < 5)
+        {
+            Frame(guest);
+            int count;
+            fixed (OnlinePlayer* p = players)
+            {
+                count = s_online.GetPlayers(p, players.Length);
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                if (players[i].Id == playerId && ((players[i].Flags & flag) != 0) == set)
+                {
+                    return true;
+                }
+            }
+
+            Thread.Sleep(10);
+        }
+
+        return false;
     }
 
     private static int Host(string name, string options, int port, int lanPort)
@@ -203,23 +278,24 @@ internal static unsafe class HostProbe
         return query.Results.Any(r => r.Info.Name.StartsWith("Probe host", StringComparison.Ordinal) && r.Info.Players == 2);
     }
 
-    private static OnlineStatus Frame(OnlineBridge? guest = null)
+    private static OnlineStatus Frame(OnlineBridge? guest = null, OnlineBridge? other = null)
     {
         s_online.Update();
         guest?.Update();
+        other?.Update();
         OnlineStatus status;
         s_online.GetStatus(&status);
         return status;
     }
 
-    private static OnlineStatus WaitFor(Func<OnlineStatus, bool> done, double seconds, OnlineBridge? guest = null)
+    private static OnlineStatus WaitFor(Func<OnlineStatus, bool> done, double seconds, OnlineBridge? guest = null, OnlineBridge? other = null)
     {
         var wait = Stopwatch.StartNew();
-        OnlineStatus status = Frame(guest);
+        OnlineStatus status = Frame(guest, other);
         while (!done(status) && wait.Elapsed.TotalSeconds < seconds)
         {
             Thread.Sleep(10);
-            status = Frame(guest);
+            status = Frame(guest, other);
         }
 
         return status;

@@ -39,6 +39,11 @@ public class OpenSCCT : ModuleRules
 			"AudioCapture",
 			"AudioCaptureCore",
 			"SignalProcessing",
+			// Maps the editor never imported are built at run time from their glTF render files (Play/ScctRuntimeMapActor).
+			"GLTFCore",
+			"ImageWrapper",
+			"MeshDescription",
+			"StaticMeshDescription",
 			"Json",
 			// The loading page is shown by the engine's movie player while a level loads (Menu/ScctLoadingSubsystem).
 			"MoviePlayer",

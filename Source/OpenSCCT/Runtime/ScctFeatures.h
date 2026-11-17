@@ -2,10 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "OpenSCCT.h"
+#include "Runtime/ScctBrowserApi.h"
 #include "Runtime/ScctAccountApi.h"
 #include "Runtime/ScctAcousticApi.h"
 #include "Runtime/ScctAudioCheckApi.h"
 #include "Runtime/ScctAudioViewApi.h"
+#include "Runtime/ScctContentApi.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctDemoApi.h"
 #include "Runtime/ScctDemoPlayApi.h"
@@ -17,9 +19,13 @@
 #include "Runtime/ScctHubPadsApi.h"
 #include "Runtime/ScctHubSocialApi.h"
 #include "Runtime/ScctHudApi.h"
+#include "Runtime/ScctLobbyApi.h"
+#include "Runtime/ScctMapsApi.h"
 #include "Runtime/ScctMenuApi.h"
 #include "Runtime/ScctMarkSurfaceApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Runtime/ScctRejoinApi.h"
+#include "Runtime/ScctRoundApi.h"
 #include "Runtime/ScctSocialApi.h"
 #include "Runtime/ScctPlayApi.h"
 #include "Runtime/ScctProjectionsApi.h"
@@ -50,10 +56,12 @@ struct TScctFeatureInfo;
 		static constexpr int32 Version = VersionConstant; \
 	}
 
+SCCT_FEATURE_TABLE(FScctBrowserApi, "BrowserExports", ScctBrowserApiVersion);
 SCCT_FEATURE_TABLE(FScctAccountApi, "AccountExports", ScctAccountApiVersion);
 SCCT_FEATURE_TABLE(FScctAcousticApi, "AcousticExports", ScctAcousticApiVersion);
 SCCT_FEATURE_TABLE(FScctAudioCheckApi, "AudioCheckExports", ScctAudioCheckApiVersion);
 SCCT_FEATURE_TABLE(FScctAudioViewApi, "AudioViewExports", ScctAudioViewApiVersion);
+SCCT_FEATURE_TABLE(FScctContentApi, "ContentExports", ScctContentApiVersion);
 SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
 SCCT_FEATURE_TABLE(FScctDemoApi, "DemoExports", ScctDemoApiVersion);
 SCCT_FEATURE_TABLE(FScctDemoPlayApi, "DemoPlayExports", ScctDemoPlayApiVersion);
@@ -65,9 +73,13 @@ SCCT_FEATURE_TABLE(FScctHubSocialApi, "HubSocialExports", ScctHubSocialApiVersio
 SCCT_FEATURE_TABLE(FScctHubPadsApi, "HubPadsExports", ScctHubPadsApiVersion);
 SCCT_FEATURE_TABLE(FScctHubActivityApi, "HubActivityExports", ScctHubActivityApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
+SCCT_FEATURE_TABLE(FScctLobbyApi, "LobbyExports", ScctLobbyApiVersion);
+SCCT_FEATURE_TABLE(FScctMapsApi, "MapsExports", ScctMapsApiVersion);
 SCCT_FEATURE_TABLE(FScctMenuApi, "MenuExports", ScctMenuApiVersion);
 SCCT_FEATURE_TABLE(FScctMarkSurfaceApi, "MarkSurfaceExports", ScctMarkSurfaceApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
+SCCT_FEATURE_TABLE(FScctRejoinApi, "RejoinExports", ScctRejoinApiVersion);
+SCCT_FEATURE_TABLE(FScctRoundApi, "RoundExports", ScctRoundApiVersion);
 SCCT_FEATURE_TABLE(FScctSocialApi, "SocialExports", ScctSocialApiVersion);
 SCCT_FEATURE_TABLE(FScctPlayApi, "PlayExports", ScctPlayApiVersion);
 SCCT_FEATURE_TABLE(FScctProjectionsApi, "ProjectionExports", ScctProjectionsApiVersion);

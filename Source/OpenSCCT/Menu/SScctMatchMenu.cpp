@@ -10,7 +10,11 @@
 #include "Menu/ScctMenuKit.h"
 #include "Menu/ScctMenuNav.h"
 #include "Menu/ScctMenuSubsystem.h"
+#include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
+#include "Misc/Parse.h"
+#include "Misc/Paths.h"
+#include "Runtime/ScctFeatures.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
 #include "Runtime/ScctOnlineApi.h"
@@ -84,6 +88,13 @@ void SScctMatchMenu::Construct(const FArguments& InArgs)
 	Host.Open = [this](const FString& Name) { ShowNamed(Name); };
 	Host.Back = [this] { GoBack(); };
 
+	FParse::Value(FCommandLine::Get(), TEXT("ScctResultsAction="), ResultsAction);
+	FParse::Value(FCommandLine::Get(), TEXT("ScctResultsActionAfter="), ResultsActionAfter);
+	if (!bOnlineLevel)
+	{
+		FParse::Value(FCommandLine::Get(), TEXT("ScctEndMatch="), EndMatchAt);
+	}
+
 	ChildSlot
 	[
 		ScctUi::ScaleForSmallScreens(
@@ -136,8 +147,9 @@ void SScctMatchMenu::SetOpen(bool bInOpen)
 		// Who the player is now decides the pause page's entries (logged as the menu opens).
 		ShownEntries.Reset();
 		RefreshContext(false);
-		// Offline the results are the menu's page while the round is over; otherwise the menu opens on its first page.
-		Show(bResultsReady && !bOnlineLevel ? EView::Results : EView::Pause);
+		// The results are the menu's page while the round is over (their buttons are the ways on); otherwise the menu
+		// opens on its first page.
+		Show(bResultsReady ? EView::Results : EView::Pause);
 	}
 	else
 	{
@@ -398,17 +410,133 @@ void SScctMatchMenu::Tick(const FGeometry& AllottedGeometry, const double InCurr
 		{
 			Show(EView::Results);
 		}
-		else if (!bReady && View == EView::Results && !bOpen)
+		else if (!bReady && View == EView::Results)
 		{
+			if (bOpen && bResultsOpenedMenu)
+			{
+				// The visit moved on (the next round or the lobby): the menu opened for the results closes with them.
+				UE_LOG(LogOpenSCCT, Log, TEXT("Match menu: the results are gone (the visit moved on)"));
+				OnResume.ExecuteIfBound();
+			}
 			Show(EView::Pause);
 		}
-		if (bReady && !bOnlineLevel && !bOfflineResultsOpened)
+		if (!bReady)
 		{
-			// Offline nothing comes after the round by itself: the menu opens on the results with the ways on.
-			bOfflineResultsOpened = true;
-			UE_LOG(LogOpenSCCT, Log, TEXT("Match menu: the round is over, showing the results"));
+			bResultsOpenedMenu = false;
+		}
+		else if (!bResultsOpenedMenu)
+		{
+			// The results take the mouse and the pad: offline nothing comes after the round by itself, and online the
+			// results' Next, Back to lobby and Leave are the ways on.
+			bResultsOpenedMenu = true;
+			ResultsShownFor = 0.0f;
+			bResultsActionDone = false;
+			UE_LOG(LogOpenSCCT, Log, TEXT("Match menu: the round is over, showing the results (%s)"), bOnlineLevel ? TEXT("online") : TEXT("offline"));
+			LogResults();
 			OnWantsOpen.ExecuteIfBound();
 		}
+	}
+	if (bResultsReady)
+	{
+		ResultsShownFor += InDeltaTime;
+	}
+	LevelTime += InDeltaTime;
+	RunResultsUnattended();
+}
+
+void SScctMatchMenu::LogResults() const
+{
+	int32 Winner = 255;
+	FString Reason;
+	TArray<TArray<FString>> Rows;
+	TArray<int32> Teams;
+	TArray<bool> Local;
+	if (!ReadResults(Winner, Reason, Rows, Teams, Local))
+	{
+		return;
+	}
+	const int32 LocalTeam = GetResultsLocalTeam();
+	UE_LOG(LogOpenSCCT, Log, TEXT("Results: winner %d, the local player played %d (%s), %s, %d line(s)"), Winner, LocalTeam,
+		Winner > 1 || (LocalTeam != 0 && LocalTeam != 1) ? TEXT("no verdict") : Winner == LocalTeam ? TEXT("won") : TEXT("lost"), *Reason, Rows.Num());
+	for (int32 Index = 0; Index < Rows.Num(); ++Index)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Results:   %s side %d score %s kills %s deaths %s%s"), *Rows[Index][0], Teams[Index], *Rows[Index][1], *Rows[Index][2], *Rows[Index][3],
+			Local[Index] ? TEXT(" (local)") : TEXT(""));
+	}
+}
+
+int32 SScctMatchMenu::GetResultsLocalTeam() const
+{
+	// Online the side the local player played this round is his own results line (a Revenge game swaps the sides).
+	const UScctOnlineSubsystem* Visit = Online.Get();
+	return bOnlineLevel && Visit != nullptr ? Visit->GetResultsLocalTeam() : IsMercLocal() ? 1 : 0;
+}
+
+void SScctMatchMenu::ResultsNext()
+{
+	UScctOnlineSubsystem* Visit = Online.Get();
+	if (Visit == nullptr)
+	{
+		return;
+	}
+	// The server starts the next game (or goes back to the lobby) once every player on a side is ready, or when its
+	// results countdown runs out.
+	FScctOnlineResults Results;
+	TArray<FScctOnlineResultRow> Rows;
+	const bool bMore = Visit->GetResults(Results, Rows) && Results.GamesLeft > 0;
+	UE_LOG(LogOpenSCCT, Log, TEXT("Results: Next, ready for the %s"), bMore ? TEXT("next game of the series") : TEXT("lobby"));
+	Visit->SetReady(true);
+}
+
+void SScctMatchMenu::ResultsToLobby()
+{
+	if (UScctOnlineSubsystem* Visit = Online.Get())
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Results: Back to lobby, everyone"));
+		Visit->BackToLobby();
+	}
+}
+
+void SScctMatchMenu::ResultsAskLeave()
+{
+	// Asked again, with a warning while the match demo is still being saved (ResultsScreen.ToMainMenu).
+	const UScctOnlineSubsystem* Visit = Online.Get();
+	const bool bPending = Visit != nullptr && (Visit->GetDemoFlags() & EScctRoundDemoFlags::PendingSave) != 0;
+	ScctUi::Confirm(Dialogs, TEXT("Leave"),
+		bPending ? TEXT("Your match demo is still being saved. Leaving now cancels the download. Leave the session?") : TEXT("Leave the session?"),
+		TEXT("Leave"), TEXT("Stay"), [this] { UE_LOG(LogOpenSCCT, Log, TEXT("Results: leaving the session")); OnLeave.ExecuteIfBound(); }, true);
+}
+
+void SScctMatchMenu::RunResultsUnattended()
+{
+	// Once a run, so the match a rematch opens plays on.
+	static bool bEndedThisRun = false;
+	if (EndMatchAt >= 0.0f && LevelTime >= EndMatchAt && !bEndedThisRun)
+	{
+		EndMatchAt = -1.0f;
+		bEndedThisRun = true;
+		const FScctRoundApi* Round = ScctFeature<FScctRoundApi>();
+		const int32 Queued = Round != nullptr ? Round->EndLocalRound() : 0;
+		UE_LOG(LogOpenSCCT, Log, TEXT("-ScctEndMatch: running the local match's clock out on its server: %s"), Queued != 0 ? TEXT("queued") : TEXT("refused (no local match, or no round table)"));
+	}
+
+	// Once a run: a rematch opens the level again, which would end and rematch again for ever.
+	static bool bPressedThisRun = false;
+	if (ResultsAction.IsEmpty() || bResultsActionDone || bPressedThisRun || !bResultsReady || ResultsShownFor < ResultsActionAfter)
+	{
+		return;
+	}
+	bResultsActionDone = true;
+	bPressedThisRun = true;
+	UE_LOG(LogOpenSCCT, Log, TEXT("-ScctResultsAction: pressing %s"), *ResultsAction);
+	if (ResultsAction.Equals(TEXT("next"), ESearchCase::IgnoreCase) && bOnlineLevel) { ResultsNext(); }
+	else if (ResultsAction.Equals(TEXT("lobby"), ESearchCase::IgnoreCase) && bOnlineLevel) { ResultsToLobby(); }
+	else if (ResultsAction.Equals(TEXT("leave"), ESearchCase::IgnoreCase) && bOnlineLevel) { OnLeave.ExecuteIfBound(); }
+	else if (ResultsAction.Equals(TEXT("rematch"), ESearchCase::IgnoreCase) && !bOnlineLevel) { Restart(false); }
+	else if (ResultsAction.Equals(TEXT("menu"), ESearchCase::IgnoreCase) && !bOnlineLevel) { UE_LOG(LogOpenSCCT, Log, TEXT("Results: main menu")); OnLeave.ExecuteIfBound(); }
+	else
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("-ScctResultsAction: '%s' is not a button of the %s results"), *ResultsAction, bOnlineLevel ? TEXT("online") : TEXT("offline"));
 	}
 }
 
@@ -662,10 +790,36 @@ bool SScctMatchMenu::ReadResults(int32& OutWinner, FString& OutReason, TArray<TA
 		case 2: OutReason = TEXT("A side was eliminated"); break;
 		default: OutReason = TEXT("The round was stopped"); break;
 		}
+		if (Results.ObjectivesNeeded > 0)
+		{
+			OutReason += FString::Printf(TEXT("   ·   objectives %d / %d"), Results.ObjectivesTaken, Results.ObjectivesNeeded);
+		}
+		// The round table's extras, in the order of the results' lines: objectives and who left early.
+		const TArray<FScctRoundResultExtra> Extras = Visit->GetResultExtras();
+		TMap<int32, FScctRoundResultExtra> ExtraOf;
+		for (int32 Index = 0; Index < Extras.Num() && Index < Rows.Num(); ++Index)
+		{
+			if (Extras[Index].Id == Rows[Index].Id)
+			{
+				ExtraOf.Add(Rows[Index].Id, Extras[Index]);
+			}
+		}
 		Rows.StableSort([](const FScctOnlineResultRow& A, const FScctOnlineResultRow& B) { return A.Team != B.Team ? A.Team < B.Team : A.Score > B.Score; });
 		for (const FScctOnlineResultRow& Row : Rows)
 		{
-			OutRows.Add({ Row.Name, FString::FromInt(Row.Score), FString::FromInt(Row.Kills), FString::FromInt(Row.Deaths) });
+			FString Name = Row.Name;
+			if (const FScctRoundResultExtra* Extra = ExtraOf.Find(Row.Id))
+			{
+				if (Results.ObjectivesNeeded > 0 && Extra->Objectives > 0)
+				{
+					Name += FString::Printf(TEXT("  · %d obj"), Extra->Objectives);
+				}
+				if (Extra->LeftEarly != 0)
+				{
+					Name += TEXT("  (left)");
+				}
+			}
+			OutRows.Add({ Name, FString::FromInt(Row.Score), FString::FromInt(Row.Kills), FString::FromInt(Row.Deaths) });
 			OutTeams.Add(Row.Team);
 			OutLocal.Add(Row.Id == Visit->GetStatus().LocalId);
 		}
@@ -709,9 +863,11 @@ TSharedRef<SWidget> SScctMatchMenu::BuildResults()
 	const FString Headline = bDecided
 		? ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TextTeamWin"), Winner, Winner == 0 ? TEXT("Spies win") : TEXT("Mercenaries win"))
 		: bEnded ? FString(TEXT("Round over")) : FString(TEXT("Scoreboard"));
-	const bool bLocalWon = bDecided && Winner == (IsMercLocal() ? 1 : 0);
+	const int32 LocalTeam = GetResultsLocalTeam();
+	const bool bSpectator = LocalTeam != 0 && LocalTeam != 1;
+	const bool bLocalWon = bDecided && !bSpectator && Winner == LocalTeam;
 	const FString Kicker = !bEnded ? FString(TEXT("ROUND IN PROGRESS"))
-		: bLocalWon ? FString(TEXT("VICTORY")) : bDecided ? FString(TEXT("DEFEAT")) : FString(TEXT("NO WINNER"));
+		: bLocalWon ? FString(TEXT("YOU WIN")) : bDecided && !bSpectator ? FString(TEXT("YOU LOSE")) : bDecided ? FString(TEXT("ROUND OVER")) : FString(TEXT("NO WINNER"));
 
 	// Two tables, one per side.
 	const auto SideTable = [&](int32 Team) -> TSharedRef<SWidget>
@@ -783,6 +939,52 @@ TSharedRef<SWidget> SScctMatchMenu::BuildResults()
 		];
 	}
 	const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Online;
+	int32 GamesLeft = 0;
+	if (bOnlineLevel && Weak.IsValid())
+	{
+		FScctOnlineResults Results;
+		TArray<FScctOnlineResultRow> ResultRows;
+		GamesLeft = Weak->GetResults(Results, ResultRows) ? Results.GamesLeft : 0;
+
+		// NEXT: ready for the next game of the series, or for the lobby once the series is over (ResultsScreen.Rematch).
+		TSharedPtr<SScctButton> Next;
+		Buttons->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 10.0f, 0.0f)
+		[
+			SAssignNew(Next, SScctButton)
+			.Look(EScctButtonLook::Primary)
+			.MinWidth(220.0f)
+			.IsEnabled_Lambda([Weak] { return Weak.IsValid() && !Weak->HasFlag(EScctOnlineStatusFlags::LocalReady); })
+			.Text_Lambda([Weak, GamesLeft]
+			{
+				const bool bReady = Weak.IsValid() && Weak->HasFlag(EScctOnlineStatusFlags::LocalReady);
+				const bool bControl = Weak.IsValid() && Weak->HasFlag(EScctOnlineStatusFlags::CanControl);
+				return FText::FromString(bReady ? TEXT("READY") : GamesLeft > 0 ? TEXT("NEXT ROUND") : bControl ? TEXT("RETURN TO LOBBY") : TEXT("CONTINUE TO LOBBY"));
+			})
+			.Description(FText::FromString(TEXT("Say you are ready: the next game of the series (or the lobby) starts once every player on a side is.")))
+			.OnPressed(FSimpleDelegate::CreateLambda([this] { ResultsNext(); }))
+		];
+		DefaultFocus = Next;
+		// BACK TO LOBBY: the player who controls the session sends everyone there at once, without waiting for the
+		// others to be ready (the rest of the series is dropped).
+		Buttons->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 10.0f, 0.0f)
+		[
+			SNew(SBox)
+			.Visibility_Lambda([Weak] { return Weak.IsValid() && Weak->HasFlag(EScctOnlineStatusFlags::CanControl) ? EVisibility::Visible : EVisibility::Collapsed; })
+			[
+				SNew(SScctButton)
+				.Text(FText::FromString(GamesLeft > 0 ? TEXT("END SERIES, TO LOBBY") : TEXT("EVERYONE TO LOBBY NOW")))
+				.Description(FText::FromString(TEXT("You control this session: everyone back to the lobby now, without waiting.")))
+				.OnPressed(FSimpleDelegate::CreateLambda([this] { ResultsToLobby(); }))
+			]
+		];
+		Buttons->AddSlot().AutoWidth()
+		[
+			SNew(SScctButton)
+			.Text(FText::FromString(TEXT("LEAVE")))
+			.Description(FText::FromString(TEXT("Leave the session and go back to the main menu.")))
+			.OnPressed(FSimpleDelegate::CreateLambda([this] { ResultsAskLeave(); }))
+		];
+	}
 
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 30.0f, 0.0f, 0.0f)
@@ -798,15 +1000,49 @@ TSharedRef<SWidget> SScctMatchMenu::BuildResults()
 				.Text(FText::FromString(Headline.ToUpper()))
 			]
 		]
-		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 0.0f, 0.0f, 30.0f)
+		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 0.0f, 0.0f, bOnlineLevel ? 8.0f : 30.0f)
 		[
 			SNew(STextBlock).Font(ScctUi::Body()).ColorAndOpacity(ScctHudStyle::TextDim())
-			.Text_Lambda([Weak, Reason, bOnline = bOnlineLevel]
+			.Text(FText::FromString(Reason))
+		]
+		// Online: the series and the server's countdown, who the next game waits for, and the personal demo.
+		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 0.0f, 0.0f, 24.0f)
+		[
+			SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).Justification(ETextJustify::Center).AutoWrapText(true)
+			.Visibility(bOnlineLevel ? EVisibility::Visible : EVisibility::Collapsed)
+			.Text_Lambda([Weak, GamesLeft]
 			{
-				FString Line = Reason;
-				if (bOnline && Weak.IsValid() && Weak->GetStatus().Countdown > 0.0f)
+				if (!Weak.IsValid())
 				{
-					Line += FString::Printf(TEXT("   ·   next in %d s"), FMath::CeilToInt32(Weak->GetStatus().Countdown));
+					return FText::GetEmpty();
+				}
+				const int32 Left = FMath::CeilToInt32(Weak->GetStatus().Countdown);
+				const FString Series = GamesLeft > 0 ? FString::Printf(TEXT("%d game%s left in the series"), GamesLeft, GamesLeft == 1 ? TEXT("") : TEXT("s")) : FString(TEXT("The series is over"));
+				// Only a dedicated server counts down (OnlineServer.ResultsSeconds); a listen host waits for everyone.
+				const TCHAR* Then = GamesLeft > 0 ? TEXT("next game") : TEXT("back to the lobby");
+				TArray<FString> Waiting;
+				for (const FScctOnlinePlayer& Player : Weak->GetPlayers())
+				{
+					if ((Player.Flags & (EScctOnlinePlayerFlags::Ready | EScctOnlinePlayerFlags::Spectator | EScctOnlinePlayerFlags::Bot)) == 0 && Player.Team != 255)
+					{
+						Waiting.Add(Player.Name);
+					}
+				}
+				FString Line = Left > 0 ? FString::Printf(TEXT("%s  ·  %s in %d s"), *Series, Then, Left) : FString::Printf(TEXT("%s  ·  %s once everyone is ready"), *Series, Then);
+				Line += Waiting.Num() == 0 ? FString(TEXT("\nEveryone is ready.")) : FString::Printf(TEXT("\nWaiting for %s."), *FString::Join(Waiting, TEXT(", ")));
+				// The personal demo (OnlineClient.DemoRecordingStatus): shown while the player records or a demo is still saved.
+				const int32 Demo = Weak->GetDemoFlags();
+				if ((Demo & (EScctRoundDemoFlags::Recording | EScctRoundDemoFlags::PendingSave)) != 0)
+				{
+					Line += TEXT("\nMatch demo: ") + Weak->GetRoundText(EScctRoundText::DemoStatus);
+					if ((Demo & EScctRoundDemoFlags::PendingSave) != 0)
+					{
+						Line += TEXT(" Stay connected until saving finishes.");
+					}
+					else if ((Demo & EScctRoundDemoFlags::Saved) != 0)
+					{
+						Line += TEXT(" Saved as ") + FPaths::GetCleanFilename(Weak->GetRoundText(EScctRoundText::LastDemoPath));
+					}
 				}
 				return FText::FromString(Line);
 			})

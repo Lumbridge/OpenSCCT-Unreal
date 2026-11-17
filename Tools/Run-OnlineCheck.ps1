@@ -49,6 +49,8 @@ param(
     [switch] $NoServer,
     # Do not say ready: the game stays in the lobby (for a look at it).
     [switch] $StayInLobby,
+    # The server's admin password (empty: none), for the game's admin login (-ScctAdmin=<password>;status).
+    [string] $AdminPassword = '',
     # A practice server (unlimited lives, the in-match menu's Switch Team).
     [switch] $Practice,
     # Join from the menus instead of -ScctJoin: a menu script (Source/OpenSCCT/Menu/ScctMenuDriver.h) that opens
@@ -88,6 +90,7 @@ try {
             rotation = @(@{ map = $Map; mode = 'Story'; timeLimit = $TimeLimit },
                 $(if ($SecondTimeLimit -gt 0) { @{ map = $SecondMap; mode = 'Story'; timeLimit = $SecondTimeLimit } } else { @{ map = $SecondMap; mode = 'Story' } }))
             minPlayersToLaunch = $MinPlayers; launchCountdownSeconds = 2; resultsSeconds = 6; bansFile = $null; matchLog = $null
+            adminPassword = $(if ($AdminPassword) { $AdminPassword } else { $null })
             practice = [bool] $Practice
         } | ConvertTo-Json -Depth 4 | Set-Content -Path $config -Encoding utf8
 
