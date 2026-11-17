@@ -21,6 +21,9 @@ $normals = Join-Path $project "Saved\ScctImport\$Map\normals"
 python "$PSScriptRoot\prepare_textures.py" $render $normals
 if ($LASTEXITCODE -ne 0) { throw 'Texture preparation failed.' }
 
+# A level that exists cannot be replaced from inside the editor's Python: it is rebuilt from nothing each import.
+Remove-Item (Join-Path $project "Content\Imported\Maps\$Map\$Map.umap") -ErrorAction SilentlyContinue
+
 # Unreal's command line treats backslashes in -script as escapes.
 function Fwd([string] $path) { $path -replace '\\', '/' }
 $log = Fwd (Join-Path $project "Saved\Logs\import-$Map.log")

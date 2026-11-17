@@ -23,8 +23,9 @@ SURFACE_MATERIAL = "/Game/OpenSCCT/Materials/M_ScctSurface"
 # Light conversion. The original lights were tuned for baked lightmaps with hand-placed fill lights; these
 # factors bring them to physical units under Lumen. Tuned by eye on AquaE.
 RADIUS_UNITS = 25.0          # world radius = 25 * (LightRadius + 1), as the original engine
-CANDELAS_PER_BRIGHTNESS = 1.6
-EMISSIVE_UNLIT = 6.0
+CANDELAS_PER_BRIGHTNESS = 0.45
+EMISSIVE_UNLIT = 3.0      # screens, lamps and signs that were unlit in the original
+EMISSIVE_ADDITIVE = 1.0   # flare and glow sprites: bloom does the rest
 
 asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
 editor_assets = unreal.EditorAssetLibrary
@@ -147,6 +148,8 @@ def ensure_surface_material():
     materials_lib.connect_material_expressions(emissive_strength, "", emissive, "B")
     materials_lib.connect_material_property(emissive, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
+    # One material serves level surfaces and characters.
+    material.set_editor_property("used_with_skeletal_mesh", True)
     materials_lib.recompile_material(material)
     editor_assets.save_asset(SURFACE_MATERIAL)
     log("made " + SURFACE_MATERIAL)
@@ -189,9 +192,9 @@ def build_materials(parent, material_doc):
     normal_maps = by_key(DEST + "/Normals")
     instances = {}
     folder = DEST + "/Materials"
-    for key, record in material_doc["materials"].items():
+    for material_name, record in material_doc["materials"].items():
         flags = record["flags"]
-        imported = sanitize(key)
+        imported = sanitize(material_name)
         name = "MI_" + imported
         path = folder + "/" + name
         if editor_assets.does_asset_exist(path):
@@ -210,14 +213,15 @@ def build_materials(parent, material_doc):
             if normal:
                 materials_lib.set_material_instance_texture_parameter_value(instance, "Normal", normal)
 
-        dark, bright, metallic = surface_look(key)
+        dark, bright, metallic = surface_look(material_name)
         materials_lib.set_material_instance_scalar_parameter_value(instance, "RoughnessDark", dark)
         materials_lib.set_material_instance_scalar_parameter_value(instance, "RoughnessBright", bright)
         materials_lib.set_material_instance_scalar_parameter_value(instance, "Metallic", metallic)
 
         is_additive = key(imported) in additive
         unlit = bool(flags.get("unlit")) or is_additive
-        materials_lib.set_material_instance_scalar_parameter_value(instance, "Emissive", EMISSIVE_UNLIT if unlit else 0.0)
+        emissive = EMISSIVE_ADDITIVE if is_additive else EMISSIVE_UNLIT if unlit else 0.0
+        materials_lib.set_material_instance_scalar_parameter_value(instance, "Emissive", emissive)
 
         overrides = instance.get_editor_property("base_property_overrides")
         blend = None
@@ -390,7 +394,7 @@ def main():
     fog = spawn(unreal.ExponentialHeightFog, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
     fog.set_folder_path("Atmosphere")
     fog_component = fog.component
-    try_set(fog_component, "fog_density", 0.012)
+    try_set(fog_component, "fog_density", 0.006)
     try_set(fog_component, "fog_height_falloff", 0.02)
     try_set(fog_component, "fog_inscattering_luminance", unreal.LinearColor(0.02, 0.03, 0.05, 1.0))
     try_set(fog_component, "enable_volumetric_fog", True)
@@ -403,8 +407,9 @@ def main():
     settings = post.get_editor_property("settings")
     for name, value in [
         ("auto_exposure_method", unreal.AutoExposureMethod.AEM_HISTOGRAM),
-        ("auto_exposure_min_brightness", 0.35),
-        ("auto_exposure_max_brightness", 2.5),
+        # A narrow range: the eye adapts a little, but dark rooms stay dark. This is a stealth game.
+        ("auto_exposure_min_brightness", 0.7),
+        ("auto_exposure_max_brightness", 1.6),
         ("auto_exposure_bias", 0.0),
         ("bloom_intensity", 0.9),
         ("bloom_threshold", -1.0),

@@ -34,6 +34,44 @@ for package, mesh in MODELS:
     tasks.append(task)
 unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
 
+# The importer's own materials are not compiled for skinned meshes in a game run, so each slot gets an instance
+# of the project's surface material with the slot's original texture.
+materials_lib = unreal.MaterialEditingLibrary
+asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+surface = unreal.load_asset("/Game/OpenSCCT/Materials/M_ScctSurface")
+if surface and not surface.get_editor_property("used_with_skeletal_mesh"):
+    surface.set_editor_property("used_with_skeletal_mesh", True)
+    materials_lib.recompile_material(surface)
+    unreal.EditorAssetLibrary.save_loaded_asset(surface)
+
+for package, mesh_name in MODELS:
+    base = "/Game/Imported/Chars/%s/%s" % (package, mesh_name)
+    mesh = unreal.load_asset("%s/SkeletalMeshes/%s" % (base, mesh_name))
+    if not mesh or not surface:
+        continue
+    slots = mesh.get_editor_property("materials")
+    for slot in slots:
+        imported = slot.get_editor_property("material_interface")
+        if not imported:
+            continue
+        name = str(imported.get_name())
+        if name.startswith("MI_"):
+            continue
+        path = "%s/Materials/MI_%s" % (base, name)
+        instance = unreal.load_asset(path) if unreal.EditorAssetLibrary.does_asset_exist(path) else asset_tools.create_asset(
+            "MI_" + name, base + "/Materials", unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+        materials_lib.set_material_instance_parent(instance, surface)
+        texture = unreal.load_asset("%s/Textures/%s" % (base, name))
+        if texture:
+            materials_lib.set_material_instance_texture_parameter_value(instance, "BaseColor", texture)
+        # Suits and gear: matte cloth with a slight sheen on the brighter, worn parts.
+        materials_lib.set_material_instance_scalar_parameter_value(instance, "RoughnessDark", 0.8)
+        materials_lib.set_material_instance_scalar_parameter_value(instance, "RoughnessBright", 0.5)
+        materials_lib.update_material_instance(instance)
+        slot.set_editor_property("material_interface", instance)
+    mesh.set_editor_property("materials", slots)
+    log("materials set on %s: %d slots" % (mesh_name, len(slots)))
+
 registry = unreal.AssetRegistryHelpers.get_asset_registry()
 by_class = {}
 for asset in registry.get_assets_by_path("/Game/Imported/Chars", recursive=True):
