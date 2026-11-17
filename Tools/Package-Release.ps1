@@ -378,8 +378,9 @@ try {
         '-cook', '-stage', '-pak', '-iostore', '-compressed', '-nodebuginfo',
         '-archive', "-archivedirectory=$archive",
         # DirectoriesToAlwaysCook finds no .umap, so the levels are named here; a map list on the command line replaces
-        # MapsToCook in Config/DefaultGame.ini, hence the front end too.
-        ('-MapsToCook=' + ((@('/Game/OpenSCCT/Maps/L_FrontEnd') + @($bundledMaps | ForEach-Object { "/Game/Imported/Maps/$_/$_" })) -join '+'))
+        # MapsToCook in Config/DefaultGame.ini, hence the front end and the runtime level (which builds every map
+        # without an imported level from the player's packs) too.
+        ('-MapsToCook=' + ((@('/Game/OpenSCCT/Maps/L_FrontEnd', '/Game/OpenSCCT/RuntimeMap/L_RuntimeMap') + @($bundledMaps | ForEach-Object { "/Game/Imported/Maps/$_/$_" })) -join '+'))
     )
     if ($Configuration -eq 'Shipping') { $uatArgs += '-distribution' }
     & $uat @uatArgs *> (Join-Path $Out 'uat.log')
