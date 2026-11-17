@@ -326,6 +326,9 @@ def build_materials(material_doc):
             scalar("Metallic", look["metallic"])
             scalar("Specular", look.get("specular", 0.5))
             scalar("MacroNormal", look.get("macro_normal", 1.0))
+            tint = look.get("tint")
+            if tint:
+                materials_lib.set_material_instance_vector_parameter_value(instance, "Tint", unreal.LinearColor(tint[0], tint[1], tint[2], 1.0))
 
             # The detail layer: only on lit surfaces (a glow or a decal has no grain of its own).
             detail = look.get("detail") if kind == "surface" and not unlit else None
