@@ -55,6 +55,12 @@ public:
 	/** Plain sight at once: the match is over. */
 	void Clear();
 
+	/**
+	 * For the effects warm-up behind the loading page (Play/ScctEffectsWarmup.h): shows Mode whatever the HUD says, so
+	 * its post-process and marks are drawn once before play; INDEX_NONE gives the picture back at once (plain sight).
+	 */
+	void HoldModeForWarmup(int32 Mode);
+
 	/** The mode the goggles show now (34 night, 36 thermal, 37 motion, 38 EMF, 0 plain sight), forced or the HUD's. */
 	int32 GetVisionMode() const { return ShownMode; }
 
@@ -147,6 +153,9 @@ private:
 
 	/** -ScctForceVision: the mode held whatever the HUD says, INDEX_NONE when not forced. */
 	int32 ForcedMode = INDEX_NONE;
+
+	/** HoldModeForWarmup: the mode the warm-up holds, INDEX_NONE when none. */
+	int32 WarmupMode = INDEX_NONE;
 
 	/** -ScctVisionHeatOpacity / -ScctVisionEmfOpacity: every pawn's opacity in that mode, negative when not held. */
 	float HeatOpacityOverride = -1.0f;
