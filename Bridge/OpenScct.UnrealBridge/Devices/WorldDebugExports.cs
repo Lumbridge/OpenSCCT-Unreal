@@ -4,6 +4,9 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using OpenScct.Core;
 using OpenScct.Core.Engine;
+using OpenScct.Game.Equipment;
+using OpenScct.Game.Movement;
+using OpenScct.Physics.Collision;
 using OpenScct.Game.SBase;
 using OpenScct.Server;
 
@@ -24,12 +27,20 @@ public unsafe struct WorldDebugApi
     public delegate* unmanaged[Cdecl]<float, float, float, int, int> BreakLights;
     public delegate* unmanaged[Cdecl]<float, float, float, int, int> BreakProps;
     public delegate* unmanaged[Cdecl]<int> FireEmitters;
+    public delegate* unmanaged[Cdecl]<float, float, float, int, int, int> ShootNear;
 }
 
 public static unsafe class WorldDebugExports
 {
-    /// <summary>2: FireEmitters added.</summary>
-    public const int ApiVersion = 2;
+    /// <summary>2: FireEmitters added. 3: ShootNear added.</summary>
+    public const int ApiVersion = 3;
+
+    /// <summary>ShootNear's targets: the map's movers (doors, lifts), or its breakable props (panes, lamps).</summary>
+    private const int ShootMovers = 0, ShootProps = 1;
+
+    /// <summary>How many marks ShootNear puts on each target, and how far apart they must be.</summary>
+    private const int MarksPerTarget = 5;
+    private const float MarkSpacing = 14f;
 
     /// <summary>Fills <paramref name="api"/>. Returns the API version.</summary>
     [UnmanagedCallersOnly]
@@ -41,6 +52,7 @@ public static unsafe class WorldDebugExports
         api->BreakLights = &BreakLights;
         api->BreakProps = &BreakProps;
         api->FireEmitters = &FireEmitters;
+        api->ShootNear = &ShootNear;
         return ApiVersion;
     }
 
@@ -144,6 +156,83 @@ public static unsafe class WorldDebugExports
 
         Fire(level, tags);
     });
+
+    /// <summary>
+    /// Shoots the <paramref name="count"/> movers (<paramref name="kind"/> 0) or breakable props (1) nearest the point:
+    /// a few bullet marks on each, put through the impact manager as a gun's trace does (the surface's own impact
+    /// class, the hit actor as the mark's surface), so every machine draws them on that actor. The marks go where
+    /// lines across the target meet it, from the side facing the point first. Returns 1 when queued.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ShootNear(float x, float y, float z, int count, int kind)
+    {
+        var near = new FVector(x, y, z);
+        return OnServer(host =>
+        {
+            var targets = new List<Actor>();
+            foreach (Actor a in host.World.Level.AllActors<Actor>())
+            {
+                if (!a.bDeleteMe && (kind == ShootMovers ? a is Mover : kind == ShootProps && a is SGamePlayObject { bDamageable: true } and not SObjectiveTrigger))
+                {
+                    targets.Add(a);
+                }
+            }
+
+            targets.Sort((a, b) => FVector.DistSquared(a.Location, near).CompareTo(FVector.DistSquared(b.Location, near)));
+            for (int i = 0; i < targets.Count && i < count; i++)
+            {
+                Shoot(targets[i], near);
+            }
+        });
+    }
+
+    private static void Shoot(Actor target, FVector from)
+    {
+        if (MovementNatives.Driver(target) is not { } driver)
+        {
+            return;
+        }
+
+        // The horizontal line from the target to the point first, then the target's own axes both ways.
+        target.Rotation.GetAxes(out FVector ax, out FVector ay, out _);
+        FVector toward = from - target.Location;
+        toward.Z = 0f;
+        var directions = new List<FVector>();
+        if (toward.SizeSquared() > 1f)
+        {
+            directions.Add(toward.SafeNormal());
+        }
+
+        directions.AddRange([ax, ay, ax * -1f, ay * -1f]);
+        var marks = new List<FVector>();
+        float[] across = [0f, 24f, -24f, 48f, -48f, 72f, -72f];
+        float[] heights = [40f, 0f, 70f, -30f];
+        foreach (FVector d in directions)
+        {
+            FVector side = new FVector(-d.Y, d.X, 0f).SafeNormal();
+            foreach (float h in heights)
+            {
+                foreach (float a in across)
+                {
+                    if (marks.Count >= MarksPerTarget)
+                    {
+                        return;
+                    }
+
+                    FVector through = target.Location + (side * a) + new FVector(0f, 0f, h);
+                    if (!driver.Collision.LineCheck(out FCheckResult hit, null, through - (d * 160f), through + (d * 160f), default, ETraceFlags.TRACE_AllColliding) ||
+                        !ReferenceEquals(hit.Actor, target) || marks.Exists(m => FVector.DistSquared(m, hit.Location) < MarkSpacing * MarkSpacing))
+                    {
+                        continue;
+                    }
+
+                    marks.Add(hit.Location);
+                    FRotator facing = hit.Normal.Rotation();
+                    ImpactManager.AddImpact(target, SWeaponDefense.ImpactClass((ESurfaceType)hit.SurfaceType), hit.Location, facing, null, target);
+                }
+            }
+        }
+    }
 
     private static void Fire(Level level, HashSet<Name> tags)
     {

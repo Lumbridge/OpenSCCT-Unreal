@@ -105,6 +105,9 @@ public sealed class WorldState
     /// <summary>True when <paramref name="actor"/> stands behind a name this state hands out (for the probe).</summary>
     public bool IsFollowed(Actor actor) => _nameOfActor.ContainsKey(actor);
 
+    /// <summary>The name id this state hands out for <paramref name="actor"/>, 0 when it does not follow it.</summary>
+    public int NameIdOf(Actor actor) => _nameOfActor.GetValueOrDefault(actor);
+
     // ---- names -----------------------------------------------------------------------------------------------
 
     /// <summary>How many names the table holds, id 0 (none) included: valid ids are 0 to this minus one.</summary>

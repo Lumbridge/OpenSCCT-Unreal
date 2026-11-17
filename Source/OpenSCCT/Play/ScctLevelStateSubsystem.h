@@ -60,7 +60,11 @@ struct FScctWorldDebugApi;
  *                              "lights" fires every switched light's tag (each toggles), "breaklights" shoots out
  *                              the three lit switched lights nearest the camera, "props" breaks the eight
  *                              breakable props nearest the camera, "emitters" fires every map Emitter's tag
- *                              (the waiting ones start, the running ones stop). Example: -ScctLevelDo="movers@8;breaklights@14"
+ *                              (the waiting ones start, the running ones stop), "shootmovers" puts bullet marks on
+ *                              the two movers nearest the camera and "shootprops" on the three breakable props
+ *                              nearest it (to see marks follow a door and go with a pane).
+ *                              Example: -ScctLevelDo="movers@8;breaklights@14"
+ *   -ScctMarkTest              the same as -ScctLevelDo="shootmovers@4;shootprops@4.5;movers@9;props@15"
  */
 UCLASS()
 class OPENSCCT_API UScctLevelStateSubsystem : public UWorldSubsystem

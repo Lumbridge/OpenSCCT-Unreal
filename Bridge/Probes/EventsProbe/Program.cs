@@ -41,6 +41,7 @@ unsafe
         (nameof(BridgeSimEvent), sizeof(BridgeSimEvent), 64), (nameof(BridgeSound), sizeof(BridgeSound), 100),
         (nameof(BridgeShot), sizeof(BridgeShot), 72), (nameof(BridgeEffectActor), sizeof(BridgeEffectActor), 148),
         (nameof(BridgeImpactMark), sizeof(BridgeImpactMark), 76), (nameof(BridgeAmbientSound), sizeof(BridgeAmbientSound), 44),
+        (nameof(BridgeMarkSurface), sizeof(BridgeMarkSurface), 32), // Runtime/ScctMarkSurfaceApi.h
     ];
     Console.WriteLine("record sizes: " + string.Join(", ", sizes.Select(s => $"{s.Name} {s.Size}")));
     if (sizes.Any(s => s.Size != s.Expected))

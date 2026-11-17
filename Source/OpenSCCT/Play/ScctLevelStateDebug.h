@@ -8,8 +8,8 @@
 // change both together. Only the level state's -ScctLevelDo switch uses it. Every entry returns 1 when the
 // action was handed to the server and 0 when there is no local server (an online round) or no match.
 
-// Version 2: FireEmitters added.
-constexpr int32 ScctWorldDebugApiVersion = 2;
+// Version 2: FireEmitters added. 3: ShootNear added.
+constexpr int32 ScctWorldDebugApiVersion = 3;
 
 struct FScctWorldDebugApi
 {
@@ -25,4 +25,9 @@ struct FScctWorldDebugApi
 	int32 (__cdecl* BreakProps)(float X, float Y, float Z, int32 Count);
 	/** Fires the tag of every map Emitter: the waiting ones start, the running ones stop, the bursts fire. */
 	int32 (__cdecl* FireEmitters)();
+	/**
+	 * Puts a few bullet marks on each of the Count movers (Kind 0) or breakable props (Kind 1) nearest the point,
+	 * through the impact manager as a gun's trace does, with the target as the marks' surface.
+	 */
+	int32 (__cdecl* ShootNear)(float X, float Y, float Z, int32 Count, int32 Kind);
 };
