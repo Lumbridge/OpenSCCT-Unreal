@@ -1,0 +1,1058 @@
+#include "Play/ScctAudioSubsystem.h"
+
+#include "AudioDevice.h"
+#include "Components/AudioComponent.h"
+#include "Components/PoseableMeshComponent.h"
+#include "Decoders/VorbisAudioInfo.h"
+#include "Dom/JsonObject.h"
+#include "Engine/World.h"
+#include "GameFramework/WorldSettings.h"
+#include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Parse.h"
+#include "Misc/Paths.h"
+#include "OpenSCCT.h"
+#include "Play/ScctPawnProxy.h"
+#include "Play/ScctSessionSubsystem.h"
+#include "Play/ScctSoundWave.h"
+#include "Runtime/ScctFeatures.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+#include "Sound/ReverbEffect.h"
+#include "Sound/SoundAttenuation.h"
+
+namespace
+{
+	// The original mixes 32 voices; with a modern mixer there is room for more before the slot rule applies.
+	constexpr int32 MaxEventVoices = 48;
+	constexpr int32 MaxComponents = 128;
+
+	// Decoded sound kept in memory; the files of a map in play come to 20 to 60 MB.
+	constexpr int64 CacheBudgetBytes = 160ll * 1024 * 1024;
+	constexpr double CacheIdleSeconds = 180.0;
+
+	// The original hears nothing beyond 100 x the sound's radius.
+	constexpr float ReachPerRadius = 100.0f;
+	constexpr float ZeroRadiusMinDistance = 10.0f;
+
+	// A flat ambient source falls silent below this volume (the original's rule 22).
+	constexpr float AmbientSilence = 0.05f;
+	constexpr float AmbientFadeSeconds = 0.4f;
+
+	// Ambient voices are matched by actor key (3D) or by sound (flat: zones naming one sound share a voice).
+	constexpr int64 FlatAmbientBit = 1ll << 40;
+
+	const FName ZoneReverbTag(TEXT("ScctZone"));
+
+	/** Millibels (the unit of the EAX level parameters) to a linear gain. */
+	float FromMillibels(double Millibels)
+	{
+		return FMath::Pow(10.0f, static_cast<float>(Millibels) / 2000.0f);
+	}
+}
+
+bool UScctAudioSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
+{
+	return WorldType == EWorldType::Game || WorldType == EWorldType::PIE;
+}
+
+void UScctAudioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
+{
+	Super::Initialize(Collection);
+	Session = Collection.InitializeDependency<UScctSessionSubsystem>();
+	if (Session == nullptr)
+	{
+		return;
+	}
+
+	Session->OnSessionChanged.AddUObject(this, &UScctAudioSubsystem::HandleSessionChanged);
+	Session->OnMatchStarted.AddUObject(this, &UScctAudioSubsystem::HandleMatchStarted);
+	Session->OnFrame.AddUObject(this, &UScctAudioSubsystem::HandleFrame);
+
+	bLogVoices = FParse::Param(FCommandLine::Get(), TEXT("ScctAudioLog"));
+	FParse::Value(FCommandLine::Get(), TEXT("ScctAudioSummary="), SummaryEvery);
+	SoundBuffer.SetNumUninitialized(256);
+	AmbientBuffer.SetNumUninitialized(512);
+	Voices.Reserve(MaxComponents);
+
+	// The Vorbis decoder is used from worker tasks; its libraries are loaded here, once, on the game thread.
+	LoadVorbisLibraries();
+
+	// The room a zone without an environment of its own gets: short and quiet, so 3D sounds sit in a space
+	// without any place sounding like a hall.
+	DefaultReverb = NewObject<UReverbEffect>(this);
+	DefaultReverb->DecayTime = 0.9f;
+	DefaultReverb->DecayHFRatio = 0.6f;
+	DefaultReverb->Gain = 0.22f;
+	DefaultReverb->GainHF = 0.6f;
+	DefaultReverb->ReflectionsGain = 0.12f;
+	DefaultReverb->ReflectionsDelay = 0.012f;
+	DefaultReverb->LateGain = 0.9f;
+	DefaultReverb->LateDelay = 0.02f;
+	DefaultReverb->Density = 1.0f;
+	DefaultReverb->Diffusion = 0.85f;
+}
+
+void UScctAudioSubsystem::Deinitialize()
+{
+	StopAllVoices();
+	Cache.Reset();
+	if (Session != nullptr)
+	{
+		Session->OnSessionChanged.RemoveAll(this);
+		Session->OnMatchStarted.RemoveAll(this);
+		Session->OnFrame.RemoveAll(this);
+	}
+	Super::Deinitialize();
+}
+
+float UScctAudioSubsystem::DistanceGain(float Distance, float MinDistance, float Radius)
+{
+	if (Distance >= ReachPerRadius * Radius && Radius > 0.0f)
+	{
+		return 0.0f;
+	}
+	return Distance <= MinDistance ? 1.0f : MinDistance / (MinDistance + 0.5f * (Distance - MinDistance));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Session
+// ---------------------------------------------------------------------------------------------------------------
+
+void UScctAudioSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
+{
+	// Call ids start again at 1 and actor ids are reused in the next match: nothing may carry over.
+	if (OldId != 0)
+	{
+		LogSummary();
+	}
+	StopAllVoices();
+	Zones.Reset();
+	ZoneEffects.Reset();
+	ListenerZone = INDEX_NONE;
+	ActiveZone = -2;
+	NumStarted = NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = PeakVoices = 0;
+}
+
+void UScctAudioSubsystem::HandleMatchStarted()
+{
+	FString Error;
+	Events = ScctFeature<FScctEventsApi>(&Error);
+	ContentRoot = FOpenSCCTModule::FindContentRoot();
+	bHasDevice = GetWorld()->GetAudioDeviceRaw() != nullptr;
+	SummaryTimer = SummaryEvery;
+	if (Events == nullptr)
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Audio: no sound this match, the bridge's events are missing: %s"), *Error);
+		return;
+	}
+
+	// Harmless when the bridge already started the feature with the session.
+	Events->Begin();
+	LoadZones(Session->GetSessionInfo().Map);
+	UE_LOG(LogOpenSCCT, Log, TEXT("Audio: ready for %s (%s, %d zones with reverb, content %s)"), Session->GetSessionInfo().Map,
+		bHasDevice ? TEXT("audio device present") : TEXT("no audio device: voices are tracked but not heard"), Zones.Num(), *ContentRoot);
+}
+
+void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
+{
+	if (Events == nullptr)
+	{
+		return;
+	}
+
+	// The listener is the camera, which Unreal's audio follows by itself (the player's view target); the same
+	// point is used here for reach, the flat ambient rules and the log.
+	const FScctBridgeView& View = Session->GetView();
+	bListenerValid = View.Valid != 0;
+	Listener = FVector(View.X, View.Y, View.Z);
+
+	DrainSounds();
+	UpdateAmbient();
+	UpdateVoices(DeltaSeconds);
+	UpdateReverb();
+
+	TrimTimer -= DeltaSeconds;
+	if (TrimTimer <= 0.0f)
+	{
+		TrimTimer = 2.0f;
+		Cache.Trim(CacheBudgetBytes, CacheIdleSeconds,
+			[this](int32 FileId)
+			{
+				for (const FVoice& Voice : Voices)
+				{
+					if (Voice.FileId == FileId)
+					{
+						return true;
+					}
+				}
+				return false;
+			},
+			[this](int32 FileId)
+			{
+				Waves.Remove(static_cast<int64>(FileId) * 2);
+				Waves.Remove(static_cast<int64>(FileId) * 2 + 1);
+			});
+	}
+
+	PeakVoices = FMath::Max(PeakVoices, Voices.Num());
+	if (SummaryEvery > 0.0f)
+	{
+		SummaryTimer -= DeltaSeconds;
+		if (SummaryTimer <= 0.0f)
+		{
+			SummaryTimer = SummaryEvery;
+			LogSummary();
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Sound records
+// ---------------------------------------------------------------------------------------------------------------
+
+void UScctAudioSubsystem::DrainSounds()
+{
+	for (;;)
+	{
+		const int32 Count = Events->DrainSounds(SoundBuffer.GetData(), SoundBuffer.Num());
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			const FScctSound& Record = SoundBuffer[Index];
+			switch (Record.Op)
+			{
+			case EScctSoundOp::Play:
+				Play(Record);
+				break;
+			case EScctSoundOp::Stop:
+				Stop(Record);
+				break;
+			case EScctSoundOp::PlayMusic:
+				PlayMusic(Record);
+				break;
+			case EScctSoundOp::StopMusic:
+				for (FVoice& Voice : Voices)
+				{
+					if (Voice.bMusic)
+					{
+						FadeOutVoice(Voice, Record.FadeSeconds, TEXT("music stopped"));
+					}
+				}
+				break;
+			case EScctSoundOp::StopCall:
+				for (FVoice& Voice : Voices)
+				{
+					if (Voice.CallId == Record.CallId && Voice.AmbientId == 0)
+					{
+						FadeOutVoice(Voice, 0.05f, TEXT("call stopped"));
+					}
+				}
+				break;
+			default:
+				break;
+			}
+		}
+		if (Count < SoundBuffer.Num())
+		{
+			return;
+		}
+	}
+}
+
+void UScctAudioSubsystem::Play(const FScctSound& Record)
+{
+	if (Record.FileId == 0)
+	{
+		return;
+	}
+
+	const bool bAtListener = (Record.Flags & EScctSoundFlags::AtListener) != 0;
+	const bool bPositional = !bAtListener && (Record.Flags & EScctSoundFlags::Positional) != 0;
+	const float MinDistance = Record.MinDistance > 0.0f ? Record.MinDistance : ZeroRadiusMinDistance;
+	const FVector Location(Record.X, Record.Y, Record.Z);
+	if (bPositional && bListenerValid && (Record.Flags & EScctSoundFlags::Loop) == 0 && Record.Radius > 0.0f
+		&& FVector::Dist(Location, Listener) >= ReachPerRadius * Record.Radius)
+	{
+		// The bridge passes on what the original would start: its reach test uses the radius of the call, and
+		// the server's own calls are not tested again. The file's own radius can be much smaller, and a one-shot
+		// beyond 100 x that is silent for its whole life, so it takes no voice. A loop may still come nearer.
+		++NumOutOfReach;
+		return;
+	}
+	if (!MakeRoom(Record))
+	{
+		++NumRefused;
+		return;
+	}
+
+	FVoice Voice;
+	Voice.CallId = Record.CallId;
+	Voice.Segment = Record.Segment;
+	Voice.ActorId = Record.ActorId;
+	Voice.FollowActorId = Record.FollowActorId;
+	Voice.FollowBoneId = Record.FollowBoneId;
+	Voice.SoundId = Record.SoundId;
+	Voice.LeafId = Record.LeafId;
+	Voice.FileId = Record.FileId;
+	Voice.Slot = Record.Slot;
+	Voice.Location = Location;
+	Voice.Volume = FMath::Clamp(Record.Volume, 0.0f, 1.0f);
+	Voice.Radius = Record.Radius;
+	Voice.MinDistance = MinDistance;
+	Voice.Pitch = FMath::Clamp(Record.Pitch, 0.5f, 2.0f);
+	Voice.LoopStart = Record.LoopStart;
+	Voice.LoopEnd = Record.LoopEnd;
+	Voice.StartIn = FMath::Max(Record.Delay, 0.0f);
+	Voice.bPositional = bPositional;
+	Voice.bAtListener = bAtListener;
+	Voice.bLoop = (Record.Flags & EScctSoundFlags::Loop) != 0;
+	Voice.bNoOverride = (Record.Flags & EScctSoundFlags::NoOverride) != 0;
+	// A timed loop of a sequence ends by the clock; any other loop runs until it is stopped.
+	Voice.LifeLeft = Record.PlaySeconds > 0.0f ? Record.PlaySeconds : -1.0f;
+	Voices.Add(Voice);
+
+	// Start the decode now, so a delayed entry of a sequence is ready when its time comes.
+	FScctPcmPtr Pcm;
+	Cache.Request(Record.FileId, GetFilePath(Record.FileId), Pcm);
+}
+
+bool UScctAudioSubsystem::MakeRoom(const FScctSound& Record)
+{
+	int32 EventVoices = 0;
+	for (const FVoice& Voice : Voices)
+	{
+		EventVoices += Voice.AmbientId == 0 && !Voice.bMusic && Voice.State != EVoiceState::Fading ? 1 : 0;
+	}
+	if (EventVoices < MaxEventVoices)
+	{
+		return true;
+	}
+
+	// The original's rule when no voice is free: the new call replaces the voice of the same actor and slot
+	// (slot 0 never matches), unless it is a NoOverride call, which is then not played; otherwise the quietest
+	// voice at the listener goes.
+	FVoice* Victim = nullptr;
+	if (Record.Slot != 0)
+	{
+		for (FVoice& Voice : Voices)
+		{
+			if (Voice.AmbientId == 0 && !Voice.bMusic && Voice.State != EVoiceState::Fading && Voice.ActorId == Record.ActorId && Voice.Slot == Record.Slot)
+			{
+				if ((Record.Flags & EScctSoundFlags::NoOverride) != 0)
+				{
+					return false;
+				}
+				Victim = &Voice;
+				break;
+			}
+		}
+	}
+	if (Victim == nullptr)
+	{
+		float Quietest = MAX_flt;
+		for (FVoice& Voice : Voices)
+		{
+			if (Voice.AmbientId != 0 || Voice.bMusic || Voice.State == EVoiceState::Fading)
+			{
+				continue;
+			}
+			const float Heard = Voice.Volume * (Voice.bPositional ? DistanceGain(FVector::Dist(Voice.Location, Listener), Voice.MinDistance, Voice.Radius) : 1.0f);
+			if (Heard < Quietest)
+			{
+				Quietest = Heard;
+				Victim = &Voice;
+			}
+		}
+	}
+	if (Victim == nullptr)
+	{
+		return false;
+	}
+
+	++NumStolen;
+	FadeOutVoice(*Victim, 0.03f, TEXT("voice taken by a new call"));
+	return true;
+}
+
+void UScctAudioSubsystem::Stop(const FScctSound& Record)
+{
+	const bool bAllSounds = (Record.Flags & EScctSoundFlags::AllSounds) != 0;
+	const bool bLocalPawnVoices = (Record.Flags & EScctSoundFlags::LocalPawnVoices) != 0;
+	for (FVoice& Voice : Voices)
+	{
+		// Ambient loops are state: they stop when their source leaves the ambient list.
+		if (Voice.AmbientId != 0 || Voice.State == EVoiceState::Fading)
+		{
+			continue;
+		}
+		const bool bOwner = Record.ActorId == 0
+			? (!bAllSounds || !Voice.bMusic)
+			: (Voice.ActorId == Record.ActorId || (bLocalPawnVoices && Voice.bAtListener));
+		if (bOwner && (bAllSounds || Voice.SoundId == Record.SoundId || Voice.LeafId == Record.SoundId))
+		{
+			FadeOutVoice(Voice, 0.05f, TEXT("StopSound"));
+		}
+	}
+}
+
+void UScctAudioSubsystem::PlayMusic(const FScctSound& Record)
+{
+	for (const FVoice& Voice : Voices)
+	{
+		if (Voice.bMusic && Voice.State != EVoiceState::Fading && Voice.SoundId == Record.SoundId)
+		{
+			// The track asked for already plays.
+			return;
+		}
+	}
+	for (FVoice& Voice : Voices)
+	{
+		if (Voice.bMusic)
+		{
+			FadeOutVoice(Voice, FMath::Max(Record.FadeSeconds, 2.0f), TEXT("music replaced"));
+		}
+	}
+	if (Record.FileId == 0)
+	{
+		return;
+	}
+
+	FVoice Voice;
+	Voice.SoundId = Record.SoundId;
+	Voice.LeafId = Record.LeafId;
+	Voice.FileId = Record.FileId;
+	Voice.Volume = Record.Volume > 0.0f ? FMath::Min(Record.Volume, 1.0f) : 1.0f;
+	Voice.Pitch = Record.Pitch > 0.0f ? FMath::Clamp(Record.Pitch, 0.5f, 2.0f) : 1.0f;
+	Voice.LoopStart = Record.LoopStart;
+	Voice.LoopEnd = Record.LoopEnd;
+	Voice.FadeIn = Record.FadeSeconds;
+	Voice.bLoop = (Record.Flags & EScctSoundFlags::Loop) != 0;
+	Voice.bMusic = true;
+	Voice.LifeLeft = -1.0f;
+	Voices.Add(Voice);
+
+	FScctPcmPtr Pcm;
+	Cache.Request(Record.FileId, GetFilePath(Record.FileId), Pcm);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Ambient sources
+// ---------------------------------------------------------------------------------------------------------------
+
+void UScctAudioSubsystem::UpdateAmbient()
+{
+	for (FVoice& Voice : Voices)
+	{
+		Voice.bSeen = false;
+	}
+	ListenerZone = INDEX_NONE;
+
+	const int32 Count = bListenerValid ? Events->GetAmbientSounds(AmbientBuffer.GetData(), AmbientBuffer.Num()) : 0;
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		const FScctAmbientSound& Source = AmbientBuffer[Index];
+		const FVector Location(Source.X, Source.Y, Source.Z);
+		const bool bZone = (Source.Flags & EScctAmbientFlags::Zone) != 0;
+		const bool bListenerInZone = bZone && (Source.Flags & EScctAmbientFlags::ListenerInZone) != 0;
+		if (bListenerInZone)
+		{
+			// The zone the listener stands in also picks the reverb; the audio table knows zones by their place.
+			for (int32 Zone = 0; Zone < Zones.Num(); ++Zone)
+			{
+				if (Zones[Zone].Location.Equals(Location, 1.0))
+				{
+					ListenerZone = Zone;
+					break;
+				}
+			}
+		}
+		if (Source.FileId == 0 || Source.Volume <= 0.0f)
+		{
+			continue;
+		}
+
+		const bool bPositional = (Source.Flags & EScctAmbientFlags::Positional) != 0;
+		const float Radius = Source.Radius;
+		const float Distance = FVector::Dist(Location, Listener);
+		float Volume = Source.Volume;
+		if (bPositional)
+		{
+			if (Radius > 0.0f && Distance >= ReachPerRadius * Radius)
+			{
+				continue;
+			}
+		}
+		else if (bZone)
+		{
+			if (!bListenerInZone)
+			{
+				continue;
+			}
+		}
+		else
+		{
+			// A flat source that is no zone: full inside its radius, falling off beyond it.
+			if (Radius > 0.0f && Distance > Radius)
+			{
+				Volume /= 1.0f + 0.5f * (Distance - Radius) / Radius;
+			}
+			if (Volume < AmbientSilence)
+			{
+				continue;
+			}
+		}
+
+		const int64 Id = bPositional ? static_cast<int64>(Source.Key) : (FlatAmbientBit | Source.SoundId);
+		if (const int32* Found = AmbientVoices.Find(Id))
+		{
+			FVoice& Voice = Voices[*Found];
+			if (Voice.FileId == Source.FileId && Voice.State != EVoiceState::Fading)
+			{
+				// Several flat sources of one sound share the voice: it plays as loud as the loudest of them.
+				Voice.Volume = Voice.bSeen ? FMath::Max(Voice.Volume, Volume) : Volume;
+				if (bPositional)
+				{
+					Voice.Location = Location;
+				}
+				Voice.bSeen = true;
+				continue;
+			}
+			// The source now plays another file (or its voice is on its way out): it starts afresh.
+			FadeOutVoice(Voice, AmbientFadeSeconds, TEXT("ambient source changed"));
+			Voice.AmbientId = 0;
+			AmbientVoices.Remove(Id);
+		}
+
+		FVoice Voice;
+		Voice.AmbientId = Id;
+		Voice.ActorId = Source.Key;
+		Voice.SoundId = Source.SoundId;
+		Voice.LeafId = Source.SoundId;
+		Voice.FileId = Source.FileId;
+		Voice.Location = Location;
+		Voice.Volume = Volume;
+		Voice.Radius = Radius;
+		Voice.MinDistance = Radius > 0.0f ? Radius : ZeroRadiusMinDistance;
+		Voice.Pitch = FMath::Clamp(Source.Pitch, 0.5f, 2.0f);
+		Voice.FadeIn = AmbientFadeSeconds;
+		Voice.RepeatInterval = Source.RepeatInterval;
+		Voice.bPositional = bPositional;
+		Voice.bLoop = (Source.Flags & EScctAmbientFlags::Loop) != 0;
+		Voice.LifeLeft = -1.0f;
+		Voice.bSeen = true;
+		AmbientVoices.Add(Id, Voices.Add(Voice));
+	}
+
+	// A source that is no longer listed, in reach or in the listener's zone fades out.
+	for (auto It = AmbientVoices.CreateIterator(); It; ++It)
+	{
+		FVoice& Voice = Voices[It.Value()];
+		if (!Voice.bSeen)
+		{
+			FadeOutVoice(Voice, AmbientFadeSeconds, TEXT("ambient source out of reach"));
+			Voice.AmbientId = 0;
+			It.RemoveCurrent();
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Voices
+// ---------------------------------------------------------------------------------------------------------------
+
+void UScctAudioSubsystem::UpdateVoices(float DeltaSeconds)
+{
+	for (auto It = Voices.CreateIterator(); It; ++It)
+	{
+		FVoice& Voice = *It;
+		bool bRemove = false;
+		switch (Voice.State)
+		{
+		case EVoiceState::Waiting:
+		{
+			Voice.StartIn -= DeltaSeconds;
+			FScctPcmPtr Pcm;
+			const FScctSoundCache::EState FileState = Cache.Request(Voice.FileId, GetFilePath(Voice.FileId), Pcm);
+			if (FileState == FScctSoundCache::EState::Failed)
+			{
+				++NumFailedFiles;
+				bRemove = true;
+			}
+			else if (FileState == FScctSoundCache::EState::Ready && Voice.StartIn <= 0.0f)
+			{
+				bRemove = !StartVoice(Voice, Pcm);
+			}
+			break;
+		}
+
+		case EVoiceState::Playing:
+			if (Voice.LifeLeft >= 0.0f)
+			{
+				Voice.LifeLeft -= DeltaSeconds;
+				if (Voice.LifeLeft < 0.0f)
+				{
+					if (Voice.AmbientId != 0)
+					{
+						// An ambient one-shot stays known while its source is audible, so it does not start again
+						// every frame; it plays again after its repeat interval if it has one.
+						if (UAudioComponent* Component = Voice.Component.Get())
+						{
+							Component->Stop();
+						}
+						Voice.State = EVoiceState::Dormant;
+						Voice.RepeatLeft = Voice.RepeatInterval;
+					}
+					else
+					{
+						if (bLogVoices)
+						{
+							LogVoice(TEXT("ended"), Voice);
+						}
+						bRemove = true;
+					}
+					break;
+				}
+			}
+			if (UAudioComponent* Component = Voice.Component.Get())
+			{
+				if (Voice.bPositional)
+				{
+					Voice.Location = FindVoiceLocation(Voice);
+					Component->SetWorldLocation(Voice.Location);
+				}
+				if (Voice.AmbientId != 0 && !FMath::IsNearlyEqual(Voice.AppliedVolume, Voice.Volume, 0.005f))
+				{
+					Voice.AppliedVolume = Voice.Volume;
+					Component->SetVolumeMultiplier(Voice.Volume);
+				}
+			}
+			else if (Voice.bPositional)
+			{
+				Voice.Location = FindVoiceLocation(Voice);
+			}
+			break;
+
+		case EVoiceState::Dormant:
+			if (Voice.RepeatInterval > 0.0f)
+			{
+				Voice.RepeatLeft -= DeltaSeconds;
+				if (Voice.RepeatLeft <= 0.0f)
+				{
+					Voice.State = EVoiceState::Waiting;
+					Voice.StartIn = 0.0f;
+					Voice.FadeIn = 0.0f;
+				}
+			}
+			break;
+
+		case EVoiceState::Fading:
+			Voice.FadeLeft -= DeltaSeconds;
+			bRemove = Voice.FadeLeft <= 0.0f;
+			break;
+		}
+
+		if (bRemove)
+		{
+			ReleaseVoice(Voice);
+			It.RemoveCurrent();
+		}
+	}
+}
+
+bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
+{
+	if (!Pcm.IsValid() || Pcm->NumFrames() == 0)
+	{
+		return false;
+	}
+
+	if (Voice.bPositional)
+	{
+		Voice.Location = FindVoiceLocation(Voice);
+	}
+	if (!Voice.bLoop)
+	{
+		// The voice ends by the clock (the engine's voice ends by itself at the same moment); a little margin
+		// lets the last block play out.
+		Voice.LifeLeft = Pcm->Seconds() / Voice.Pitch + 0.1f;
+	}
+	Voice.State = EVoiceState::Playing;
+	Voice.AppliedVolume = Voice.Volume;
+	++NumStarted;
+
+	if (bHasDevice)
+	{
+		UScctSoundWave* Wave = FindOrCreateWave(Voice, Pcm);
+		// An ambient one-shot that plays again still holds the component of its last play.
+		UAudioComponent* Component = Voice.Component.IsValid() ? Voice.Component.Get() : AcquireComponent();
+		if (Wave != nullptr && Component != nullptr)
+		{
+			Component->SetSound(Wave);
+			Component->bAllowSpatialization = Voice.bPositional;
+			Component->AttenuationSettings = Voice.bPositional ? FindOrCreateAttenuation(Voice.MinDistance, Voice.Radius) : nullptr;
+			Component->bIsMusic = Voice.bMusic;
+			Component->SetVolumeMultiplier(Voice.Volume);
+			Component->SetPitchMultiplier(Voice.Pitch);
+			Component->SetWorldLocation(Voice.Location);
+			if (Voice.FadeIn > 0.0f)
+			{
+				Component->FadeIn(Voice.FadeIn, 1.0f);
+			}
+			else
+			{
+				Component->Play();
+			}
+			Voice.Component = Component;
+		}
+	}
+
+	if (bLogVoices)
+	{
+		LogVoice(TEXT("play"), Voice, *FString::Printf(TEXT(" %d Hz %d ch %.2f s"), Pcm->SampleRate, Pcm->Channels, Pcm->Seconds()));
+	}
+	return true;
+}
+
+void UScctAudioSubsystem::FadeOutVoice(FVoice& Voice, float Seconds, const TCHAR* Why)
+{
+	if (Voice.State == EVoiceState::Fading)
+	{
+		return;
+	}
+
+	const bool bSounding = Voice.State == EVoiceState::Playing;
+	if (bLogVoices && (bSounding || Voice.State == EVoiceState::Waiting))
+	{
+		LogVoice(TEXT("stop"), Voice, *FString::Printf(TEXT(" (%s, fade %.2f s)"), Why, Seconds));
+	}
+	++NumStopped;
+
+	UAudioComponent* Component = Voice.Component.Get();
+	if (Component != nullptr && bSounding && Seconds > 0.0f)
+	{
+		Component->FadeOut(Seconds, 0.0f);
+	}
+	Voice.State = EVoiceState::Fading;
+	Voice.FadeLeft = bSounding ? FMath::Max(Seconds, 0.0f) : 0.0f;
+}
+
+void UScctAudioSubsystem::ReleaseVoice(FVoice& Voice)
+{
+	if (Voice.AmbientId != 0)
+	{
+		AmbientVoices.Remove(Voice.AmbientId);
+	}
+	if (UAudioComponent* Component = Voice.Component.Get())
+	{
+		Component->Stop();
+		FreeComponents.Add(Component);
+	}
+	Voice.Component.Reset();
+}
+
+void UScctAudioSubsystem::StopAllVoices()
+{
+	for (FVoice& Voice : Voices)
+	{
+		ReleaseVoice(Voice);
+	}
+	Voices.Reset();
+	AmbientVoices.Reset();
+}
+
+FVector UScctAudioSubsystem::FindVoiceLocation(const FVoice& Voice) const
+{
+	if (Voice.FollowActorId == 0)
+	{
+		return Voice.Location;
+	}
+
+	if (const AScctPawnProxy* Proxy = Session->FindProxy(Voice.FollowActorId))
+	{
+		// A pawn: the drawn body, and the drawn bone when the call names one (a voice from the head, steps from a foot).
+		if (Voice.FollowBoneId != 0 && Proxy->HasModel())
+		{
+			const FName Bone = Proxy->FindMeshBoneName(const_cast<UScctAudioSubsystem*>(this)->GetName(Voice.FollowBoneId));
+			if (!Bone.IsNone())
+			{
+				return Proxy->GetBodyMesh()->GetSocketLocation(Bone);
+			}
+		}
+		const FScctBridgePawn& Pawn = Proxy->GetPawn();
+		return FVector(Pawn.X, Pawn.Y, Pawn.Z);
+	}
+
+	float Location[3];
+	if (Events->GetActorLocation(Voice.FollowActorId, Location) != 0)
+	{
+		return FVector(Location[0], Location[1], Location[2]);
+	}
+	// The actor is gone: the sound stays where it last was.
+	return Voice.Location;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Unreal objects
+// ---------------------------------------------------------------------------------------------------------------
+
+UScctSoundWave* UScctAudioSubsystem::FindOrCreateWave(const FVoice& Voice, const FScctPcmPtr& Pcm)
+{
+	TObjectPtr<UScctSoundWave>& Wave = Waves.FindOrAdd(static_cast<int64>(Voice.FileId) * 2 + (Voice.bLoop ? 1 : 0));
+	if (Wave == nullptr)
+	{
+		Wave = NewObject<UScctSoundWave>(this);
+		Wave->Init(Pcm, Voice.bLoop, Voice.LoopStart, Voice.LoopEnd);
+	}
+	return Wave;
+}
+
+USoundAttenuation* UScctAudioSubsystem::FindOrCreateAttenuation(float MinDistance, float Radius)
+{
+	// Whole centimetres are fine enough, and keep the number of distinct settings small.
+	const uint32 MinKey = static_cast<uint32>(FMath::RoundToInt(FMath::Max(MinDistance, 1.0f)));
+	const uint32 RadiusKey = static_cast<uint32>(FMath::RoundToInt(FMath::Max(Radius, 0.0f)));
+	TObjectPtr<USoundAttenuation>& Found = Attenuations.FindOrAdd((static_cast<uint64>(MinKey) << 32) | RadiusKey);
+	if (Found != nullptr)
+	{
+		return Found;
+	}
+
+	const float Min = static_cast<float>(MinKey);
+	// A sound without a radius has no reach limit in the original; it is inaudible long before this.
+	const float Reach = RadiusKey > 0 ? ReachPerRadius * RadiusKey : 200.0f * Min;
+	const float Falloff = FMath::Max(Reach - Min, 1.0f);
+
+	Found = NewObject<USoundAttenuation>(this);
+	FSoundAttenuationSettings& Settings = Found->Attenuation;
+	Settings.bAttenuate = true;
+	Settings.bSpatialize = true;
+	Settings.AttenuationShape = EAttenuationShape::Sphere;
+	Settings.AttenuationShapeExtents = FVector(Min, 0.0, 0.0);
+	Settings.FalloffDistance = Falloff;
+
+	// The original's curve, MinDistance / (MinDistance + 0.5 x (d - MinDistance)), sampled where it bends most
+	// (close to the source) and cut to nothing at the reach.
+	Settings.DistanceAlgorithm = EAttenuationDistanceModel::Custom;
+	FRichCurve* Curve = Settings.CustomAttenuationCurve.GetRichCurve();
+	Curve->Reset();
+	Curve->AddKey(0.0f, 1.0f);
+	constexpr int32 Keys = 28;
+	for (int32 Key = 1; Key <= Keys; ++Key)
+	{
+		const float Beyond = Falloff * FMath::Pow(1.0e-4f, 1.0f - static_cast<float>(Key) / Keys) * 0.98f;
+		Curve->AddKey(Beyond / Falloff, Min / (Min + 0.5f * Beyond));
+	}
+	Curve->AddKey(1.0f, 0.0f);
+
+	// Far sounds lose their top end, as through air.
+	Settings.bAttenuateWithLPF = true;
+	Settings.LPFRadiusMin = FMath::Max(Min, 1500.0f);
+	Settings.LPFRadiusMax = FMath::Max(Min * 4.0f, 9000.0f);
+	Settings.LPFFrequencyAtMin = 20000.0f;
+	Settings.LPFFrequencyAtMax = 5000.0f;
+
+	// The room is heard more on a distant source than on a near one.
+	Settings.bEnableReverbSend = true;
+	Settings.ReverbSendMethod = EReverbSendMethod::Linear;
+	Settings.ReverbWetLevelMin = 0.12f;
+	Settings.ReverbWetLevelMax = 0.5f;
+	Settings.ReverbDistanceMin = Min;
+	Settings.ReverbDistanceMax = FMath::Max(Min * 4.0f, 3000.0f);
+	return Found;
+}
+
+UAudioComponent* UScctAudioSubsystem::AcquireComponent()
+{
+	while (FreeComponents.Num() > 0)
+	{
+		if (UAudioComponent* Component = FreeComponents.Pop(EAllowShrinking::No))
+		{
+			return Component;
+		}
+	}
+	if (Components.Num() >= MaxComponents)
+	{
+		return nullptr;
+	}
+
+	UAudioComponent* Component = NewObject<UAudioComponent>(GetWorld()->GetWorldSettings());
+	Component->bAutoActivate = false;
+	Component->bAutoDestroy = false;
+	Component->bStopWhenOwnerDestroyed = true;
+	Component->RegisterComponentWithWorld(GetWorld());
+	Components.Add(Component);
+	return Component;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Reverb
+// ---------------------------------------------------------------------------------------------------------------
+
+void UScctAudioSubsystem::LoadZones(const FString& Map)
+{
+	const FString Path = ContentRoot / TEXT("svmap") / Map / TEXT("audio/audio.json");
+	FString Text;
+	TSharedPtr<FJsonObject> Root;
+	if (!FFileHelper::LoadFileToString(Text, *Path) || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root.IsValid())
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Audio: no audio table at %s: every zone gets the default room"), *Path);
+		return;
+	}
+
+	// The zone rows have the reverb, the actor rows of the same id have the zone's place (which is how the
+	// bridge's ambient records name a zone).
+	TMap<FString, FVector> Places;
+	const TArray<TSharedPtr<FJsonValue>>* Actors = nullptr;
+	if (Root->TryGetArrayField(TEXT("actors"), Actors))
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Actors)
+		{
+			const TSharedPtr<FJsonObject>* Actor = nullptr;
+			const TSharedPtr<FJsonObject>* Place = nullptr;
+			FString Id;
+			if (Value->TryGetObject(Actor) && (*Actor)->TryGetStringField(TEXT("id"), Id) && (*Actor)->TryGetObjectField(TEXT("location"), Place))
+			{
+				Places.Add(Id, FVector((*Place)->GetNumberField(TEXT("X")), (*Place)->GetNumberField(TEXT("Y")), (*Place)->GetNumberField(TEXT("Z"))));
+			}
+		}
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* ZoneRows = nullptr;
+	if (!Root->TryGetArrayField(TEXT("zones"), ZoneRows))
+	{
+		return;
+	}
+	for (const TSharedPtr<FJsonValue>& Value : *ZoneRows)
+	{
+		const TSharedPtr<FJsonObject>* Row = nullptr;
+		const TSharedPtr<FJsonObject>* Effect = nullptr;
+		const TSharedPtr<FJsonObject>* Params = nullptr;
+		FString Id;
+		if (!Value->TryGetObject(Row) || !(*Row)->TryGetStringField(TEXT("id"), Id) || !(*Row)->TryGetObjectField(TEXT("effect"), Effect)
+			|| !(*Effect)->TryGetObjectField(TEXT("params"), Params))
+		{
+			continue;
+		}
+		const FVector* Place = Places.Find(Id);
+		if (Place == nullptr)
+		{
+			continue;
+		}
+
+		const auto Number = [Params](const TCHAR* Name, double Default)
+		{
+			double Found = Default;
+			(*Params)->TryGetNumberField(Name, Found);
+			return Found;
+		};
+
+		// The EAX environment in the terms of Unreal's reverb, which keeps the same model: levels in millibels
+		// become linear gains, times stay seconds.
+		UReverbEffect* Reverb = NewObject<UReverbEffect>(this);
+		Reverb->Gain = FMath::Clamp(FromMillibels(Number(TEXT("Room"), -1000.0)), 0.0f, 1.0f);
+		Reverb->GainHF = FMath::Clamp(FromMillibels(Number(TEXT("RoomHF"), -100.0)), 0.0f, 1.0f);
+		Reverb->DecayTime = FMath::Clamp(static_cast<float>(Number(TEXT("DecayTime"), 1.49)), 0.1f, 20.0f);
+		Reverb->DecayHFRatio = FMath::Clamp(static_cast<float>(Number(TEXT("DecayHFRatio"), 0.83)), 0.1f, 2.0f);
+		Reverb->ReflectionsGain = FMath::Clamp(FromMillibels(Number(TEXT("Reflections"), -2602.0)), 0.0f, 3.16f);
+		Reverb->ReflectionsDelay = FMath::Clamp(static_cast<float>(Number(TEXT("ReflectionsDelay"), 0.007)), 0.0f, 0.3f);
+		Reverb->LateGain = FMath::Clamp(FromMillibels(Number(TEXT("Reverb"), 200.0)), 0.0f, 10.0f);
+		Reverb->LateDelay = FMath::Clamp(static_cast<float>(Number(TEXT("ReverbDelay"), 0.011)), 0.0f, 0.1f);
+		Reverb->Diffusion = FMath::Clamp(static_cast<float>(Number(TEXT("EnvironmentDiffusion"), 1.0)), 0.0f, 1.0f);
+		Reverb->Density = 1.0f;
+		Reverb->AirAbsorptionGainHF = FMath::Clamp(FromMillibels(Number(TEXT("AirAbsorptionHF"), -5.0)), 0.892f, 1.0f);
+
+		FZone Zone;
+		Zone.Id = Id;
+		(*Effect)->TryGetStringField(TEXT("class"), Zone.EffectClass);
+		Zone.Location = *Place;
+		Zone.Effect = ZoneEffects.Add(Reverb);
+		Zone.DecayTime = Reverb->DecayTime;
+		Zones.Add(MoveTemp(Zone));
+	}
+}
+
+void UScctAudioSubsystem::UpdateReverb()
+{
+	if (ListenerZone == ActiveZone)
+	{
+		return;
+	}
+	ActiveZone = ListenerZone;
+
+	const bool bZone = Zones.IsValidIndex(ActiveZone);
+	UReverbEffect* Reverb = bZone ? ZoneEffects[Zones[ActiveZone].Effect].Get() : DefaultReverb.Get();
+	if (bZone)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Audio: reverb of zone %s: %s (decay %.2f s, room %.2f, late %.2f)"), *Zones[ActiveZone].Id,
+			*Zones[ActiveZone].EffectClass, Reverb->DecayTime, Reverb->Gain, Reverb->LateGain);
+	}
+	else
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Audio: reverb of the default room (the listener's zone has none of its own)"));
+	}
+
+	if (FAudioDevice* Device = GetWorld()->GetAudioDeviceRaw())
+	{
+		// One tag: the new environment replaces the one before, cross-faded as the listener walks through the door.
+		Device->ActivateReverbEffect(Reverb, ZoneReverbTag, 1.0f, 0.5f, 1.0f);
+	}
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Names and logging
+// ---------------------------------------------------------------------------------------------------------------
+
+const FString& UScctAudioSubsystem::GetName(int32 Id)
+{
+	if (const FString* Known = Names.Find(Id))
+	{
+		return *Known;
+	}
+
+	TCHAR Buffer[512];
+	const int32 Length = Id != 0 ? Events->GetName(Id, Buffer, UE_ARRAY_COUNT(Buffer)) : 0;
+	return Names.Add(Id, Length > 0 ? FString(Buffer) : FString());
+}
+
+FString UScctAudioSubsystem::GetFilePath(int32 FileId)
+{
+	return ContentRoot / GetName(FileId);
+}
+
+void UScctAudioSubsystem::LogVoice(const TCHAR* What, const FVoice& Voice, const TCHAR* Extra) const
+{
+	UScctAudioSubsystem* Self = const_cast<UScctAudioSubsystem*>(this);
+	const float Distance = bListenerValid ? FVector::Dist(Voice.Location, Listener) : 0.0f;
+	const TCHAR* Kind = Voice.bMusic ? TEXT("music") : Voice.AmbientId != 0 ? (Voice.bPositional ? TEXT("ambient 3D") : TEXT("ambient flat"))
+		: Voice.bAtListener ? TEXT("at listener") : Voice.bPositional ? TEXT("3D") : TEXT("flat");
+	if (Voice.bPositional)
+	{
+		const float Gain = DistanceGain(Distance, Voice.MinDistance, Voice.Radius);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Audio %s: %s '%s' call %d.%d actor %d at (%.0f, %.0f, %.0f) %.0f cm from the listener, volume %.2f x distance gain %.2f (min %.0f, reach %.0f), pitch %.2f%s%s%s%s [%d voices]"),
+			What, Kind, *Self->GetName(Voice.FileId), Voice.CallId, Voice.Segment, Voice.ActorId, Voice.Location.X, Voice.Location.Y, Voice.Location.Z,
+			Distance, Voice.Volume, Gain, Voice.MinDistance, ReachPerRadius * Voice.Radius, Voice.Pitch, Voice.bLoop ? TEXT(", loop") : TEXT(""),
+			Voice.FollowActorId != 0 ? *FString::Printf(TEXT(", follows %d"), Voice.FollowActorId) : TEXT(""),
+			Voice.FollowBoneId != 0 ? *FString::Printf(TEXT(" bone '%s'"), *Self->GetName(Voice.FollowBoneId)) : TEXT(""), Extra, Voices.Num());
+	}
+	else
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Audio %s: %s '%s' call %d.%d actor %d, volume %.2f, pitch %.2f%s%s [%d voices]"),
+			What, Kind, *Self->GetName(Voice.FileId), Voice.CallId, Voice.Segment, Voice.ActorId, Voice.Volume, Voice.Pitch,
+			Voice.bLoop ? TEXT(", loop") : TEXT(""), Extra, Voices.Num());
+	}
+}
+
+void UScctAudioSubsystem::LogSummary() const
+{
+	int32 Playing = 0, Waiting = 0, Ambient = 0, Sounding = 0;
+	for (const FVoice& Voice : Voices)
+	{
+		Playing += Voice.State == EVoiceState::Playing ? 1 : 0;
+		Waiting += Voice.State == EVoiceState::Waiting ? 1 : 0;
+		Ambient += Voice.AmbientId != 0 ? 1 : 0;
+		Sounding += Voice.Component.IsValid() ? 1 : 0;
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: %d voices now (%d playing, %d waiting, %d ambient, peak %d), %d Unreal components in use of %d made; since the match began %d started, %d stopped, %d out of reach, %d refused by the slot rule, %d replaced; files: %d decoded (%.1f MB held), %d failed to decode, %d plays lost to them; listener at (%.0f, %.0f, %.0f)"),
+		Voices.Num(), Playing, Waiting, Ambient, PeakVoices, Sounding, Components.Num(), NumStarted, NumStopped, NumOutOfReach, NumRefused, NumStolen,
+		Cache.GetNumDecoded(), Cache.GetBytes() / (1024.0 * 1024.0), Cache.GetNumFailed(), NumFailedFiles, Listener.X, Listener.Y, Listener.Z);
+}
