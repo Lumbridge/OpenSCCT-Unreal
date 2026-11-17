@@ -19,6 +19,7 @@
 #include "Misc/Paths.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
+#include "Online/ScctTokenStore.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 #include "Settings/ScctSettings.h"
@@ -220,7 +221,7 @@ void UScctHubSubsystem::ConfigureMaster()
 	FString MasterUrl, InviteKey, Token;
 	GConfig->GetString(HubProjectSection, TEXT("MasterUrl"), MasterUrl, GGameIni);
 	GConfig->GetString(HubProjectSection, TEXT("InviteKey"), InviteKey, GGameIni);
-	GConfig->GetString(OnlineUserSection, TEXT("AccountToken"), Token, GGameUserSettingsIni);
+	Token = ScctAccountToken::Load();
 	Api->ConfigureMaster(*MasterUrl, *InviteKey, *Token);
 }
 

@@ -112,10 +112,10 @@ void SScctAccountPage::Construct(const FArguments& InArgs)
 	}));
 
 	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
-	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)[ AccountUi::Title(AccountUi::ToText(TEXT("ACCOUNT")), 24.0f) ];
+	// The menus' page host draws the page's title above it.
 	Box->AddSlot().AutoHeight()
 	[
-		SNew(SBox).MaxDesiredHeight(760.0f)
+		SNew(SBox).MaxDesiredHeight(690.0f)
 		[
 			SNew(SScrollBox)
 			+ SScrollBox::Slot()[ SAssignNew(ContentBox, SBox) ]
@@ -417,13 +417,11 @@ TSharedRef<SWidget> SScctAccountPage::BuildSignedIn()
 			[
 				SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, ColumnGap)[ BuildIdentity() ]
-				+ SVerticalBox::Slot().AutoHeight()[ BuildPronouns() ]
+				+ SVerticalBox::Slot().AutoHeight()[ BuildCareer() ]
 			]
 			+ SHorizontalBox::Slot().FillWidth(1.0f)
 			[
-				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, ColumnGap)[ BuildRank() ]
-				+ SVerticalBox::Slot().AutoHeight()[ BuildCareer() ]
+				BuildRank()
 			]
 		]
 		+ SVerticalBox::Slot().AutoHeight()[ BuildTitles() ];
@@ -485,7 +483,7 @@ TSharedRef<SWidget> SScctAccountPage::BuildIdentity()
 	}
 	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
 	[
-		Note(AccountUi::ToText(TEXT("Settings and controls follow your account. Display, graphics, performance and device settings stay on this PC.")))
+		Note(AccountUi::ToText(TEXT("Settings and controls follow your account. Display, graphics, performance, network and device settings stay on this PC.")))
 	];
 	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ Line(Sync, 11.0f, ScctHudStyle::TextDim()) ];
 	if (Subsystem->HasFlag(EScctAccountFlags::RefreshFailed))
@@ -498,53 +496,6 @@ TSharedRef<SWidget> SScctAccountPage::BuildIdentity()
 		Box->AddSlot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)[ Note(AccountUi::ToText(Subsystem->GetText(EScctAccountText::NameCooldown))) ];
 	}
 	return Card(Caption, Box);
-}
-
-TSharedRef<SWidget> SScctAccountPage::BuildPronouns()
-{
-	UScctAccountSubsystem* Subsystem = Account.Get();
-	const TArray<FString> Presets = Subsystem->GetPronounPresets();
-	const int32 Saved = Subsystem->GetInfo().Pronouns;
-	const int32 Shown = PronounsDraft >= 0 ? PronounsDraft : Saved;
-
-	const TSharedRef<SWrapBox> Choices = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6.0f, 6.0f));
-	for (int32 Index = 0; Index < Presets.Num(); ++Index)
-	{
-		const FString Label = Index == 0 ? Presets[Index] + TEXT(" (default)") : Presets[Index];
-		Choices->AddSlot()
-		[
-			AccountUi::Button(AccountUi::ToText(Label.ToUpper()), FOnClicked::CreateLambda([this, Index]
-			{
-				PronounsDraft = Index;
-				Rebuild();
-				return FReply::Handled();
-			}), Index == Shown)
-		];
-	}
-
-	// The example uses the set picked, saved or not (AccountScreen.Pronouns).
-	static const TCHAR* const Possessives[] = { TEXT("their"), TEXT("her"), TEXT("his") };
-	FString Name = Subsystem->GetText(EScctAccountText::Name);
-	const FString Example = Shown >= 0 && Shown < UE_ARRAY_COUNT(Possessives)
-		? FString::Printf(TEXT("%s used %s last life"), *(Name.IsEmpty() ? FString(TEXT("You")) : Name), Possessives[Shown])
-		: Subsystem->GetText(EScctAccountText::PronounsExample);
-
-	const TWeakObjectPtr<UScctAccountSubsystem> Weak = Account;
-	const TSharedRef<SButton> Save = AccountUi::Button(AccountUi::ToText(TEXT("SAVE PRONOUNS")), FOnClicked::CreateLambda([this, Weak, Shown]
-	{
-		if (Weak.IsValid() && Weak->SetPronouns(Shown))
-		{
-			PronounsDraft = -1;
-		}
-		return FReply::Handled();
-	}));
-	Save->SetEnabled(!Subsystem->HasFlag(EScctAccountFlags::SavingPronouns) && Shown != Saved && Shown >= 0);
-
-	return Card(TEXT("Pronouns"), SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Note(AccountUi::ToText(TEXT("Choose the pronouns used in messages about you. They/them is the default."))) ]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Choices ]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ Line(Example, 12.0f, ScctHudStyle::TextDim()) ]
-		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)[ Save ]);
 }
 
 TSharedRef<SWidget> SScctAccountPage::BuildRank()

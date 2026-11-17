@@ -10,13 +10,13 @@ class UScctAccountSubsystem;
 class UScctOnlineSubsystem;
 
 /**
- * The front end's Account page (the Godot client's AccountScreen and AccountScreen.Pronouns), drawn from
+ * The menus' Account page (the Godot client's AccountScreen), drawn from
  * UScctAccountSubsystem:
  *   - signed out: what an account gives, and SIGN IN WITH DISCORD (the browser opens the master's page; the page
  *     shows the code to check there and waits, with a way to give up);
  *   - signed in without a name: the name to claim (3 to 16 letters, digits, _ - and .);
  *   - signed in: the name with CHANGE NAME (locked with the date while the cooldown runs) and SIGN OUT, the
- *     pronouns, the rank with its XP bar, lifetime XP, the prestige button (pressed twice: the second press confirms)
+ *     rank with its XP bar, lifetime XP, the prestige button (pressed twice: the second press confirms)
  *     and the prestige emblems, the career snapshot, and the title to show under the name (unlocked ones to pick, the
  *     locked ones on request with how to unlock them).
  * Settings and key layouts follow the account; the page says where the sync stands.
@@ -47,7 +47,6 @@ private:
 	TSharedRef<SWidget> BuildSignedIn();
 
 	TSharedRef<SWidget> BuildIdentity();
-	TSharedRef<SWidget> BuildPronouns();
 	TSharedRef<SWidget> BuildRank();
 	TSharedRef<SWidget> BuildCareer();
 	TSharedRef<SWidget> BuildTitles();
@@ -70,8 +69,6 @@ private:
 	bool bChangingName = false;
 	bool bPrestigeArmed = false;
 	bool bShowLocked = false;
-	/** The pronoun set picked and not saved yet (-1: the account's). */
-	int32 PronounsDraft = -1;
 
 	FString AutoPress;
 	float AutoPressTimer = 2.0f;

@@ -9,6 +9,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Online/ScctTokenStore.h"
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
@@ -165,8 +166,9 @@ const FScctOnlineApi* UScctOnlineSubsystem::Connect()
 		bMasterSet = true;
 
 		// A sign-in of an earlier run: the master answers with the account.
-		FString Token;
-		if (GConfig->GetString(UserSection, TEXT("AccountToken"), Token, GGameUserSettingsIni) && !Token.IsEmpty())
+		// Sealed for this Windows user (Online/ScctTokenStore.h), or -ScctAccountToken for this run only.
+		const FString Token = ScctAccountToken::Load();
+		if (!Token.IsEmpty())
 		{
 			Api->SetAccountToken(*Token);
 		}
@@ -421,8 +423,7 @@ void UScctOnlineSubsystem::SignOut()
 	if (Api != nullptr)
 	{
 		Api->SignOut();
-		GConfig->RemoveKey(UserSection, TEXT("AccountToken"), GGameUserSettingsIni);
-		GConfig->Flush(false, GGameUserSettingsIni);
+		ScctAccountToken::Clear();
 	}
 }
 
@@ -577,8 +578,7 @@ void UScctOnlineSubsystem::RefreshTexts()
 		if (LastAccountState == static_cast<int32>(EScctOnlineAccountState::SignedIn))
 		{
 			// Kept for the next run; never shown and never logged.
-			GConfig->SetString(UserSection, TEXT("AccountToken"), *ReadText(EScctOnlineText::AccountToken), GGameUserSettingsIni);
-			GConfig->Flush(false, GGameUserSettingsIni);
+			ScctAccountToken::Save(ReadText(EScctOnlineText::AccountToken));
 			UE_LOG(LogOpenSCCT, Log, TEXT("Online: signed in as '%s'"), *AccountName);
 		}
 	}

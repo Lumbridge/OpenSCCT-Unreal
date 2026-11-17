@@ -12,7 +12,7 @@ using OpenScct.UnrealBridge.Social;
 //   SocialProbe [states] [contentRoot]   the Discord status of several states, the join secrets, the invite pipe fix
 //   SocialProbe forward <server id>      hands a website join to the game that owns the pipe (a second process)
 //   SocialProbe list [masterUrl]         the master's servers and hubs with their ids (for a website join to try)
-//   SocialProbe account [masterUrl] [inviteKey] [--token T] [--sync] [--claim NAME] [--pronouns N] [--prestige] [--signout]
+//   SocialProbe account [masterUrl] [inviteKey] [--token T] [--sync] [--claim NAME] [--prestige] [--signout]
 //                                        the account service against a master (AccountCheck.cs)
 string mode = args.Length > 0 ? args[0] : "states";
 return mode switch

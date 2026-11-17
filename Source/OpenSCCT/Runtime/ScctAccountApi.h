@@ -11,7 +11,7 @@
 // service runs inside the social table's Update, so it moves only while UScctSocialSubsystem ticks. Text is UTF-16,
 // zero terminated. Game thread only.
 
-constexpr int32 ScctAccountApiVersion = 1;
+constexpr int32 ScctAccountApiVersion = 2;
 
 /** FScctAccountInfo::View: which part of the Account page applies. */
 enum class EScctAccountView : int32
@@ -30,7 +30,7 @@ namespace EScctAccountFlags
 	constexpr int32 RefreshFailed = 4;  // the last refresh failed; what is shown is from before
 	constexpr int32 HasProgress = 8;    // the master has levels: rank, XP and titles are filled
 	constexpr int32 Claiming = 16;
-	constexpr int32 SavingPronouns = 32;
+	// 32 is unused.
 	constexpr int32 Prestiging = 64;
 	constexpr int32 SigningOut = 128;
 	constexpr int32 CanPrestige = 256;
@@ -56,7 +56,7 @@ struct FScctAccountInfo
 	int32 View;      // EScctAccountView
 	int32 Flags;     // EScctAccountFlags
 	int32 Revision;  // goes up whenever anything here or in the texts changed
-	int32 Pronouns;  // index of the account's pronouns in the presets, -1 for another set
+	int32 EmblemsReached; // prestige emblems reached: one per prestige, plus the master emblem (0 to 11)
 	int64 AccountId;
 	int64 NameChangeAllowed; // Unix seconds the name may next be changed (0: now)
 	int32 Prestige;
@@ -83,19 +83,17 @@ static_assert(sizeof(FScctAccountInfo) == 104, "FScctAccountInfo must match the 
 enum class EScctAccountText : int32
 {
 	Name = 0,
-	Pronouns = 1,
-	Status = 2,          // the page's last message
-	NameCooldown = 3,    // "You can change your name again on 3 March 2027." while locked
-	RankTag = 4,         // "42", "P3 · 42" or "Master · 55"
-	RankDescription = 5, // "Prestige 3, level 42 - Field Agent"
-	NextLevel = 6,       // "1,250 / 2,150 XP to level 43" or "Level 55 · Maximum level"
-	TotalXp = 7,         // "120,400 lifetime XP"
-	Title = 8,           // the chosen title, or "No title equipped"
-	PronounsExample = 9, // "Name used their last life"
-	PrestigeHelp = 10,
-	XpRules = 11,
-	CareerHelp = 12,
-	SignInCode = 13,
+	Status = 1,          // the page's last message
+	NameCooldown = 2,    // "You can change your name again on 3 March 2027." while locked
+	RankTag = 3,         // "42", "P3 · 42" or "Master · 55"
+	RankDescription = 4, // "Prestige 3, level 42 - Field Agent"
+	NextLevel = 5,       // "1,250 / 2,150 XP to level 43" or "Level 55 · Maximum level"
+	TotalXp = 6,         // "120,400 lifetime XP"
+	Title = 7,           // the chosen title, or "No title equipped"
+	PrestigeHelp = 8,
+	XpRules = 9,
+	CareerHelp = 10,
+	SignInCode = 11,
 };
 
 struct FScctAccountTitle
@@ -146,16 +144,11 @@ struct FScctAccountApi
 	/** The catalogue's title at Index with its id, text and how it is unlocked. Returns 0 past the end. */
 	int32 (__cdecl* GetTitle)(int32 Index, FScctAccountTitle* Title, TCHAR* Id, int32 IdCapacity, TCHAR* Text, int32 TextCapacity, TCHAR* How, int32 HowCapacity);
 
-	/** The pronoun set at Index of the presets. Returns its length, or -1 past the end. */
-	int32 (__cdecl* GetPronounPreset)(int32 Index, TCHAR* Buffer, int32 Capacity);
-
 	/** Asks the master for the account (at most once a minute unless bForce). */
 	void (__cdecl* Refresh)(int32 bForce);
 
 	/** Claims or changes the name. Returns 1 when the master is asked; otherwise the Status text says why. */
 	int32 (__cdecl* ClaimName)(const TCHAR* Name);
-
-	int32 (__cdecl* SetPronouns)(int32 Preset);
 
 	/** Enters the next prestige (the page has the player confirm first). */
 	int32 (__cdecl* Prestige)();
@@ -181,4 +174,4 @@ struct FScctAccountApi
 	/** The prestige emblem's colour, 0xRRGGBB (1 to 10; 11 the master emblem's). */
 	int32 (__cdecl* EmblemColour)(int32 Prestige);
 };
-static_assert(sizeof(FScctAccountApi) == 8 + 16 * sizeof(void*), "FScctAccountApi does not match AccountApi");
+static_assert(sizeof(FScctAccountApi) == 8 + 14 * sizeof(void*), "FScctAccountApi does not match AccountApi");

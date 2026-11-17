@@ -22,10 +22,8 @@ public unsafe struct AccountApi
     public delegate* unmanaged[Cdecl]<AccountInfoBlock*, int> GetInfo;
     public delegate* unmanaged[Cdecl]<int, char*, int, int> GetText;
     public delegate* unmanaged[Cdecl]<int, AccountTitle*, char*, int, char*, int, char*, int, int> GetTitle;
-    public delegate* unmanaged[Cdecl]<int, char*, int, int> GetPronounPreset;
     public delegate* unmanaged[Cdecl]<int, void> Refresh;
     public delegate* unmanaged[Cdecl]<char*, int> ClaimName;
-    public delegate* unmanaged[Cdecl]<int, int> SetPronouns;
     public delegate* unmanaged[Cdecl]<int> Prestige;
     public delegate* unmanaged[Cdecl]<int> SignOut;
     public delegate* unmanaged[Cdecl]<char*, void> SetChosenTitle;
@@ -38,7 +36,7 @@ public unsafe struct AccountApi
 
 public static unsafe class AccountExports
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     /// <summary>AccountApi.Start's flags.</summary>
     public const int StartSyncOff = 1;
@@ -61,10 +59,8 @@ public static unsafe class AccountExports
         api->GetInfo = &GetInfo;
         api->GetText = &GetText;
         api->GetTitle = &GetTitle;
-        api->GetPronounPreset = &GetPronounPreset;
         api->Refresh = &Refresh;
         api->ClaimName = &ClaimName;
-        api->SetPronouns = &SetPronouns;
         api->Prestige = &Prestige;
         api->SignOut = &SignOut;
         api->SetChosenTitle = &SetChosenTitle;
@@ -154,21 +150,6 @@ public static unsafe class AccountExports
         }
     }
 
-    /// <summary>The pronoun set at <paramref name="index"/> of the presets ("they/them" first, the default). Returns its length, or -1 past the end.</summary>
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int GetPronounPreset(int index, char* buffer, int capacity)
-    {
-        try
-        {
-            return index >= 0 && index < PlayerPronouns.Presets.Count ? OnlineTextCopy.Buffer(buffer, capacity, PlayerPronouns.Presets[index]) : -1;
-        }
-        catch (Exception e)
-        {
-            Failed(e);
-            return -1;
-        }
-    }
-
     /// <summary>Asks the master for the account (at most once a minute unless <paramref name="force"/>).</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Refresh(int force) =>
@@ -185,9 +166,6 @@ public static unsafe class AccountExports
         string n = Text(name);
         return Guarded(() => Account.ClaimName(n) ? 1 : 0);
     }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int SetPronouns(int preset) => Guarded(() => Account.SetPronouns(preset) ? 1 : 0);
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int Prestige() => Guarded(() => Account.Prestige() ? 1 : 0);

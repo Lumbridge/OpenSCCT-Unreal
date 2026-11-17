@@ -16,11 +16,11 @@ namespace OpenScct.UnrealBridge.Social;
 /// The player's account on the master for the whole run (a port of the Godot client's AccountService, AccountSettings
 /// and the master calls of its AccountScreen): it asks the master for the account after each sign-in, at start-up
 /// with a saved sign-in and a few seconds after each round's results, keeps the last <see cref="AccountInfo"/> for the
-/// Account page, claims and changes the name, saves the pronouns, enters the next prestige and signs out. It also
+/// Account page, claims and changes the name, enters the next prestige and signs out. It also
 /// syncs the player's settings with the account (<see cref="ProfileSync"/>): it takes the account's copy after a
 /// sign-in, and sends this PC's 3 s after a setting or a key layout changed.
 /// <para>The sign-in itself and its token belong to the online bridge's <see cref="OnlineMaster"/> (Unreal keeps the
-/// token in the user settings); this class follows it. A 401 from the master on any of its calls signs the player out
+/// token sealed with DPAPI); this class follows it. A 401 from the master on any of its calls signs the player out
 /// on this PC: Unreal is asked (<see cref="SocialRequestKind.SignedOut"/>) to forget the token.</para>
 /// <para>Master calls run on worker threads with a client of their own; their answers are taken in
 /// <see cref="Update"/>, on the game thread. The settings themselves live in Unreal (the settings registry and the
@@ -50,7 +50,6 @@ public sealed partial class AccountService
     private bool _refreshPulls;
     private long _nextRefresh;
     private Task<AccountInfo>? _claim;
-    private Task<AccountInfo>? _pronouns;
     private Task<AccountInfo>? _prestige;
     private Task<bool>? _signOut;
     private OnlineState _lastOnline;
@@ -143,7 +142,6 @@ public sealed partial class AccountService
         // Answers for the previous sign-in cannot touch this one.
         _refresh = null;
         _claim = null;
-        _pronouns = null;
         _prestige = null;
         _signOut = null;
         ResetProfile();
@@ -284,32 +282,6 @@ public sealed partial class AccountService
         return true;
     }
 
-    /// <summary>Saves the pronouns of <see cref="PlayerPronouns.Presets"/> at <paramref name="preset"/>.</summary>
-    public bool SetPronouns(int preset)
-    {
-        if (preset < 0 || preset >= PlayerPronouns.Presets.Count)
-        {
-            SetStatus("Choose a pronoun set from the list.");
-            return false;
-        }
-
-        if (Preview)
-        {
-            SetStatus("Preview: the pronouns are not sent.");
-            return false;
-        }
-
-        if (!SignedIn || _pronouns is not null)
-        {
-            return false;
-        }
-
-        string pronouns = PlayerPronouns.Presets[preset];
-        SetStatus("Saving pronouns...");
-        _pronouns = Call(c => c.SetPronounsAsync(pronouns));
-        return true;
-    }
-
     /// <summary>Enters the next prestige (the page asks the player to confirm first).</summary>
     public bool Prestige()
     {
@@ -371,21 +343,6 @@ public sealed partial class AccountService
             }
         }
 
-        if (_pronouns is { IsCompleted: true } pronouns)
-        {
-            _pronouns = null;
-            if (pronouns.IsCompletedSuccessfully)
-            {
-                Remember(pronouns.Result);
-                SetStatus("Pronouns saved.");
-                _social.Log("Account: pronouns saved: " + pronouns.Result.Pronouns);
-            }
-            else if (!SignedOutBy(pronouns))
-            {
-                SetStatus(ErrorOf(pronouns));
-            }
-        }
-
         if (_prestige is { IsCompleted: true } prestige)
         {
             _prestige = null;
@@ -432,7 +389,6 @@ public sealed partial class AccountService
         RefreshFailed = false;
         _refresh = null;
         _claim = null;
-        _pronouns = null;
         _prestige = null;
         _signOut = null;
         ResetProfile();
@@ -497,7 +453,6 @@ public sealed partial class AccountService
         info = default;
         info.View = (int)View;
         info.Revision = Revision;
-        info.Pronouns = PresetIndex(a?.Pronouns ?? _state.Pronouns);
         info.AccountId = a?.Id ?? _state.AccountId;
         info.TitlesTotal = TitleCatalog.All.Count;
         info.TitleChosen = -1;
@@ -508,7 +463,6 @@ public sealed partial class AccountService
         if (Preview) flags |= AccountFlags.Preview;
         if (RefreshFailed) flags |= AccountFlags.RefreshFailed;
         if (_claim is not null) flags |= AccountFlags.Claiming;
-        if (_pronouns is not null) flags |= AccountFlags.SavingPronouns;
         if (_prestige is not null) flags |= AccountFlags.Prestiging;
         if (_signOut is not null) flags |= AccountFlags.SigningOut;
         if (_refresh is not null) flags |= AccountFlags.Refreshing;
@@ -544,6 +498,7 @@ public sealed partial class AccountService
                 info.TotalXp = progress.TotalXp;
                 info.BestLevel = progress.BestLevel;
                 info.RankColour = ColourOf(rank);
+                info.EmblemsReached = rank.Prestige + (rank.IsMaster ? 1 : 0);
                 info.TitlesUnlocked = progress.Titles.Count;
                 if (rank.Title is { } title)
                 {
@@ -558,12 +513,10 @@ public sealed partial class AccountService
     public string Text(AccountText kind)
     {
         AccountInfo? a = Account;
-        string name = a?.Name ?? (_state.Name.Length > 0 ? _state.Name : "You");
         PlayerRank rank = RankOf(a);
         return kind switch
         {
             AccountText.Name => a?.Name ?? _state.Name,
-            AccountText.Pronouns => PlayerPronouns.Normalize(a?.Pronouns ?? _state.Pronouns),
             AccountText.Status => Status,
             AccountText.NameCooldown => a?.NameChangeAllowed is { } allowed && allowed > DateTimeOffset.UtcNow
                 ? "You can change your name again on " + allowed.ToLocalTime().ToString("d MMMM yyyy", CultureInfo.InvariantCulture) + "."
@@ -575,7 +528,6 @@ public sealed partial class AccountService
                 : string.Create(CultureInfo.InvariantCulture, $"{rank.XpIntoLevel:N0} / {rank.XpForNext:N0} XP to level {rank.Level + 1}"),
             AccountText.TotalXp => a?.Progress is { } p ? string.Create(CultureInfo.InvariantCulture, $"{p.TotalXp:N0} lifetime XP") : string.Empty,
             AccountText.Title => rank.Title?.Text ?? "No title equipped",
-            AccountText.PronounsExample => name + " used " + PlayerPronouns.For(a?.Pronouns ?? _state.Pronouns).Possessive + " last life",
             AccountText.PrestigeHelp => rank.CanPrestige ? $"Return to level 1 for the prestige {rank.Prestige + 1} emblem and a new title."
                 : rank.IsMaster ? "Master prestige · The highest rank."
                 : string.Empty,
@@ -622,20 +574,6 @@ public sealed partial class AccountService
 
         int title = _chosenTitle is { } chosen && p.Titles.Contains(chosen) && TitleCatalog.Find(chosen) is { } t ? t.Bit : -1;
         return PlayerRank.FromXp(p.Prestige, p.Xp, title);
-    }
-
-    private static int PresetIndex(string? pronouns)
-    {
-        string normalized = PlayerPronouns.Normalize(pronouns);
-        for (int i = 0; i < PlayerPronouns.Presets.Count; i++)
-        {
-            if (PlayerPronouns.Presets[i] == normalized)
-            {
-                return i;
-            }
-        }
-
-        return -1;
     }
 
     // ---- ranks (RankIcons) ----------------------------------------------------------------------------------------
@@ -738,7 +676,6 @@ public sealed partial class AccountService
         {
             Id = 1,
             Name = "Preview",
-            Pronouns = PlayerPronouns.Default,
             NameChangeAllowed = DateTimeOffset.UtcNow.AddDays(12),
             Stats = new AccountStats { Matches = 214, SpyWins = 61, MercWins = 58, Losses = 95, Kills = 1403, Deaths = 1177 },
             Progress = new ProgressInfo
@@ -758,7 +695,6 @@ internal sealed class AccountStateFile
     public long AccountId { get; set; }
     public string Name { get; set; } = string.Empty;
     public bool Admin { get; set; }
-    public string Pronouns { get; set; } = PlayerPronouns.Default;
 
     /// <summary>When this PC's synced settings last changed, Unix milliseconds (0: never).</summary>
     public long ProfileUpdatedMs { get; set; }
@@ -779,7 +715,6 @@ internal sealed class AccountStateFile
         AccountId = account.Id;
         Name = account.Name ?? string.Empty;
         Admin = account.Admin;
-        Pronouns = PlayerPronouns.Normalize(account.Pronouns);
     }
 
     /// <summary>Forgets the account (the sync's bookkeeping stays, as in the Godot client).</summary>
@@ -788,7 +723,6 @@ internal sealed class AccountStateFile
         AccountId = 0;
         Name = string.Empty;
         Admin = false;
-        Pronouns = PlayerPronouns.Default;
     }
 
     public static AccountStateFile Load(string? path)

@@ -39,7 +39,9 @@ public enum AccountFlags
     HasProgress = 8,
 
     Claiming = 16,
-    SavingPronouns = 32,
+
+    // 32 is unused.
+
     Prestiging = 64,
     SigningOut = 128,
     CanPrestige = 256,
@@ -82,8 +84,8 @@ public struct AccountInfoBlock
     public int Flags;
     public int Revision;
 
-    /// <summary>The index of the account's pronouns in PlayerPronouns.Presets, -1 for another set.</summary>
-    public int Pronouns;
+    /// <summary>The prestige emblems reached: one per prestige, and the master emblem (0 to 11).</summary>
+    public int EmblemsReached;
 
     public long AccountId;
 
@@ -124,43 +126,38 @@ public enum AccountText
     /// <summary>The claimed name (empty until claimed).</summary>
     Name = 0,
 
-    Pronouns = 1,
-
     /// <summary>The page's last message ("Name claimed: ...", the master's refusal).</summary>
-    Status = 2,
+    Status = 1,
 
     /// <summary>"You can change your name again on 3 March 2027." while the name is locked.</summary>
-    NameCooldown = 3,
+    NameCooldown = 2,
 
     /// <summary>"42", "P3 · 42" or "Master · 55".</summary>
-    RankTag = 4,
+    RankTag = 3,
 
     /// <summary>"Prestige 3, level 42 - Field Agent".</summary>
-    RankDescription = 5,
+    RankDescription = 4,
 
     /// <summary>"1,250 / 2,150 XP to level 43", or "Level 55 · Maximum level".</summary>
-    NextLevel = 6,
+    NextLevel = 5,
 
     /// <summary>"120,400 lifetime XP".</summary>
-    TotalXp = 7,
+    TotalXp = 6,
 
     /// <summary>The chosen title's text, or "No title equipped".</summary>
-    Title = 8,
-
-    /// <summary>"Name used their last life" with the account's pronouns.</summary>
-    PronounsExample = 9,
+    Title = 7,
 
     /// <summary>The prestige button's line: what prestige does, or "Master prestige · The highest rank.".</summary>
-    PrestigeHelp = 10,
+    PrestigeHelp = 8,
 
     /// <summary>The XP rules as one line (the Godot page's tooltip).</summary>
-    XpRules = 11,
+    XpRules = 9,
 
     /// <summary>The career snapshot's footnote.</summary>
-    CareerHelp = 12,
+    CareerHelp = 10,
 
     /// <summary>The sign-in code while a sign-in waits.</summary>
-    SignInCode = 13,
+    SignInCode = 11,
 }
 
 /// <summary>One title of the catalogue (FScctAccountTitle); its id, text and how it is unlocked go beside it.</summary>

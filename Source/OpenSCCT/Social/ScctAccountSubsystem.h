@@ -23,21 +23,24 @@ DECLARE_MULTICAST_DELEGATE(FScctAccountChanged);
  * The player's account on the master (Bridge/OpenScct.UnrealBridge/Social/AccountService.cs, the Godot client's
  * AccountService, AccountSettings and ProfileSync): what the Account page shows and does, and the settings sync.
  *
- * The sign-in itself stays with UScctOnlineSubsystem (its token is kept in the user settings). Once signed in, the
+ * The sign-in itself stays with UScctOnlineSubsystem (its token is sealed with DPAPI by Online/ScctTokenStore). Once signed in, the
  * bridge asks the master for the account (after each sign-in, at start-up with a saved one, and a few seconds after
- * each round's results) and keeps its name, pronouns, rank, XP, prestige, titles and career. A 401 from the master
+ * each round's results) and keeps its name, rank, XP, prestige, titles and career. A 401 from the master
  * signs the player out on this PC (the social subsystem deletes the saved token).
  *
  * Settings sync: the settings registry's values (every visible option except the Display, Graphics and Performance
- * pages and device choices, which belong to one PC, plus the chosen title) and both key layouts (Saved/Controls/
- * controls.json and bindings.json) follow the account. A changed setting, heard on FScctSettings::OnChanged, or a
- * key layout file saved anew, is sent 3 s later; after a sign-in the account's copy is taken when it is newer and put
+ * pages, device choices, this PC's network (master address, ports, port mapping) and values forced for one run, plus the chosen title), UScctUserSettings' volumes, brightness,
+ * motion blur and distance unit (not the render scale or the window, which belong to one PC), and both key layouts
+ * (Saved/Controls/controls.json and bindings.json) follow the account. A changed setting, heard on
+ * FScctSettings::OnChanged, a key layout file saved anew, or a user setting found changed (looked at each second), is
+ * sent 3 s later; after a sign-in the account's copy is taken when it is newer and put
  * in through FScctSettings and the control settings. The chosen title is the hidden setting Account.Title.
  *
  * Switches (off by default):
  *   -ScctAccountPreview                  the page shows a made-up account (prestige 2, level 37); nothing is sent
  *   -ScctNoAccountSync                   never send or take settings this run
- *   -ScctAccountSetting=<key>=<value>@S  set a registered setting S seconds in, as the settings page would (sync checks)
+ *   -ScctAccountSetting=<key>=<value>@S  set a registered setting, or a synced user setting such as User.MasterVolume,
+ *                                        S seconds in, as the settings page would (sync checks)
  *   -ScctAccountClaim=<name>             claim that name once the signed-in account is known and has none
  */
 UCLASS()
@@ -62,9 +65,6 @@ public:
 	/** Every title of the catalogue with the account's unlocks and choice. */
 	TArray<FScctAccountTitleRow> GetTitles() const;
 
-	/** The pronoun presets ("they/them" first, the default). */
-	TArray<FString> GetPronounPresets() const;
-
 	/** The prestige emblem's colour (1 to 10; 11 the master emblem). */
 	FLinearColor EmblemColour(int32 Prestige) const;
 
@@ -75,7 +75,6 @@ public:
 
 	void Refresh(bool bForce = false);
 	bool ClaimName(const FString& Name);
-	bool SetPronouns(int32 Preset);
 	bool Prestige();
 	bool SignOut();
 
@@ -108,6 +107,9 @@ private:
 	/** A key layout or the control settings were saved since the last look: they count as a change. */
 	bool ControlFilesChanged();
 
+	/** A synced user setting (a volume, the brightness, motion blur, the distance unit) changed since the last look. */
+	bool UserSettingsChanged();
+
 	void RunSwitches(float DeltaSeconds);
 
 	static bool IsSynced(const FName& Page, const FName& Key);
@@ -124,6 +126,7 @@ private:
 	float FileCheckTimer = 0.0f;
 	FDateTime ControlsStamp;
 	FDateTime BindingsStamp;
+	FString UserSnapshot;
 
 	// Switches.
 	bool bPreview = false;

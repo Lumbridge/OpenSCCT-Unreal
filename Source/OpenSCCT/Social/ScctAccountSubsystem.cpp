@@ -5,6 +5,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
+#include "Menu/ScctUserSettings.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
@@ -17,6 +18,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Settings/ScctSettings.h"
+#include "Settings/ScctSettingsForced.h"
 #include "Social/ScctSocialSubsystem.h"
 
 const TCHAR* const UScctAccountSubsystem::TitleSetting = TEXT("Account.Title");
@@ -59,6 +61,90 @@ namespace
 	FDateTime StampOf(const FString& Path)
 	{
 		return IFileManager::Get().GetTimeStamp(*Path);
+	}
+
+	/**
+	 * The volumes of UScctUserSettings that follow the account. The Godot client syncs every setting but the display,
+	 * the frame caps and the devices; here the same goes for the user settings: the volumes, the brightness, motion
+	 * blur and the HUD's distance unit travel, the render scale and the window stay on this PC.
+	 */
+	struct FScctAccountSyncedVolume
+	{
+		const TCHAR* Key;
+		int32 UScctUserSettings::* Field;
+	};
+
+	const FScctAccountSyncedVolume ScctAccountSyncedVolumes[] = {
+		{ TEXT("User.MasterVolume"), &UScctUserSettings::MasterVolume },
+		{ TEXT("User.EffectsVolume"), &UScctUserSettings::EffectsVolume },
+		{ TEXT("User.AmbientVolume"), &UScctUserSettings::AmbientVolume },
+		{ TEXT("User.MusicVolume"), &UScctUserSettings::MusicVolume },
+		{ TEXT("User.MenuMusicVolume"), &UScctUserSettings::MenuMusicVolume },
+		{ TEXT("User.MenuSoundsVolume"), &UScctUserSettings::MenuSoundsVolume },
+		{ TEXT("User.ObjectiveVolume"), &UScctUserSettings::ObjectiveVolume },
+		{ TEXT("User.VoiceVolume"), &UScctUserSettings::VoiceVolume },
+		{ TEXT("User.HubJukeboxVolume"), &UScctUserSettings::HubJukeboxVolume },
+		{ TEXT("User.HubChimesVolume"), &UScctUserSettings::HubChimesVolume },
+	};
+
+	const TCHAR* const ScctAccountGammaKey = TEXT("User.Gamma");
+	const TCHAR* const ScctAccountMotionBlurKey = TEXT("User.MotionBlur");
+	const TCHAR* const ScctAccountFeetKey = TEXT("User.DistanceInFeet");
+
+	/** The synced user settings into Object, as text like the registry's values. */
+	void ScctAccountWriteUserSettings(FJsonObject& Object)
+	{
+		const UScctUserSettings* User = UScctUserSettings::Get();
+		for (const FScctAccountSyncedVolume& Volume : ScctAccountSyncedVolumes)
+		{
+			Object.SetStringField(Volume.Key, FString::FromInt(User->*Volume.Field));
+		}
+		Object.SetStringField(ScctAccountGammaKey, FString::SanitizeFloat(User->Gamma));
+		Object.SetStringField(ScctAccountMotionBlurKey, User->bMotionBlur ? TEXT("true") : TEXT("false"));
+		Object.SetStringField(ScctAccountFeetKey, User->bDistanceInFeet ? TEXT("true") : TEXT("false"));
+	}
+
+	/** One synced user setting from the account's copy. False when Key is not one of them. */
+	bool ScctAccountReadUserSetting(const FString& Key, const FString& Value)
+	{
+		UScctUserSettings* User = UScctUserSettings::Get();
+		for (const FScctAccountSyncedVolume& Volume : ScctAccountSyncedVolumes)
+		{
+			if (Key == Volume.Key)
+			{
+				User->*Volume.Field = FMath::Clamp(FCString::Atoi(*Value), 0, 100);
+				return true;
+			}
+		}
+		if (Key == ScctAccountGammaKey)
+		{
+			User->Gamma = FMath::Clamp(FCString::Atof(*Value), 1.6f, 3.0f);
+			return true;
+		}
+		if (Key == ScctAccountMotionBlurKey)
+		{
+			User->bMotionBlur = Value.ToBool();
+			return true;
+		}
+		if (Key == ScctAccountFeetKey)
+		{
+			User->bDistanceInFeet = Value.ToBool();
+			return true;
+		}
+		return false;
+	}
+
+	/** The synced user settings as one line, to tell when one of them changed. */
+	FString ScctAccountUserSnapshot()
+	{
+		const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+		ScctAccountWriteUserSettings(*Object);
+		FString Line;
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Object->Values)
+		{
+			Line += Field.Key + TEXT("=") + Field.Value->AsString() + TEXT(";");
+		}
+		return Line;
 	}
 }
 
@@ -105,6 +191,7 @@ void UScctAccountSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	ControlsStamp = StampOf(UScctControlSettings::GetSettingsFile());
 	BindingsStamp = StampOf(UScctControlSettings::GetBindingsFile());
+	UserSnapshot = ScctAccountUserSnapshot();
 	TickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &UScctAccountSubsystem::Tick));
 }
 
@@ -150,7 +237,7 @@ bool UScctAccountSubsystem::Tick(float DeltaSeconds)
 	if (FileCheckTimer >= FileCheckSeconds)
 	{
 		FileCheckTimer = 0.0f;
-		if (ControlFilesChanged())
+		if (ControlFilesChanged() || UserSettingsChanged())
 		{
 			bLocalDirty = true;
 		}
@@ -185,7 +272,14 @@ void UScctAccountSubsystem::RunSwitches(float DeltaSeconds)
 	if (AutoSettingAt >= 0.0f && RunSeconds >= AutoSettingAt)
 	{
 		AutoSettingAt = -1.0f;
-		if (FScctSettings::Find(FName(*AutoSettingKey)) == nullptr)
+		if (AutoSettingKey.StartsWith(TEXT("User.")) && ScctAccountReadUserSetting(AutoSettingKey, AutoSettingValue))
+		{
+			// A user setting, as the Audio or Video tab would change and save it.
+			UE_LOG(LogOpenSCCT, Log, TEXT("Account: setting %s to %s (-ScctAccountSetting)"), *AutoSettingKey, *AutoSettingValue);
+			UScctUserSettings::Get()->Save();
+			UScctUserSettings::Get()->ApplyAll();
+		}
+		else if (FScctSettings::Find(FName(*AutoSettingKey)) == nullptr)
 		{
 			UE_LOG(LogOpenSCCT, Warning, TEXT("Account: -ScctAccountSetting names no registered setting '%s'"), *AutoSettingKey);
 		}
@@ -217,6 +311,21 @@ bool UScctAccountSubsystem::IsSynced(const FName& Page, const FName& Key)
 		{
 			return false;
 		}
+	}
+	// This PC's network: the master it signs in to (the sync's own way in), its ports, port mapping and connect path.
+	static const FName LocalKeys[] = { TEXT("Online.MasterUrl"), TEXT("Online.InviteKey"), TEXT("Online.ConnectMode"), TEXT("Online.LanPort"),
+		TEXT("Online.HostPort"), TEXT("Online.HostUpnp") };
+	for (const FName& Local : LocalKeys)
+	{
+		if (Key == Local)
+		{
+			return false;
+		}
+	}
+	// A value forced for one run (-ScctSettingSet) is not the player's choice.
+	if (FScctSettingsForced::IsForced(Key))
+	{
+		return false;
 	}
 	return !Key.ToString().Contains(TEXT("Device"));
 }
@@ -253,6 +362,8 @@ FString UScctAccountSubsystem::BuildSettingsJson() const
 	}
 	// Hidden from the settings page, but the player's choice all the same.
 	Object->SetStringField(TitleSetting, FScctSettings::GetString(TitleSetting));
+	// The volumes, brightness, motion blur and distance unit, which UScctUserSettings holds.
+	ScctAccountWriteUserSettings(*Object);
 
 	FString Json;
 	const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json);
@@ -270,6 +381,21 @@ void UScctAccountSubsystem::SendLocalProfile(bool bChanged)
 	const FString Controls = LoadText(UScctControlSettings::GetSettingsFile());
 	const FString Bindings = LoadText(UScctControlSettings::GetBindingsFile());
 	Api->SetLocalProfile(*Settings, *Controls, *Bindings, bChanged ? 1 : 0);
+}
+
+bool UScctAccountSubsystem::UserSettingsChanged()
+{
+	const FString Now = ScctAccountUserSnapshot();
+	if (Now == UserSnapshot)
+	{
+		return false;
+	}
+	UserSnapshot = Now;
+	if (!bApplying)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Account: a volume, the brightness, motion blur or the distance unit changed"));
+	}
+	return !bApplying;
 }
 
 bool UScctAccountSubsystem::ControlFilesChanged()
@@ -305,6 +431,7 @@ void UScctAccountSubsystem::ApplyIncoming()
 	// Put in without counting as the player's own change (nothing is sent back).
 	bApplying = true;
 	int32 Taken = 0;
+	int32 TakenUser = 0;
 	TSharedPtr<FJsonObject> Object;
 	if (FJsonSerializer::Deserialize(TJsonReaderFactory<TCHAR>::Create(SettingsJson), Object) && Object.IsValid())
 	{
@@ -314,13 +441,28 @@ void UScctAccountSubsystem::ApplyIncoming()
 			const FScctSettingDesc* Desc = FScctSettings::Find(Key);
 			FString Value;
 			// Options this build does not have, and the ones that belong to one PC, are left alone.
-			if (Desc != nullptr && IsSynced(Desc->Page, Key) && Field.Value.IsValid() && Field.Value->TryGetString(Value))
+			if (!Field.Value.IsValid() || !Field.Value->TryGetString(Value))
+			{
+				continue;
+			}
+			if (Desc != nullptr && IsSynced(Desc->Page, Key))
 			{
 				FScctSettings::SetString(Key, Value);
 				++Taken;
 			}
+			else if (Desc == nullptr && ScctAccountReadUserSetting(Field.Key, Value))
+			{
+				++TakenUser;
+			}
 		}
 		FScctSettings::Save();
+		if (TakenUser > 0)
+		{
+			UScctUserSettings* User = UScctUserSettings::Get();
+			User->Save();
+			User->ApplyAll();
+		}
+		UserSnapshot = ScctAccountUserSnapshot();
 	}
 
 	bool bControls = false;
@@ -344,7 +486,7 @@ void UScctAccountSubsystem::ApplyIncoming()
 	bApplying = false;
 	bLocalDirty = false;
 
-	UE_LOG(LogOpenSCCT, Log, TEXT("Account: applied the account's settings (%d setting(s)%s)"), Taken, bControls ? TEXT(", the key layouts and control settings") : TEXT(""));
+	UE_LOG(LogOpenSCCT, Log, TEXT("Account: applied the account's settings (%d setting(s), %d user setting(s)%s)"), Taken, TakenUser, bControls ? TEXT(", the key layouts and control settings") : TEXT(""));
 	Api->FinishIncomingProfile(1);
 	SendLocalProfile(false);
 }
@@ -387,21 +529,6 @@ TArray<FScctAccountTitleRow> UScctAccountSubsystem::GetTitles() const
 	return Rows;
 }
 
-TArray<FString> UScctAccountSubsystem::GetPronounPresets() const
-{
-	TArray<FString> Presets;
-	if (Api == nullptr)
-	{
-		return Presets;
-	}
-	TCHAR Buffer[64];
-	for (int32 Index = 0; Index < 16 && Api->GetPronounPreset(Index, Buffer, UE_ARRAY_COUNT(Buffer)) >= 0; ++Index)
-	{
-		Presets.Emplace(Buffer);
-	}
-	return Presets;
-}
-
 FLinearColor UScctAccountSubsystem::ToColour(int32 Rgb)
 {
 	return FLinearColor(FColor((Rgb >> 16) & 0xFF, (Rgb >> 8) & 0xFF, Rgb & 0xFF));
@@ -439,11 +566,6 @@ void UScctAccountSubsystem::Refresh(bool bForce)
 bool UScctAccountSubsystem::ClaimName(const FString& Name)
 {
 	return Api != nullptr && Api->ClaimName(*Name) != 0;
-}
-
-bool UScctAccountSubsystem::SetPronouns(int32 Preset)
-{
-	return Api != nullptr && Api->SetPronouns(Preset) != 0;
 }
 
 bool UScctAccountSubsystem::Prestige()
