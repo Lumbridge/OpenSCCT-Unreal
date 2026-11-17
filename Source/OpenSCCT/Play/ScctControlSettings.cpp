@@ -5,6 +5,7 @@
 #include "OpenSCCT.h"
 #include "Runtime/ScctFeatures.h"
 #include "Runtime/ScctMouseAimApi.h"
+#include "Runtime/ScctPadApi.h"
 
 namespace
 {
@@ -144,7 +145,28 @@ bool UScctControlSettings::Load()
 	FScctControlSettings Now = {};
 	Controls->GetSettings(&Now);
 	FromBridge(Now);
+	ReadPadExtras();
 	return bRead || FailFromBridge(TEXT("The control settings file could not be read."));
+}
+
+void UScctControlSettings::ReadPadExtras()
+{
+	if (const FScctPadApi* Pad = ScctFeature<FScctPadApi>())
+	{
+		int32 Enabled = 0;
+		float Strength = 1.0f;
+		Pad->GetRumble(&Enabled, &Strength);
+		bPadRumble = Enabled != 0;
+		PadRumbleStrength = Strength;
+	}
+}
+
+void UScctControlSettings::WritePadExtras() const
+{
+	if (const FScctPadApi* Pad = ScctFeature<FScctPadApi>())
+	{
+		Pad->SetRumble(bPadRumble ? 1 : 0, PadRumbleStrength);
+	}
 }
 
 bool UScctControlSettings::Apply()
@@ -161,8 +183,10 @@ bool UScctControlSettings::Apply()
 	FScctControlSettings Wanted = {};
 	ToBridge(Wanted);
 	Controls->SetSettings(&Wanted);
+	WritePadExtras();
 	Controls->GetSettings(&Wanted);
 	FromBridge(Wanted);
+	ReadPadExtras();
 	return true;
 }
 
@@ -195,6 +219,7 @@ bool UScctControlSettings::Refresh()
 	FScctControlSettings Now = {};
 	Controls->GetSettings(&Now);
 	FromBridge(Now);
+	ReadPadExtras();
 	return true;
 }
 
@@ -238,6 +263,9 @@ bool UScctControlSettings::GetDefaults(UScctControlSettings& Into)
 	FScctControlSettings Defaults = {};
 	MouseAim->GetDefaults(&Defaults);
 	Into.FromBridge(Defaults);
+	// Reloaded's first run: vibration off, at full strength when it is turned on.
+	Into.bPadRumble = false;
+	Into.PadRumbleStrength = 1.0f;
 	return true;
 }
 

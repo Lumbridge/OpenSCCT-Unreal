@@ -87,6 +87,9 @@ public sealed class ChannelPoseApplier
     private readonly Xform[] _mirrorGlobal;
     private readonly byte[] _sampled;
     private readonly GlbCharacter _character;
+
+    /// <summary>The bone of this skeleton each bone of the clips' file moves (-1: none), or null when the clips are this file's own.</summary>
+    private readonly int[]? _trackBone;
     private readonly float[] _cacheFrame = new float[64];
     private readonly string?[] _cacheSequence = new string?[64];
     private bool _hasFrom;
@@ -98,10 +101,24 @@ public sealed class ChannelPoseApplier
     /// <paramref name="boneMirrors"/> is Pawn.BoneMirrors: for each bone of the package, in its order (the character
     /// file's joint order), the bone whose pose it takes when mirrored, -1 for a bone a mirror leaves alone. Without
     /// it the mirror bone is found by name (L and R swapped).
+    /// <para><paramref name="clipsFrom"/> is the file the clips come from when it is not <paramref name="character"/>:
+    /// a map outfit's model posed with its team's stock clips (the Godot client's SkeletalModel.Load(glb,
+    /// animationsFrom: stock)). A clip's track then moves the bone of the same name, a stock bone the model lacks is
+    /// left out, and <paramref name="boneMirrors"/> counts the stock file's bones (the package's), which are found in
+    /// this skeleton by name too (ChannelPoseApplier's packageBones there).</para>
     /// </summary>
-    public ChannelPoseApplier(GlbCharacter character, IReadOnlyList<int>? boneMirrors = null)
+    public ChannelPoseApplier(GlbCharacter character, IReadOnlyList<int>? boneMirrors = null, GlbCharacter? clipsFrom = null)
     {
         _character = character ?? throw new ArgumentNullException(nameof(character));
+        if (clipsFrom is not null && !ReferenceEquals(clipsFrom, character))
+        {
+            _trackBone = new int[clipsFrom.BoneCount];
+            for (int b = 0; b < _trackBone.Length; b++)
+            {
+                _trackBone[b] = character.FindBone(clipsFrom.BoneNames[b]);
+            }
+        }
+
         _count = character.BoneCount;
         _parent = character.Parents;
         _restPos = character.RestPosition;
@@ -131,7 +148,20 @@ public sealed class ChannelPoseApplier
             _mirror[b] = m >= 0 ? m : b;
         }
 
-        if (boneMirrors is not null)
+        if (boneMirrors is not null && _trackBone is not null)
+        {
+            // An outfit's model: the package's bones (the stock file's) are found in this skeleton by name.
+            Array.Fill(_mirror, -1);
+            for (int b = 0; b < Math.Min(boneMirrors.Count, _trackBone.Length); b++)
+            {
+                int source = boneMirrors[b];
+                if (source >= 0 && source < _trackBone.Length && _trackBone[b] >= 0 && _trackBone[source] >= 0)
+                {
+                    _mirror[_trackBone[b]] = _trackBone[source];
+                }
+            }
+        }
+        else if (boneMirrors is not null)
         {
             // The drawn model is the package's own mesh here, so the package's bone b is this skeleton's bone b.
             Array.Fill(_mirror, -1);
@@ -285,6 +315,10 @@ public sealed class ChannelPoseApplier
     /// <summary>The index of a bone by name, or -1.</summary>
     public int FindBone(string name) => _character.FindBone(name);
 
+    /// <summary>The bone of this skeleton a clip track's bone is (-1 when the skeleton lacks it).</summary>
+    private int TrackBone(int clipBone) =>
+        _trackBone is null ? clipBone : clipBone >= 0 && clipBone < _trackBone.Length ? _trackBone[clipBone] : -1;
+
     /// <summary>
     /// Poses the skeleton from <paramref name="channels"/> (index = channel). With a root lock the root bone is moved
     /// by <paramref name="rootOffset"/> (skeleton space: R(lock) - R(t), the root motion the actor carries since the
@@ -419,8 +453,8 @@ public sealed class ChannelPoseApplier
         GlbTrack[] tracks = clip.Tracks;
         for (int track = 0; track < tracks.Length; track++)
         {
-            int target = tracks[track].Bone;
-            if (!_included[target])
+            int target = TrackBone(tracks[track].Bone);
+            if (target < 0 || !_included[target])
             {
                 continue;
             }
@@ -499,7 +533,12 @@ public sealed class ChannelPoseApplier
         GlbTrack[] tracks = clip.Tracks;
         for (int track = 0; track < tracks.Length; track++)
         {
-            int bone = tracks[track].Bone;
+            int bone = TrackBone(tracks[track].Bone);
+            if (bone < 0)
+            {
+                continue;
+            }
+
             switch (tracks[track].Type)
             {
                 case GlbTrackType.Position:
@@ -654,7 +693,7 @@ public sealed class ChannelPoseApplier
         GlbTrack[] tracks = clip0.Tracks;
         for (int track = 0; track < tracks.Length; track++)
         {
-            if (tracks[track].Bone != root)
+            if (TrackBone(tracks[track].Bone) != root)
             {
                 continue;
             }

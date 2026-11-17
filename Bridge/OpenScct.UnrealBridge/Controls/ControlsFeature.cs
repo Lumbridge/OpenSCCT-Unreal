@@ -126,6 +126,12 @@ public sealed class ControlsFeature
     /// <summary>True while the look-ahead draws the mouse turn ahead of the simulation.</summary>
     public bool LookAheadActive => _look.Active;
 
+    /// <summary>
+    /// The camera the last <c>GetView</c> handed Unreal (the eye of the frame, the look-ahead and the wall constraint
+    /// in it), or null before the first. The spy's eye view traces from it to its sockets (Equipment/FirstPersonModels.cs).
+    /// </summary>
+    public (FVector Location, FRotator Rotation)? DrawnCamera { get; private set; }
+
     /// <summary>One rendered frame of device state, before the session's update.</summary>
     public unsafe void Frame(in BridgeRawInput raw)
     {
@@ -175,6 +181,7 @@ public sealed class ControlsFeature
     public BridgeLookView GetView(float aspect, float clearance)
     {
         ViewSample current = _session.View;
+        DrawnCamera = null;
         if (!current.Valid)
         {
             return default;
@@ -257,6 +264,7 @@ public sealed class ControlsFeature
 
         FRotator pending = !overridden && _look.Active ? _look.Pending : default;
         FRotator aim = pc is null ? camera.Rotation : new FRotator(pc.Rotation.Pitch + pending.Pitch, pc.Rotation.Yaw + pending.Yaw, pc.Rotation.Roll);
+        DrawnCamera = (camera.Location, camera.Rotation);
         return new BridgeLookView
         {
             X = camera.Location.X,

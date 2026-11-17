@@ -619,7 +619,7 @@ public sealed partial class AccountService
     /// Runs one master call on a worker thread with a client of its own (made now, disposed after), so a change of the
     /// online bridge's master never cuts it off midway. Fails with a <see cref="MasterException"/> when no master is set.
     /// </summary>
-    private static Task<T> Call<T>(Func<MasterClient, Task<T>> call, bool withToken = true)
+    internal static Task<T> Call<T>(Func<MasterClient, Task<T>> call, bool withToken = true)
     {
         OnlineMaster? master = Master;
         if (master?.Url is not { } url)

@@ -69,6 +69,11 @@ public:
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
+	/**
+	 * The D-pad and the stick stay on this page (the menu's entries under it are not where they go), and Right from the
+	 * loadout goes to the catalogue, Left from the catalogue's first column back to the slot it is for.
+	 */
+	virtual FNavigationReply OnNavigation(const FGeometry& MyGeometry, const FNavigationEvent& InNavigationEvent) override;
 
 	/** BACK, CANCEL or Escape: closes, after asking when a draft differs from the saved kit. */
 	void RequestBack();
@@ -125,6 +130,9 @@ private:
 	int32 Category = EScctGearCategory::Gadget;
 	int32 Slot = 0;
 	FString Hovered;
+	/** The tile the controller is on ("slot:<category>:<slot>" or "item:<path>"), focused again after a rebuild. */
+	FString FocusedTile;
+	TMap<FString, TWeakPtr<SWidget>> TileWidgets;
 	FString StatusText;
 	bool bStatusError = false;
 

@@ -93,6 +93,8 @@ namespace ScctMenuPages
 	TSharedRef<SScctMenuPage> MakeAccount(const FScctMenuHost& Host);
 	TSharedRef<SScctMenuPage> MakeJoinPassword(const FScctMenuHost& Host, const FScctSocialPasswordPrompt& Prompt);
 
+	/** The Demos page: the demos on this computer, the recent online ones, match history (Menu/SScctDemosPage.cpp). */
+	TSharedRef<SScctMenuPage> MakeDemos(const FScctMenuHost& Host);
 	/** Maps & Content: the OpenSCCT-Content catalogue with downloads and removals (Menu/SScctMenuContent.cpp). */
 	TSharedRef<SScctMenuPage> MakeContent(const FScctMenuHost& Host);
 }

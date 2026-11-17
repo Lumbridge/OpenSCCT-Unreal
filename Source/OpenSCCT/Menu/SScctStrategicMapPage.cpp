@@ -1,4 +1,5 @@
 #include "Menu/SScctStrategicMapPage.h"
+#include "Menu/ScctMenuNav.h"
 
 #include "Brushes/SlateColorBrush.h"
 #include "Brushes/SlateDynamicImageBrush.h"
@@ -451,7 +452,7 @@ void SScctStrategicMapPage::Tick(const FGeometry& AllottedGeometry, const double
 
 FReply SScctStrategicMapPage::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
-	if (bOwnKeys && InKeyEvent.GetKey() == EKeys::Escape)
+	if (bOwnKeys && ScctMenuNav::IsBackKey(InKeyEvent.GetKey()))
 	{
 		Close();
 		return FReply::Handled();

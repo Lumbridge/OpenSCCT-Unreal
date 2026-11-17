@@ -19,6 +19,8 @@ struct FScctFxParticle
 {
 	FVector Position = FVector::ZeroVector;
 	FVector Velocity = FVector::ZeroVector;
+	/** cm/s2 added to the velocity, besides Gravity (an original emitter's Acceleration, turned into the world). */
+	FVector Acceleration = FVector::ZeroVector;
 
 	/** Colour, and the opacity at its fullest. Glow sprites add Colour x Alpha to the picture (values above 1 bloom). */
 	FLinearColor Color = FLinearColor::White;

@@ -1,4 +1,5 @@
 #include "Menu/SScctGearPage.h"
+#include "Menu/ScctMenuNav.h"
 
 #include "Brushes/SlateColorBrush.h"
 #include "Brushes/SlateDynamicImageBrush.h"
@@ -317,12 +318,45 @@ void SScctGearPage::Tick(const FGeometry& AllottedGeometry, const double InCurre
 
 FReply SScctGearPage::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
-	if (InKeyEvent.GetKey() == EKeys::Escape)
+	if (ScctMenuNav::IsBackKey(InKeyEvent.GetKey()))
 	{
 		RequestBack();
 		return FReply::Handled();
 	}
+	// The page itself has the keyboard (it takes it when it opens): an arrow or the D-pad goes to its first tile.
+	if (HasKeyboardFocus() && FSlateApplication::Get().GetNavigationDirectionFromKey(InKeyEvent) != EUINavigation::Invalid)
+	{
+		if (const TSharedPtr<SWidget> First = ScctMenuNav::FindFirstFocusable(KitBox))
+		{
+			FSlateApplication::Get().SetKeyboardFocus(First, EFocusCause::Navigation);
+			return FReply::Handled();
+		}
+	}
 	return FReply::Unhandled();
+}
+
+FNavigationReply SScctGearPage::OnNavigation(const FGeometry& MyGeometry, const FNavigationEvent& InNavigationEvent)
+{
+	const EUINavigation Type = InNavigationEvent.GetNavigationType();
+	const TSharedPtr<SWidget> Focused = FSlateApplication::Get().GetUserFocusedWidget(InNavigationEvent.GetUserIndex());
+	if (Type == EUINavigation::Right && KitBox.IsValid() && KitBox->HasFocusedDescendants())
+	{
+		if (const TSharedPtr<SWidget> First = ScctMenuNav::FindFirstFocusable(CatalogueBox))
+		{
+			return FNavigationReply::Explicit(First);
+		}
+	}
+	if (Type == EUINavigation::Left && CatalogueBox.IsValid() && CatalogueBox->HasFocusedDescendants() && Focused.IsValid())
+	{
+		const float Left = CatalogueBox->GetCachedGeometry().GetAbsolutePosition().X;
+		const float FocusedLeft = Focused->GetCachedGeometry().GetAbsolutePosition().X;
+		const TSharedPtr<SWidget> SlotTile = TileWidgets.FindRef(FString::Printf(TEXT("slot:%d:%d"), Category, Category == EScctGearCategory::Gadget ? Slot : 0)).Pin();
+		if (FocusedLeft - Left < 40.0f * MyGeometry.Scale && SlotTile.IsValid())
+		{
+			return FNavigationReply::Explicit(SlotTile);
+		}
+	}
+	return FNavigationReply::Stop();
 }
 
 void SScctGearPage::RequestBack()
@@ -547,9 +581,21 @@ void SScctGearPage::Refresh()
 	{
 		Slot = 0;
 	}
+	// The controller stays on the tile it pressed although the tiles are built again.
+	const bool bHadFocus = HasFocusedDescendants();
+	TileWidgets.Reset();
 	KitBox->SetContent(BuildKit());
 	CatalogueBox->SetContent(BuildCatalogue());
 	ShowIntel(Hovered.IsEmpty() ? SelectedPath() : Hovered);
+	if (bHadFocus && FSlateApplication::IsInitialized())
+	{
+		TSharedPtr<SWidget> Again = TileWidgets.FindRef(FocusedTile).Pin();
+		if (!Again.IsValid())
+		{
+			Again = ScctMenuNav::FindFirstFocusable(CatalogueBox);
+		}
+		FSlateApplication::Get().SetKeyboardFocus(Again.IsValid() ? Again : TSharedPtr<SWidget>(SharedThis(this)), EFocusCause::Navigation);
+	}
 }
 
 void SScctGearPage::ShowIntel(const FString& Path)
@@ -561,9 +607,9 @@ TSharedRef<SWidget> SScctGearPage::KitSlot(const FString& Caption, const FString
 {
 	const bool bActive = bEnabled && Category == InCategory && (InCategory != EScctGearCategory::Gadget || Slot == InSlot);
 	const FLinearColor Accent = ScctHudStyle::Accent(State.Side);
-	TSharedRef<SButton> Button = SNew(SButton)
+	const TSharedRef<SScctRingButton> Button = SNew(SScctRingButton)
 		.ButtonStyle(&GearTileStyle())
-		.IsFocusable(false)
+		.IsFocusable(true)
 		.IsEnabled(bEnabled)
 		.ToolTipText(Ui::ToText(Tooltip))
 		.OnClicked(FOnClicked::CreateLambda([this, InCategory, InSlot] { SelectSlot(InCategory, InSlot); return FReply::Handled(); }))
@@ -578,11 +624,14 @@ TSharedRef<SWidget> SScctGearPage::KitSlot(const FString& Caption, const FString
 				]
 			]
 		];
+	const FString TileKey = FString::Printf(TEXT("slot:%d:%d"), InCategory, InSlot);
+	TileWidgets.Add(TileKey, Button);
+	Button->OnFocused = [this, TileKey] { FocusedTile = TileKey; };
 	const TWeakPtr<SButton> Weak = Button;
 	Button->SetBorderBackgroundColor(TAttribute<FSlateColor>::CreateLambda([Weak, bActive, Accent]
 	{
 		const TSharedPtr<SButton> Pinned = Weak.Pin();
-		const bool bHover = Pinned.IsValid() && Pinned->IsHovered();
+		const bool bHover = Pinned.IsValid() && (Pinned->IsHovered() || Pinned->HasKeyboardFocus());
 		return FSlateColor(bActive ? ScctHudStyle::Fade(Accent, bHover ? 0.34f : 0.26f) : FLinearColor(1.0f, 1.0f, 1.0f, bHover ? 0.12f : 0.05f));
 	}));
 	return Button;
@@ -648,9 +697,9 @@ TSharedRef<SWidget> SScctGearPage::Card(const FScctGearOption& Option)
 	}
 	const FSlateBrush* Icon = IconOf(Intel);
 
-	TSharedRef<SButton> Button = SNew(SButton)
+	const TSharedRef<SScctRingButton> Button = SNew(SScctRingButton)
 		.ButtonStyle(&GearTileStyle())
-		.IsFocusable(false)
+		.IsFocusable(true)
 		.ToolTipText(Ui::ToText(bAllowed ? FString(Option.Name) : FString(Intel.Restriction)))
 		.OnClicked(FOnClicked::CreateLambda([this, Path] { Pick(Path); return FReply::Handled(); }))
 		.OnHovered(FSimpleDelegate::CreateLambda([this, Path] { Hovered = Path; ShowIntel(Path); }))
@@ -684,11 +733,15 @@ TSharedRef<SWidget> SScctGearPage::Card(const FScctGearOption& Option)
 				]
 			]
 		];
+	// The controller's focus shows the item's details as the pointer does.
+	const FString TileKey = TEXT("item:") + Path;
+	TileWidgets.Add(TileKey, Button);
+	Button->OnFocused = [this, TileKey, Path] { FocusedTile = TileKey; ShowIntel(Path); };
 	const TWeakPtr<SButton> Weak = Button;
 	Button->SetBorderBackgroundColor(TAttribute<FSlateColor>::CreateLambda([Weak, bSelected, Accent]
 	{
 		const TSharedPtr<SButton> Pinned = Weak.Pin();
-		const bool bHover = Pinned.IsValid() && Pinned->IsHovered();
+		const bool bHover = Pinned.IsValid() && (Pinned->IsHovered() || Pinned->HasKeyboardFocus());
 		return FSlateColor(bSelected ? ScctHudStyle::Fade(Accent, bHover ? 0.34f : 0.26f) : FLinearColor(1.0f, 1.0f, 1.0f, bHover ? 0.12f : 0.05f));
 	}));
 	return Button;

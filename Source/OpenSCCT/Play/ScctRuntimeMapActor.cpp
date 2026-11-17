@@ -357,7 +357,12 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 				{
 					// The engine's mesh factory names each slot after the glTF material index.
 					const FName Slot = SlotNames[Group];
+					// The imported slot name exists only in editor builds (FStaticMaterial's WITH_EDITORONLY_DATA argument).
+#if WITH_EDITORONLY_DATA
 					Mesh->GetStaticMaterials().Add(FStaticMaterial(MaterialFor(FCString::Atoi(*Slot.ToString())), Slot, Slot));
+#else
+					Mesh->GetStaticMaterials().Add(FStaticMaterial(MaterialFor(FCString::Atoi(*Slot.ToString())), Slot));
+#endif
 				}
 				UStaticMesh::FBuildMeshDescriptionsParams Params;
 				Params.bFastBuild = true;

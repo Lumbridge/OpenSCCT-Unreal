@@ -33,6 +33,10 @@ param(
     # Run the audio engine without a sound device (the engine's non-realtime renderer, -DeterministicAudio)
     # instead of no audio engine at all (-nosound): voices really play, into nothing. Never audible.
     [switch] $NullAudio,
+    # Run the audio engine on the machine's real output devices (neither -nosound nor -DeterministicAudio): the device
+    # list and the spatialization plugin are only there then. An off-screen window has no focus, so the engine plays it
+    # at its unfocused volume.
+    [switch] $DeviceAudio,
     # Draw the map in the runtime level from its render files even when it has an imported level (a map without one
     # always is: Source/OpenSCCT/Play/ScctRuntimeMapActor.h). Point -Extra "-ScctMaps=<dir>" at maps outside the content.
     [switch] $Runtime,
@@ -65,7 +69,7 @@ $arguments = @(
     "`"$project\OpenSCCTUnreal.uproject`"",
     "`"$levelPath$Options`"",
     '-game', '-RenderOffscreen', '-ResX=1920', '-ResY=1080', '-ForceRes', '-unattended', '-nosplash',
-    $(if ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
+    $(if ($DeviceAudio) { '' } elseif ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
     (Format-Switch 'ScctContent' $contentDir),
     "-ScctShots=$Shots",
     "-ScctShotEvery=$Every",

@@ -148,6 +148,7 @@ namespace EScctWorldMarkerKind
 	constexpr int32 VolumetricSensor = 8; // SVolumetricSensor. State: bLightState (0 broken, 1 off, 2 green, 3 red)
 	constexpr int32 LaserTrigger = 9;     // SLaserTrigger. State: 0 working, 1 beam switched off, 2 broken
 	constexpr int32 Disk = 10;            // SDisk, a Disk Hunt dog tag (hidden in the other modes)
+	constexpr int32 CamNetwork = 11;      // SCamNetwork, a camera of the merc ring. State: 1 while shocked out (flag Disabled); TimeLeft the seconds left
 }
 
 namespace EScctWorldMarkerFlags
@@ -159,6 +160,7 @@ namespace EScctWorldMarkerFlags
 	constexpr int32 Hidden = 16;     // the actor is hidden (not part of this game mode, or not shown yet)
 	constexpr int32 Secondary = 32;  // a secondary objective
 	constexpr int32 Gone = 64;       // not on this client now (out of network relevancy): the values are the last known
+	constexpr int32 Disabled = 128;  // out of order (a network camera shot with the sticky shocker)
 }
 
 /** One gameplay object a client marks in the world, as of the last tick. */
@@ -182,7 +184,7 @@ namespace EScctWorldEventKind
 	/** A material slot changed (cracked screen, warning lamp). A: the slot, B: the skin's name id (0: back to the mesh's own material).
 	 *  Skins an actor already wears when it is first seen raise no event: read them with GetActorSkins. */
 	constexpr int32 SkinChanged = 2;
-	/** A glass pane (SVitre) broke. A: 1 when X,Y,Z is where it was hit and DX,DY,DZ the unit direction of the hit; 0 when only the pane's location is known. */
+	/** A glass pane (SVitre) broke. A: 1 when X,Y,Z is where it was hit and DX,DY,DZ the unit direction of the hit; 0 when only the pane's location is known. B: the pane's impact serial when A is 1 (it seeds the shards' shape), else 0. */
 	constexpr int32 GlassBroken = 3;
 	/** A switched light went on or off. A: 1 on / 0 off, B: the light type now. */
 	constexpr int32 LightSwitched = 4;

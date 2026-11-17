@@ -20,7 +20,8 @@ namespace OpenScct.UnrealBridge.Events;
 /// <list type="bullet">
 /// <item>Effect actors (EffectViews.OnTick, game/Scripts/Fx/EffectViews.cs): every actor spawned during play whose
 /// class is an effect class of shared/fx/effects.json: Emitter actors (smoke, chaff, explosions, gas, sparks of
-/// devices), thrown and placed gadgets drawn as static meshes, beams, sprinkler puddles, flash lights.</item>
+/// devices), thrown and placed gadgets drawn as static meshes, beams, sprinkler puddles, flash lights; and the PS2
+/// modem's destruction preset (Ps2ModemEffect), which that table cannot name.</item>
 /// <item>Shots (CombatFxView, game/Scripts/Fx/CombatFxView.cs): the muzzle flashes (the SMuzzleSticky and
 /// ClientFireMuzzle notifies, and the local merc gun's SpawnSFX count) and the tracers (SFireTrace actors).</item>
 /// <item>Impact marks: the level's ImpactTable, read live.</item>
@@ -44,12 +45,23 @@ internal sealed class EffectTracker
         ("SBase.SBackPack_Att", BridgeEffectKind.Gadget),
     ];
 
+    /// <summary>
+    /// Effect classes of OpenSCCT's own that shared/fx/effects.json cannot list, found by their runtime type: the PS2
+    /// modem's destruction preset is a plain Emitter to the class table (it has no UnrealScript class of its own), so
+    /// it would be taken for every other Emitter. EffectViews draws it by type too (the Ps2ModemEffect branch).
+    /// </summary>
+    private static readonly (Type Type, string Class, int Kind)[] s_runtimeClasses =
+    [
+        (typeof(Ps2ModemEffect), "SBase.Ps2ModemEffect", BridgeEffectKind.Emitter),
+    ];
+
     private static readonly Name SpawnSFX = new("SpawnSFX");
 
     private readonly PlaySession _session;
     private readonly DrainQueue<BridgeShot> _shots;
     private readonly Dictionary<string, int> _kinds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<UcClassInfo, ClassEntry?> _classes = [];
+    private readonly Dictionary<Type, ClassEntry> _runtimeEntries = [];
     private readonly Dictionary<Actor, Tracked> _tracked = new(ReferenceEqualityComparer.Instance);
     private readonly List<Tracked> _order = [];
     private readonly HashSet<Actor> _tracers = new(ReferenceEqualityComparer.Instance);
@@ -187,7 +199,8 @@ internal sealed class EffectTracker
             };
             _tracked[a] = t;
             _order.Add(t);
-            Seen[a.GetUcClass().Name] = Seen.GetValueOrDefault(a.GetUcClass().Name) + 1;
+            string seen = cls.Name ?? a.GetUcClass().Name;
+            Seen[seen] = Seen.GetValueOrDefault(seen) + 1;
         }
     }
 
@@ -370,6 +383,15 @@ internal sealed class EffectTracker
 
     private ClassEntry? ClassOf(Actor a)
     {
+        foreach ((Type type, string cls, int kind) in s_runtimeClasses)
+        {
+            if (type.IsInstanceOfType(a))
+            {
+                return _runtimeEntries.TryGetValue(type, out ClassEntry? known) ? known
+                    : _runtimeEntries[type] = new ClassEntry(EventNames.Id(cls), kind, cls[(cls.LastIndexOf('.') + 1)..]);
+            }
+        }
+
         UcClassInfo info = a.GetUcClass();
         if (!_classes.TryGetValue(info, out ClassEntry? entry))
         {
@@ -613,7 +635,8 @@ internal sealed class EffectTracker
         return count;
     }
 
-    private sealed record ClassEntry(int ClassId, int Kind);
+    /// <param name="Name">The name it is counted under in <see cref="Seen"/>; null for the actor's own class name.</param>
+    private sealed record ClassEntry(int ClassId, int Kind, string? Name = null);
 
     private sealed class MuzzleCursor
     {

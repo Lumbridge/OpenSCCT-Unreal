@@ -1,6 +1,7 @@
 #include "Menu/ScctFrontEndGameMode.h"
 
 #include "Blueprint/UserWidget.h"
+#include "Demo/ScctDemoPlayback.h"
 #include "Engine/LevelStreamingDynamic.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -167,6 +168,12 @@ void AScctFrontEndGameMode::ShowMenu()
 	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 	Player->SetInputMode(Mode);
 	Player->SetShowMouseCursor(true);
+
+	// Back from watching a demo: the Demos page again, where the demo was picked.
+	if (UScctDemoPlayback* Demo = UScctDemoPlayback::Get(this); Demo != nullptr && Demo->TakeReturnToDemos())
+	{
+		Menu->ShowPageNamed(TEXT("demos"));
+	}
 
 	FString Page;
 	if (FParse::Value(FCommandLine::Get(), TEXT("ScctMenuPage="), Page) || FParse::Value(FCommandLine::Get(), TEXT("ScctOpenPage="), Page))

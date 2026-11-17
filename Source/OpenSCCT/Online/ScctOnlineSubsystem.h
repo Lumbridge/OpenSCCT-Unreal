@@ -495,6 +495,13 @@ private:
 	/** Seconds the visit has wanted another level; the travel starts after a moment so the screen can say so. */
 	float TravelDelay = 0.0f;
 
+	/**
+	 * A round's map with no level in the game: its cooked pack is fetched (Online/ScctMapPacks) before the visit
+	 * gives up. The map being fetched, and why it could not be (the visit then ends with that reason).
+	 */
+	FString LevelFetchMap;
+	FString LevelFetchError;
+
 	/** ReportLoaded was sent for this bridge session id. */
 	int32 ReportedSessionId = 0;
 

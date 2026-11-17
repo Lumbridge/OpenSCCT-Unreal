@@ -8,6 +8,7 @@
 #include "Menu/SScctSettingsPanel.h"
 #include "Menu/ScctMenuDriver.h"
 #include "Menu/ScctMenuKit.h"
+#include "Menu/ScctMenuNav.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
@@ -31,16 +32,15 @@ namespace
 	/** GUI.SSMenu_LANMainPage s_Init: Sleep(0.5), then keys count (InGameMenuK.KeyIgnoreSeconds). */
 	constexpr float MatchMenuKeyHold = 0.5f;
 
+	/** Escape and the controller's B, Back and Start: Start closes the menu it opened (Menu/ScctMenuNav.h). */
 	bool MatchMenuIsBackKey(const FKey& Key)
 	{
-		return Key == EKeys::Escape || Key == EKeys::Gamepad_FaceButton_Right;
+		return ScctMenuNav::IsBackKey(Key);
 	}
 
 	int32 MatchMenuTabDirection(const FKey& Key)
 	{
-		if (Key == EKeys::Q || Key == EKeys::PageUp || Key == EKeys::Gamepad_LeftShoulder) { return -1; }
-		if (Key == EKeys::E || Key == EKeys::PageDown || Key == EKeys::Gamepad_RightShoulder) { return 1; }
-		return 0;
+		return ScctMenuNav::TabDirection(Key);
 	}
 
 	int32 MatchMenuModeIndex(int32 ModeId)
@@ -79,6 +79,9 @@ void SScctMatchMenu::Construct(const FArguments& InArgs)
 
 	SAssignNew(Dialogs, SScctDialogLayer);
 	Dialogs->FocusAfter = SharedThis(this);
+	// The controller's notices show over the match; the question to turn it on waits until the menu is open.
+	const TWeakPtr<SScctMatchMenu> WeakMenu = SharedThis(this);
+	ScctMenuNav::RegisterLayer(Dialogs.ToSharedRef(), [WeakMenu] { const TSharedPtr<SScctMatchMenu> Pinned = WeakMenu.Pin(); return Pinned.IsValid() && Pinned->bOpen; });
 	Host.Online = Online;
 	Host.Dialogs = Dialogs;
 	Host.bInMatch = true;
@@ -272,6 +275,11 @@ void SScctMatchMenu::FocusDefault()
 		return;
 	}
 	TSharedPtr<SWidget> Focus = View == EView::Settings && Settings.IsValid() ? Settings->GetDefaultFocus() : DefaultFocus.Pin();
+	if (!Focus.IsValid())
+	{
+		// A view that names no control to start on: its first one, so a controller has somewhere to be.
+		Focus = ScctMenuNav::FindFirstFocusable(Body);
+	}
 	FSlateApplication::Get().SetKeyboardFocus(Focus.IsValid() ? Focus : TSharedPtr<SWidget>(SharedThis(this)), EFocusCause::SetDirectly);
 }
 

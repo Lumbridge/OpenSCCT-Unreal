@@ -61,6 +61,9 @@ param(
     [int] $ResY = 720,
     # Anything else for the game's command line, as written.
     [string] $Extra = '',
+    # Run the audio engine without a sound device (-DeterministicAudio) instead of no audio engine (-nosound), so
+    # voices really play (voice chat's playback, the submixes), into nothing.
+    [switch] $NullAudio,
     [string] $Engine = 'F:\UE_5.8'
 )
 
@@ -120,7 +123,8 @@ try {
 
     $arguments = @(
         "`"$project\OpenSCCTUnreal.uproject`"",
-        '-game', '-RenderOffscreen', "-ResX=$ResX", "-ResY=$ResY", '-ForceRes', '-unattended', '-nosplash', '-nosound',
+        '-game', '-RenderOffscreen', "-ResX=$ResX", "-ResY=$ResY", '-ForceRes', '-unattended', '-nosplash',
+        $(if ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
         "-ScctContent=`"$("$Content".Replace('\', '/'))`"",
         $(if ($MenuDo) { "-ScctMenuDo=`"$MenuDo`"" } else { "-ScctJoin=127.0.0.1:$Port" }), '-ScctName=UnrealCheck',
         $(if (-not $StayInLobby -and -not $MenuDo) { '-ScctAutoReady' }),

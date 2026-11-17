@@ -305,9 +305,25 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Controller")
 	float PadLookScale = 1.0f;
 
+	/**
+	 * The controller vibrates with the match (Reloaded's controller_rumble_enabled, off on a first run). Kept in
+	 * controls.json's "controller" group with the rest; it crosses through the pad table (Runtime/ScctPadApi.h), not
+	 * the controls struct. Played by Play/ScctRumble.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Controller")
+	bool bPadRumble = false;
+
+	/** The vibration's strength, 0 to 1. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Controller")
+	float PadRumbleStrength = 1.0f;
+
 private:
 	void ToBridge(FScctControlSettings& Out) const;
 	void FromBridge(const FScctControlSettings& In);
+
+	/** The vibration settings, from and to the pad table (the controls struct does not carry them). */
+	void ReadPadExtras();
+	void WritePadExtras() const;
 
 	/** Records the controls table's last error (or Fallback when it has none) and returns false. */
 	bool FailFromBridge(const TCHAR* Fallback);

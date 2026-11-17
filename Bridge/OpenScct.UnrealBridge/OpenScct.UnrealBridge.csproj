@@ -41,5 +41,12 @@
          pages, both Godot-free models of the Godot pages. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\RoundScoreboardModel.cs" Link="Linked\UI\RoundScoreboardModel.cs" />
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\BriefingPages.cs" Link="Linked\UI\BriefingPages.cs" />
+    <!-- Demo playback's chase camera (Demo/DemoPlayback.cs), Godot-free like the session. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\Play\Demo\DemoChaseCamera.cs" Link="Linked\Demo\DemoChaseCamera.cs" />
+  </ItemGroup>
+  <!-- The TestBox fixture (OpenSCCT's synthetic test map, no original content) goes to maps/ next to the bridge, a map
+       root the bridge always searches, so the client's checks can host it whatever the content folder holds. -->
+  <ItemGroup>
+    <None Include="$(OpenScctRoot)fixtures\testbox\**\*" Link="maps\TestBox\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

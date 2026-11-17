@@ -171,9 +171,9 @@ void SScctMapPicker::Refill()
 			// No picture: the map's code where it would be.
 			: StaticCastSharedRef<SWidget>(SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center)[ Ui::Label(Map.Id, ScctHudStyle::TextFaint()) ]);
 
-		const TSharedRef<SButton> Tile = SNew(SButton)
+		const TSharedRef<SButton> Tile = SNew(SScctRingButton)
 			.ButtonStyle(&TileStyle())
-			.IsFocusable(false)
+			.IsFocusable(true)
 			.ToolTipText(Ui::ToText(FString::Printf(TEXT("%s (%s)"), *Map.Name, *Map.Id)))
 			.OnClicked(FOnClicked::CreateLambda([this, Id] { OnPicked.ExecuteIfBound(Id); return FReply::Handled(); }))
 			[
@@ -200,7 +200,7 @@ void SScctMapPicker::Refill()
 		Tile->SetBorderBackgroundColor(TAttribute<FSlateColor>::CreateLambda([this, Weak, Id]
 		{
 			const TSharedPtr<SButton> Pinned = Weak.Pin();
-			const bool bHovered = Pinned.IsValid() && Pinned->IsHovered();
+			const bool bHovered = Pinned.IsValid() && (Pinned->IsHovered() || Pinned->HasKeyboardFocus());
 			if (Selected.Get().Equals(Id, ESearchCase::IgnoreCase))
 			{
 				return FSlateColor(ScctHudStyle::Fade(Ui::Accent(), bHovered ? 0.75f : 0.6f));
