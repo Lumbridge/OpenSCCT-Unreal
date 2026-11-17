@@ -100,6 +100,9 @@ public:
 	/** The test's own figures for an area's summary line (the pause menu's and the keys'), in place of the inspector's. */
 	void SetAreaNote(EScctInspectArea Area, const FString& Text) { AreaNotes[static_cast<int32>(Area)] = Text; }
 
+	/** Server corrections the client has applied to the local player so far (as of this frame). */
+	int64 GetCorrectionsApplied() const { return CorrectionsApplied; }
+
 	/** Voices the audio subsystem has started since the match began. */
 	int32 GetVoicesStarted() const;
 

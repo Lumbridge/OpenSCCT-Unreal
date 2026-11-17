@@ -221,7 +221,10 @@ namespace ScctPlayInspectTestLocal
 			bAirborne = false;
 			bTapReleased = Info.Tap == nullptr;
 			StepStartLocation = Local != nullptr ? FVector(Local->X, Local->Y, Local->Z) : FVector::ZeroVector;
+			StepLast = StepStartLocation;
+			StepPath = 0.0f;
 			StepVoices = Inspector.GetVoicesStarted();
+			StepCorrections = Inspector.GetCorrectionsApplied();
 			StepAmmo = GetAmmo(Context);
 			bMenuSeen = bMenuBlocked = bMenuClosed = bMenuHeld = false;
 			UE_LOG(LogScctTest, Log, TEXT("%s: step '%s' (%.1f s) at %.1f s"), *GetName(), Info.Name, Info.Seconds, Inspector.GetSeconds());
@@ -295,6 +298,12 @@ namespace ScctPlayInspectTestLocal
 			{
 				bAirborne = true;
 			}
+			if (Local != nullptr)
+			{
+				const FVector At(Local->X, Local->Y, Local->Z);
+				StepPath += static_cast<float>(FVector::Dist2D(At, StepLast));
+				StepLast = At;
+			}
 			AScctPlayerController* Player = Context.GetPlayer();
 			if (Player != nullptr && (Info.LookX != 0.0f || Info.LookY != 0.0f))
 			{
@@ -349,10 +358,11 @@ namespace ScctPlayInspectTestLocal
 				bTapReleased = true;
 			}
 			const FVector Now = Local != nullptr ? FVector(Local->X, Local->Y, Local->Z) : StepStartLocation;
-			const float Moved = static_cast<float>(FVector::Dist2D(Now, StepStartLocation));
+			// The path walked, not the distance from the start: a walk that turns comes back towards where it began.
+			const float Moved = StepPath;
 			const int32 Voices = Inspector.GetVoicesStarted() - StepVoices;
-			StepLog.Add(FString::Printf(TEXT("%s: moved %.0f uu, %s, airborne %d, voices +%d"), Info.Name, Moved,
-				Local == nullptr ? TEXT("no pawn") : (Local->Flags & EScctInspectPawnFlags::Crouched) != 0 ? TEXT("crouched") : TEXT("standing"), bAirborne ? 1 : 0, Voices));
+			StepLog.Add(FString::Printf(TEXT("%s: walked %.0f uu, %s, airborne %d, voices +%d, corrections +%lld"), Info.Name, Moved,
+				Local == nullptr ? TEXT("no pawn") : (Local->Flags & EScctInspectPawnFlags::Crouched) != 0 ? TEXT("crouched") : TEXT("standing"), bAirborne ? 1 : 0, Voices, Inspector.GetCorrectionsApplied() - StepCorrections));
 			if (Info.Hold1 != nullptr && Moved > InspectMinWalk)
 			{
 				MovingStepVoices += Voices;
@@ -557,7 +567,10 @@ namespace ScctPlayInspectTestLocal
 		bool bTapReleased = true;
 		bool bAirborne = false;
 		FVector StepStartLocation = FVector::ZeroVector;
+		FVector StepLast = FVector::ZeroVector;
+		float StepPath = 0.0f;
 		int32 StepVoices = 0;
+		int64 StepCorrections = 0;
 		int32 StepAmmo = -1;
 		TSet<FString> Held;
 		TArray<FString> StepLog;
