@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "OpenSCCT.h"
+#include "Runtime/ScctAudioCheckApi.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctEquipmentApi.h"
 #include "Runtime/ScctEventsApi.h"
@@ -28,6 +29,7 @@ struct TScctFeatureInfo;
 		static constexpr int32 Version = VersionConstant; \
 	}
 
+SCCT_FEATURE_TABLE(FScctAudioCheckApi, "AudioCheckExports", ScctAudioCheckApiVersion);
 SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
 SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);

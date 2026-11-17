@@ -122,6 +122,17 @@ internal sealed class SoundResolver
     }
 
     /// <summary>
+    /// Starts <paramref name="song"/> as the music, as a PlayMusic event would (a check's switch, not the game).
+    /// Returns false for a sound the library does not know or that resolves to no file.
+    /// </summary>
+    public bool PlayMusicForCheck(long tick, string song, float fadeIn)
+    {
+        long before = Silent + UnknownCount;
+        PlayMusic(tick, song, fadeIn);
+        return Silent + UnknownCount == before;
+    }
+
+    /// <summary>
     /// Handles one sound event presented with <paramref name="tick"/>. Returns false for a PlaySound that was
     /// dropped (a duplicate copy, or out of reach).
     /// </summary>

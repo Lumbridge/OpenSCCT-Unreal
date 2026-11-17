@@ -11,7 +11,9 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "Engine/GameInstance.h"
 #include "OpenSCCT.h"
+#include "Play/ScctAudioMix.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Play/ScctSoundWave.h"
@@ -20,6 +22,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Sound/ReverbEffect.h"
 #include "Sound/SoundAttenuation.h"
+#include "Sound/SoundClass.h"
 
 namespace
 {
@@ -131,7 +134,7 @@ void UScctAudioSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	ZoneEffects.Reset();
 	ListenerZone = INDEX_NONE;
 	ActiveZone = -2;
-	NumStarted = NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = PeakVoices = 0;
+	NumStarted = NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
 }
 
 void UScctAudioSubsystem::HandleMatchStarted()
@@ -141,6 +144,13 @@ void UScctAudioSubsystem::HandleMatchStarted()
 	ContentRoot = FOpenSCCTModule::FindContentRoot();
 	bHasDevice = GetWorld()->GetAudioDeviceRaw() != nullptr;
 	SummaryTimer = SummaryEvery;
+	const UGameInstance* GameInstance = GetWorld()->GetGameInstance();
+	Mix = GameInstance != nullptr ? GameInstance->GetSubsystem<UScctAudioMix>() : nullptr;
+	if (Mix != nullptr)
+	{
+		// The world's audio device may be newer than the game: it gets the categories and the gains now.
+		Mix->EnsureApplied();
+	}
 	if (Events == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Error, TEXT("Audio: no sound this match, the bridge's events are missing: %s"), *Error);
@@ -149,6 +159,18 @@ void UScctAudioSubsystem::HandleMatchStarted()
 
 	// Harmless when the bridge already started the feature with the session.
 	Events->Begin();
+
+	FString Song;
+	if (FParse::Value(FCommandLine::Get(), TEXT("ScctAudioMusic="), Song, false))
+	{
+		FString At;
+		CheckSongIn = 3.0f;
+		if (Song.Split(TEXT("@"), &Song, &At))
+		{
+			CheckSongIn = FMath::Max(FCString::Atof(*At), 0.0f);
+		}
+		CheckSong = Song;
+	}
 	LoadZones(Session->GetSessionInfo().Map);
 	const FAudioDevice* Device = GetWorld()->GetAudioDeviceRaw();
 	UE_LOG(LogOpenSCCT, Log, TEXT("Audio: ready for %s (%s, %d zones with reverb, content %s)"), Session->GetSessionInfo().Map,
@@ -175,6 +197,18 @@ void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
 	const FScctBridgeView& View = Session->GetView();
 	bListenerValid = View.Valid != 0;
 	Listener = FVector(View.X, View.Y, View.Z);
+
+	if (CheckSongIn >= 0.0f)
+	{
+		CheckSongIn -= DeltaSeconds;
+		if (CheckSongIn < 0.0f)
+		{
+			const FScctAudioCheckApi* Check = ScctFeature<FScctAudioCheckApi>();
+			const bool bPlays = Check != nullptr && Check->PlayMusic(*CheckSong, 0.0f) != 0;
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctAudio: -ScctAudioMusic: '%s' %s"), *CheckSong,
+				bPlays ? TEXT("started as the music") : Check == nullptr ? TEXT("not started: the bridge has no audio check table") : TEXT("not started: unknown sound or no file"));
+		}
+	}
 
 	DrainSounds();
 	UpdateAmbient();
@@ -275,6 +309,16 @@ void UScctAudioSubsystem::Play(const FScctSound& Record)
 		return;
 	}
 
+	const bool bObjective = (Record.Flags & EScctSoundFlags::Objective) != 0;
+	if (bObjective && Mix != nullptr && !Mix->AreObjectiveSoundsOn())
+	{
+		// The original's profile switch bObjectiveSounds, which Godot turns off at objective volume 0: the jingle is
+		// dropped, not played silently.
+		++NumObjectiveSkipped;
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctAudio: objective jingle '%s' skipped (objective volume 0)"), *GetName(Record.SoundId));
+		return;
+	}
+
 	const bool bAtListener = (Record.Flags & EScctSoundFlags::AtListener) != 0;
 	const bool bPositional = !bAtListener && (Record.Flags & EScctSoundFlags::Positional) != 0;
 	const float MinDistance = Record.MinDistance > 0.0f ? Record.MinDistance : ZeroRadiusMinDistance;
@@ -318,6 +362,7 @@ void UScctAudioSubsystem::Play(const FScctSound& Record)
 	Voice.bAtListener = bAtListener;
 	Voice.bLoop = (Record.Flags & EScctSoundFlags::Loop) != 0;
 	Voice.bNoOverride = (Record.Flags & EScctSoundFlags::NoOverride) != 0;
+	Voice.Category = static_cast<uint8>(bObjective ? EScctAudioCategory::Objective : EScctAudioCategory::World);
 	// A timed loop of a sequence ends by the clock; any other loop runs until it is stopped.
 	Voice.LifeLeft = Record.PlaySeconds > 0.0f ? Record.PlaySeconds : -1.0f;
 	Voices.Add(Voice);
@@ -439,6 +484,7 @@ void UScctAudioSubsystem::PlayMusic(const FScctSound& Record)
 	Voice.FadeIn = Record.FadeSeconds;
 	Voice.bLoop = (Record.Flags & EScctSoundFlags::Loop) != 0;
 	Voice.bMusic = true;
+	Voice.Category = static_cast<uint8>(EScctAudioCategory::Music);
 	Voice.LifeLeft = -1.0f;
 	Voices.Add(Voice);
 
@@ -714,6 +760,8 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 			Component->bAllowSpatialization = Voice.bPositional;
 			Component->AttenuationSettings = Voice.bPositional ? FindOrCreateAttenuation(Voice.MinDistance, Voice.Radius) : nullptr;
 			Component->bIsMusic = Voice.bMusic;
+			// The category's class routes the voice to its submix, whose volume is the player's slider.
+			Component->SoundClassOverride = Mix != nullptr ? Mix->GetClass(static_cast<EScctAudioCategory>(Voice.Category)) : nullptr;
 			Component->SetVolumeMultiplier(Voice.Volume);
 			Component->SetPitchMultiplier(Voice.Pitch);
 			Component->SetWorldLocation(Voice.Location);
@@ -732,6 +780,15 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 	if (bLogVoices)
 	{
 		LogVoice(TEXT("play"), Voice, *FString::Printf(TEXT(" %d Hz %d ch %.2f s"), Pcm->SampleRate, Pcm->Channels, Pcm->Seconds()));
+	}
+	if (Voice.bMusic || Voice.Category == static_cast<uint8>(EScctAudioCategory::Objective))
+	{
+		// Rare and the ones a player turns down most: said in the log with the class and the gain they play at.
+		const EScctAudioCategory Category = static_cast<EScctAudioCategory>(Voice.Category);
+		const UAudioComponent* Component = Voice.Component.Get();
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctAudio: %s '%s' starts in class %s at category gain %.2f x master %.2f"), Voice.bMusic ? TEXT("music") : TEXT("objective jingle"),
+			*GetName(Voice.FileId), Component != nullptr && Component->SoundClassOverride != nullptr ? *Component->SoundClassOverride->GetName() : UScctAudioMix::CategoryName(Category),
+			Mix != nullptr ? Mix->GetGain(Category) : 1.0f, Mix != nullptr ? Mix->GetMasterGain() : 1.0f);
 	}
 	return true;
 }
@@ -1086,8 +1143,8 @@ void UScctAudioSubsystem::LogSummary() const
 		Ambient += Voice.AmbientId != 0 ? 1 : 0;
 		Sounding += Voice.Component.IsValid() ? 1 : 0;
 	}
-	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: %d voices now (%d playing, %d waiting, %d ambient, peak %d), %d Unreal components in use of %d made; since the match began %d started, %d stopped, %d out of reach, %d refused by the slot rule, %d replaced; files: %d decoded (%.1f MB held), %d failed to decode, %d plays lost to them; listener at (%.0f, %.0f, %.0f)"),
-		Voices.Num(), Playing, Waiting, Ambient, PeakVoices, Sounding, Components.Num(), NumStarted, NumStopped, NumOutOfReach, NumRefused, NumStolen,
+	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: %d voices now (%d playing, %d waiting, %d ambient, peak %d), %d Unreal components in use of %d made; since the match began %d started, %d stopped, %d out of reach, %d refused by the slot rule, %d replaced, %d objective jingles skipped; files: %d decoded (%.1f MB held), %d failed to decode, %d plays lost to them; listener at (%.0f, %.0f, %.0f)"),
+		Voices.Num(), Playing, Waiting, Ambient, PeakVoices, Sounding, Components.Num(), NumStarted, NumStopped, NumOutOfReach, NumRefused, NumStolen, NumObjectiveSkipped,
 		Cache.GetNumDecoded(), Cache.GetBytes() / (1024.0 * 1024.0), Cache.GetNumFailed(), NumFailedFiles, Listener.X, Listener.Y, Listener.Z);
 
 	// The engine's own listener must be where this subsystem takes it to be (the camera), or every 3D voice is
