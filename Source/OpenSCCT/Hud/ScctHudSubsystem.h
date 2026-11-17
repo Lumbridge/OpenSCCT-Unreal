@@ -30,6 +30,9 @@ class UScctHudWidget;
  *        PreviewCoop N shows coop icon N (1 offer a ladder, 2 climb on the mate, 3 offer a hoist, 4 be boosted up;
  *        0 takes it away) as if the game offered it. Die kills the local pawn on the local match's server (lives
  *        left as they are), e.g. to see the Merc Deathmatch respawn weapon pick.
+ *        Heart 1 selects the local spy's heart beat sensor; Weapon 1/0 holds or lets go of the weapon key (a spy
+ *        draws the Shocker with it, which starts the sensor's scan). RadarRotate 0/1 and RadarScale P (percent) set
+ *        the player's radar options for the run without saving them.
  *   -ScctHudTexture=Package.Name[,Package.Name...]
  *        loads those textures of the content as the session starts and logs their size ("ScctHudTextures: ...").
  *   -ScctHudLog=S
@@ -123,6 +126,15 @@ private:
 	int32 LastCoopIcon = 0;
 	FIntPoint LastRespawnTile = FIntPoint(-1, -1);
 	float RespawnKeyAge = -100.0f;
+
+	// The radar (ScctHudRadar.cpp): the player's radar options and the heart sensor into the model, the radar's log
+	// line, and the timed commands Heart and Weapon. ReadSnapshot reads the blips themselves.
+	void InitRadar();
+	void ReadRadar();
+	bool RunRadarCommand(const FString& Name, int32 Argument);
+	void LogRadar();
+	int32 LastHeartCone = 0;
+	bool bRadarTextureMissingLogged = false;
 
 	float GadgetKeysAge = 0.0f;
 	int32 LastGadgetView = 0;

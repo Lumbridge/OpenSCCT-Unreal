@@ -62,7 +62,17 @@ namespace ScctHudElements
 	/** Top centre: the clock, both teams, objectives done and the countdowns. */
 	void PaintRound(FScctHudPainter& Painter, const FScctHudModel& Model);
 
-	/** Top left: the mission's objectives and what is being hacked right now. */
+	/**
+	 * Top left: the radar (teammates, enemies and alarms around the player, Higher and Lower icons, arrows at the edge
+	 * for enemies and alarms out of range, the heart sensor's cone) and the place name above it, the name in every
+	 * mode. ScctHudElementsRadar.cpp.
+	 */
+	void PaintRadar(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/** The height the radar and its place name take at the top left; the objectives panel starts below it. */
+	float RadarReservedHeight(const FScctHudModel& Model);
+
+	/** Top left, under the radar: the mission's objectives and what is being hacked right now. */
 	void PaintObjectives(FScctHudPainter& Painter, const FScctHudModel& Model);
 
 	/** Top right: the kill feed. */

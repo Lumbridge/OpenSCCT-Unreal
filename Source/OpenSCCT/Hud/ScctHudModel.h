@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Runtime/ScctHudApi.h"
 #include "Runtime/ScctHudGadgetApi.h"
+#include "Runtime/ScctHudRadarApi.h"
 #include "Runtime/ScctHudTextureApi.h"
 
 /**
@@ -112,6 +113,16 @@ public:
 
 	/** Unattended look check only (-ScctHudCommands "PreviewCoop N"): shows coop icon N as if the game offered it; 0 off. */
 	int32 PreviewCoopIcon = 0;
+
+	/** The radar's blips (FScctHudBlip: teammates, enemies, alarms, as world locations), read with the snapshot. */
+	TArray<FScctHudBlip> Radar;
+
+	/** The heart beat sensor's cone and the frame of its clip (Cone 0 when it is not selected or the table is missing). */
+	FScctHudHeartSensor HeartSensor = {};
+
+	/** The player's radar options (Hud.RadarScale, Hud.RadarRotate in the settings registry), read with the snapshot. */
+	float RadarScale = 1.0f;
+	bool bRadarRotate = true;
 
 	/** The name of the Use key, which cycles the Merc Deathmatch respawn weapon (empty when unbound). */
 	FString RespawnUseKey;

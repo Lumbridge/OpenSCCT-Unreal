@@ -236,6 +236,22 @@ void FScctHudPainter::Image(const FBox2f& Box, const FSlateBrush& Brush, const F
 	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Drawn), &Part, ESlateDrawEffect::None, Final);
 }
 
+void FScctHudPainter::RotatedImage(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint, float Degrees)
+{
+	const FLinearColor Final = ScctHudStyle::Fade(Tint, Opacity);
+	if (Box.GetSize().GetMin() <= 0.0f || Final.A <= 0.002f || Brush.GetResourceObject() == nullptr)
+	{
+		return;
+	}
+
+	// Slate turns the element about its own centre when no point is given; its angle is in radians, clockwise on
+	// screen (Slate's y runs down).
+	FSlateBrush Part = Brush;
+	Part.SetUVRegion(UV);
+	FSlateDrawElement::MakeRotatedBox(Elements, ++Layer, BoxGeometry(Box), &Part, ESlateDrawEffect::None,
+		FMath::DegreesToRadians(Degrees), TOptional<FVector2f>(), FSlateDrawElement::RelativeToElement, Final);
+}
+
 void FScctHudPainter::Arc(const FVector2f& Centre, float Radius, float StartDegrees, float EndDegrees, const FLinearColor& Colour, float Thickness, float Glow)
 {
 	const float Sweep = EndDegrees - StartDegrees;

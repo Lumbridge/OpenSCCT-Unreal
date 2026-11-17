@@ -36,6 +36,7 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 	}
 	else
 	{
+		PaintRadar(Painter, *Model);
 		PaintObjectives(Painter, *Model);
 		PaintRound(Painter, *Model);
 		PaintFeed(Painter, *Model);

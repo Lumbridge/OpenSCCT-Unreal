@@ -53,6 +53,7 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	FParse::Value(FCommandLine::Get(), TEXT("ScctHudLog="), LogEvery);
 	InitGadgetViews();
 	InitIcons();
+	InitRadar();
 
 	// -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1"
 	FString Commands;
@@ -117,6 +118,8 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	LastCoopIcon = 0;
 	LastRespawnTile = FIntPoint(-1, -1);
 	RespawnKeyAge = -100.0f;
+	LastHeartCone = 0;
+	bRadarTextureMissingLogged = false;
 	if (NewSessionId != 0 && Api == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Error, TEXT("HUD: the bridge has no HUD table (its reason is in the log above); the match plays without a HUD and without goggles"));
@@ -244,7 +247,9 @@ void UScctHudSubsystem::ReadSnapshot()
 	ReadRows(M.Objectives, 48, Api->GetObjectives);
 	ReadRows(M.ObjectiveLines, 16, Api->GetObjectiveLines);
 	ReadRows(M.Scores, 32, Api->GetScoreboard);
+	ReadRows(M.Radar, 64, Api->GetRadar);
 	ReadGadgetViews();
+	ReadRadar();
 
 	M.LocalTeam = M.State.Side;
 	for (const FScctHudScoreRow& Row : M.Scores)
@@ -335,7 +340,7 @@ void UScctHudSubsystem::RunTimedCommands()
 		{
 			Api->SetOption(EScctHudOption::SwitchEnhancedReality, 0);
 		}
-		else if (RunIconCommand(Command.Name, Command.Argument))
+		else if (RunIconCommand(Command.Name, Command.Argument) || RunRadarCommand(Command.Name, Command.Argument))
 		{
 		}
 		else if (AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController()))
@@ -381,6 +386,7 @@ void UScctHudSubsystem::LogSnapshot(float DeltaSeconds)
 		M.bHasRound ? 1 : 0, R.GameMode, R.RemainingSeconds, R.TeamLives[0], R.TeamLives[1], R.TeamScore[0], R.TeamScore[1], R.ObjectivesLeft, R.NumObjectives,
 		M.Scores.Num(), M.ObjectiveLines.Num(), M.Markers.Num(), M.Feed.Num(), M.Headlines.Num(), M.Log.Num(),
 		S.DamageCount, *M.Text(R.WatchedNameId), R.RespawnIn, R.NoRespawn);
+	LogRadar();
 
 	// The scoreboard's rows while it is up (and once near the start), for the same check.
 	constexpr float FirstRows = 2.0f;

@@ -42,6 +42,13 @@ if (args.Length > 5 && args[5].Equals("icons", StringComparison.OrdinalIgnoreCas
     return IconsRun(content, map, mode, merc, seconds);
 }
 
+Console.WriteLine($"sizes: HudHeartSensorState {Unsafe.SizeOf<HudHeartSensorState>()}, HudRadarApi {Unsafe.SizeOf<HudRadarApi>()}");
+
+if (args.Length > 5 && args[5].Equals("radar", StringComparison.OrdinalIgnoreCase))
+{
+    return RadarRun(content, map, mode, merc, seconds);
+}
+
 BridgeSession.Configure(content);
 var load = Stopwatch.StartNew();
 using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
@@ -614,6 +621,86 @@ static unsafe int IconsRun(string content, string map, string mode, bool merc, d
         Thread.Sleep(4);
     }
 
+    return 0;
+}
+
+// The radar and the heart sensor: the blips by kind each second, and for a spy the sensor selected at 2 s, the weapon
+// drawn (the FireMode button held) from 3 s, the cone, its clip frame and the scan pings and heartbeats it raised,
+// checked against the sound records the events feature resolved from them.
+static unsafe int RadarRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+    HudFeature hud = HudFeature.Of(session);
+    OpenScct.UnrealBridge.Events.EventsFeature events = OpenScct.UnrealBridge.Events.EventsFeature.Of(session);
+    HudHeartSensor sensor = HudHeartSensor.Of(session);
+    hud.SetViewport(1920, 1080);
+    var input = default(BridgeInput);
+    var blips = new HudBlip[64];
+    var sounds = new BridgeSound[256];
+    var run = Stopwatch.StartNew();
+    bool selected = false;
+    double nextReport = 1;
+    int pings = 0, beats = 0, maxCone = 0;
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        const int FireMode = 11;
+        input.Buttons[FireMode] = (byte)(!merc && t is > 3 and < 3.7 ? 1 : 0);
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        if (!merc && !selected && t > 2)
+        {
+            selected = true;
+            Console.WriteLine($"t={t:F1} SelectHeartSensor -> {HudRadarExports.Select(session.Session.LocalController)}");
+        }
+
+        int n;
+        while ((n = events.DrainSounds(sounds)) > 0)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                string name = OpenScct.UnrealBridge.Events.EventNames.Text(sounds[i].SoundId);
+                pings += name.EndsWith("echo_indic1", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+                beats += name.EndsWith("Heart_Beat", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            }
+        }
+
+        hud.GetState(out HudState s);
+        HudHeartSensorState h = HudRadarExports.Read(sensor);
+        maxCone = Math.Max(maxCone, h.Cone);
+        if (t >= nextReport)
+        {
+            nextReport += 1;
+            int count = hud.Frame.Radar.CopyTo(blips);
+            int[] kinds = new int[4];
+            for (int i = 0; i < count; i++)
+            {
+                kinds[Math.Clamp(blips[i].Kind, 0, 3)]++;
+            }
+
+            string far = string.Join(" ", blips.Take(count).Select(b =>
+                $"k{b.Kind}:{MathF.Sqrt((b.X - s.X) * (b.X - s.X) + (b.Y - s.Y) * (b.Y - s.Y)) / 44f:F0}/{(b.Z - s.Z) / 44f:F0}"));
+            Console.WriteLine($"t={t:F1} side {s.Side} yaw {s.Yaw:F0} location '{hud.Texts.Text(s.LocationNameId)}' | {count} blips: {kinds[0]} teammates, {kinds[1]} enemies, " +
+                $"{kinds[2]} alarms, {kinds[3]} gpo [radar units dist/dz {far}] | HeartCone {s.HeartCone} sensor cone {h.Cone} frame {h.Frame:F1}/{h.LoopFrames} " +
+                $"pings {h.CheckSounds} beats {h.DetectedSounds} raised {h.SoundsRaised} resolved echo_indic1 {pings} Heart_Beat {beats}");
+        }
+
+        Thread.Sleep(4);
+    }
+
+    Console.WriteLine($"radar summary: highest cone {maxCone}, scan pings asked {sensor.CheckSounds}, heartbeats asked {sensor.DetectedSounds}, raised {sensor.SoundsRaised}, " +
+        $"sound records resolved: echo_indic1 {pings}, Heart_Beat {beats}");
     return 0;
 }
 
