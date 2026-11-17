@@ -6,6 +6,7 @@
 #include "Runtime/ScctAudioViewApi.h"
 #include "Runtime/ScctEventsApi.h"
 #include "Runtime/ScctReverbRoomApi.h"
+#include "Runtime/ScctSequenceAudioApi.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctAudioSubsystem.generated.h"
 
@@ -65,7 +66,16 @@ class USubmixEffectReverbPreset;
  *                          in turn, -ScctAudioListenerEvery=S seconds each (default 8), from the match's start
  *   -ScctAudioRooms=0|log  0: no source-room or adaptive reverb (one listener reverb, as before); log: log every 3D
  *                          voice's room routing once a second (the -ScctAudioProbe emitters always are)
+ *   -ScctSequenceAudioTrigger=Tag[@S]  fire the event Tag on the local server S seconds into the match (default 2), which
+ *                          starts the animation controllers of that slot (Tools/Test/SequenceAudioPack has ScctSequenceAudioCheck)
+ *   -ScctSequenceAudioJoinAt=S  read no sequence audio before S seconds into the match, as a player who joins then
+ *   -ScctSequenceAudioDrift=S  every sequence voice slips S seconds once, 2 s after it starts, so it is put back in step
  * Play/ScctAudioMix has the volume switches (-ScctAudioVolume, -ScctAudioPeaks).
+ *
+ * Animation sequences (Play/ScctAudioSequences.cpp): every audio segment an animation sequence plays now is one voice,
+ * started at the segment's offset on the sequence's replicated clock (so a player who joins late hears it in step),
+ * following its target actor and put back in step when it drifts more than 0.25 s (the Godot client's
+ * AnimationSequenceAudio).
  *
  * Rooms (Play/ScctAudioRooms.cpp): a 3D voice whose source is in another zone than the listener's sends its reverb to
  * that zone's own reverb (one of four source-room submixes, Godot's ReverbBuses.SourceRooms), turned by what the way
@@ -189,6 +199,30 @@ private:
 		float AppliedRoomSend = 0.0f;
 		float RoomSend = 0.0f;
 		float RoomLogIn = 0.0f;
+
+		// Animation sequence audio (Play/ScctAudioSequences.cpp): the segment key it plays (0: none), where in its file
+		// the bridge says the segment is now, where this voice is by its own playback (from the wall clock since it started,
+		// as the engine renders it in real time, however long a game frame takes), where it started and the file's length.
+		int32 SequenceKey = 0;
+		float SequenceOffset = 0.0f;
+		float SequencePosition = 0.0f;
+		float StartOffset = 0.0f;
+		float FileSeconds = 0.0f;
+		double SequenceStartedAt = 0.0;
+		/** -ScctSequenceAudioDrift: the slip put on its playback (once). */
+		float SequenceSlip = 0.0f;
+		bool bSequenceDrifted = false;
+	};
+
+	/** One audio segment of an animation sequence, as the bridge last listed it (Play/ScctAudioSequences.cpp). */
+	struct FSequenceSegment
+	{
+		FScctSequenceSound Last = {};
+		/** The voice that plays it (an index into Voices whose SequenceKey is the segment's), INDEX_NONE before it has one. */
+		int32 VoiceIndex = INDEX_NONE;
+		/** Its voice is over (its file ended, failed or had nothing left to play): it stays silent until it is no longer listed. */
+		bool bEnded = false;
+		bool bSeen = false;
 	};
 
 	/**
@@ -295,6 +329,18 @@ private:
 	int32 ZoneOfRoom(const FScctReverbRoom& Room) const;
 	FString RoomName(int32 Zone) const;
 	void LogRoomSummary() const;
+
+	/**
+	 * Animation sequence audio (Play/ScctAudioSequences.cpp, the Godot client's AnimationSequenceAudio): one 3D voice per
+	 * audio segment the bridge lists, started at the segment's offset on the replicated sequence clock, following its
+	 * target, put back in step when it drifts more than 0.25 s and stopped when its segment is no longer listed.
+	 */
+	void UpdateSequenceAudio(float DeltaSeconds);
+	/** Reads the -ScctSequenceAudio switches and fetches the sequence audio table at the match's start. */
+	void ReadSequenceSwitches();
+	/** The start of a sequence voice: where in its file it starts (the segment's latest offset); false when nothing is left to play. */
+	bool PrepareSequenceStart(FVoice& Voice, float FileSeconds);
+	void LogSequenceSummary() const;
 
 public:
 	/** Puts "Sound through walls" on the Audio page (called by Play/ScctAudioMix with the other audio options). */
@@ -460,6 +506,25 @@ private:
 	int32 NumRoomFieldClaims = 0;
 	int32 NumRoomRefused = 0;
 	int32 NumGeometryPackets = 0;
+
+	// Animation sequence audio (Play/ScctAudioSequences.cpp).
+	const FScctSequenceAudioApi* SequenceApi = nullptr;
+	TArray<FScctSequenceSound> SequenceBuffer;
+	TMap<int32, FSequenceSegment> SequenceSegments;
+	float SequenceClock = 0.0f;
+	/** -ScctSequenceAudioTrigger=Tag@S: the event fired on the local server S seconds into the match (empty: none). */
+	FString SequenceTriggerTag;
+	float SequenceTriggerIn = -1.0f;
+	/** -ScctSequenceAudioJoinAt=S: nothing is read before S seconds into the match, as for a player who arrives then. */
+	float SequenceJoinAt = 0.0f;
+	/** -ScctSequenceAudioDrift=S: each sequence voice slips S seconds once, 2 s after it starts, so it is put back in step. */
+	float SequenceDrift = 0.0f;
+	int32 NumSequenceStarted = 0;
+	int32 NumSequenceSeeks = 0;
+	int32 NumSequenceStopped = 0;
+	int32 NumSequenceEnded = 0;
+	int32 NumSequenceNoFile = 0;
+	int32 PeakSequenceSegments = 0;
 
 	/** -ScctAudioMusic: the song to start and the seconds into the match it starts at (negative: done). */
 	FString CheckSong;

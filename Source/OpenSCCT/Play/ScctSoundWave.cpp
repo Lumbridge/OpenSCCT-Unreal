@@ -8,12 +8,18 @@ namespace
 	class FScctPcmGenerator : public ISoundGenerator
 	{
 	public:
-		FScctPcmGenerator(const FScctPcmPtr& InPcm, bool bInLoop, int32 InLoopStart, int32 InLoopEnd)
+		FScctPcmGenerator(const FScctPcmPtr& InPcm, bool bInLoop, int32 InLoopStart, int32 InLoopEnd, float StartSeconds)
 			: Pcm(InPcm)
 			, LoopStart(InLoopStart)
 			, LoopEnd(InLoopEnd)
 			, bLoop(bInLoop)
 		{
+			// A voice started part-way into its file (UAudioComponent::Play's start time: an animation sequence's audio
+			// segment joined late or put back in step) reads from there; a one-shot started past its end is over at once.
+			if (StartSeconds > 0.0f)
+			{
+				Frame = FMath::Clamp(FMath::FloorToInt32(StartSeconds * static_cast<float>(Pcm->SampleRate)), 0, Pcm->NumFrames());
+			}
 		}
 
 		virtual int32 OnGenerateAudio(float* OutAudio, int32 NumSamples) override
@@ -93,6 +99,6 @@ void UScctSoundWave::Init(const FScctPcmPtr& InPcm, bool bInLoop, int32 InLoopSt
 ISoundGeneratorPtr UScctSoundWave::CreateSoundGenerator(const FSoundGeneratorInitParams& InParams)
 {
 	return Pcm.IsValid() && Pcm->NumFrames() > 0
-		? ISoundGeneratorPtr(MakeShared<FScctPcmGenerator, ESPMode::ThreadSafe>(Pcm, bLoop, LoopStart, LoopEnd))
+		? ISoundGeneratorPtr(MakeShared<FScctPcmGenerator, ESPMode::ThreadSafe>(Pcm, bLoop, LoopStart, LoopEnd, InParams.StartTime))
 		: ISoundGeneratorPtr();
 }

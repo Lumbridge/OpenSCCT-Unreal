@@ -170,6 +170,10 @@ void UScctAudioSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	bLastListenerSet = false;
 	NumStarted =NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
 	NumHrtfStarted = NumPannedStarted = 0;
+	// Segment keys and clocks belong to one match (Play/ScctAudioSequences.cpp).
+	SequenceSegments.Reset();
+	SequenceClock = 0.0f;
+	NumSequenceStarted = NumSequenceSeeks = NumSequenceStopped = NumSequenceEnded = NumSequenceNoFile = PeakSequenceSegments = 0;
 }
 
 void UScctAudioSubsystem::HandleMatchStarted()
@@ -215,6 +219,7 @@ void UScctAudioSubsystem::HandleMatchStarted()
 	LoadZones(Session->GetSessionInfo().Map);
 	ReadRoomSwitches();
 	CreateRoomFields();
+	ReadSequenceSwitches();
 	const FAudioDevice* Device = GetWorld()->GetAudioDeviceRaw();
 	UE_LOG(LogOpenSCCT, Log, TEXT("Audio: ready for %s (%s, %d zones with reverb, content %s)"), Session->GetSessionInfo().Map,
 		Device != nullptr ? *FString::Printf(TEXT("audio device present, %d engine voices"), Device->GetMaxChannels())
@@ -260,6 +265,8 @@ void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
 	UpdateAudioProbe(DeltaSeconds);
 	DrainSounds();
 	UpdateAmbient();
+	// The animation sequences' audio segments (Play/ScctAudioSequences.cpp).
+	UpdateSequenceAudio(DeltaSeconds);
 	UpdateAcoustics(DeltaSeconds);
 	UpdateVoices(DeltaSeconds);
 	// The listener's zone and every voice's source room (Play/ScctAudioRooms.cpp), then the main reverb of that zone.
@@ -792,11 +799,16 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 	{
 		Voice.Location = FindVoiceLocation(Voice);
 	}
+	// An animation sequence's segment starts where its clock is now, part-way into its file (Play/ScctAudioSequences.cpp).
+	if (Voice.SequenceKey != 0 && !PrepareSequenceStart(Voice, Pcm->Seconds()))
+	{
+		return false;
+	}
 	if (!Voice.bLoop)
 	{
 		// The voice ends by the clock (the engine's voice ends by itself at the same moment); a little margin
 		// lets the last block play out.
-		Voice.LifeLeft = Pcm->Seconds() / Voice.Pitch + 0.1f;
+		Voice.LifeLeft = (Pcm->Seconds() - Voice.StartOffset) / Voice.Pitch + 0.1f;
 	}
 	Voice.State = EVoiceState::Playing;
 	// Its first frame has no movement yet: only the listener's own counts toward the Doppler shift.
@@ -847,11 +859,11 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 			Component->LowPassFilterFrequency = Voice.AcousticLowPass;
 			if (Voice.FadeIn > 0.0f)
 			{
-				Component->FadeIn(Voice.FadeIn, 1.0f);
+				Component->FadeIn(Voice.FadeIn, 1.0f, Voice.StartOffset);
 			}
 			else
 			{
-				Component->Play();
+				Component->Play(Voice.StartOffset);
 			}
 			Voice.Component = Component;
 		}
@@ -1264,6 +1276,7 @@ void UScctAudioSubsystem::LogSummary() const
 	LogAcousticSummary();
 	LogAudioViewSummary();
 	LogRoomSummary();
+	LogSequenceSummary();
 	TArray<FString> Notes;
 	OnSummary().Broadcast(Notes);
 	UE_CLOG(Notes.Num() > 0, LogOpenSCCT, Log, TEXT("Audio summary: also %s"), *FString::Join(Notes, TEXT("; ")));

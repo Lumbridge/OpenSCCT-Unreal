@@ -35,6 +35,7 @@
 #include "Runtime/ScctPlayApi.h"
 #include "Runtime/ScctProjectionsApi.h"
 #include "Runtime/ScctReverbRoomApi.h"
+#include "Runtime/ScctSequenceAudioApi.h"
 #include "Runtime/ScctSmokeApi.h"
 #include "Runtime/ScctSoftBodyApi.h"
 #include "Runtime/ScctVisionApi.h"
@@ -98,6 +99,7 @@ SCCT_FEATURE_TABLE(FScctSocialApi, "SocialExports", ScctSocialApiVersion);
 SCCT_FEATURE_TABLE(FScctPlayApi, "PlayExports", ScctPlayApiVersion);
 SCCT_FEATURE_TABLE(FScctProjectionsApi, "ProjectionExports", ScctProjectionsApiVersion);
 SCCT_FEATURE_TABLE(FScctReverbRoomApi, "ReverbRoomExports", ScctReverbRoomApiVersion);
+SCCT_FEATURE_TABLE(FScctSequenceAudioApi, "SequenceAudioExports", ScctSequenceAudioApiVersion);
 SCCT_FEATURE_TABLE(FScctSmokeApi, "SmokeExports", ScctSmokeApiVersion);
 SCCT_FEATURE_TABLE(FScctSoftBodyApi, "SoftBodyExports", ScctSoftBodyApiVersion);
 SCCT_FEATURE_TABLE(FScctVisionApi, "VisionExports", ScctVisionApiVersion);
