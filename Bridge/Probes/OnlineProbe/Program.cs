@@ -13,6 +13,7 @@ using OpenScct.UnrealBridge.Hud;
 using OpenScct.UnrealBridge.Online;
 
 // OnlineProbe <content root> <OpenSCCT checkout> [first map] [second map] [seconds in the second match] [port] [master url] [invite key]
+// OnlineProbe host [content root] [map] [port] [lan port] [upnp]   (hosting from the game: see HostProbe.cs)
 //
 // Starts a real dedicated server (svm-server, the OpenSCCT checkout's src/OpenScct.Server.Cli) on localhost with
 // bots filling the sides, and visits it the way Unreal does: through the function table OnlineExports.GetApi fills
@@ -31,7 +32,7 @@ using OpenScct.UnrealBridge.Online;
 // One thing is not the exported path, and only this: the join itself goes through OnlineBridge.Join with a
 // loopback-only socket (the exported Join binds every interface, which can raise a firewall prompt on a test
 // machine).
-return Probe.Run(args);
+return args.Length > 0 && args[0] == "host" ? HostProbe.Run(args[1..]) : Probe.Run(args);
 
 internal static unsafe class Probe
 {
@@ -154,6 +155,7 @@ internal static unsafe class Probe
             ("OnlineResultRow", sizeof(OnlineResultRow), 120),
             ("OnlineServerEntry", sizeof(OnlineServerEntry), 424),
             ("OnlineApi", sizeof(OnlineApi), 8 + 26 * sizeof(void*)),
+            ("HostApi", sizeof(HostApi), 8 + 7 * sizeof(void*)),
         ];
         bool ok = true;
         foreach ((string name, int size, int expected) in sizes)
