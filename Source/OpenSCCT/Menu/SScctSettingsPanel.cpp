@@ -134,6 +134,11 @@ void SScctSettingsPanel::Construct(const FArguments& InArgs, const FScctMenuHost
 {
 	Host = InHost;
 	UScctControlSettings::Get()->EnsureLoaded();
+	// The bindings open on the side being played (the spy's with no match running).
+	if (const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>())
+	{
+		bBindMerc = Controls->GetSide() == 1;
+	}
 	if (UGameUserSettings* Engine = EngineSettings())
 	{
 		PendingMode = static_cast<int32>(Engine->GetFullscreenMode());

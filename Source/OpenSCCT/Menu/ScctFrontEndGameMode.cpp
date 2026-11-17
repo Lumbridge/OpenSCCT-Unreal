@@ -12,6 +12,7 @@
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
 #include "Play/ScctViewPawn.h"
+#include "ShaderCompiler.h"
 
 namespace
 {
@@ -37,6 +38,9 @@ namespace
 
 	/** Seconds one sway of the camera takes, there and back. */
 	constexpr float SwayPeriod = 46.0f;
+
+	/** The longest the backdrop waits for its shaders (wall clock seconds) before it is shown anyway. */
+	constexpr double BackdropShaderWait = 12.0;
 }
 
 AScctFrontEndGameMode::AScctFrontEndGameMode()
@@ -59,24 +63,21 @@ void AScctFrontEndGameMode::StartPlay()
 		}
 
 		bool bStarted = false;
-		ULevelStreamingDynamic::LoadLevelInstance(this, Level, FVector::ZeroVector, FRotator::ZeroRotator, bStarted);
-		if (!bStarted)
+		ULevelStreamingDynamic* Streaming = ULevelStreamingDynamic::LoadLevelInstance(this, Level, FVector::ZeroVector, FRotator::ZeroRotator, bStarted);
+		if (!bStarted || Streaming == nullptr)
 		{
 			continue;
 		}
 
-		// The map brings its own light; the level's stand-in scene would shine into it.
-		for (TActorIterator<AActor> It(GetWorld()); It; ++It)
-		{
-			if (It->ActorHasTag(FallbackTag))
-			{
-				It->Destroy();
-			}
-		}
-		CameraLocation = Backdrop.Location;
-		CameraRotation = FRotator(Backdrop.Pitch, Backdrop.Yaw, 0.0f);
-		CameraSway = Backdrop.Sway;
-		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: backdrop is %s"), Backdrop.Map);
+		// Loaded hidden: the level's own scene stays until the map can be drawn (RevealBackdrop).
+		Streaming->SetShouldBeVisible(false);
+		BackdropLevel = Streaming;
+		BackdropMap = Backdrop.Map;
+		BackdropLocation = Backdrop.Location;
+		BackdropRotation = FRotator(Backdrop.Pitch, Backdrop.Yaw, 0.0f);
+		BackdropSway = Backdrop.Sway;
+		BackdropStarted = FPlatformTime::Seconds();
+		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: backdrop %s is loading; the level's own scene shows until it is ready"), Backdrop.Map);
 		return;
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: no imported map to show behind the menu; using the level's own scene"));
@@ -87,7 +88,57 @@ void AScctFrontEndGameMode::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 	Seconds += DeltaSeconds;
 	ShowMenu();
+	RevealBackdrop();
 	MoveCamera();
+}
+
+void AScctFrontEndGameMode::RevealBackdrop()
+{
+	if (!IsValid(BackdropLevel))
+	{
+		return;
+	}
+	const double Waited = FPlatformTime::Seconds() - BackdropStarted;
+
+	if (!BackdropLevel->ShouldBeVisible())
+	{
+		if (BackdropLevel->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad)
+		{
+			UE_LOG(LogOpenSCCT, Warning, TEXT("Menu: backdrop %s failed to load; the level's own scene stays"), BackdropMap);
+			BackdropLevel = nullptr;
+			return;
+		}
+		if (!BackdropLevel->IsLevelLoaded())
+		{
+			return;
+		}
+		// Uncooked runs compile the map's materials on first sight: until then it draws grey or black.
+		const int32 Jobs = GShaderCompilingManager != nullptr ? GShaderCompilingManager->GetNumRemainingJobs() : 0;
+		if (Jobs > 0 && Waited < BackdropShaderWait)
+		{
+			return;
+		}
+		BackdropLevel->SetShouldBeVisible(true);
+		return;
+	}
+	if (!BackdropLevel->IsLevelVisible())
+	{
+		return;
+	}
+
+	// The map brings its own light; the level's stand-in scene would shine into it.
+	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+	{
+		if (It->ActorHasTag(FallbackTag))
+		{
+			It->Destroy();
+		}
+	}
+	CameraLocation = BackdropLocation;
+	CameraRotation = BackdropRotation;
+	CameraSway = BackdropSway;
+	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: backdrop is %s (shown after %.1f s)"), BackdropMap, Waited);
+	BackdropLevel = nullptr;
 }
 
 void AScctFrontEndGameMode::ShowMenu()
