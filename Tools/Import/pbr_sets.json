@@ -1,0 +1,154 @@
+{
+  "about": "CC0 assets the importer layers under the original art. fetch_assets.py downloads and packs them, import_assets.py turns them into the committed uassets under /Game/OpenSCCT/ThirdParty. 'tile_cm' is the real-world size one repeat of the set covers; surface classes (surface_classes.json) pick a set by its key here.",
+  "sets": {
+    "Concrete034": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Concrete034_2K-JPG.zip",
+      "tile_cm": 220,
+      "use": "bare concrete, cast floors and walls"
+    },
+    "Concrete015": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Concrete015_2K-JPG.zip",
+      "tile_cm": 250,
+      "use": "dirty, stained concrete; brick and cut stone faces"
+    },
+    "PaintedPlaster017": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=PaintedPlaster017_2K-JPG.zip",
+      "tile_cm": 200,
+      "use": "painted concrete and painted walls"
+    },
+    "Plaster001": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Plaster001_2K-JPG.zip",
+      "tile_cm": 200,
+      "use": "rough plaster, ceilings"
+    },
+    "Rock030": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Rock030_2K-JPG.zip",
+      "tile_cm": 300,
+      "use": "natural rock, cave walls"
+    },
+    "Marble006": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Marble006_2K-JPG.zip",
+      "tile_cm": 200,
+      "use": "polished stone and marble"
+    },
+    "SurfaceImperfections001": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=SurfaceImperfections001_2K-JPG.zip",
+      "tile_cm": 150,
+      "use": "smudges on glazed tiles, plastic and screens"
+    },
+    "Metal032": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Metal032_2K-JPG.zip",
+      "tile_cm": 120,
+      "use": "worn bare metal"
+    },
+    "Metal009": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Metal009_2K-JPG.zip",
+      "tile_cm": 120,
+      "use": "brushed, cleaner metal"
+    },
+    "PaintedMetal007": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=PaintedMetal007_2K-JPG.zip",
+      "tile_cm": 150,
+      "use": "painted metal: doors, lockers, machines"
+    },
+    "Rust004": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Rust004_2K-JPG.zip",
+      "tile_cm": 150,
+      "use": "rusted metal"
+    },
+    "Wood049": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Wood049_2K-JPG.zip",
+      "tile_cm": 120,
+      "use": "wood planks, crates and furniture"
+    },
+    "Fabric030": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Fabric030_2K-JPG.zip",
+      "tile_cm": 60,
+      "use": "cloth, curtains, upholstery"
+    },
+    "Carpet016": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Carpet016_2K-JPG.zip",
+      "tile_cm": 120,
+      "use": "carpet"
+    },
+    "Ground037": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Ground037_2K-JPG.zip",
+      "tile_cm": 250,
+      "use": "dirt and earth"
+    },
+    "Ground054": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Ground054_2K-JPG.zip",
+      "tile_cm": 250,
+      "use": "sand"
+    },
+    "Gravel022": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Gravel022_2K-JPG.zip",
+      "tile_cm": 200,
+      "use": "gravel"
+    },
+    "Asphalt012": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Asphalt012_2K-JPG.zip",
+      "tile_cm": 250,
+      "use": "asphalt and roofing felt"
+    },
+    "Snow006": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Snow006_2K-JPG.zip",
+      "tile_cm": 250,
+      "use": "snow"
+    },
+    "Plastic010": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Plastic010_2K-JPG.zip",
+      "tile_cm": 60,
+      "use": "moulded plastic, rubber"
+    },
+    "Leather026": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Leather026_2K-JPG.zip",
+      "tile_cm": 60,
+      "use": "leather seats"
+    },
+    "Grass004": {
+      "source": "ambientCG",
+      "url": "https://ambientcg.com/get?file=Grass004_2K-JPG.zip",
+      "tile_cm": 200,
+      "use": "grass"
+    }
+  },
+  "hdris": {
+    "kloppenheim_02_puresky": {
+      "source": "Poly Haven",
+      "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloppenheim_02_puresky_4k.hdr",
+      "use": "clear night sky with stars and a moon"
+    },
+    "kloppenheim_07_puresky": {
+      "source": "Poly Haven",
+      "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloppenheim_07_puresky_4k.hdr",
+      "use": "overcast night sky"
+    },
+    "qwantani_dusk_2_puresky": {
+      "source": "Poly Haven",
+      "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/qwantani_dusk_2_puresky_4k.hdr",
+      "use": "dusk sky with a low glow on the horizon"
+    }
+  }
+}

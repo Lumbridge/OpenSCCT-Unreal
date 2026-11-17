@@ -18,14 +18,17 @@ import unreal
 CONTENT_ROOT, MAP, NORMALS_DIR = sys.argv[1], sys.argv[2], sys.argv[3]
 RENDER = os.path.join(CONTENT_ROOT, "svmap", MAP, "render")
 DEST = "/Game/Imported/Maps/" + MAP
-SURFACE_MATERIAL = "/Game/OpenSCCT/Materials/M_ScctSurface"
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import scct_materials  # noqa: E402  pylint: disable=wrong-import-position
 
 # Light conversion. The original lights were tuned for baked lightmaps with hand-placed fill lights; these
 # factors bring them to physical units under Lumen. Tuned by eye on AquaE.
 RADIUS_UNITS = 25.0          # world radius = 25 * (LightRadius + 1), as the original engine
 CANDELAS_PER_BRIGHTNESS = 0.45
-EMISSIVE_UNLIT = 3.0      # screens, lamps and signs that were unlit in the original
-EMISSIVE_ADDITIVE = 1.0   # flare and glow sprites: bloom does the rest
+EMISSIVE_UNLIT = 2.0      # screens, lamps and signs that were unlit in the original
+EMISSIVE_ADDITIVE = 0.4   # flare and glow sprites: bloom does the rest
+EMISSIVE_SELF_ILLUM = 4.0  # the self-lit part of a lit surface whose class names no strength of its own
 
 asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
 editor_assets = unreal.EditorAssetLibrary
@@ -82,106 +85,45 @@ def rotator(units):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Master material
+# Materials
 # ---------------------------------------------------------------------------------------------------------------
 
-def ensure_surface_material():
-    if editor_assets.does_asset_exist(SURFACE_MATERIAL):
-        return unreal.load_asset(SURFACE_MATERIAL)
+def load_surface_classes():
+    """surface_classes.json: the class of every original material and the look of each class."""
+    document = json.load(open(os.path.join(HERE, "surface_classes.json")))
+    classes = document["classes"]
+    chosen = dict(document["materials"])
+    chosen.update(document.get("overrides", {}))
+    fallback = document.get("fallback", "generic")
+    sets = json.load(open(os.path.join(HERE, "pbr_sets.json")))["sets"]
 
-    folder, name = SURFACE_MATERIAL.rsplit("/", 1)
-    material = asset_tools.create_asset(name, folder, unreal.Material, unreal.MaterialFactoryNew())
+    def look_of(source):
+        name = chosen.get(source, fallback)
+        return name, classes.get(name) or classes[fallback]
 
-    def node(cls, x, y):
-        return materials_lib.create_material_expression(material, cls, x, y)
-
-    base = node(unreal.MaterialExpressionTextureSampleParameter2D, -900, -200)
-    base.set_editor_property("parameter_name", "BaseColor")
-
-    tint = node(unreal.MaterialExpressionVectorParameter, -900, 50)
-    tint.set_editor_property("parameter_name", "Tint")
-    tint.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
-
-    colour = node(unreal.MaterialExpressionMultiply, -550, -150)
-    materials_lib.connect_material_expressions(base, "RGB", colour, "A")
-    materials_lib.connect_material_expressions(tint, "", colour, "B")
-    materials_lib.connect_material_property(colour, "", unreal.MaterialProperty.MP_BASE_COLOR)
-
-    opacity = node(unreal.MaterialExpressionScalarParameter, -900, 250)
-    opacity.set_editor_property("parameter_name", "Opacity")
-    opacity.set_editor_property("default_value", 1.0)
-    alpha = node(unreal.MaterialExpressionMultiply, -550, 200)
-    materials_lib.connect_material_expressions(base, "A", alpha, "A")
-    materials_lib.connect_material_expressions(opacity, "", alpha, "B")
-    materials_lib.connect_material_property(alpha, "", unreal.MaterialProperty.MP_OPACITY)
-    materials_lib.connect_material_property(alpha, "", unreal.MaterialProperty.MP_OPACITY_MASK)
-
-    normal = node(unreal.MaterialExpressionTextureSampleParameter2D, -900, 450)
-    normal.set_editor_property("parameter_name", "Normal")
-    normal.set_editor_property("texture", unreal.load_asset("/Engine/EngineMaterials/DefaultNormal"))
-    normal.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL)
-    materials_lib.connect_material_property(normal, "RGB", unreal.MaterialProperty.MP_NORMAL)
-
-    # Darker parts of a surface read as rougher grime, brighter parts as worn, smoother material.
-    rough_dark = node(unreal.MaterialExpressionScalarParameter, -900, 700)
-    rough_dark.set_editor_property("parameter_name", "RoughnessDark")
-    rough_dark.set_editor_property("default_value", 0.85)
-    rough_bright = node(unreal.MaterialExpressionScalarParameter, -900, 800)
-    rough_bright.set_editor_property("parameter_name", "RoughnessBright")
-    rough_bright.set_editor_property("default_value", 0.45)
-    roughness = node(unreal.MaterialExpressionLinearInterpolate, -550, 720)
-    materials_lib.connect_material_expressions(rough_dark, "", roughness, "A")
-    materials_lib.connect_material_expressions(rough_bright, "", roughness, "B")
-    materials_lib.connect_material_expressions(base, "G", roughness, "Alpha")
-    materials_lib.connect_material_property(roughness, "", unreal.MaterialProperty.MP_ROUGHNESS)
-
-    metallic = node(unreal.MaterialExpressionScalarParameter, -900, 950)
-    metallic.set_editor_property("parameter_name", "Metallic")
-    metallic.set_editor_property("default_value", 0.0)
-    materials_lib.connect_material_property(metallic, "", unreal.MaterialProperty.MP_METALLIC)
-
-    emissive_strength = node(unreal.MaterialExpressionScalarParameter, -900, 1100)
-    emissive_strength.set_editor_property("parameter_name", "Emissive")
-    emissive_strength.set_editor_property("default_value", 0.0)
-    emissive = node(unreal.MaterialExpressionMultiply, -550, 1050)
-    materials_lib.connect_material_expressions(colour, "", emissive, "A")
-    materials_lib.connect_material_expressions(emissive_strength, "", emissive, "B")
-    materials_lib.connect_material_property(emissive, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
-
-    # One material serves level surfaces and characters.
-    material.set_editor_property("used_with_skeletal_mesh", True)
-    material.set_editor_property("used_with_nanite", True)
-    materials_lib.recompile_material(material)
-    editor_assets.save_asset(SURFACE_MATERIAL)
-    log("made " + SURFACE_MATERIAL)
-    return material
+    return look_of, sets
 
 
-# Surface looks by the words in a texture's name: (pattern, RoughnessDark, RoughnessBright, Metallic).
-SURFACE_LOOKS = [
-    (r"metal|steel|iron|alu|chrome|grille|grid|pipe|tuyau|vent|inox|rail", 0.55, 0.22, 0.9),
-    (r"glass|verre|vitre|window|mirror|miroir", 0.12, 0.04, 0.0),
-    (r"water|eau|aqua_water|liquid", 0.08, 0.03, 0.0),
-    (r"marble|marbre|tile|carrel|ceram|floor|sol|polish", 0.45, 0.12, 0.0),
-    (r"wood|bois|parquet|plank", 0.65, 0.35, 0.0),
-    (r"plastic|plastiq|screen|ecran|ordi|comput", 0.45, 0.2, 0.0),
-    (r"beton|concrete|wall|mur|brick|brique|rock|stone|pierre|gravier|plaster", 0.92, 0.7, 0.0),
-    (r"fabric|tissu|carpet|moquette|cloth|rideau|curtain", 0.98, 0.9, 0.0),
-]
+def pan_speed(animation):
+    """The original's texture scrolling as UV units per second, or (0, 0). Only straight panners are carried over;
+    its oscillators and rotators are rare (a dozen materials) and stay still."""
+    if not animation or animation.get("type") != "panner":
+        return 0.0, 0.0
+    # PanDirection is a rotator; its yaw turns the scroll direction in the texture plane [estimate: the sign of
+    # the scroll is not decoded, which only matters for text that scrolls].
+    yaw = animation["direction"][1] / 65536.0 * 2.0 * math.pi
+    return animation["rate"] * math.cos(yaw), animation["rate"] * math.sin(yaw)
 
 
-def surface_look(name):
-    lowered = name.lower()
-    for pattern, dark, bright, metallic in SURFACE_LOOKS:
-        if re.search(pattern, lowered):
-            return dark, bright, metallic
-    return 0.85, 0.5, 0.0
-
-
-def build_materials(parent, material_doc):
+def build_materials(material_doc):
     """One material instance per glTF material. Returns {imported material asset name: instance}."""
     additive = {key(entry["key"]) for entry in material_doc.get("additive", []) if "key" in entry}
     additive |= {key(entry["name"]) for entry in material_doc.get("additive", []) if "name" in entry}
+    look_of, sets = load_surface_classes()
+    parents = {name: unreal.load_asset(path) for name, path in
+               (("surface", scct_materials.SURFACE), ("glass", scct_materials.GLASS), ("water", scct_materials.WATER))}
+    if not all(parents.values()):
+        raise RuntimeError("master materials are missing: run Tools/Import/Import-Assets.ps1 first")
 
     def by_key(folder_path):
         found = {}
@@ -189,9 +131,31 @@ def build_materials(parent, material_doc):
             found[key(asset_path.rsplit("/", 1)[1].split(".")[0])] = asset_path
         return found
 
+    # Textures a material needs beyond its colour map (self-illumination and its mask) are not in the glTF.
+    extra_files = set()
+    for record in material_doc["materials"].values():
+        for flag in ("self_illum", "self_illum_mask"):
+            path = record["flags"].get(flag)
+            if isinstance(path, str) and os.path.exists(os.path.join(RENDER, path)):
+                extra_files.add(os.path.join(RENDER, path))
+        sheet = (record["flags"].get("flipbook") or {}).get("texture")
+        if sheet and os.path.exists(os.path.join(RENDER, sheet)):
+            extra_files.add(os.path.join(RENDER, sheet))
     textures = by_key(DEST + "/world/Textures")
+    missing_extra = sorted(path for path in extra_files if key(os.path.splitext(os.path.basename(path))[0]) not in textures)
+    if missing_extra:
+        import_files(missing_extra, DEST + "/Extra")
+    extra = by_key(DEST + "/Extra")
     normal_maps = by_key(DEST + "/Normals")
+    detail_folder = scct_materials.THIRD_PARTY + "/ambientCG/T_%s_%s"
+
+    def texture_of(path):
+        stem = key(os.path.splitext(os.path.basename(path))[0])
+        asset = textures.get(stem) or extra.get(stem)
+        return unreal.load_asset(asset) if asset else None
+
     instances = {}
+    counts = {}
     folder = DEST + "/Materials"
     for material_name, record in material_doc["materials"].items():
         flags = record["flags"]
@@ -202,45 +166,109 @@ def build_materials(parent, material_doc):
             instance = unreal.load_asset(path)
         else:
             instance = asset_tools.create_asset(name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
-        materials_lib.set_material_instance_parent(instance, parent)
+        lib_clear = getattr(materials_lib, "clear_all_material_instance_parameters", None)
+        if lib_clear:
+            lib_clear(instance)   # a re-import starts from the parent's defaults, not last time's values
 
-        texture_file = flags.get("texture")
-        if texture_file:
-            stem = os.path.splitext(os.path.basename(texture_file))[0]
-            texture = unreal.load_asset(textures[key(stem)]) if key(stem) in textures else None
-            if texture:
-                materials_lib.set_material_instance_texture_parameter_value(instance, "BaseColor", texture)
-            normal = unreal.load_asset(normal_maps[key(stem + "_N")]) if key(stem + "_N") in normal_maps else None
-            if normal:
-                materials_lib.set_material_instance_texture_parameter_value(instance, "Normal", normal)
-
-        dark, bright, metallic = surface_look(material_name)
-        materials_lib.set_material_instance_scalar_parameter_value(instance, "RoughnessDark", dark)
-        materials_lib.set_material_instance_scalar_parameter_value(instance, "RoughnessBright", bright)
-        materials_lib.set_material_instance_scalar_parameter_value(instance, "Metallic", metallic)
-
+        class_name, look = look_of(record.get("source") or material_name)
         is_additive = key(imported) in additive
         unlit = bool(flags.get("unlit")) or is_additive
-        emissive = EMISSIVE_ADDITIVE if is_additive else EMISSIVE_UNLIT if unlit else 0.0
-        materials_lib.set_material_instance_scalar_parameter_value(instance, "Emissive", emissive)
+        translucent = bool(flags.get("translucent"))
+        # Glass and water get their own materials only where the original drew a see-through, lit surface.
+        kind = look.get("kind", "surface")
+        if kind == "glass" and not (translucent and not is_additive):
+            kind = "plain"
+        if kind == "water" and (unlit or flags.get("masked")):
+            kind = "plain"
+        counts[class_name] = counts.get(class_name, 0) + 1
+
+        def scalar(parameter, value):
+            materials_lib.set_material_instance_scalar_parameter_value(instance, parameter, float(value))
+
+        def texture(parameter, asset):
+            if asset:
+                materials_lib.set_material_instance_texture_parameter_value(instance, parameter, asset)
+
+        texture_file = flags.get("texture")
+        base = texture_of(texture_file) if texture_file else None
+        blend = None
+        if kind == "glass":
+            materials_lib.set_material_instance_parent(instance, parents["glass"])
+            texture("BaseColor", base)
+            scalar("Roughness", look["rough_dark"])
+            scalar("OpacityFloor", look.get("opacity_floor", 0.12))
+            scalar("Emissive", EMISSIVE_ADDITIVE if unlit else 0.0)
+        elif kind == "water":
+            materials_lib.set_material_instance_parent(instance, parents["water"])
+            texture("BaseColor", base)
+            scalar("Roughness", look["rough_dark"])
+            # Water the original drew solid hides what is under it; keep it nearly so.
+            scalar("Opacity", 0.55 if translucent else 0.93)
+        else:
+            materials_lib.set_material_instance_parent(instance, parents["surface"])
+            texture("BaseColor", base)
+            if texture_file:
+                stem = os.path.splitext(os.path.basename(texture_file))[0]
+                normal = normal_maps.get(key(stem + "_N"))
+                texture("Normal", unreal.load_asset(normal) if normal else None)
+            scalar("RoughnessDark", look["rough_dark"])
+            scalar("RoughnessBright", look["rough_bright"])
+            scalar("Metallic", look["metallic"])
+            scalar("Specular", look.get("specular", 0.5))
+            scalar("MacroNormal", look.get("macro_normal", 1.0))
+
+            # The detail layer: only on lit surfaces (a glow or a decal has no grain of its own).
+            detail = look.get("detail") if kind == "surface" and not unlit else None
+            if detail:
+                texture("DetailNormal", unreal.load_asset(detail_folder % (detail, "N")))
+                texture("DetailORD", unreal.load_asset(detail_folder % (detail, "ORD")))
+                scalar("DetailTiling", 1.0 / look.get("tile_cm", sets[detail]["tile_cm"]))
+                scalar("DetailNormalStrength", look.get("detail_normal", 1.0))
+                scalar("DetailRoughness", look.get("detail_rough", 0.5))
+                scalar("DetailColour", look.get("detail_colour", 0.5))
+                scalar("DetailOcclusion", look.get("detail_ao", 0.5))
+
+            # Light given off: whole-surface for what the original drew unlit, masked for its self-illumination.
+            glow = look.get("emissive")
+            scalar("Emissive", EMISSIVE_ADDITIVE if is_additive else (glow or EMISSIVE_UNLIT) if unlit else 0.0)
+            self_lit = flags.get("self_illum")
+            if isinstance(self_lit, str) and texture_of(self_lit) and not unlit:
+                texture("SelfIllumTexture", texture_of(self_lit))
+                mask = flags.get("self_illum_mask")
+                texture("SelfIllumMask", texture_of(mask) if isinstance(mask, str) else None)
+                scalar("SelfIllum", glow or EMISSIVE_SELF_ILLUM)
+
+            pan_u, pan_v = pan_speed(flags.get("uv_anim"))
+            scalar("PanU", pan_u)
+            scalar("PanV", pan_v)
+            flipbook = flags.get("flipbook")
+            sheet = texture_of(flipbook["texture"]) if flipbook and flipbook.get("texture") else None
+            if sheet:
+                texture("BaseColor", sheet)
+                scalar("FlipColumns", flipbook["cols"])
+                scalar("FlipRows", flipbook["rows"])
+                scalar("FlipRate", flipbook["fps"])
+                scalar("FlipFrames", flipbook["frames"])
+
+            if is_additive:
+                blend = unreal.BlendMode.BLEND_ADDITIVE
+            elif translucent:
+                blend = unreal.BlendMode.BLEND_TRANSLUCENT
+            elif flags.get("masked"):
+                blend = unreal.BlendMode.BLEND_MASKED
 
         overrides = instance.get_editor_property("base_property_overrides")
-        blend = None
-        if is_additive:
-            blend = unreal.BlendMode.BLEND_ADDITIVE
-        elif flags.get("translucent"):
-            blend = unreal.BlendMode.BLEND_TRANSLUCENT
-        elif flags.get("masked"):
-            blend = unreal.BlendMode.BLEND_MASKED
         overrides.set_editor_property("override_blend_mode", blend is not None)
         if blend is not None:
             overrides.set_editor_property("blend_mode", blend)
-        overrides.set_editor_property("override_two_sided", bool(flags.get("two_sided")))
-        overrides.set_editor_property("two_sided", bool(flags.get("two_sided")))
+        two_sided = bool(flags.get("two_sided")) and kind != "glass"   # the glass master is two-sided already
+        overrides.set_editor_property("override_two_sided", two_sided)
+        overrides.set_editor_property("two_sided", two_sided)
         instance.set_editor_property("base_property_overrides", overrides)
 
         materials_lib.update_material_instance(instance)
         instances[key(imported)] = instance
+    log("surface classes: " + ", ".join("%s %d" % item for item in sorted(counts.items(), key=lambda item: -item[1])))
     return instances
 
 
@@ -265,8 +293,7 @@ def main():
             texture.set_editor_property("srgb", False)
             texture.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_NORMALMAP)
 
-    parent = ensure_surface_material()
-    instances = build_materials(parent, material_doc)
+    instances = build_materials(material_doc)
     log("materials: %d" % len(instances))
 
     # Every mesh gets the new materials, and Nanite for crisp shadows and cheap overdraw.
@@ -318,6 +345,8 @@ def main():
         component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)  # the simulation owns collision
         if movable:
             component.set_mobility(unreal.ComponentMobility.MOVABLE)
+            # The surface material's detail layer is world-aligned; on something that moves it must travel along.
+            component.set_default_custom_primitive_data_float(scct_materials.LOCAL_DETAIL_SLOT, 1.0)
         return actor
 
     for node in gltf["nodes"]:
@@ -396,16 +425,66 @@ def main():
     log("lights: %d" % count)
 
     # ---- atmosphere ---------------------------------------------------------------------------------------------
+    # The original's sky box is not imported (it is a 2005 backdrop). Each map gets a real sky instead: an HDRI
+    # panorama on a dome, a sky light that throws that panorama's light, and a moon where the sky has one.
+    # Interiors need no special case: Lumen lets sky light in only where the level is open to it.
+    skies = json.load(open(os.path.join(HERE, "map_skies.json")))
+    sky_kind = skies["maps"].get(MAP, skies["default"])
+    sky_look = skies["kinds"][sky_kind]
+    panorama_path = scct_materials.THIRD_PARTY + "/PolyHaven/" + sky_look["panorama"]
+    tint = unreal.LinearColor(sky_look["tint"][0], sky_look["tint"][1], sky_look["tint"][2], 1.0)
+
+    sky_material_path = DEST + "/Materials/MI_Sky"
+    if editor_assets.does_asset_exist(sky_material_path):
+        sky_material = unreal.load_asset(sky_material_path)
+    else:
+        sky_material = asset_tools.create_asset("MI_Sky", DEST + "/Materials", unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+    materials_lib.set_material_instance_parent(sky_material, unreal.load_asset(scct_materials.SKY))
+    materials_lib.set_material_instance_texture_parameter_value(sky_material, "Panorama", unreal.load_asset(panorama_path))
+    materials_lib.set_material_instance_vector_parameter_value(sky_material, "Tint", tint)
+    for name, value in (("Brightness", sky_look["brightness"]), ("StarBrightness", sky_look["stars"]), ("Rotation", sky_look["rotation"])):
+        materials_lib.set_material_instance_scalar_parameter_value(sky_material, name, float(value))
+    materials_lib.update_material_instance(sky_material)
+
+    # The dome: far outside every map (the largest is under 300 m across), and nothing but a picture: no shadow,
+    # no collision, and kept out of the lighting scene so it cannot block the sky light it stands for.
+    dome = spawn(unreal.StaticMeshActor, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
+    dome.set_actor_label("SkyDome")
+    dome.set_folder_path("Atmosphere")
+    dome.set_actor_scale3d(unreal.Vector(20000, 20000, 20000))
+    dome_component = dome.static_mesh_component
+    dome_component.set_static_mesh(unreal.load_asset("/Engine/BasicShapes/Sphere"))
+    dome_component.set_material(0, sky_material)
+    dome_component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)
+    dome_component.set_cast_shadow(False)
+    for name in ("visible_in_ray_tracing", "affect_dynamic_indirect_lighting", "affect_distance_field_lighting"):
+        try_set(dome_component, name, False)
+
     sky = spawn(unreal.SkyLight, unreal.Vector(0, 0, 3000), unreal.Rotator(0, 0, 0))
     sky.set_folder_path("Atmosphere")
     sky_component = sky.light_component
     sky_component.set_mobility(unreal.ComponentMobility.MOVABLE)
-    # A faint, even night-sky fill: open areas are never pitch black, and Lumen keeps it out of closed rooms.
     try_set(sky_component, "real_time_capture", False)
     try_set(sky_component, "source_type", unreal.SkyLightSourceType.SLS_SPECIFIED_CUBEMAP)
-    try_set(sky_component, "cubemap", unreal.load_asset("/Engine/MapTemplates/Sky/DaylightAmbientCubemap"))
-    sky_component.set_intensity(1.2)
-    sky_component.set_light_color(unreal.LinearColor(0.30, 0.42, 0.75, 1.0))
+    try_set(sky_component, "cubemap", unreal.load_asset(panorama_path + "_light"))
+    try_set(sky_component, "source_cubemap_angle", float(sky_look["rotation"]))
+    sky_component.set_intensity(sky_look["sky_light"])
+    sky_component.set_light_color(tint)
+
+    moon_look = sky_look.get("moon")
+    if moon_look:
+        moon = spawn(unreal.DirectionalLight, unreal.Vector(0, 0, 4000), unreal.Rotator(roll=0, pitch=moon_look["pitch"], yaw=moon_look["yaw"]))
+        moon.set_actor_label("Moon")
+        moon.set_folder_path("Atmosphere")
+        moon_component = moon.light_component
+        moon_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+        moon_component.set_intensity(moon_look["lux"])
+        moon_component.set_light_color(unreal.LinearColor(moon_look["colour"][0], moon_look["colour"][1], moon_look["colour"][2], 1.0))
+        moon_component.set_cast_shadows(True)
+        # A wide source: moonlight through haze throws soft-edged shadows.
+        try_set(moon_component, "light_source_angle", 2.0)
+        try_set(moon_component, "volumetric_scattering_intensity", 1.0)
+    log("sky: %s%s" % (sky_kind, " with a moon" if moon_look else ""))
 
     fog = spawn(unreal.ExponentialHeightFog, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0))
     fog.set_folder_path("Atmosphere")
@@ -436,6 +515,8 @@ def main():
         ("lens_flare_intensity", 0.4),
         ("ambient_occlusion_intensity", 0.6),
         ("motion_blur_amount", 0.35),
+        # Glass and water show the room in them, not only the sky.
+        ("lumen_front_layer_translucency_reflections", True),
     ]:
         try_set(settings, "override_" + name, True)
         try_set(settings, name, value)
