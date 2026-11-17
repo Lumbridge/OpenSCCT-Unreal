@@ -244,7 +244,6 @@ private:
 	int32 TourIndex = 0;
 	bool bAdvanceTour = false;
 	int32 ShotsLeft = -1;
-	int32 ShotIndex = 0;
 	float ShotTimer = 0.0f;
 	float QuitTimer = -1.0f;
 

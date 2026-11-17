@@ -484,7 +484,10 @@ void UScctSessionSubsystem::TickAutoShots(float DeltaTime)
 
 	FString Directory = FPaths::ProjectSavedDir() / TEXT("ScctShots");
 	FParse::Value(FCommandLine::Get(), TEXT("ScctShotDir="), Directory);
-	const FString File = Directory / FString::Printf(TEXT("%s_%02d.png"), *GetWorld()->GetMapName(), ShotIndex++);
+	// Numbered through the whole run, not per level: a run that comes back to a map (menu, match, menu, match)
+	// keeps every picture instead of writing over the first visit's.
+	static int32 RunShotIndex = 0;
+	const FString File = Directory / FString::Printf(TEXT("%s_%02d.png"), *GetWorld()->GetMapName(), RunShotIndex++);
 	// -ScctShotUI: the screenshot includes the HUD and everything else Slate draws over the picture.
 	static const bool bShowUI = FParse::Param(FCommandLine::Get(), TEXT("ScctShotUI"));
 	FScreenshotRequest::RequestScreenshot(File, bShowUI, false);
