@@ -90,7 +90,8 @@ Nothing here was downloaded. `Content/OpenSCCT/Effects/` holds only things built
 | T_RainStreak | `make_effect_textures.py` (drawn with numpy) | a raindrop streak |
 
 The textures the placed effects show (smoke, sparks, coronas, cookies) are original game content: they are
-imported per map into `Content/Imported/` and never committed.
+imported per map into `Content/Imported/` and never committed. A release cooks the imported maps, and with them
+these textures, into its paks (docs/RELEASING.md): bundled in releases, never committed.
 
 ## Pawn skins (Tools/Materials, Content/OpenSCCT/Materials/PawnSkins)
 
