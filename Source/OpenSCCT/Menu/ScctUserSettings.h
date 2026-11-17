@@ -12,6 +12,8 @@ enum class EScctSoundKind : uint8
 	Music,    // the match's music
 	MenuMusic,
 	MenuSounds,
+	Objective, // the objective jingles (at 0 they are not played at all)
+	Voice,     // other players' voices
 };
 
 /**
@@ -56,6 +58,9 @@ public:
 	/** Counts up whenever a volume changed, so a player of sound can tell its voices need their gain again. */
 	int32 GetAudioRevision() const { return AudioRevision; }
 
+	/** Raised by ApplyAll, after the volumes are in force: a mixer that sets gains of its own reads them again. */
+	FSimpleMulticastDelegate OnApplied;
+
 	// Volumes, 0 to 100.
 	int32 MasterVolume = 100;
 	int32 EffectsVolume = 80;
@@ -63,6 +68,8 @@ public:
 	int32 MusicVolume = 70;
 	int32 MenuMusicVolume = 50;
 	int32 MenuSoundsVolume = 70;
+	int32 ObjectiveVolume = 80;
+	int32 VoiceVolume = 100;
 
 	bool bMotionBlur = true;
 

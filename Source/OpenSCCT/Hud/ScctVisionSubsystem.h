@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Hud/ScctVisionData.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctVisionSubsystem.generated.h"
 
@@ -16,7 +17,16 @@ class UMaterialInstanceDynamic;
  * (run Tools/Materials/Build-VisionMaterials.ps1 after changing it). Each has one parameter, Amount, 0 to 1.
  *
  * Characters are marked for the materials through the custom depth stencil while a mode is on: 1 a spy, 2 a merc.
- * Thermal vision draws marked pixels hot.
+ * Thermal vision draws marked pixels hot. Other things only the goggles show are marked by whoever draws them
+ * (the detector beams: Play/ScctMarkersSubsystem): StencilEmfStreak is drawn as a dark grey streak in EMF, and
+ * HeatStencil(Heat) as that heat in thermal.
+ *
+ * Other subsystems ask which mode is shown (GetVisionMode and the tests after it) to show what the original hides
+ * from the naked eye: beams flagged bHideInNormalVision in thermal and EMF, effects flagged bHideInNormalVision in
+ * night and thermal vision.
+ *
+ * Unattended switch: -ScctForceVision=<34|36|37|38> holds that mode whatever the HUD says (0 holds plain sight), so
+ * a mode can be shot without a player turning the goggles on.
  */
 UCLASS()
 class OPENSCCT_API UScctVisionSubsystem : public UWorldSubsystem
@@ -30,6 +40,29 @@ public:
 	/** Plain sight at once: the match is over. */
 	void Clear();
 
+	/** The mode the goggles show now (34 night, 36 thermal, 37 motion, 38 EMF, 0 plain sight), forced or the HUD's. */
+	int32 GetVisionMode() const { return ShownMode; }
+
+	/** Thermal or EMF: the modes that show detector beams flagged bHideInNormalVision. */
+	bool IsHeatOrEmf() const { return ShownMode == 36 || ShownMode == 38; }
+
+	/** Night or thermal: the modes that show effects flagged bHideInNormalVision (the original's EffectViews rule). */
+	bool ShowsVisionOnlyEffects() const { return ShownMode == 34 || ShownMode == 36; }
+
+	/** The simulation's per-actor vision values of this frame (heat, EMF, motion, shock protection), refreshed by Present. */
+	const FScctVisionData& GetData() const { return Data; }
+	FScctVisionData& GetData() { return Data; }
+
+	/** The goggles of a world, or null. */
+	static const UScctVisionSubsystem* Find(const UWorld* World);
+
+	/** The custom depth stencil of something EMF vision draws as a dark grey streak. */
+	static constexpr int32 StencilEmfStreak = 3;
+
+	/** The custom depth stencil of something thermal vision draws at Heat (0 to 1): 128 to 255. */
+	static int32 HeatStencil(float Heat) { return 128 + FMath::RoundToInt(FMath::Clamp(Heat, 0.0f, 1.0f) * 127.0f); }
+
+	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
 protected:
@@ -63,4 +96,12 @@ private:
 	bool bTriedMaterials = false;
 	bool bCharactersMarked = false;
 	int32 LastMode = 0;
+
+	FScctVisionData Data;
+
+	/** The mode shown, after the forced one is applied. */
+	int32 ShownMode = 0;
+
+	/** -ScctForceVision: the mode held whatever the HUD says, INDEX_NONE when not forced. */
+	int32 ForcedMode = INDEX_NONE;
 };

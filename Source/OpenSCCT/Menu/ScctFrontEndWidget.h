@@ -16,8 +16,14 @@ class OPENSCCT_API UScctFrontEndWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	/** Unattended: shows a page by name ("offline", "join", "servers"). */
+	/** Unattended: shows a page by name ("offline", "join", "servers", "options"). */
 	void ShowPageNamed(const FString& Name);
+
+	/** Opens the Options screen on one of its pages (SScctFrontEnd::ShowOptions). */
+	void ShowOptions(FName Page);
+
+	/** The QUIT question, as the button asks it. */
+	void AskQuit();
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;

@@ -6,6 +6,8 @@
 #include "Hud/ScctHudStyle.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "OpenSCCT.h"
 #include "Play/ScctExposure.h"
 #include "Play/ScctPawnProxy.h"
@@ -44,6 +46,22 @@ namespace
 bool UScctVisionSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
 {
 	return WorldType == EWorldType::Game || WorldType == EWorldType::PIE;
+}
+
+void UScctVisionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
+{
+	Super::Initialize(Collection);
+	int32 Forced = 0;
+	if (FParse::Value(FCommandLine::Get(), TEXT("ScctForceVision="), Forced))
+	{
+		ForcedMode = Forced;
+		UE_LOG(LogOpenSCCT, Log, TEXT("Vision: mode %d held by -ScctForceVision, whatever the HUD says"), ForcedMode);
+	}
+}
+
+const UScctVisionSubsystem* UScctVisionSubsystem::Find(const UWorld* World)
+{
+	return World != nullptr ? World->GetSubsystem<UScctVisionSubsystem>() : nullptr;
 }
 
 void UScctVisionSubsystem::Deinitialize()
@@ -104,6 +122,12 @@ bool UScctVisionSubsystem::EnsureVolume()
 
 void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 {
+	Data.Refresh(DeltaSeconds);
+	if (ForcedMode != INDEX_NONE)
+	{
+		VisionMode = ForcedMode;
+	}
+	ShownMode = VisionMode;
 	bool bAnyMode = false;
 	for (const FVisionMode& Mode : Modes)
 	{
@@ -173,6 +197,8 @@ void UScctVisionSubsystem::Clear()
 		}
 	}
 	LastMode = 0;
+	ShownMode = 0;
+	Data.Reset();
 	MarkCharacters(false);
 }
 

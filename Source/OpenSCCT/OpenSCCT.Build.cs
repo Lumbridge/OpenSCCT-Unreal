@@ -27,6 +27,8 @@ public class OpenSCCT : ModuleRules
 			"AnimationCore",
 			// The effect meshes are imported on the player's machine and found by looking (Play/ScctEffectsSubsystem).
 			"AssetRegistry",
+			// The monitors' list and work areas for the display settings (Settings/ScctDisplaySettings).
+			"ApplicationCore",
 			// A sound wave class of our own (Play/ScctSoundWave) links against the audio proxy interfaces.
 			"AudioExtensions",
 			"Json",
@@ -34,6 +36,9 @@ public class OpenSCCT : ModuleRules
 			"MoviePlayer",
 			"Projects",
 			"RenderCore",
+			// The flash-bang after-image is copied out of the post-processing chain (Hud/ScctScreenEffectsSubsystem).
+			"Renderer",
+			"RHI",
 			"Slate",
 			"SlateCore",
 			// The game's sounds are loose Ogg Vorbis and PCM files decoded at run time (Play/ScctSoundData).

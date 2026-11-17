@@ -6,6 +6,7 @@
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Menu/ScctMatchMenuWidget.h"
+#include "Hub/ScctHubSubsystem.h"
 #include "Misc/App.h"
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
@@ -125,6 +126,15 @@ void AScctGameMode::StartPlay()
 	UScctOnlineSubsystem* Online = UScctOnlineSubsystem::Get(this);
 	if (Session == nullptr)
 	{
+		return;
+	}
+
+	UScctHubSubsystem* Hub = UScctHubSubsystem::Get(this);
+	if (Hub != nullptr && Hub->ShouldPresent(GetWorld()))
+	{
+		// The hub is the hub server's: this level only presents the session the hub visit puts in the bridge's slot.
+		UE_LOG(LogOpenSCCT, Log, TEXT("Level %s presents the hub visit (no local match)"), *Match.Map);
+		Hub->PresentIn(Session);
 		return;
 	}
 

@@ -11,7 +11,9 @@ script again; the assets are rebuilt from nothing each time.
 
 Scene inputs the shaders read:
   14 the picture so far, 1 scene depth (cm), 13 custom depth (cm), 25 custom stencil.
-The game marks characters in the custom stencil while a mode is on: 1 a spy, 2 a merc.
+The game marks characters in the custom stencil while a mode is on: 1 a spy, 2 a merc. Detector beams are marked
+while thermal or EMF is on by a cylinder drawn only into the custom depth (Source/OpenSCCT/Play/ScctMarkersSubsystem):
+3 a beam EMF draws as a dark grey streak, 128 to 255 a beam thermal draws at the heat (stencil - 128) / 127.
 """
 import unreal
 
@@ -37,15 +39,42 @@ float Grain = frac(sin(dot(Cell + frac(T) * 37.0, float2(12.9898, 78.233))) * 43
 BODY = """
 float2 SUV = GetDefaultSceneTextureUV(Parameters, 25);
 float2 SPx = GetSceneTextureBufferSize(25).zw;
-float Body = (SceneTextureLookup(SUV, 25, false).r > 0.5
+float S0 = SceneTextureLookup(SUV, 25, false).r;
+float Body = (S0 > 0.5 && S0 < 2.5
     && SceneTextureLookup(SUV, 13, false).r < SceneTextureLookup(SUV, 1, false).r + 30.0) ? 1.0 : 0.0;
 float Ring = 0.0;
 for (int k = 0; k < 8; k++)
 {
     float Ak = k * 0.785398;
     float2 O = SUV + float2(cos(Ak), sin(Ak)) * SPx * Radius;
-    Ring += (SceneTextureLookup(O, 25, false).r > 0.5
+    float Sk = SceneTextureLookup(O, 25, false).r;
+    Ring += (Sk > 0.5 && Sk < 2.5
         && SceneTextureLookup(O, 13, false).r < SceneTextureLookup(O, 1, false).r + 30.0) ? 0.125 : 0.0;
+}
+"""
+
+# The detector beams the goggles show (after BODY): Beam how much of the pixel a heat-marked beam covers and BeamHeat
+# its heat, Streak how much an EMF-marked beam covers. The pixel and its four neighbours one pixel away are read,
+# the neighbours at half weight, so a beam a pixel or two across reads as a soft line rather than broken dots. A
+# beam is seen only where nothing of the scene stands in front of it (the beam is not in the scene depth itself).
+BEAMS = """
+float Beam = 0.0;
+float BeamHeat = 0.0;
+float Streak = 0.0;
+for (int b = 0; b < 5; b++)
+{
+    float2 O = SUV + (b == 0 ? float2(0.0, 0.0) : float2(cos(b * 1.570796), sin(b * 1.570796)) * SPx);
+    float Sb = SceneTextureLookup(O, 25, false).r;
+    float Wb = (b == 0 ? 1.0 : 0.5) * (SceneTextureLookup(O, 13, false).r < SceneTextureLookup(O, 1, false).r + 5.0 ? 1.0 : 0.0);
+    if (Sb > 127.5)
+    {
+        BeamHeat = max(BeamHeat, (Sb - 128.0) / 127.0);
+        Beam = max(Beam, Wb);
+    }
+    if (Sb > 2.5 && Sb < 3.5)
+    {
+        Streak = max(Streak, Wb);
+    }
 }
 """
 
@@ -84,7 +113,7 @@ return lerp(C, Out, Amount);
 
 THERMAL = PRELUDE + """
 float Radius = 10.0;
-""" + BODY + """
+""" + BODY + BEAMS + """
 // The room as temperature rather than detail: a softened brightness, kept cold. Lamps read warmer.
 float Lb = L;
 for (int i = 0; i < 4; i++)
@@ -99,6 +128,9 @@ float Heat = 0.13 + pow(Lb, 0.7) * 0.50 + smoothstep(0.80, 1.0, Lb) * 0.20;
 // form, with warm air around it.
 float Core = 0.56 + 0.26 * Ring * Ring + 0.18 * saturate(L * 6.0);
 Heat = lerp(max(Heat, Ring * 0.50), Core, Body);
+
+// A detector beam is drawn at its own heat (HeatIntensity: 1 a tripwire, 0.4 a mine's beam).
+Heat = lerp(Heat, max(Heat, BeamHeat), Beam);
 Heat = saturate(Heat + Grain * 0.035);
 
 // Palette: deep blue, violet, magenta, orange, yellow, white.
@@ -143,7 +175,7 @@ return lerp(C, Out, Amount);
 
 EMF = PRELUDE + """
 float Radius = 2.5;
-""" + BODY + """
+""" + BODY + BEAMS + """
 // Electrical things glow: what is bright in the picture (lamps, screens) blooms blue-white over a dark field.
 float Glow = 0.0;
 for (int i = 0; i < 8; i++)
@@ -161,6 +193,9 @@ Out += float3(0.55, 0.78, 1.0) * (Hot * 0.9 + Glow * 0.9);
 
 // People carry little that shows: only a thin cold outline.
 Out += float3(0.25, 0.45, 0.9) * saturate(abs(Ring - Body) * 2.0) * 0.55;
+
+// A detector beam is a dark grey streak: it gives off nothing, the field only shows it is there.
+Out = lerp(Out, float3(0.24, 0.24, 0.25), Streak);
 
 // Interference: slow bands drifting up the picture, and grain.
 Out *= 0.90 + 0.10 * sin(VUV.y * 80.0 + T * 4.0);
@@ -231,6 +266,63 @@ def build(name, code):
     log("built %s" % path)
 
 
+# Cross-eyed double vision (spec/hud/screen-effects.md, "Cross-eyed double vision"), as the original's final draw of
+# the frame does it: the picture twice, half each. One copy shows U 0 to 1 - SpreadA across the screen, the other U
+# SpreadB to 1, V unchanged, so each is stretched from its own side. Source/OpenSCCT/Hud/ScctScreenEffectsSubsystem
+# works the two spreads out from CrossEyedFactor and the time (the original's formula) and sets them each frame;
+# Amount blends the doubled picture in (1 while the factor is on).
+DOUBLE = """
+float2 VUV = GetViewportUV(Parameters);
+float3 C = Scene.rgb;
+float2 U0 = float2(VUV.x * (1.0 - SpreadA), VUV.y);
+float2 U1 = float2(SpreadB + VUV.x * (1.0 - SpreadB), VUV.y);
+float3 Doubled = 0.5 * (SceneTextureLookup(ViewportUVToSceneTextureUV(U0, 14), 14, true).rgb
+    + SceneTextureLookup(ViewportUVToSceneTextureUV(U1, 14), 14, true).rgb);
+return lerp(C, Doubled, saturate(Amount));
+"""
+
+
+def build_double_vision():
+    asset_name = "M_ScctDoubleVision"
+    path = "%s/%s" % (PACKAGE, asset_name)
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        unreal.EditorAssetLibrary.delete_asset(path)
+
+    library = unreal.MaterialEditingLibrary
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(asset_name, PACKAGE, unreal.Material, unreal.MaterialFactoryNew())
+    material.set_editor_property("material_domain", unreal.MaterialDomain.MD_POST_PROCESS)
+    material.set_editor_property("blendable_location", unreal.BlendableLocation.BL_SCENE_COLOR_AFTER_TONEMAPPING)
+    # After the goggles' materials (priority 0): the original doubled the finished frame as its very last draw.
+    material.set_editor_property("blendable_priority", 10)
+
+    inputs = [("Scene", scene_texture(material, unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0, 0), "Color")]
+    for index, (parameter, default) in enumerate([("Amount", 0.0), ("SpreadA", 0.0), ("SpreadB", 0.0)]):
+        node = library.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -700, 200 + index * 150)
+        node.set_editor_property("parameter_name", parameter)
+        node.set_editor_property("default_value", default)
+        inputs.append((parameter, node, ""))
+
+    custom = library.create_material_expression(material, unreal.MaterialExpressionCustom, -250, 200)
+    custom.set_editor_property("description", "ScctDoubleVision")
+    custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    pins = []
+    for pin_name, _, _ in inputs:
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", pin_name)
+        pins.append(pin)
+    custom.set_editor_property("inputs", pins)
+    custom.set_editor_property("code", DOUBLE.strip())
+
+    for pin_name, node, output in inputs:
+        if not library.connect_material_expressions(node, output, custom, pin_name):
+            log("could not connect %s of %s" % (pin_name, asset_name))
+    library.connect_material_property(custom, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    library.recompile_material(material)
+    unreal.EditorAssetLibrary.save_loaded_asset(material, only_if_is_dirty=False)
+    log("built %s" % path)
+
+
 for mode_name, mode_code in MODES:
     build(mode_name, mode_code)
-log("done: %d materials" % len(MODES))
+build_double_vision()
+log("done: %d materials" % (len(MODES) + 1))

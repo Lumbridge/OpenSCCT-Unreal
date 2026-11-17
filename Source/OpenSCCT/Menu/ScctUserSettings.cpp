@@ -41,6 +41,8 @@ void UScctUserSettings::Load()
 	GConfig->GetInt(Section, TEXT("MusicVolume"), MusicVolume, Ini);
 	GConfig->GetInt(Section, TEXT("MenuMusicVolume"), MenuMusicVolume, Ini);
 	GConfig->GetInt(Section, TEXT("MenuSoundsVolume"), MenuSoundsVolume, Ini);
+	GConfig->GetInt(Section, TEXT("ObjectiveVolume"), ObjectiveVolume, Ini);
+	GConfig->GetInt(Section, TEXT("VoiceVolume"), VoiceVolume, Ini);
 	GConfig->GetBool(Section, TEXT("MotionBlur"), bMotionBlur, Ini);
 	GConfig->GetFloat(Section, TEXT("Gamma"), Gamma, Ini);
 	GConfig->GetInt(Section, TEXT("RenderScale"), RenderScale, Ini);
@@ -52,6 +54,8 @@ void UScctUserSettings::Load()
 	MusicVolume = FMath::Clamp(MusicVolume, 0, 100);
 	MenuMusicVolume = FMath::Clamp(MenuMusicVolume, 0, 100);
 	MenuSoundsVolume = FMath::Clamp(MenuSoundsVolume, 0, 100);
+	ObjectiveVolume = FMath::Clamp(ObjectiveVolume, 0, 100);
+	VoiceVolume = FMath::Clamp(VoiceVolume, 0, 100);
 	Gamma = FMath::Clamp(Gamma, 1.6f, 3.0f);
 	RenderScale = FMath::Clamp(RenderScale, 50, 100);
 }
@@ -65,6 +69,8 @@ void UScctUserSettings::Save()
 	GConfig->SetInt(Section, TEXT("MusicVolume"), MusicVolume, Ini);
 	GConfig->SetInt(Section, TEXT("MenuMusicVolume"), MenuMusicVolume, Ini);
 	GConfig->SetInt(Section, TEXT("MenuSoundsVolume"), MenuSoundsVolume, Ini);
+	GConfig->SetInt(Section, TEXT("ObjectiveVolume"), ObjectiveVolume, Ini);
+	GConfig->SetInt(Section, TEXT("VoiceVolume"), VoiceVolume, Ini);
 	GConfig->SetBool(Section, TEXT("MotionBlur"), bMotionBlur, Ini);
 	GConfig->SetFloat(Section, TEXT("Gamma"), Gamma, Ini);
 	GConfig->SetInt(Section, TEXT("RenderScale"), RenderScale, Ini);
@@ -94,6 +100,7 @@ void UScctUserSettings::ApplyAll()
 	{
 		Hud->SetOption(EScctHudOption::DistanceInFeet, bDistanceInFeet ? 1 : 0);
 	}
+	OnApplied.Broadcast();
 }
 
 void UScctUserSettings::ResetVideo()
@@ -117,6 +124,8 @@ void UScctUserSettings::ResetAudio()
 	MusicVolume = 70;
 	MenuMusicVolume = 50;
 	MenuSoundsVolume = 70;
+	ObjectiveVolume = 80;
+	VoiceVolume = 100;
 }
 
 void UScctUserSettings::ResetInterface()
@@ -132,6 +141,8 @@ float UScctUserSettings::GetGain(EScctSoundKind Kind) const
 	case EScctSoundKind::Ambient: return AmbientVolume / 100.0f;
 	case EScctSoundKind::Music: return MusicVolume / 100.0f;
 	case EScctSoundKind::MenuMusic: return MenuMusicVolume / 100.0f;
+	case EScctSoundKind::Objective: return ObjectiveVolume / 100.0f;
+	case EScctSoundKind::Voice: return VoiceVolume / 100.0f;
 	default: return MenuSoundsVolume / 100.0f;
 	}
 }
@@ -139,8 +150,8 @@ float UScctUserSettings::GetGain(EScctSoundKind Kind) const
 void UScctUserSettings::LogValues(const TCHAR* Why) const
 {
 	const UGameUserSettings* Engine = GEngine != nullptr ? GEngine->GetGameUserSettings() : nullptr;
-	UE_LOG(LogOpenSCCT, Log, TEXT("Settings %s: volumes master %d effects %d ambient %d music %d menu music %d menu sounds %d; motion blur %d, gamma %.2f, render scale %d, feet %d"),
-		Why, MasterVolume, EffectsVolume, AmbientVolume, MusicVolume, MenuMusicVolume, MenuSoundsVolume, bMotionBlur ? 1 : 0, Gamma, RenderScale, bDistanceInFeet ? 1 : 0);
+	UE_LOG(LogOpenSCCT, Log, TEXT("Settings %s: volumes master %d effects %d ambient %d music %d menu music %d menu sounds %d objective %d voice %d; motion blur %d, gamma %.2f, render scale %d, feet %d"),
+		Why, MasterVolume, EffectsVolume, AmbientVolume, MusicVolume, MenuMusicVolume, MenuSoundsVolume, ObjectiveVolume, VoiceVolume, bMotionBlur ? 1 : 0, Gamma, RenderScale, bDistanceInFeet ? 1 : 0);
 	if (Engine != nullptr)
 	{
 		const FIntPoint Size = Engine->GetScreenResolution();

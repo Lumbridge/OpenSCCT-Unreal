@@ -38,11 +38,28 @@ class UScctHudWidget;
  *        go); or any command of the player's bindings (SwitchHeadset 1 or 2: the side's two vision modes, 3
  *        cycles; ShowMenu; SwitchLaser ...), which presses the key the current side has it on, so it takes the
  *        path a real key takes. A command no key is bound to is refused with a log line.
+ *        PreviewCamAlert 1/0 shows or hides the camera network page's Alert box without a spy hacking.
+ *        PreviewCoop N shows coop icon N (1 offer a ladder, 2 climb on the mate, 3 offer a hoist, 4 be boosted up;
+ *        0 takes it away) as if the game offered it. Die kills the local pawn on the local match's server (lives
+ *        left as they are), e.g. to see the Merc Deathmatch respawn weapon pick.
  *   -ScctHudChat="6 all hello there;11 team go left"
  *        timed chat lines, "seconds-into-the-match all|team text": the chat line opens with the text in it and
  *        is sent a second and a half later, so a screenshot in between shows the open line
+ *   -ScctHudTexture=Package.Name[,Package.Name...]
+ *        loads those textures of the content as the session starts and logs their size ("ScctHudTextures: ...").
  *   -ScctHudLog=S
  *        seconds between the snapshot lines in the log (default 1; 0 turns them off)
+ *   -ScctGadgetMenu=sticky|mine[,At[,Hold[,Down;Down...]]]
+ *        opens the spy's sticky cam menu or the merc's mine menu: at At seconds (default 4) the Alt-fire key goes
+ *        down, the gadget is selected and the controller put in the menu (nothing in the original's scripts enters
+ *        the sticky cam menu, so a check cannot reach it by keys alone), the down key steps the selection at each
+ *        Down time, and Alt-fire comes up after Hold seconds (default 8), which runs the selected line as a player's
+ *        release would. The menu's rows go to the log as they change ("ScctHud: menu ...").
+ *   -ScctGadgetView=sticky|camnet[,At[,Stay]]
+ *        looks through a gadget's camera by the player's own keys: at At seconds (default 4) the sticky cam or the
+ *        camera network gadget is selected; a spy then draws the Shocker (the weapon key held) and fires the cam with
+ *        Alt-fire, a merc uses the network with Alt-fire; Stay seconds later (default 10) Alt-fire leaves the view.
+ *        The view's changes go to the log ("ScctHud: gadget view ...", "ScctHud: CamNetworkAlert ...").
  */
 UCLASS()
 class OPENSCCT_API UScctHudSubsystem : public UWorldSubsystem
@@ -54,6 +71,13 @@ public:
 
 	/** What the HUD shows this frame. */
 	const FScctHudModel& GetModel() const { return *Model; }
+
+	/**
+	 * Every message drained from the bridge, as it is drained (once each, oldest first), before the model files it.
+	 * The chat takes the Chat and TeamChat lines from here; the model leaves those to it.
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FMessageEvent, const FScctHudMessage& /*Message*/);
+	FMessageEvent OnMessage;
 
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
@@ -93,6 +117,48 @@ private:
 	void HideWidget();
 	void RunTimedCommands();
 	void LogSnapshot(float DeltaSeconds);
+
+	// The gadget views (ScctHudGadgetViews.cpp): the sticky cam and mine menus, the sticky cam and camera network
+	// pages' camera and key help, and the unattended -ScctGadgetMenu check.
+	void InitGadgetViews();
+	void ReadGadgetViews();
+	void RunGadgetChecks(float DeltaSeconds);
+
+	struct FGadgetMenuCheck
+	{
+		int32 Menu = 0;          // EScctHudGadgetMenu, 0 when off
+		float At = 4.0f;         // seconds into the match when Alt-fire goes down and the menu is forced
+		float Hold = 8.0f;       // seconds Alt-fire stays down (the menu stays open)
+		TArray<float> DownSteps; // seconds into the match when the down key steps the selection
+		int32 Stage = 0;         // 0 waiting, 1 in the menu with Alt-fire down, 2 done
+		int32 NextStep = 0;
+	} GadgetMenuCheck;
+
+	struct FGadgetViewCheck
+	{
+		int32 Kind = 0;          // EScctHudGadgetKind: StickyCam or CamNetwork, 0 when off
+		float At = 4.0f;         // seconds into the match when the gadget is selected
+		float Stay = 10.0f;      // seconds in the view before Alt-fire leaves it
+		int32 Stage = 0;
+		float StageAt = 0.0f;    // when the current stage began
+	} GadgetViewCheck;
+
+	// The HUD's pictures (ScctHudIcons.cpp): the coop icon's clip and the respawn pick's Use key into the model, the
+	// -ScctHudTexture check, and the timed commands PreviewCoop N and Die.
+	void InitIcons();
+	void ReadIcons(float DeltaSeconds);
+	bool RunIconCommand(const FString& Name, int32 Argument);
+
+	TArray<FString> TextureChecks; // -ScctHudTexture=Package.Name[,Package.Name...]
+	bool bTextureChecksDone = false;
+	int32 LastCoopIcon = 0;
+	FIntPoint LastRespawnTile = FIntPoint(-1, -1);
+	float RespawnKeyAge = -100.0f;
+
+	float GadgetKeysAge = 0.0f;
+	int32 LastGadgetView = 0;
+	bool bLastCamAlert = false;
+	uint32 LastMenuSignature = 0;
 
 	struct FTimedCommand
 	{

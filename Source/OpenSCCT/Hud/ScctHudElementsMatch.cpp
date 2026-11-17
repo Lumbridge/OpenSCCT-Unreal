@@ -1,6 +1,7 @@
 #include "Hud/ScctHudElements.h"
 
 #include "Hud/ScctHudStyle.h"
+#include "Hud/ScctVisorEffects.h"
 
 // The blocks about the match: clock and teams, objectives, world markers, the start and end banners, the scoreboard.
 
@@ -159,7 +160,8 @@ void ScctHudElements::PaintRound(FScctHudPainter& Painter, const FScctHudModel& 
 
 void ScctHudElements::PaintObjectives(FScctHudPainter& Painter, const FScctHudModel& Model)
 {
-	if (!Model.bHasRound || !Model.bHasState || (Model.State.Flags & EScctHudFlags::HideHud) != 0 || Model.ObjectiveLines.Num() == 0)
+	if (!Model.bHasRound || !Model.bHasState || (Model.State.Flags & EScctHudFlags::HideHud) != 0 || Model.ObjectiveLines.Num() == 0
+		|| ScctVisorEffects::IsHudShutDown(Model)) // the merc page's objectives go down with an EMP
 	{
 		return;
 	}

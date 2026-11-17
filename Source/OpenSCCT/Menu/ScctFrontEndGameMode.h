@@ -12,9 +12,11 @@ class UScctFrontEndWidget;
  * streamed in behind the menu with a slowly moving camera; when none of the maps it knows a camera for has been
  * imported, the level's own small lit scene stays (its actors carry the tag ScctFallback).
  *
- * Unattended switch (off by default):
- *   -ScctMenuPage=offline|join|servers   open the menu on that page (for screenshots)
+ * Unattended switches (off by default):
+ *   -ScctMenuPage=offline|join|servers|options   open the menu on that page (for screenshots)
  *   -ScctMenuPage=start                  open the offline page and press its START (each time the menu is shown)
+ *   -ScctOptions=<Page>                  open the Options screen on that page (Display, Hud...; Menu/SScctOptionsPage.h)
+ *   -ScctConfirmTest                     open the QUIT question (a screenshot of the confirmation box)
  */
 UCLASS()
 class OPENSCCT_API AScctFrontEndGameMode : public AGameModeBase

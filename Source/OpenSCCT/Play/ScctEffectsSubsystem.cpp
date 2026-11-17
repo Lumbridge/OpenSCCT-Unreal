@@ -13,6 +13,8 @@
 #include "Misc/CommandLine.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/Parse.h"
+#include "Hud/ScctVisionSubsystem.h"
+#include "Misc/ScopeExit.h"
 #include "OpenSCCT.h"
 #include "Play/ScctLevelStateSubsystem.h"
 #include "Play/ScctEquipmentSubsystem.h"
@@ -137,6 +139,7 @@ void UScctEffectsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Tracers.SetNum(MaxTracers);
 	ImpactSerials.Init(0, MaxImpactSlots);
 	ImpactSeenFrame.Init(0, MaxImpactSlots);
+	MarkSurfaces.SetNum(MaxImpactSlots);
 	Actors.Reserve(320);
 }
 
@@ -193,6 +196,11 @@ void UScctEffectsSubsystem::ResetMatch()
 	{
 		Serial = 0;
 	}
+	for (FMarkSurface& Surface : MarkSurfaces)
+	{
+		Surface = FMarkSurface();
+	}
+	ResetProjections();
 	Sprites.Clear();
 	MatchSeconds = 0.0f;
 	bFireHeld = bAltFireHeld = false;
@@ -329,6 +337,7 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 	DrainShots();
 	UpdateTracers(FxSeconds);
 	UpdateImpactMarks();
+	UpdateProjections();
 	UpdateEffectActors(FxSeconds);
 	UpdateLights(FxSeconds);
 	UpdateBodyFill(DeltaSeconds);
@@ -579,29 +588,6 @@ void UScctEffectsSubsystem::UpdateTracers(float DeltaSeconds)
 // Impact marks
 // ---------------------------------------------------------------------------------------------------------------
 
-USceneComponent* UScctEffectsSubsystem::FindMarkSurface(int32 SurfaceActorId)
-{
-	if (SurfaceActorId == 0)
-	{
-		return nullptr;
-	}
-
-	// The simulation names the surface by its actor; the level state knows the level actor by the actor's map name.
-	const FScctPlayApi* Play = ScctFeature<FScctPlayApi>();
-	UScctLevelStateSubsystem* Level = GetWorld()->GetSubsystem<UScctLevelStateSubsystem>();
-	if (Play == nullptr || Level == nullptr)
-	{
-		return nullptr;
-	}
-	TCHAR Name[128] = {};
-	if (Play->GetActorName(SurfaceActorId, Name, UE_ARRAY_COUNT(Name)) <= 0)
-	{
-		return nullptr;
-	}
-	const AActor* Actor = Level->FindLevelActor(Name);
-	return Actor != nullptr ? Actor->GetRootComponent() : nullptr;
-}
-
 void UScctEffectsSubsystem::UpdateImpactMarks()
 {
 	const int32 Count = Events->GetImpactMarks(MarkBuffer.GetData(), MarkBuffer.Num());
@@ -621,6 +607,7 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 		if (bNew)
 		{
 			ImpactSerials[Mark.Slot] = Mark.Serial;
+			MarkSurfaces[Mark.Slot] = FMarkSurface();
 			++NumImpacts;
 			const FString& SparkClass = GetName(Mark.SparkClassId);
 			const FString& TypeClass = GetName(Mark.TypeId);
@@ -645,18 +632,8 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 				// Each slot's decal has its own colours, set for the surface that was hit.
 				DecalTints[Mark.Slot] = Decal->CreateDynamicMaterialInstance();
 			}
-			// A mark on something the simulation has taken away since (a pane that broke, a prop that is hidden)
-			// goes with it, and comes back with it.
-			const USceneComponent* Carrier = Decal->GetAttachParent();
-			const bool bSurfaceHidden = Carrier != nullptr && Carrier != Host->GetRootComponent() && Carrier->GetOwner() != nullptr && Carrier->GetOwner()->IsHidden();
-			if (bSurfaceHidden && !bNew)
-			{
-				if (Decal->IsVisible())
-				{
-					Decal->SetVisibility(false);
-				}
-			}
-			else if (bNew || !Decal->IsVisible())
+			// A mark tied to a door that was hidden for a while comes back where it was on the door.
+			if (bNew || (!Decal->IsVisible() && !MarkSurfaces[Mark.Slot].bAttached))
 			{
 				const float HalfSize = TintDecal(DecalTints[Mark.Slot], GetName(Mark.TypeId), GetName(Mark.SparkClassId));
 				// A decal projects along its own X axis, into the surface; its turn about that axis is random so
@@ -667,27 +644,26 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 				// Shallow, so a mark on a thin wall or a door edge is not projected onto what stands behind it.
 				Decal->DecalSize = FVector(4.0, Size, Size);
 
-				// A mark on a door, a lift or any other map actor that moves goes with it: the decal hangs on the
-				// level actor the simulation's actor is drawn by. A mark on the level's own geometry stays put.
-				USceneComponent* Surface = FindMarkSurface(Mark.SurfaceActorId);
-				USceneComponent* Wanted = Surface != nullptr ? Surface : Host->GetRootComponent();
-				if (Decal->GetAttachParent() != Wanted)
-				{
-					Decal->AttachToComponent(Wanted, FAttachmentTransformRules::KeepWorldTransform);
-				}
+				// A mark on a door, a lift or any other map actor that moves goes with it, and is drawn only while
+				// that actor is (Play/ScctEffectsMarks.cpp). A mark on the level's own geometry stays put.
 				Decal->SetWorldLocationAndRotation(At, Facing);
-				// The surface's own scale must not stretch the mark.
-				Decal->SetWorldScale3D(FVector::OneVector);
-				Decal->SetVisibility(true);
-				if (bLog && Surface != nullptr)
-				{
-					UE_LOG(LogOpenSCCT, Log, TEXT("Effects: the mark of impact slot %d lies on map actor %d (level actor %s) and moves with it"), Mark.Slot, Mark.SurfaceActorId, *GetNameSafe(Surface->GetOwner()));
-				}
+				AttachMark(Mark.Slot, Mark, *Decal);
+			}
+			const bool bDrawn = FollowMarkSurface(Mark.Slot, *Decal);
+			if (Decal->IsVisible() != bDrawn)
+			{
+				Decal->SetVisibility(bDrawn);
 			}
 		}
 		else if (Decal != nullptr && Decal->IsVisible())
 		{
 			Decal->SetVisibility(false);
+			FMarkSurface& Surface = MarkSurfaces[Mark.Slot];
+			if (bLog && Surface.bAttached && !Surface.bHiddenWithSurface)
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("Effects: mark slot %d hidden with its surface #%d (no longer drawn)"), Mark.Slot, Surface.ActorId);
+			}
+			Surface.bHiddenWithSurface = Surface.bAttached;
 		}
 	}
 
@@ -708,6 +684,19 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 {
 	const int32 Count = Events->GetEffectActors(ActorBuffer.GetData(), ActorBuffer.Num());
+	const UScctVisionSubsystem* Vision = UScctVisionSubsystem::Find(GetWorld());
+	const bool bShowVisionOnly = Vision != nullptr && Vision->ShowsVisionOnlyEffects();
+	int32 NumVisionOnly = 0;
+	ON_SCOPE_EXIT
+	{
+		const int32 Shown = bShowVisionOnly ? NumVisionOnly : 0;
+		if (NumVisionOnly != LoggedVisionOnly || Shown != LoggedVisionOnlyShown)
+		{
+			LoggedVisionOnly = NumVisionOnly;
+			LoggedVisionOnlyShown = Shown;
+			UE_LOG(LogOpenSCCT, Log, TEXT("Effects: %d vision-only effects listed, %d shown (mode %d)"), NumVisionOnly, Shown, Vision != nullptr ? Vision->GetVisionMode() : 0);
+		}
+	};
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
 		const FScctEffectActor& Record = ActorBuffer[Index];
@@ -732,7 +721,10 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 		// Where it is: on a drawn pawn's bone, or where the simulation has it.
 		const FVector Scale(Record.ScaleX != 0.0f ? Record.ScaleX : 1.0f, Record.ScaleY != 0.0f ? Record.ScaleY : 1.0f, Record.ScaleZ != 0.0f ? Record.ScaleZ : 1.0f);
 		FTransform Place(FRotator(Record.Pitch, Record.Yaw, Record.Roll), FVector(Record.X, Record.Y, Record.Z));
-		bool bHidden = (Record.Flags & (EScctEffectFlags::Hidden | EScctEffectFlags::VisionOnly)) != 0;
+		// bHideInNormalVision: shown only while the goggles show night or thermal vision.
+		const bool bVisionOnly = (Record.Flags & EScctEffectFlags::VisionOnly) != 0;
+		NumVisionOnly += bVisionOnly ? 1 : 0;
+		bool bHidden = (Record.Flags & EScctEffectFlags::Hidden) != 0 || (bVisionOnly && !bShowVisionOnly);
 		if ((Record.Flags & EScctEffectFlags::OnBone) != 0)
 		{
 			const AScctPawnProxy* Proxy = Session->FindProxy(Record.BaseActorId);

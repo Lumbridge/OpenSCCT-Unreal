@@ -165,9 +165,16 @@ void UScctLevelStateSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	bLog = FParse::Param(FCommandLine::Get(), TEXT("ScctLevelLog"));
 
-	// -ScctLevelDo="movers@8;breaklights@14"
+	// -ScctLevelDo="movers@8;breaklights@14" (also flare: a merc flare thrown from the camera; dirtyfeet: every pawn's
+	// next steps leave footprints). -ScctMarkTest shoots the nearest doors and panes, then opens the
+	// doors and breaks the panes, so the marks can be seen to go with them.
 	FString Actions;
-	if (FParse::Value(FCommandLine::Get(), TEXT("ScctLevelDo="), Actions, false))
+	FParse::Value(FCommandLine::Get(), TEXT("ScctLevelDo="), Actions, false);
+	if (FParse::Param(FCommandLine::Get(), TEXT("ScctMarkTest")))
+	{
+		Actions += TEXT(";shootmovers@4;shootprops@4.5;movers@9;props@15");
+	}
+	if (!Actions.IsEmpty())
 	{
 		TArray<FString> Entries;
 		Actions.ParseIntoArray(Entries, TEXT(";"));
@@ -703,6 +710,29 @@ void UScctLevelStateSubsystem::RunDebugActions()
 		else if (Action.What == TEXT("emitters"))
 		{
 			Queued = Debug->FireEmitters();
+		}
+		else if (Action.What == TEXT("shootmovers"))
+		{
+			Queued = Debug->ShootNear(View.X, View.Y, View.Z, 2, 0);
+		}
+		else if (Action.What == TEXT("shootprops"))
+		{
+			Queued = Debug->ShootNear(View.X, View.Y, View.Z, 3, 1);
+		}
+		else if (Action.What == TEXT("flare"))
+		{
+			// Ahead of the camera and a little down, so it catches on the floor or the wall in front.
+			FRotator Aim(View.Pitch, View.Yaw, 0.0f);
+			Aim.Pitch = FMath::Min(Aim.Pitch, -12.0f);
+			const FVector Direction = Aim.Vector();
+			const FVector From = FVector(View.X, View.Y, View.Z) + Direction * 40.0;
+			Queued = Debug->ThrowFlare(From.X, From.Y, From.Z, Direction.X, Direction.Y, Direction.Z);
+		}
+		else if (Action.What == TEXT("dirtyfeet"))
+		{
+			const int32 Pawns = Debug->DirtyFeet();
+			UE_LOG(LogOpenSCCT, Log, TEXT("Level state: dirty feet on %d pawns of the client's world"), Pawns);
+			Queued = Pawns > 0 ? 1 : 0;
 		}
 		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: -ScctLevelDo '%s' at %.1f s (camera at %.0f, %.0f, %.0f): %s"), *Action.What, MatchSeconds, View.X, View.Y, View.Z,
 			Queued == 1 ? TEXT("handed to the server") : Queued == 0 ? TEXT("no local server to do it") : TEXT("not a known action"));

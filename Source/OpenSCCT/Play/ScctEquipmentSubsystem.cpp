@@ -96,7 +96,7 @@ namespace
 		return Slot >= 0 && Slot < UE_ARRAY_COUNT(Names) ? Names[Slot] : TEXT("?");
 	}
 
-	void SetCVar(const TCHAR* Name, int32 Value)
+	void SetIntCVar(const TCHAR* Name, int32 Value)
 	{
 		if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
 		{
@@ -174,8 +174,8 @@ void UScctEquipmentSubsystem::OnMatchStarted()
 	Models.LoadCatalog(*Api);
 
 	// The view model shadows itself from every light, the torch and the muzzle flash included.
-	SetCVar(TEXT("r.FirstPerson.SelfShadow"), 1);
-	SetCVar(TEXT("r.FirstPerson.SelfShadow.LightTypes"), 2);
+	SetIntCVar(TEXT("r.FirstPerson.SelfShadow"), 1);
+	SetIntCVar(TEXT("r.FirstPerson.SelfShadow.LightTypes"), 2);
 
 	Equipment.SetNumUninitialized(MaxEquipment);
 	Attachments.SetNumUninitialized(MaxAttachments);

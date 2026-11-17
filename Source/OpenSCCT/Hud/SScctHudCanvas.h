@@ -18,6 +18,8 @@ public:
 		FullScreen,
 		/** Inside the display's safe zone: everything to read. */
 		SafeArea,
+		/** Over the whole picture and every other layer: the flash-bang white-out, which blinds the HUD too. */
+		Blinding,
 	};
 
 	SLATE_BEGIN_ARGS(SScctHudCanvas) {}

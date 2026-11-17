@@ -233,15 +233,15 @@ namespace
 			{
 				const FScctMenuMapInfo* Map = Menu->FindMap(MapIds[Index]);
 				// Under the name: the modes (most maps play all four, which needs no list) and the players it is made for.
-				TArray<FString> ModeNames;
+				TArray<FString> PlayableModeNames;
 				for (int32 Mode = 0; Map != nullptr && Mode < 4; ++Mode)
 				{
 					if (Map->Plays(Mode))
 					{
-						ModeNames.Add(Menu->GetModeName(Mode));
+						PlayableModeNames.Add(Menu->GetModeName(Mode));
 					}
 				}
-				FString Modes = ModeNames.Num() == 4 ? FString(TEXT("Every mode")) : FString::Join(ModeNames, TEXT(" · "));
+				FString Modes = PlayableModeNames.Num() == 4 ? FString(TEXT("Every mode")) : FString::Join(PlayableModeNames, TEXT(" · "));
 				if (Map != nullptr && Map->Data.RecommendedPlayers > 0)
 				{
 					Modes += FString::Printf(TEXT("%s%d players"), Modes.IsEmpty() ? TEXT("") : TEXT("  ·  "), Map->Data.RecommendedPlayers);
