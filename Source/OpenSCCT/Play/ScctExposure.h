@@ -25,11 +25,26 @@ namespace FScctExposure
 	OPENSCCT_API float Get();
 
 	/**
+	 * How bright the last picture was as a whole, before the tone curve: the scene's average luminance (the
+	 * engine's exposure histogram over the whole picture, its brightest and darkest tenths left out) times the
+	 * exposure. 0.18 is a picture the eye has settled on; less is one too dark for the exposure's range (a cellar
+	 * with the lamps shot out), more one too bright. 0 until a frame was measured.
+	 */
+	OPENSCCT_API float PictureLevel();
+
+	/**
 	 * What to multiply a flash light's strength by so it reads the same at any exposure. The strengths in the code
 	 * are those of a moderately lit room (ReferenceExposure); bounded both ways so a wrong reading cannot blind
 	 * or hide a flash.
 	 */
 	OPENSCCT_API float FlashScale();
+
+	/**
+	 * Candelas of a rifle's muzzle flash in a moderately lit room, before FlashScale (scct.Flash.Candelas). One
+	 * value for every muzzle flash light, the local player's view model and every flash seen from outside, so a
+	 * shot lights the room the same whoever fires it and from wherever it is seen.
+	 */
+	OPENSCCT_API float MuzzleFlashCandelas();
 
 	/** The same factor with the caller's own bounds, for a light that must keep up over the whole exposure range. */
 	OPENSCCT_API float PictureScale(float Least, float Most);

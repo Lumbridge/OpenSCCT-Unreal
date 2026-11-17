@@ -10,8 +10,8 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Menu/ScctUserSettings.h"
 #include "Play/ScctAudioSubsystem.h"
-#include "Settings/ScctSettings.h"
 #include "Sound/AudioSettings.h"
 #include "Sound/SoundClass.h"
 #include "Sound/SoundSubmix.h"
@@ -27,18 +27,31 @@ namespace
 	/** Godot's SettingsApplier.NonVoiceHeadroom: 3 dB of summing headroom for every category but Master and Voice. */
 	constexpr float NonVoiceHeadroom = 0.70794576f;
 
-	const FName MasterKey(TEXT("Audio.Master"));
+	/** The player's volume (Menu/ScctUserSettings.h) of each category, in EScctAudioCategory order. */
+	const EScctSoundKind CategoryKinds[NumCategories] = {
+		EScctSoundKind::Effects, EScctSoundKind::Music, EScctSoundKind::MenuMusic, EScctSoundKind::Objective,
+		EScctSoundKind::MenuSounds, EScctSoundKind::Voice };
 
-	/** The option of each category, in EScctAudioCategory order. */
-	const FName CategoryKeys[NumCategories] = {
-		TEXT("Audio.Effects"), TEXT("Audio.RoundMusic"), TEXT("Audio.MenuMusic"), TEXT("Audio.Objective"),
-		TEXT("Audio.MenuSounds"), TEXT("Voice.OutputVolume") };
+	/** The settings' field of a category's volume (0..100), or of the master volume for INDEX_NONE. */
+	int32* VolumeField(UScctUserSettings& Settings, int32 Index)
+	{
+		switch (Index)
+		{
+		case INDEX_NONE: return &Settings.MasterVolume;
+		case 0: return &Settings.EffectsVolume;
+		case 1: return &Settings.MusicVolume;
+		case 2: return &Settings.MenuMusicVolume;
+		case 3: return &Settings.ObjectiveVolume;
+		case 4: return &Settings.MenuSoundsVolume;
+		default: return &Settings.VoiceVolume;
+		}
+	}
 
 	bool ParseCategory(const FString& Name, int32& OutIndex);
 
-	/** Sets a volume option from the console, as the Options screen would: "scct.Audio.Volume Music 0.25" or "... default". */
+	/** Sets a volume from the console, as the settings page would: "scct.Audio.Volume Music 0.25" or "... default". */
 	FAutoConsoleCommand VolumeCommand(TEXT("scct.Audio.Volume"),
-		TEXT("Sets an Audio volume option (Master, Effects, Music, MenuMusic, Objective, MenuSounds, Voice) to 0..1, or back to its default with 'default'. Applies at once and is kept in the user settings."),
+		TEXT("Sets a volume of the settings (Master, Effects, Music, MenuMusic, Objective, MenuSounds, Voice) to 0..1, or back to its default with 'default'. Applies at once and is kept in the user settings."),
 		FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
 		{
 			int32 Index = INDEX_NONE;
@@ -47,15 +60,20 @@ namespace
 				UE_LOG(LogOpenSCCT, Warning, TEXT("ScctAudio: usage: scct.Audio.Volume <Master|Effects|Music|MenuMusic|Objective|MenuSounds|Voice> <0..1|default>"));
 				return;
 			}
-			const FName Key = Index == INDEX_NONE ? MasterKey : CategoryKeys[Index];
+			UScctUserSettings* Settings = UScctUserSettings::Get();
+			int32* Field = VolumeField(*Settings, Index);
 			if (Args[1].Equals(TEXT("default"), ESearchCase::IgnoreCase))
 			{
-				FScctSettings::Reset(Key);
+				// A fresh object holds the defaults (its members' initial values).
+				UScctUserSettings* Defaults = NewObject<UScctUserSettings>();
+				*Field = *VolumeField(*Defaults, Index);
 			}
 			else
 			{
-				FScctSettings::SetFloat(Key, FCString::Atof(*Args[1]));
+				*Field = FMath::Clamp(FMath::RoundToInt32(FCString::Atof(*Args[1]) * 100.0f), 0, 100);
 			}
+			Settings->ApplyAll();
+			Settings->Save();
 		}));
 
 	/** Index of the main submix's peak listener in FDeviceState::Peaks; the categories follow from 1. */
@@ -137,60 +155,9 @@ const TCHAR* UScctAudioMix::CategoryName(EScctAudioCategory Category)
 	return Index >= 0 && Index < NumCategories ? Names[Index] : TEXT("?");
 }
 
-void UScctAudioMix::RegisterSettings()
-{
-	// Godot's GameSettings (game/Scripts/Options/GameSettings.cs, the audio section): master 1, the categories 0.5
-	// (z_cache_sound_volume on a first run), other players' voices 1.
-	struct FOption
-	{
-		FName Key;
-		FText Label;
-		FText Tooltip;
-		const TCHAR* Default;
-	};
-	const FOption Options[] = {
-		{ MasterKey, LOCTEXT("Master", "Master volume"), LOCTEXT("MasterTip", "Everything the game plays."), TEXT("1.0") },
-		{ CategoryKeys[0], LOCTEXT("Effects", "Sound effects"), LOCTEXT("EffectsTip", "The match's sounds: steps, shots, voices of the characters, the map's ambience and its rooms' reverb."), TEXT("0.5") },
-		{ CategoryKeys[1], LOCTEXT("RoundMusic", "In-game music volume"), LOCTEXT("RoundMusicTip", "The music of a round and of its end."), TEXT("0.5") },
-		{ CategoryKeys[2], LOCTEXT("MenuMusic", "Menu music volume"), LOCTEXT("MenuMusicTip", "The music of the main menu and the lobby."), TEXT("0.5") },
-		{ CategoryKeys[3], LOCTEXT("Objective", "Objective sounds"), LOCTEXT("ObjectiveTip", "The jingles that mark an objective. At 0 they are not played at all."), TEXT("0.5") },
-		{ CategoryKeys[4], LOCTEXT("MenuSounds", "Menu sounds"), LOCTEXT("MenuSoundsTip", "The menus' own sounds: button feedback, the join sound."), TEXT("0.5") },
-		{ CategoryKeys[5], LOCTEXT("Voice", "Other players' voice volume"), LOCTEXT("VoiceTip", "Other players' voices (voice chat)."), TEXT("1.0") },
-	};
-	int32 Order = 0;
-	for (const FOption& Option : Options)
-	{
-		FScctSettingDesc Desc;
-		Desc.Key = Option.Key;
-		Desc.Page = TEXT("Audio");
-		Desc.Group = LOCTEXT("Volume", "Volume");
-		Desc.Label = Option.Label;
-		Desc.Tooltip = Option.Tooltip;
-		Desc.Type = EScctSettingType::Float;
-		Desc.Default = Option.Default;
-		Desc.Min = 0.0f;
-		Desc.Max = 1.0f;
-		Desc.Step = 0.05f;
-		Desc.Order = Order++;
-		if (Option.Key == CategoryKeys[static_cast<int32>(EScctAudioCategory::Voice)])
-		{
-			// As in Godot, the voice chat volume is on the Voice page, under its playback group (ScctVoiceSettings).
-			Desc.Page = TEXT("Voice");
-			Desc.Group = NSLOCTEXT("ScctVoice", "GroupPlayback", "Playback & devices");
-			Desc.Step = 0.01f;
-			Desc.Order = 2;
-		}
-		FScctSettings::Register(Desc);
-	}
-
-	// Sound through walls belongs to the match's sound, which registers it itself.
-	UScctAudioSubsystem::RegisterAcousticSettings();
-}
-
 void UScctAudioMix::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
-	RegisterSettings();
 
 	for (float& Value : Forced)
 	{
@@ -216,16 +183,13 @@ void UScctAudioMix::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	bLogPeaks = FParse::Param(FCommandLine::Get(), TEXT("ScctAudioPeaks"));
 
-	CreateObjects();
-	SettingsHandle = FScctSettings::OnChanged().AddUObject(this, &UScctAudioMix::HandleSettingChanged);
-	EnsureApplied();
+	// The volumes are the user settings'; only "Sound through walls", which nothing else holds, is a registry option
+	// (shown at the end of the settings page's Audio tab).
+	UScctAudioSubsystem::RegisterAcousticSettings();
 
-	// What the Options screen will list on the Audio page, once, so a run's log shows the options exist.
-	for (const FScctSettingDesc* Desc : FScctSettings::OptionsOf(TEXT("Audio")))
-	{
-		UE_LOG(LogOpenSCCT, Log, TEXT("ScctAudio: option %s '%s' (group %s, %.2f..%.2f step %.2f, default %s, now %s)"), *Desc->Key.ToString(),
-			*Desc->Label.ToString(), *Desc->Group.ToString(), Desc->Min, Desc->Max, Desc->Step, *Desc->Default, *FScctSettings::GetString(Desc->Key));
-	}
+	CreateObjects();
+	SettingsHandle = UScctUserSettings::Get()->OnApplied.AddUObject(this, &UScctAudioMix::HandleSettingsApplied);
+	EnsureApplied();
 
 	if (bLogPeaks)
 	{
@@ -235,7 +199,7 @@ void UScctAudioMix::Initialize(FSubsystemCollectionBase& Collection)
 
 void UScctAudioMix::Deinitialize()
 {
-	FScctSettings::OnChanged().Remove(SettingsHandle);
+	UScctUserSettings::Get()->OnApplied.Remove(SettingsHandle);
 	FTSTicker::RemoveTicker(PeakTicker);
 
 	if (FAudioDeviceManager* Manager = GEngine != nullptr ? GEngine->GetAudioDeviceManager() : nullptr)
@@ -356,44 +320,55 @@ void UScctAudioMix::EnsureApplied()
 	Apply();
 }
 
-void UScctAudioMix::HandleSettingChanged(FName Key)
+void UScctAudioMix::HandleSettingsApplied()
 {
-	if (Key != MasterKey && Algo::Find(CategoryKeys, Key) == nullptr)
-	{
-		return;
-	}
+	const float OldMaster = MasterGain;
+	float Old[NumCategories];
+	FMemory::Memcpy(Old, Gains, sizeof(Gains));
 	ReadGains();
-	Apply();
+	if (OldMaster != MasterGain || FMemory::Memcmp(Old, Gains, sizeof(Gains)) != 0)
+	{
+		Apply();
+	}
 }
 
 void UScctAudioMix::ReadGains()
 {
-	MasterGain = ForcedMaster >= 0.0f ? ForcedMaster : FMath::Clamp(FScctSettings::GetFloat(MasterKey), 0.0f, 1.0f);
+	const UScctUserSettings* Settings = UScctUserSettings::Get();
+	MasterGain = ForcedMaster >= 0.0f ? ForcedMaster : FMath::Clamp(Settings->MasterVolume / 100.0f, 0.0f, 1.0f);
 	for (int32 Index = 0; Index < NumCategories; ++Index)
 	{
-		Gains[Index] = Forced[Index] >= 0.0f ? Forced[Index] : FMath::Clamp(FScctSettings::GetFloat(CategoryKeys[Index]), 0.0f, 1.0f);
+		Gains[Index] = Forced[Index] >= 0.0f ? Forced[Index] : Settings->GetGain(CategoryKinds[Index]);
 	}
 }
 
 void UScctAudioMix::Apply()
 {
+	// The player's volumes are set where the sounds are played: the master volume is the engine's
+	// (FApp::SetVolumeMultiplier), the match's voices carry the volume of their kind (Play/ScctAudioSubsystem) and the
+	// menus' sounds theirs (Menu/ScctMenuSubsystem). The submixes keep only their headroom, so nothing is turned down
+	// twice; other players' voices have no player of their own yet, so the voice submix carries the voice volume. A gain
+	// forced by -ScctAudioVolume is set on the submix (over the player's volume) for a check.
 	float Applied[NumCategories];
 	for (int32 Index = 0; Index < NumCategories; ++Index)
 	{
-		Applied[Index] = Gains[Index] * (static_cast<EScctAudioCategory>(Index) == EScctAudioCategory::Voice ? 1.0f : NonVoiceHeadroom);
+		const bool bVoice = static_cast<EScctAudioCategory>(Index) == EScctAudioCategory::Voice;
+		const float SubmixGain = Forced[Index] >= 0.0f ? Forced[Index] : bVoice ? Gains[Index] : 1.0f;
+		Applied[Index] = SubmixGain * (bVoice ? 1.0f : NonVoiceHeadroom);
 	}
+	const float MainSubmixGain = ForcedMaster >= 0.0f ? ForcedMaster : 1.0f;
 
 	int32 NumDevices = 0;
 	if (FAudioDeviceManager* Manager = GEngine != nullptr ? GEngine->GetAudioDeviceManager() : nullptr)
 	{
-		Manager->IterateOverAllDevices([this, &Applied, &NumDevices](Audio::FDeviceId Id, FAudioDevice* Device)
+		Manager->IterateOverAllDevices([this, &Applied, &NumDevices, MainSubmixGain](Audio::FDeviceId Id, FAudioDevice* Device)
 		{
 			if (Device == nullptr)
 			{
 				return;
 			}
 			++NumDevices;
-			Device->SetSubmixOutputVolume(&Device->GetMainSubmixObject(), MasterGain);
+			Device->SetSubmixOutputVolume(&Device->GetMainSubmixObject(), MainSubmixGain);
 			for (int32 Index = 0; Index < NumCategories; ++Index)
 			{
 				Device->SetSubmixOutputVolume(Submixes[Index], Applied[Index]);
@@ -405,7 +380,7 @@ void UScctAudioMix::Apply()
 		});
 	}
 
-	UE_LOG(LogOpenSCCT, Log, TEXT("ScctAudio: mix master=%.2f effects=%.2f music=%.2f menumusic=%.2f objective=%.2f menusounds=%.2f voice=%.2f (submix volumes with 3 dB headroom on all but master and voice; %d audio devices%s%s)"),
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctAudio: volumes master=%.2f effects=%.2f music=%.2f menumusic=%.2f objective=%.2f menusounds=%.2f voice=%.2f (from the settings; set on the voices, the submixes keep 3 dB headroom on all but master and voice; %d audio devices%s%s)"),
 		MasterGain, Gains[0], Gains[1], Gains[2], Gains[3], Gains[4], Gains[5], NumDevices,
 		ForcedMaster >= 0.0f || Algo::AnyOf(Forced, [](float Value) { return Value >= 0.0f; }) ? TEXT(", some forced by -ScctAudioVolume") : TEXT(""),
 		AreObjectiveSoundsOn() ? TEXT("") : TEXT(", objective jingles off"));

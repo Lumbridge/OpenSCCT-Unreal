@@ -51,7 +51,7 @@ struct FScctVoiceTalkerOutput
  *
  * PLAYBACK. One UAudioComponent per remote talker, made when his first frames are waiting and dropped when he is no
  * longer a talker (he left, or the visit moved on). Each plays a USoundWaveProcedural at 48 kHz mono on the Voice
- * sound class of UScctAudioMix, so "Other players' voice volume" (Voice.OutputVolume) is its submix's gain; the player's volume for each
+ * sound class of UScctAudioMix, so the Audio page's voice chat volume (UScctUserSettings) is its submix's gain; the player's volume for each
  * talker is already in the samples ReadFrame hands out. Once a frame the game thread tops each wave up to three 20 ms
  * frames: the audio output's pace decides how fast the jitter buffer is read, as Godot's generators do. Without an
  * audio device (-nosound) the frames are read by the clock, 50 a second, so the voice still flows and is logged.

@@ -12,6 +12,7 @@
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
+#include "Settings/ScctSettings.h"
 
 const TCHAR* const UScctOnlineSubsystem::FrontEndLevel = TEXT("/Game/OpenSCCT/Maps/L_FrontEnd");
 const TCHAR* const UScctOnlineSubsystem::OnlineOption = TEXT("ScctOnline");
@@ -21,8 +22,8 @@ namespace
 	// The player's own settings (Saved/Config, never the project's): who they are online.
 	const TCHAR* const UserSection = TEXT("OpenSCCT.Online");
 
-	// The project's settings (Config/DefaultGame.ini): the master server and the invite key every build ships.
-	const TCHAR* const ProjectSection = TEXT("OpenSCCT.Online");
+	// The master server and the invite key come from the Online settings page, which defaults to the project's
+	// Config/DefaultGame.ini (ScctOnlineHost.cpp, ReadMasterSettings).
 
 	constexpr int32 MaxPlayers = 64;
 	constexpr int32 MaxServers = 64;
@@ -111,9 +112,13 @@ void UScctOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	bAutoWalk = FParse::Param(CommandLine, TEXT("ScctAutoWalk"));
 	FParse::Value(CommandLine, TEXT("ScctLeaveAfter="), LeaveAfter);
 	FParse::Value(CommandLine, TEXT("ScctChat="), AutoChat, false);
+	ReadHostSwitches();
 	// The status lines are for unattended runs; a player's log is not filled with them.
-	LogEvery = AutoJoin.IsEmpty() ? 0.0f : 2.0f;
+	LogEvery = AutoJoin.IsEmpty() && AutoHostPort < 0 ? 0.0f : 2.0f;
 	FParse::Value(CommandLine, TEXT("ScctOnlineLog="), LogEvery);
+
+	RegisterOnlineSettings();
+	SettingsChangedHandle = FScctSettings::OnChanged().AddUObject(this, &UScctOnlineSubsystem::HandleSettingChanged);
 
 	LastTickSeconds = FPlatformTime::Seconds();
 	TickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &UScctOnlineSubsystem::TickFromTicker));
@@ -122,6 +127,7 @@ void UScctOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 void UScctOnlineSubsystem::Deinitialize()
 {
 	FTSTicker::RemoveTicker(TickerHandle);
+	FScctSettings::OnChanged().Remove(SettingsChangedHandle);
 	if (Api != nullptr && GetState() != EScctOnlineState::Idle)
 	{
 		// The game is closing: the server hears that the player left instead of timing them out.
@@ -151,8 +157,8 @@ const FScctOnlineApi* UScctOnlineSubsystem::Connect()
 	LoadIdentity();
 
 	FString MasterUrl, InviteKey;
-	GConfig->GetString(ProjectSection, TEXT("MasterUrl"), MasterUrl, GGameIni);
-	GConfig->GetString(ProjectSection, TEXT("InviteKey"), InviteKey, GGameIni);
+	ReadMasterSettings(MasterUrl, InviteKey);
+	ApplyConnectMode();
 	if (!MasterUrl.IsEmpty())
 	{
 		Api->SetMaster(*MasterUrl, *InviteKey);
@@ -283,6 +289,8 @@ void UScctOnlineSubsystem::Leave()
 		UE_LOG(LogOpenSCCT, Log, TEXT("Online: leaving (state %s)"), StateName(GetState()));
 		Api->Leave();
 	}
+	// The bridge's Leave closes the player's own server with the visit to it.
+	HostPort = 0;
 	Notice.Reset();
 	Touch();
 }
@@ -325,6 +333,53 @@ void UScctOnlineSubsystem::SendChat(const FString& Text, bool bTeamOnly)
 bool UScctOnlineSubsystem::SetMatchMap(const FString& Map)
 {
 	return Api != nullptr && Api->SetMatch(*Map, -1) != 0;
+}
+
+bool UScctOnlineSubsystem::SetMatch(const FString& Map, int32 Mode)
+{
+	return Api != nullptr && Api->SetMatch(Map.IsEmpty() ? nullptr : *Map, Mode) != 0;
+}
+
+bool UScctOnlineSubsystem::SetSetupOptions(const FString& Options)
+{
+	return Api != nullptr && Api->SetSetupOptions(*Options) != 0;
+}
+
+int32 UScctOnlineSubsystem::GetSetupOption(const TCHAR* Name, int32 Fallback) const
+{
+	// "?MapName=AquaE?TimeLimit=20...": the value runs to the next '?'.
+	const FString Key = FString(TEXT("?")) + Name + TEXT("=");
+	const int32 At = SetupOptions.Find(Key, ESearchCase::IgnoreCase);
+	if (At == INDEX_NONE)
+	{
+		return Fallback;
+	}
+	const FString Value = SetupOptions.Mid(At + Key.Len());
+	return Value.IsEmpty() ? Fallback : FCString::Atoi(*Value);
+}
+
+void UScctOnlineSubsystem::AdminLogin(const FString& Password)
+{
+	if (Api != nullptr && !Password.IsEmpty())
+	{
+		Api->AdminLogin(*Password);
+	}
+}
+
+void UScctOnlineSubsystem::AdminCommand(const FString& Command)
+{
+	if (Api != nullptr && !Command.TrimStartAndEnd().IsEmpty())
+	{
+		Api->AdminCommand(*Command.TrimStartAndEnd());
+	}
+}
+
+void UScctOnlineSubsystem::BackToLobby()
+{
+	if (Api != nullptr)
+	{
+		Api->BackToLobby();
+	}
 }
 
 bool UScctOnlineSubsystem::GetResults(FScctOnlineResults& OutResults, TArray<FScctOnlineResultRow>& OutRows) const
@@ -435,7 +490,7 @@ void UScctOnlineSubsystem::TickVisit()
 	{
 		// The bridge is brought up by the first thing that needs it (a join, the server list, the map list), not
 		// by an idle frame; only an unattended join asks for it here.
-		if (!AutoJoin.IsEmpty() || FParse::Param(FCommandLine::Get(), TEXT("ScctListServers")))
+		if (!AutoJoin.IsEmpty() || AutoHostPort >= 0 || FParse::Param(FCommandLine::Get(), TEXT("ScctListServers")))
 		{
 			RunUnattended(DeltaSeconds);
 		}
@@ -443,6 +498,7 @@ void UScctOnlineSubsystem::TickVisit()
 	}
 
 	Api->Update();
+	TickHost();
 
 	const EScctOnlineState OldState = GetState();
 	const bool bHadResults = HasFlag(EScctOnlineStatusFlags::ResultsReady);
@@ -487,6 +543,8 @@ void UScctOnlineSubsystem::RefreshTexts()
 	SetupDescription = ReadText(EScctOnlineText::SetupDescription);
 	ConnectLog = ReadText(EScctOnlineText::ConnectLog);
 	MapToLoad = ReadText(EScctOnlineText::MapToLoad);
+	SetupOptions = ReadText(EScctOnlineText::SetupOptions);
+	Motd = ReadText(EScctOnlineText::MasterMotd);
 
 	if (Status.MasterState != LastMasterState)
 	{
@@ -580,6 +638,11 @@ void UScctOnlineSubsystem::HandleStateChange(EScctOnlineState Old, EScctOnlineSt
 	else if (New == EScctOnlineState::Match && MatchSeconds < 0.0f)
 	{
 		MatchSeconds = 0.0f;
+	}
+	else if (New == EScctOnlineState::Lobby && IsHosting())
+	{
+		// The match the player's own server is set up for, as the session holds it (the line Create Session sent).
+		UE_LOG(LogOpenSCCT, Log, TEXT("Online: the hosted lobby's setup is %s"), *ReadText(EScctOnlineText::SetupOptions));
 	}
 	Touch();
 }
@@ -713,6 +776,7 @@ void UScctOnlineSubsystem::RunUnattended(float DeltaSeconds)
 		bAutoJoined = true;
 		Join(AutoJoin, FString(), AutoSide);
 	}
+	RunUnattendedHost();
 	if (Api == nullptr)
 	{
 		return;
@@ -765,6 +829,7 @@ void UScctOnlineSubsystem::LogStatus(float DeltaSeconds)
 	UE_LOG(LogOpenSCCT, Log, TEXT("Online: %s | server phase %d flags 0x%x | '%s' %s on %s | players %d/%d local id %d team %d | countdown %.1f | map to load '%s'"),
 		StateName(GetState()), Status.Phase, Status.Flags, *ServerName, *ModeName, *SetupMap, Status.PlayerCount, Status.MaxPlayers,
 		Status.LocalId, Status.LocalTeam, Status.Countdown, *MapToLoad);
+	LogHostStatus();
 
 	// During a round: where the simulation's pawns are, so the log shows the other players moving.
 	const UWorld* World = GetGameInstance()->GetWorld();

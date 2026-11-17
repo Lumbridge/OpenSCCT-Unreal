@@ -204,7 +204,8 @@ void UScctAudioSubsystem::ApplyAcoustics(FVoice& Voice, bool bForce)
 		return;
 	}
 
-	const float Volume = Voice.Volume * Voice.AcousticScale;
+	// The map's volume of the voice, the player's volume of its kind (Menu/ScctUserSettings.h) and the wall's scale.
+	const float Volume = Voice.Volume * SettingsGainOf(Voice) * Voice.AcousticScale;
 	if (bForce || !FMath::IsNearlyEqual(Voice.AppliedVolume, Volume, 0.005f))
 	{
 		Voice.AppliedVolume = Volume;

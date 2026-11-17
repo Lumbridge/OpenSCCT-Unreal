@@ -22,3 +22,21 @@ void UScctFrontEndWidget::ShowPageNamed(const FString& Name)
 		FrontEnd->ShowPageNamed(Name);
 	}
 }
+
+
+void UScctFrontEndWidget::ShowOptions(FName Page)
+{
+	if (FrontEnd.IsValid())
+	{
+		// The settings page of main's menus, on the tab of that name ("settings/audio").
+		FrontEnd->ShowPageNamed(Page.IsNone() ? FString(TEXT("settings")) : TEXT("settings/") + Page.ToString().ToLower());
+	}
+}
+
+void UScctFrontEndWidget::AskQuit()
+{
+	if (FrontEnd.IsValid())
+	{
+		FrontEnd->ShowPageNamed(TEXT("quit"));
+	}
+}

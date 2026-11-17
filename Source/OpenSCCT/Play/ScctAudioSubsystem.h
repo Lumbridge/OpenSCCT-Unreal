@@ -22,11 +22,15 @@ class USoundAttenuation;
  *
  *   - the files are the player's loose .wav and .ogg files, decoded on worker tasks and cached (FScctSoundCache);
  *   - every 3D voice is attenuated with the original's distance curve (full volume inside the minimum distance,
- *     MinDistance / (MinDistance + 0.5 x (d - MinDistance)) beyond it, nothing past 100 x Radius), follows its
- *     actor or its bone on the drawn pawn, and sends to the reverb more the further away it is;
- *   - the local player's own sounds and flat sounds play without 3D; music is one cross-faded track;
- *   - every voice plays in its volume category's sound class (Play/ScctAudioMix: the match's effects, the round's
- *     music, the objective jingles), so the Audio options set its gain; at objective volume 0 a jingle is not played;
+ *     MinDistance / (MinDistance + 0.5 x (d - MinDistance)) beyond it, with no cut-off: the bridge has already
+ *     tested each call against the original's reach of 100 x its radius), follows its actor or its bone on the
+ *     drawn pawn, and sends to the reverb more the further away it is;
+ *   - the local player's own sounds play without 3D and send a fixed share to the room's reverb; flat sounds play
+ *     without 3D and dry; music is one cross-faded track;
+ *   - every voice plays in its category's sound class (Play/ScctAudioMix: the match's effects, the round's music,
+ *     the objective jingles), which routes it to its submix; its gain is the player's volume of its kind
+ *     (UScctUserSettings::GetGain: effects, ambience, music, objective), set on the voice; at objective volume 0 a
+ *     jingle is not played;
  *   - the ambient loops of the map play while they are in reach (3D sources), while the listener is in their
  *     zone (zone beds, one voice per sound) or by distance (other flat sources, the loudest of each sound);
  *   - the reverb is the EAX environment of the zone the listener stands in, read from the map's audio table
@@ -64,7 +68,7 @@ public:
 	/** Voices that sound or wait for their start, the ambient ones included. */
 	int32 GetNumVoices() const { return Voices.Num(); }
 
-	/** The original's gain of a 3D source at Distance: 1 inside MinDistance, 0 beyond 100 x Radius. */
+	/** The original's gain of a 3D source at Distance: 1 inside MinDistance, falling with distance beyond it (Radius is not used: there is no cut-off). */
 	static float DistanceGain(float Distance, float MinDistance, float Radius);
 
 protected:
@@ -160,7 +164,9 @@ private:
 	 * in one call to the bridge's acoustic table, and its volume, low-pass and the place it is heard from follow.
 	 */
 	void UpdateAcoustics(float DeltaSeconds);
-	/** Puts a voice's acoustics on its component (volume x scale, low-pass, place); Force applies even unchanged values. */
+	/** The player's volume of a voice's kind (Menu/ScctUserSettings.h); the master volume is the engine's own. */
+	static float SettingsGainOf(const FVoice& Voice);
+	/** Puts a voice's acoustics on its component (volume x kind's gain x scale, low-pass, place); Force applies even unchanged values. */
 	void ApplyAcoustics(FVoice& Voice, bool bForce);
 	/** Reads -ScctAudioOcclusion, -ScctAudioWallSound and the -ScctAudioProbe switches at the match's start. */
 	void ReadAcousticSwitches();
@@ -199,6 +205,9 @@ private:
 	FName FindDrawnBone(const AScctPawnProxy& Proxy, int32 BoneId) const;
 	UScctSoundWave* FindOrCreateWave(const FVoice& Voice, const FScctPcmPtr& Pcm);
 	USoundAttenuation* FindOrCreateAttenuation(float MinDistance, float Radius);
+
+	/** The settings of the local player's own (flat) sounds: no distance model, only their send to the room's reverb. */
+	USoundAttenuation* FindOrCreateOwnSoundSettings();
 	UAudioComponent* AcquireComponent();
 
 	UPROPERTY(Transient)
@@ -222,6 +231,9 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UAudioComponent>> FreeComponents;
+
+	UPROPERTY(Transient)
+	TObjectPtr<USoundAttenuation> OwnSoundSettings;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UReverbEffect> DefaultReverb;

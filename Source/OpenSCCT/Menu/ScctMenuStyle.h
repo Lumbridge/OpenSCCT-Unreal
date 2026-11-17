@@ -38,9 +38,12 @@ namespace ScctMenuStyle
 	TSharedRef<SButton> Button(const TAttribute<FText>& Label, FOnClicked OnClicked, const TAttribute<bool>& Selected = false,
 		const FLinearColor& Colour = Accent(), float MinWidth = 0.0f);
 
-	/** A one-line text field; Hint is shown while it is empty. OnCommitted hears Enter and the loss of focus. */
+	/**
+	 * A one-line text field; Hint is shown while it is empty. OnCommitted hears Enter and the loss of focus,
+	 * OnChanged every edit as it is typed.
+	 */
 	TSharedRef<SEditableTextBox> TextBox(const FString& Hint, const FString& Initial = FString(), bool bPassword = false,
-		FOnTextCommitted OnCommitted = FOnTextCommitted());
+		FOnTextCommitted OnCommitted = FOnTextCommitted(), FOnTextChanged OnChanged = FOnTextChanged());
 
 	/** A hairline across a panel. */
 	TSharedRef<SWidget> Rule();

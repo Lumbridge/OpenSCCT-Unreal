@@ -15,6 +15,10 @@ The server project must have been built once: dotnet build -c Release --no-depen
 Tools\Run-OnlineCheck.ps1 -Content C:\path\to\.content -OpenScct C:\path\to\OpenSCCT -Map AquaE -Side spy
 
 .EXAMPLE
+# The join made from the menus, as a player makes it.
+Tools\Run-OnlineCheck.ps1 -Content C:\path\to\.content -OpenScct C:\path\to\OpenSCCT -Tag menujoin -MenuDo "wait 8; page address; wait 1; type 127.0.0.1:28961; press CONNECT; wait 10; shot lobby; press READY; wait 30; shot match; quit"
+
+.EXAMPLE
 # A join that cannot work: no server is started and the port is one nothing listens on.
 Tools\Run-OnlineCheck.ps1 -Content C:\path\to\.content -NoServer -Port 28999 -Tag fail -Shots 3 -Every 6
 #>
@@ -39,6 +43,12 @@ param(
     [switch] $NoServer,
     # Do not say ready: the game stays in the lobby (for a look at it).
     [switch] $StayInLobby,
+    # Join from the menus instead of -ScctJoin: a menu script (Source/OpenSCCT/Menu/ScctMenuDriver.h) that opens
+    # the join-by-address page, types 127.0.0.1:<Port> and presses CONNECT, for example. Its shots go to the same folder.
+    [string] $MenuDo = '',
+    # The game's picture size (the lobby and the results are worth a look at 1920x1080 as well).
+    [int] $ResX = 1280,
+    [int] $ResY = 720,
     # Anything else for the game's command line, as written.
     [string] $Extra = '',
     # Run the audio engine without a sound device (-DeterministicAudio) instead of no audio engine (-nosound), so
@@ -100,11 +110,11 @@ try {
 
     $arguments = @(
         "`"$project\OpenSCCTUnreal.uproject`"",
-        '-game', '-RenderOffscreen', '-ResX=1280', '-ResY=720', '-unattended', '-nosplash',
+        '-game', '-RenderOffscreen', "-ResX=$ResX", "-ResY=$ResY", '-ForceRes', '-unattended', '-nosplash',
         $(if ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
         "-ScctContent=`"$("$Content".Replace('\', '/'))`"",
-        "-ScctJoin=127.0.0.1:$Port", '-ScctName=UnrealCheck',
-        $(if (-not $StayInLobby) { '-ScctAutoReady' }),
+        $(if ($MenuDo) { "-ScctMenuDo=`"$MenuDo`"" } else { "-ScctJoin=127.0.0.1:$Port" }), '-ScctName=UnrealCheck',
+        $(if (-not $StayInLobby -and -not $MenuDo) { '-ScctAutoReady' }),
         $(if ($Side) { "-ScctSide=$Side" }),
         $(if ($LeaveAfter -gt 0) { "-ScctLeaveAfter=$LeaveAfter" }),
         "-ScctShots=$Shots", "-ScctShotEvery=$Every", '-ScctShotUI', "-ScctShotDir=`"$shotDir`"",

@@ -26,12 +26,16 @@ class UStaticMeshComponent;
  *     like dust in the light, with a small bloom where the beam starts and where it lands.
  *
  * The looks are two materials built by Tools/Level/build_level_assets.py (/Game/OpenSCCT/Level) on engine shapes;
- * without them nothing is drawn and the log says so. Beams the map shows only in the vision modes are left out
- * until the vision modes are drawn.
+ * without them nothing is drawn and the log says so.
+ *
+ * While the goggles show thermal or EMF (Hud/ScctVisionSubsystem), every beam is drawn for the goggles instead, as
+ * the original's vision-only beam node is: a cylinder that is not drawn in the picture, only into the custom depth
+ * stencil, which the mode's material paints: in thermal at the beam's HeatIntensity, in EMF as a dark grey streak.
+ * Beams the map hides from the naked eye (bHideInNormalVision: most tripwires, every mine beam) show only then.
  *
  * Unattended switch (off by default):
- *   -ScctShowVisionLasers   draw the beams that only show in thermal and EMF vision too, dimmer, so their
- *                           placement can be checked in a normal picture
+ *   -ScctShowVisionLasers   draw the beams that only show in thermal and EMF vision in plain sight too, dimmer, so
+ *                           their placement can be checked in a normal picture
  *   -ScctLevelLog           (shared with the level state) list every marker at the first frame and every beam
  *                           as it appears, with their places
  */
@@ -88,6 +92,7 @@ private:
 		int32 Core = INDEX_NONE;
 		int32 Halo = INDEX_NONE;
 		int32 Ends[2] = { INDEX_NONE, INDEX_NONE };
+		int32 Vision = INDEX_NONE;   // the goggles' stencil-only cylinder, while thermal or EMF is shown
 		uint32 SeenFrame = 0;
 	};
 
@@ -137,6 +142,7 @@ private:
 	FPool Lamps;
 	FPool Cores;
 	FPool Halos;
+	FPool VisionBeams;
 
 	TMap<int32, FDrawn> Drawn;   // by the marker's name id
 	TMap<int32, FBeam> Beams;    // by the beam's id
@@ -156,4 +162,9 @@ private:
 	int32 PeakLamps = 0;
 	int32 PeakBeams = 0;
 	int32 NumVisionOnlyBeams = 0;
+	int32 PeakGoggleBeams = 0;
+
+	/** What the log last said about the beams drawn for the goggles: their count and the mode. */
+	int32 LoggedGoggleBeams = 0;
+	int32 LoggedGoggleMode = 0;
 };

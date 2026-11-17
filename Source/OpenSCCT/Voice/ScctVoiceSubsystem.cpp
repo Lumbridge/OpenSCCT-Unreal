@@ -10,6 +10,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Menu/ScctUserSettings.h"
 #include "Play/ScctAudioMix.h"
 #include "Play/ScctControlSettings.h"
 #include "Play/ScctPlayerController.h"
@@ -60,7 +61,7 @@ namespace
 	bool IsVoiceKey(FName Key)
 	{
 		static const FName Keys[] = { EnabledKey, PushToTalkKey, MicMutedKey, ThresholdKey, HoldKey, InputGainKey, AutoGainKey,
-			NoiseKey, NoiseDbKey, EchoKey, JitterKey, OutputVolumeKey };
+			NoiseKey, NoiseDbKey, EchoKey, JitterKey };
 		for (const FName& Known : Keys)
 		{
 			if (Known == Key)
@@ -531,7 +532,8 @@ void UScctVoiceSubsystem::ApplySettings()
 	Settings.ActivationThreshold = FMath::Clamp(FScctSettings::GetFloat(ThresholdKey), 0.0f, 1.0f);
 	Settings.ActivationHoldMs = FMath::Clamp(FScctSettings::GetInt(HoldKey), 0, 5000);
 	Settings.InputGain = FMath::Clamp(FScctSettings::GetFloat(InputGainKey), 0.0f, 8.0f);
-	Settings.OutputVolume = FMath::Clamp(FScctSettings::GetFloat(OutputVolumeKey), 0.0f, 1.0f);
+	// The voice chat volume is the Audio page's (Menu/ScctUserSettings.h), which the voice submix applies; read back here.
+	Settings.OutputVolume = FMath::Clamp(UScctUserSettings::Get()->GetGain(EScctSoundKind::Voice), 0.0f, 1.0f);
 	Settings.JitterFrames = FMath::Clamp(FScctSettings::GetInt(JitterKey), 1, 12);
 	Settings.NoiseSuppression = FScctSettings::GetBool(NoiseKey) ? 1 : 0;
 	Settings.NoiseSuppressionDecibels = ScctVoiceSettings::NoiseDecibels();

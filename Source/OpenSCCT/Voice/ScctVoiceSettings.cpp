@@ -20,7 +20,6 @@ namespace ScctVoiceSettings
 	const FName NoiseDbKey(TEXT("Voice.NoiseSuppressionDb"));
 	const FName EchoKey(TEXT("Voice.EchoCancellation"));
 	const FName JitterKey(TEXT("Voice.JitterFrames"));
-	const FName OutputVolumeKey(TEXT("Voice.OutputVolume"));
 	const FName TeamOnlyKey(TEXT("Voice.TeamOnly"));
 	const FName TestKey(TEXT("Voice.Test"));
 }
@@ -32,7 +31,7 @@ namespace
 	/** Godot's GameSettings.NoiseLevels and NoiseLevelDecibels: Low, Standard, High, Extreme. */
 	constexpr int32 NoiseLevels[] = { 15, 30, 45, 60 };
 
-	// The page's groups in Godot's order; UScctAudioMix uses the same "Playback & devices" text for the voice volume.
+	// The page's groups in Godot's order (the voice chat volume itself is on the Audio page, UScctUserSettings).
 	FText PlaybackGroup() { return LOCTEXT("GroupPlayback", "Playback & devices"); }
 	FText MicrophoneGroup() { return LOCTEXT("GroupMicrophone", "Microphone"); }
 	FText TransmissionGroup() { return LOCTEXT("GroupTransmission", "Transmission"); }
@@ -80,7 +79,7 @@ namespace
 
 void ScctVoiceSettings::Register()
 {
-	// Orders leave room between the groups; the voice volume (UScctAudioMix) is 2, the device choice 0.
+	// Orders leave room between the groups; the device choice is 0.
 	FScctSettings::Register(Make(EnabledKey, PlaybackGroup(), 1, LOCTEXT("Enabled", "Enable voice chat"),
 		LOCTEXT("EnabledTip", "Off: you hear nobody and nobody hears you."), EScctSettingType::Bool, TEXT("true")));
 	FScctSettings::Register(Make(JitterKey, PlaybackGroup(), 3, LOCTEXT("Jitter", "Playback buffer (20 ms per step)"),

@@ -8,7 +8,7 @@
  * The menus draw the page; UScctVoiceSubsystem reads the values back and applies a change the moment it is made.
  *
  * Playback & devices: Voice.InputDevice (a choice: "Default", then the microphones the system lists), Voice.Enabled,
- * Voice.OutputVolume (registered by UScctAudioMix, whose voice chat submix it is), Voice.JitterFrames.
+ * Voice.JitterFrames. The voice chat volume is not here: it is the Audio page's (UScctUserSettings::VoiceVolume).
  * Microphone: Voice.MicMuted, Voice.InputGain, Voice.AutoGain, Voice.NoiseSuppression, Voice.NoiseSuppressionDb,
  * Voice.EchoCancellation.
  * Transmission: Voice.Threshold, Voice.HoldMs. Voice shortcuts: Voice.PushToTalk. Lobby: Voice.TeamOnly ("Restrict
@@ -35,7 +35,6 @@ namespace ScctVoiceSettings
 	extern OPENSCCT_API const FName NoiseDbKey;
 	extern OPENSCCT_API const FName EchoKey;
 	extern OPENSCCT_API const FName JitterKey;
-	extern OPENSCCT_API const FName OutputVolumeKey;
 	extern OPENSCCT_API const FName TeamOnlyKey;
 	extern OPENSCCT_API const FName TestKey;
 
