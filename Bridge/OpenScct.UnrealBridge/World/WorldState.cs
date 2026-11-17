@@ -18,9 +18,10 @@ namespace OpenScct.UnrealBridge.World;
 /// <para>A port of the Godot client's device drawing without the drawing: game/Scripts/Views/DeviceViews.cs
 /// (MeshFollower, AnimatedMeshView, the trigger light switches, Rebind, the drop zone lids),
 /// Views/CameraMountViews.cs, Views/GlassBreakViews.cs (when a pane breaks), Fx/LaserTriggerView.cs and
-/// Render/WorldLights.cs (Modulation). Not ported: conveyors (Views/ConveyorViews.cs, an OpenSCCT addition the
-/// stock maps do not use), the emitters and lights that ride a mover (Views/AttachedEffects.cs), the PS2 objective
-/// computers' own animation, and the animation studio's poses.</para>
+/// Render/WorldLights.cs (Modulation) and, for lights only, Views/AttachedEffects.cs (a light that rides a mover or
+/// hangs on a prop's bone). Not ported: conveyors (Views/ConveyorViews.cs, an OpenSCCT addition the stock maps do
+/// not use), the emitters that ride a mover or a bone (AttachedEffects), the bHardAttach frame of a rider (no
+/// Enhanced map sets it), the PS2 objective computers' own animation, and the animation studio's poses.</para>
 /// </summary>
 public sealed class WorldState
 {
@@ -65,6 +66,8 @@ public sealed class WorldState
     private readonly HashSet<Actor> _boundActors = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<Actor> _spawnedActors = new(ReferenceEqualityComparer.Instance);
     private MapLoadResult? _loaded;
+    private readonly Dictionary<string, Slot> _slotById = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (int Prop, int Bone)> _renderBoneLights = new(StringComparer.OrdinalIgnoreCase);
     private int _rebindActorCount = -1;
     private int _spawnScanActorCount = -1;
     private float _time;
@@ -75,9 +78,10 @@ public sealed class WorldState
     {
         _session = session;
         _render = MapRenderIndex.Load(session.Session.MapFolder);
-        session.Ticked += OnTick;
-        // A session that already ticked has its map: bind now so the first read is not empty.
+        // A session that already ticked has its map: bind now so the first read is not empty. The tick hook is
+        // added last, so a bind that throws leaves no handler of a dead object on the session.
         TryBind();
+        session.Ticked += OnTick;
     }
 
     /// <summary>The session's world state, made (and hooked to its ticks) on first use.</summary>
@@ -97,6 +101,9 @@ public sealed class WorldState
 
     /// <summary>Times a destroyed map actor's slot took over the server's copy (for the probe).</summary>
     public int Rebinds { get; private set; }
+
+    /// <summary>True when <paramref name="actor"/> stands behind a name this state hands out (for the probe).</summary>
+    public bool IsFollowed(Actor actor) => _nameOfActor.ContainsKey(actor);
 
     // ---- names -----------------------------------------------------------------------------------------------
 
@@ -136,7 +143,17 @@ public sealed class WorldState
             return;
         }
 
-        _loaded = loaded;
+        // _loaded is set only once everything is bound, so a bind that threw part of the way starts clean here.
+        _slots.Clear();
+        _slotById.Clear();
+        _followers.Clear();
+        _followerByName.Clear();
+        _lights.Clear();
+        _markers.Clear();
+        _animated.Clear();
+        _nameOfActor.Clear();
+        _spawnedActors.Clear();
+        _renderBoneLights.Clear();
         _time = loaded.Level.Info.TimeSeconds;
         foreach (ActorRecord record in loaded.Gameplay.Actors)
         {
@@ -152,7 +169,9 @@ public sealed class WorldState
             bool mesh = instance is { Gameplay: true } or { Kind: "mover" } ||
                 (instance is null && !skeletal && actor.DrawType == EDrawType.DT_StaticMesh && !actor.StaticMesh.IsNone);
             int markerKind = MarkerKindOf(actor);
-            bool light = actor is STriggerLight;
+            // A light of lighting.json with a simulation actor: an STriggerLight (switched), or any actor that
+            // carries the light with it (a lift door's lamp, a light riding a mover).
+            bool light = actor is STriggerLight || _render.FindLight(record.Id) is not null;
             if (!mesh && !skeletal && markerKind == 0 && !light)
             {
                 continue;
@@ -160,6 +179,7 @@ public sealed class WorldState
 
             var slot = new Slot(record.Id, Intern(record.Id), actor);
             _slots.Add(slot);
+            _slotById.TryAdd(record.Id, slot);
             _nameOfActor[actor] = slot.NameId;
             if (mesh)
             {
@@ -177,23 +197,55 @@ public sealed class WorldState
             }
         }
 
+        BindRenderBoneLights(loaded);
         foreach (RenderLight light in _render.Lights)
         {
-            Slot? slot = null;
-            foreach (Slot s in _slots)
-            {
-                if (s.Actor is STriggerLight && string.Equals(s.Id, light.Name, StringComparison.OrdinalIgnoreCase))
-                {
-                    slot = s;
-                    break;
-                }
-            }
-
-            _lights.Add(new LightState(light, Intern(light.Name), slot));
+            _renderBoneLights.TryGetValue(light.Name, out (int Prop, int Bone) bone);
+            _lights.Add(new LightState(light, Intern(light.Name), _slotById.GetValueOrDefault(light.Name), bone.Prop, bone.Bone));
         }
 
         // The first state is the map's, not a change: take it without events.
+        _loaded = loaded;
         AfterTick(loaded.Level, first: true);
+    }
+
+    /// <summary>
+    /// The lights a skeletal prop's ActorsToAttach hangs on its bones that have no simulation actor: the converter
+    /// keeps plain Light actors in the render part only, so the map names them as "Map.LightName" assets (SteeE's
+    /// crane flares). AttachedEffects' BoneLight. Lights with a simulation actor are read from the actor each tick.
+    /// </summary>
+    private void BindRenderBoneLights(MapLoadResult loaded)
+    {
+        string prefix = loaded.Gameplay.Map + ".";
+        foreach (ActorRecord record in loaded.Gameplay.Actors)
+        {
+            if (loaded.ActorOf(record) is not SAnimatedMesh || !_slotById.TryGetValue(record.Id, out Slot? prop) ||
+                !record.Props.TryGetValue("ActorsToAttach", out PropValue attachments) || attachments.Kind != PropKind.Array)
+            {
+                continue;
+            }
+
+            foreach (PropValue attachment in attachments.AsArray())
+            {
+                if (attachment.Kind != PropKind.Struct)
+                {
+                    continue;
+                }
+
+                PropBag entry = attachment.AsStruct();
+                if (!entry.TryGetValue("ActorName", out PropValue target) || target.Kind != PropKind.Asset ||
+                    !entry.TryGetValue("BoneName", out PropValue bone) || bone.Kind != PropKind.String)
+                {
+                    continue;
+                }
+
+                string path = target.AsAsset().Path;
+                if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && _render.FindLight(path[prefix.Length..]) is { } light)
+                {
+                    _renderBoneLights.TryAdd(light.Name, (prop.NameId, Intern(bone.AsString())));
+                }
+            }
+        }
     }
 
     private void AddFollower(Follower follower)
@@ -248,6 +300,9 @@ public sealed class WorldState
             if (f.Spawned && f.Slot.Actor.bDeleteMe)
             {
                 // A spawned prop that went (its camera or drop zone was destroyed) is dropped; its name stays reserved.
+                // C++ is told, so it can remove what it spawned for it without comparing lists.
+                Emit(BridgeWorldEventKind.ShownChanged, f.Slot.NameId, 0, 1, f.Slot.Actor.Location);
+                _spawnScanActorCount = -1;
                 _spawnedActors.Remove(f.Slot.Actor);
                 _nameOfActor.Remove(f.Slot.Actor);
                 _followerByName.Remove(f.Slot.NameId);
@@ -332,12 +387,16 @@ public sealed class WorldState
     /// <summary>
     /// Follows the plain props map actors spawn for themselves, which no map record places: a security camera's
     /// wall mount (CameraMountViews), a drop zone's lid (DeviceViews.BindCovers) and a disk's rack. Each gets its
-    /// owner's name with a suffix; one is followed per owner (a client has its own spawn and may also get the
-    /// server's copy).
+    /// owner's name with a suffix; one is followed per owner (a client has its own spawn of a mount and may also
+    /// get the server's copy).
+    /// <para>The lid and the rack are spawned by the server only and their Owner is sent only to the connection that
+    /// owns them, so a client can see them without one. Those are matched by mesh and by where their owner spawns
+    /// them, as DeviceViews.BindCovers does for the lid.</para>
     /// </summary>
     private void FollowSpawned(Level level)
     {
-        if (level.ActorCount == _spawnScanActorCount)
+        // The count check misses a prop that came in the tick another actor went; the slow rescan picks it up.
+        if (level.ActorCount == _spawnScanActorCount && level.TickCount % RebindRescanTicks != 0)
         {
             return;
         }
@@ -346,19 +405,33 @@ public sealed class WorldState
         foreach (SBasicGamePlayObject a in level.DynamicActors<SBasicGamePlayObject>())
         {
             if (a.bDeleteMe || a.GetType() != typeof(SBasicGamePlayObject) || a.StaticMesh.IsNone ||
-                _spawnedActors.Contains(a) || _nameOfActor.ContainsKey(a) ||
-                a.Owner is not { } owner || !_nameOfActor.TryGetValue(owner, out int ownerName))
+                _spawnedActors.Contains(a) || _nameOfActor.ContainsKey(a))
             {
                 continue;
             }
 
-            string suffix = owner switch
+            int ownerName;
+            string suffix;
+            if (a.Owner is { } owner)
             {
-                SCamera => "_Mount",
-                SFlagDropZone => "_Cover",
-                SFlag => "_Server",
-                _ => "_Prop",
-            };
+                if (!_nameOfActor.TryGetValue(owner, out ownerName))
+                {
+                    continue;
+                }
+
+                suffix = owner switch
+                {
+                    SCamera => "_Mount",
+                    SFlagDropZone => "_Cover",
+                    SFlag => "_Server",
+                    _ => "_Prop",
+                };
+            }
+            else if (!TryFindSpawner(a, out ownerName, out suffix))
+            {
+                continue;
+            }
+
             int name = Intern(NameOf(ownerName) + suffix);
             if (_followerByName.ContainsKey(name))
             {
@@ -370,6 +443,51 @@ public sealed class WorldState
             _nameOfActor[a] = name;
             AddFollower(new Follower(this, slot));
         }
+    }
+
+    /// <summary>How far a replicated prop may stand from where its owner spawned it and still be taken as that owner's (DeviceViews.BindCovers: 3 units).</summary>
+    private const float SpawnPlaceSlackSquared = 9f;
+
+    /// <summary>SFlagDropZone.PostBeginPlay: the lid is spawned at Location + (0, 0, 10) - 10 along the zone's forward axis.</summary>
+    private const float LidOffsetUp = 10f, LidOffsetBack = 10f;
+
+    /// <summary>
+    /// The map actor that spawned the ownerless plain prop <paramref name="prop"/>: the drop zone whose lid it is
+    /// (the lid mesh, at the zone's lid place) or the disk whose rack it is (the disk's own map mesh, at the disk's
+    /// home, where SFlag.PostBeginPlay spawns it).
+    /// </summary>
+    private bool TryFindSpawner(SBasicGamePlayObject prop, out int ownerName, out string suffix)
+    {
+        foreach (Marker m in _markers)
+        {
+            Actor owner = m.Slot.Actor;
+            if (owner.bDeleteMe)
+            {
+                continue;
+            }
+
+            if (owner is SFlagDropZone zone)
+            {
+                FVector lid = zone.Location + new FVector(0f, 0f, LidOffsetUp) - (zone.Rotation.Vector() * LidOffsetBack);
+                if (prop.StaticMesh == SFlagDropZone.LidMesh && DistanceSquared(prop.Location, lid) <= SpawnPlaceSlackSquared)
+                {
+                    ownerName = m.Slot.NameId;
+                    suffix = "_Cover";
+                    return true;
+                }
+            }
+            else if (owner is SFlag && m.Slot.IsAtPlacement(prop.Location) &&
+                string.Equals(prop.StaticMesh.Path, m.Slot.MapMesh, StringComparison.OrdinalIgnoreCase))
+            {
+                ownerName = m.Slot.NameId;
+                suffix = "_Server";
+                return true;
+            }
+        }
+
+        ownerName = 0;
+        suffix = "";
+        return false;
     }
 
     private void Emit(int kind, int nameId, int a, int b, FVector at, FVector direction = default)
@@ -427,11 +545,32 @@ public sealed class WorldState
         return false;
     }
 
-    /// <summary>Writes every light of the map as it shines this frame. Returns how many there are.</summary>
+    /// <summary>How many material slots <see cref="GetActorSkins"/> reports.</summary>
+    public const int SkinSlots = MaxSkinSlots;
+
+    /// <summary>
+    /// Writes the skins a followed actor wears now, one name id per material slot (0: the mesh's own material), as
+    /// UE2's Actor.Skins: Skins[i], when set, replaces the material of the mesh's section i. Returns how many slots
+    /// there are (<see cref="SkinSlots"/>; only what fits is written), 0 when <paramref name="nameId"/> is not a
+    /// followed actor. This is the state the SkinChanged events change: read it when an actor is first seen.
+    /// </summary>
+    public int GetActorSkins(int nameId, Span<int> skins)
+    {
+        if (!_followerByName.TryGetValue(nameId, out Follower? follower))
+        {
+            return 0;
+        }
+
+        follower.SkinIds[..Math.Min(skins.Length, MaxSkinSlots)].CopyTo(skins);
+        return MaxSkinSlots;
+    }
+
+    /// <summary>Writes every light of the map as it shines and stands this frame. Returns how many there are.</summary>
     public int GetLights(Span<BridgeWorldLight> lights)
     {
+        float alpha = Math.Clamp(_session.Alpha, 0f, 1f);
         // The light types run on scene time, carried on from the last tick so a pulse is smooth between ticks.
-        float time = _time + (Math.Clamp(_session.Alpha, 0f, 1f) * TickSeconds);
+        float time = _time + (alpha * TickSeconds);
         if (time != _strobeTime)
         {
             // The strobe's shared switch (a static in the original): flipped once per drawn frame (WorldLights.StrobeOff).
@@ -442,7 +581,7 @@ public sealed class WorldState
         int count = Math.Min(lights.Length, _lights.Count);
         for (int i = 0; i < count; i++)
         {
-            lights[i] = _lights[i].Draw(time, _strobeOff);
+            lights[i] = _lights[i].Draw(time, _strobeOff, alpha);
         }
 
         return _lights.Count;
@@ -573,6 +712,11 @@ public sealed class WorldState
         return (x * x) + (y * y) + (z * z);
     }
 
+    /// <summary>True when two rotations point the same way (their axes wrapped).</summary>
+    private static bool SameTurn(FRotator a, FRotator b) =>
+        FRotator.NormalizeAxis(a.Pitch - b.Pitch) == 0 && FRotator.NormalizeAxis(a.Yaw - b.Yaw) == 0 &&
+        FRotator.NormalizeAxis(a.Roll - b.Roll) == 0;
+
     /// <summary>
     /// One followed map record: the name C++ knows it by and the simulation actor that stands for it now (the map's
     /// own, or the server's copy after a rebind).
@@ -588,9 +732,13 @@ public sealed class WorldState
             Actor = actor;
             _location0 = actor.Location;
             Replaceable = !actor.bStatic && !actor.bNoDelete;
+            MapMesh = actor.StaticMesh.Path;
         }
 
         public string Id { get; }
+
+        /// <summary>The static mesh the actor had when the slot was made (the map's), or null.</summary>
+        public string? MapMesh { get; }
 
         public int NameId { get; }
 
@@ -626,6 +774,7 @@ public sealed class WorldState
         private readonly bool _simDecidesHidden;
         private readonly string? _asset0;
         private readonly string?[] _skins = new string?[MaxSkinSlots];
+        private readonly int[] _skinIds = new int[MaxSkinSlots];
         private readonly bool _glass;
         private FVector _prevLocation, _location;
         private FRotator _prevRotation, _rotation;
@@ -686,6 +835,9 @@ public sealed class WorldState
         public bool Spawned { get; }
 
         public BridgeWorldActorInfo Info { get; }
+
+        /// <summary>The skin worn in each material slot as a name id, 0 for the mesh's own material.</summary>
+        public ReadOnlySpan<int> SkinIds => _skinIds;
 
         private static BridgeWorldActorInfo MakeInfo(WorldState world, Slot slot, string className, string? asset,
             RenderInstance? instance, FVector scale, FVector pivot, FVector location, FRotator rotation, int flags) => new()
@@ -772,9 +924,10 @@ public sealed class WorldState
                     }
 
                     _skins[i] = skin;
+                    _skinIds[i] = _world.Intern(skin);
                     if (!first)
                     {
-                        _world.Emit(BridgeWorldEventKind.SkinChanged, Slot.NameId, i, _world.Intern(skin), _location);
+                        _world.Emit(BridgeWorldEventKind.SkinChanged, Slot.NameId, i, _skinIds[i], _location);
                     }
                 }
             }
@@ -793,7 +946,9 @@ public sealed class WorldState
                 _broken = broken;
             }
 
-            bool moving = !actor.bDeleteMe && DistanceSquared(_prevLocation, _location) > 1e-6f;
+            // A door that swings only turns: the rotation counts as much as the location.
+            bool moving = !actor.bDeleteMe &&
+                (DistanceSquared(_prevLocation, _location) > 1e-6f || !SameTurn(_prevRotation, _rotation));
             if (moving != _moving)
             {
                 _moving = moving;
@@ -884,13 +1039,16 @@ public sealed class WorldState
     /// <summary>
     /// One light of the map. A light named by an STriggerLight follows that actor's LightType (DeviceViews switches
     /// the map's light by the actor's id); the others keep their placed type. The light type's curve is
-    /// ActorLightRules.Modulation, as WorldLights.Modulation applies it.
+    /// ActorLightRules.Modulation, as WorldLights.Modulation applies it. A light with any simulation actor also
+    /// follows where that actor is (a lift door's lamp, a light riding a mover) or names the bone it hangs on
+    /// (AttachedEffects).
     /// </summary>
     private sealed class LightState
     {
         private readonly RenderLight _light;
         private readonly int _nameId;
-        private readonly Slot? _switch;
+        private readonly Slot? _slot;
+        private readonly int _renderProp, _renderBone;
         private readonly uint _seed;
         private bool _on;
         private int _type;
@@ -898,17 +1056,29 @@ public sealed class WorldState
         private float _gain = 1f;
         private float _r, _g, _b;
         private bool _corona;
+        private FVector _prevLocation, _location;
+        private FRotator _prevRotation, _rotation;
+        private bool _moved;
+        private int _generation;
+        private int _boneProp, _boneId;
+        private Name _boneName;
 
-        public LightState(RenderLight light, int nameId, Slot? @switch)
+        /// <param name="renderProp">The skeletal prop a render-only light hangs on (name id), 0 when none.</param>
+        /// <param name="renderBone">That prop's bone (name id).</param>
+        public LightState(RenderLight light, int nameId, Slot? slot, int renderProp, int renderBone)
         {
             _light = light;
             _nameId = nameId;
-            _switch = @switch;
+            _slot = slot;
+            _renderProp = renderProp;
+            _renderBone = renderBone;
             _type = light.LightType;
             _on = light.InitiallyOn && light.LightType != 0;
             _period = light.Period;
             _phase = light.Phase;
             (_r, _g, _b) = (light.R, light.G, light.B);
+            _prevLocation = _location = light.Location;
+            _prevRotation = _rotation = light.Rotation;
             uint seed = 2166136261;
             foreach (char c in light.Name)
             {
@@ -920,11 +1090,61 @@ public sealed class WorldState
 
         public void OnTick(WorldState world, bool first)
         {
-            if (_switch?.Actor is not STriggerLight actor)
+            if (_slot?.Actor is not { } actor)
             {
                 return;
             }
 
+            if (!actor.bDeleteMe)
+            {
+                Place(world, actor);
+            }
+
+            if (actor is STriggerLight trigger)
+            {
+                Switch(world, trigger, first);
+            }
+        }
+
+        /// <summary>Where the light's actor is, and the bone it hangs on (AttachedEffects.Follower and Place).</summary>
+        private void Place(WorldState world, Actor actor)
+        {
+            if (_generation != _slot!.Generation)
+            {
+                // Another actor took the slot: no blend from where the last one was.
+                _generation = _slot.Generation;
+                _location = actor.Location;
+                _rotation = actor.Rotation;
+            }
+
+            _prevLocation = _location;
+            _prevRotation = _rotation;
+            _location = actor.Location;
+            _rotation = actor.Rotation;
+            if (!_moved && Away(_location - _light.Location, _rotation, _light.Rotation))
+            {
+                _moved = true;
+            }
+
+            // SAnimatedMesh.AttachActorToBone: based on the prop with the bone's name; the views pose it.
+            if (!actor.AttachmentBone.IsNone && actor.Base is SAnimatedMesh { bDeleteMe: false } prop &&
+                world._nameOfActor.TryGetValue(prop, out int propName))
+            {
+                _boneProp = propName;
+                if (actor.AttachmentBone != _boneName)
+                {
+                    _boneName = actor.AttachmentBone;
+                    _boneId = world.Intern(_boneName.ToString());
+                }
+            }
+            else
+            {
+                _boneProp = 0;
+            }
+        }
+
+        private void Switch(WorldState world, STriggerLight actor, bool first)
+        {
             // DeviceViews: on while the actor lives and its LightType is not LT_None.
             bool on = !actor.bDeleteMe && actor.LightType != ELightType.LT_None;
             int type = (int)actor.LightType;
@@ -956,10 +1176,11 @@ public sealed class WorldState
             _gain = _light.Brightness > 0f ? actor.LightBrightness / _light.Brightness : 1f;
             if (actor.LightHue != _light.Hue || actor.LightSaturation != _light.Saturation)
             {
-                // The converter's colour is FGetHSV at full value; the same from the changed hue and saturation.
-                LightRgb full = ActorLightRules.Colour(0, 255, 255f);
+                // The converter's colour is FGetHSV at full value over its full brightness (0.8213, what white
+                // gives); the same from the changed hue and saturation.
+                float full = ActorLightRules.Colour(0, 255, 255f).R;
                 LightRgb c = ActorLightRules.Colour(actor.LightHue, actor.LightSaturation, 255f);
-                (_r, _g, _b) = (c.R / full.R, c.G / full.R, c.B / full.R);
+                (_r, _g, _b) = (c.R / full, c.G / full, c.B / full);
             }
             else
             {
@@ -967,7 +1188,7 @@ public sealed class WorldState
             }
         }
 
-        public BridgeWorldLight Draw(float time, bool strobeOff)
+        public BridgeWorldLight Draw(float time, bool strobeOff, float alpha)
         {
             float scale = 0f;
             if (_on)
@@ -976,18 +1197,50 @@ public sealed class WorldState
                     _type == 5 && strobeOff);
             }
 
-            bool breaking = _switch is not null && _on && _type == 4 && _light.LightType != 4;
-            return new BridgeWorldLight
+            bool triggered = _slot?.Actor is STriggerLight;
+            bool breaking = triggered && _on && _type == 4 && _light.LightType != 4;
+            var drawn = new BridgeWorldLight
             {
                 NameId = _nameId,
-                Flags = (_on ? BridgeWorldLightFlags.On : 0) | (_switch is not null ? BridgeWorldLightFlags.Triggered : 0) |
-                    (breaking ? BridgeWorldLightFlags.Breaking : 0) | (_corona ? BridgeWorldLightFlags.Corona : 0),
+                Flags = (_on ? BridgeWorldLightFlags.On : 0) | (triggered ? BridgeWorldLightFlags.Triggered : 0) |
+                    (breaking ? BridgeWorldLightFlags.Breaking : 0) | (_corona ? BridgeWorldLightFlags.Corona : 0) |
+                    (_moved ? BridgeWorldLightFlags.Moved : 0),
                 LightType = _type,
                 Scale = scale,
                 R = _r,
                 G = _g,
                 B = _b,
             };
+
+            int prop = _boneProp != 0 ? _boneProp : _renderProp;
+            if (prop != 0)
+            {
+                // The simulation has no posed skeleton: the bone and the relative attachment go out and C++ hangs the
+                // light on the drawn bone. The map's attachments sit on the bone (both relative values zero).
+                Actor? actor = _boneProp != 0 ? _slot!.Actor : null;
+                FVector at = actor?.RelativeLocation ?? default;
+                FRotator turn = actor?.RelativeRotation ?? default;
+                drawn.Flags |= BridgeWorldLightFlags.OnBone;
+                drawn.AttachNameId = prop;
+                drawn.AttachBoneId = _boneProp != 0 ? _boneId : _renderBone;
+                drawn.X = at.X;
+                drawn.Y = at.Y;
+                drawn.Z = at.Z;
+                drawn.Pitch = LerpAxis(turn.Pitch, turn.Pitch, 0f);
+                drawn.Yaw = LerpAxis(turn.Yaw, turn.Yaw, 0f);
+                drawn.Roll = LerpAxis(turn.Roll, turn.Roll, 0f);
+                return drawn;
+            }
+
+            float a = DistanceSquared(_prevLocation, _location) > CutDistanceSquared ? 1f : alpha;
+            FVector location = Lerp(_prevLocation, _location, a);
+            drawn.X = location.X;
+            drawn.Y = location.Y;
+            drawn.Z = location.Z;
+            drawn.Pitch = LerpAxis(_prevRotation.Pitch, _rotation.Pitch, a);
+            drawn.Yaw = LerpAxis(_prevRotation.Yaw, _rotation.Yaw, a);
+            drawn.Roll = LerpAxis(_prevRotation.Roll, _rotation.Roll, a);
+            return drawn;
         }
 
         /// <summary>
@@ -1025,13 +1278,24 @@ public sealed class WorldState
 
         public BridgeWorldMarker Shown => _shown;
 
+        public Slot Slot => _slot;
+
         public void OnTick(WorldState world, bool first)
         {
             Actor actor = _slot.Actor;
             if (actor.bDeleteMe)
             {
-                // Out of relevancy: the last known values stay, marked.
-                _shown.Flags |= BridgeWorldMarkerFlags.Gone;
+                // Out of relevancy: the last known values stay, marked. Said once, like any other change of flags.
+                if ((_shown.Flags & BridgeWorldMarkerFlags.Gone) == 0)
+                {
+                    _shown.Flags |= BridgeWorldMarkerFlags.Gone;
+                    if (!first)
+                    {
+                        world.Emit(BridgeWorldEventKind.MarkerChanged, _slot.NameId, _shown.State, _shown.Flags,
+                            new FVector(_shown.X, _shown.Y, _shown.Z));
+                    }
+                }
+
                 return;
             }
 

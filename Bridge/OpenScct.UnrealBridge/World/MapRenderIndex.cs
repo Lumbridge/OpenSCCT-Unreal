@@ -64,6 +64,12 @@ public sealed class RenderLight
     public float R { get; init; } = 1f;
     public float G { get; init; } = 1f;
     public float B { get; init; } = 1f;
+
+    /// <summary>Where the map placed the light (the importer spawned the level light here).</summary>
+    public FVector Location { get; init; }
+
+    /// <summary>The placed rotation, in the original's 65536-per-turn units.</summary>
+    public FRotator Rotation { get; init; }
 }
 
 /// <summary>
@@ -89,20 +95,51 @@ public sealed class MapRenderIndex
 
     public RenderLight? FindLight(string name) => _lightByName.GetValueOrDefault(name);
 
-    /// <summary>Reads the render part of the map in <paramref name="mapFolder"/>. A missing file leaves its part empty.</summary>
+    /// <summary>What was wrong with the render files (a file that could not be read, an entry that was skipped); empty when all was read.</summary>
+    public IReadOnlyList<string> Warnings => _warnings;
+
+    private readonly List<string> _warnings = [];
+
+    /// <summary>
+    /// Reads the render part of the map in <paramref name="mapFolder"/>. A missing or broken file leaves its part
+    /// empty and one bad entry is skipped (see <see cref="Warnings"/>): the match still runs, with the world state of
+    /// that part missing, instead of ending because of a render file the simulation does not need.
+    /// </summary>
     public static MapRenderIndex Load(string mapFolder)
     {
         var index = new MapRenderIndex();
         string glb = Path.Combine(mapFolder, "render", "world.glb");
         if (File.Exists(glb))
         {
-            index.ReadInstances(glb);
+            try
+            {
+                index.ReadInstances(glb);
+            }
+            catch (Exception e) when (e is IOException or InvalidDataException or JsonException or InvalidOperationException or KeyNotFoundException)
+            {
+                index._warnings.Add("world.glb: " + e.Message);
+            }
+        }
+        else
+        {
+            index._warnings.Add("world.glb is missing");
         }
 
         string lighting = Path.Combine(mapFolder, "render", "lighting.json");
         if (File.Exists(lighting))
         {
-            index.ReadLights(lighting);
+            try
+            {
+                index.ReadLights(lighting);
+            }
+            catch (Exception e) when (e is IOException or JsonException or InvalidOperationException or KeyNotFoundException)
+            {
+                index._warnings.Add("lighting.json: " + e.Message);
+            }
+        }
+        else
+        {
+            index._warnings.Add("lighting.json is missing");
         }
 
         return index;
@@ -119,7 +156,13 @@ public sealed class MapRenderIndex
             throw new InvalidDataException(path + " is not a glb file with a leading JSON chunk");
         }
 
-        byte[] json = new byte[BinaryPrimitives.ReadInt32LittleEndian(header[12..])];
+        int length = BinaryPrimitives.ReadInt32LittleEndian(header[12..]);
+        if (length <= 0 || length > file.Length - header.Length)
+        {
+            throw new InvalidDataException(path + " has a JSON chunk longer than the file");
+        }
+
+        byte[] json = new byte[length];
         file.ReadExactly(json);
         using JsonDocument doc = JsonDocument.Parse(json);
         if (!doc.RootElement.TryGetProperty("extras", out JsonElement extras) ||
@@ -129,9 +172,14 @@ public sealed class MapRenderIndex
             return;
         }
 
+        if (instances.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
         foreach (JsonElement i in instances.EnumerateArray())
         {
-            if (Str(i, "actor") is not { Length: > 0 } actor || _instances.ContainsKey(actor))
+            if (i.ValueKind != JsonValueKind.Object || Str(i, "actor") is not { Length: > 0 } actor || _instances.ContainsKey(actor))
             {
                 continue;
             }
@@ -167,12 +215,20 @@ public sealed class MapRenderIndex
             return;
         }
 
+        if (lights.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
         foreach (JsonElement l in lights.EnumerateArray())
         {
-            if (Str(l, "name") is not { Length: > 0 } name || _lightByName.ContainsKey(name))
+            if (l.ValueKind != JsonValueKind.Object || Str(l, "name") is not { Length: > 0 } name || _lightByName.ContainsKey(name))
             {
                 continue;
             }
+
+            // "rotation" is [pitch, yaw, roll] in rotator units.
+            FVector turn = Vec(l, "rotation", default);
 
             FVector colour = Vec(l, "color", new FVector(1f, 1f, 1f));
             var light = new RenderLight
@@ -190,6 +246,8 @@ public sealed class MapRenderIndex
                 R = colour.X,
                 G = colour.Y,
                 B = colour.Z,
+                Location = Vec(l, "location", default),
+                Rotation = new FRotator((int)turn.X, (int)turn.Y, (int)turn.Z),
             };
             _lights.Add(light);
             _lightByName[name] = light;
@@ -210,6 +268,14 @@ public sealed class MapRenderIndex
         if (!e.TryGetProperty(name, out JsonElement v) || v.ValueKind != JsonValueKind.Array || v.GetArrayLength() < 3)
         {
             return fallback;
+        }
+
+        for (int k = 0; k < 3; k++)
+        {
+            if (v[k].ValueKind != JsonValueKind.Number)
+            {
+                return fallback;
+            }
         }
 
         return new FVector((float)v[0].GetDouble(), (float)v[1].GetDouble(), (float)v[2].GetDouble());

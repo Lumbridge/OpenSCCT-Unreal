@@ -24,11 +24,13 @@ public unsafe struct WorldApi
     public delegate* unmanaged[Cdecl]<BridgeWorldMarker*, int, int> GetMarkers;
     public delegate* unmanaged[Cdecl]<BridgeWorldAnimated*, int, int> GetAnimated;
     public delegate* unmanaged[Cdecl]<BridgeWorldEvent*, int, int> GetEvents;
+    public delegate* unmanaged[Cdecl]<int, int*, int, int> GetActorSkins;
 }
 
 public static unsafe class WorldExports
 {
-    public const int ApiVersion = 1;
+    /// <summary>2: lights carry their place and bone, GetActorSkins added.</summary>
+    public const int ApiVersion = 2;
 
     /// <summary>Fills <paramref name="api"/>. Returns the API version.</summary>
     [UnmanagedCallersOnly]
@@ -45,6 +47,7 @@ public static unsafe class WorldExports
         api->GetMarkers = &GetMarkers;
         api->GetAnimated = &GetAnimated;
         api->GetEvents = &GetEvents;
+        api->GetActorSkins = &GetActorSkins;
         return ApiVersion;
     }
 
@@ -146,7 +149,7 @@ public static unsafe class WorldExports
         }
     }
 
-    /// <summary>Writes the map's lights as they shine this frame. Returns how many there are.</summary>
+    /// <summary>Writes the map's lights as they shine and stand this frame. Returns how many there are.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int GetLights(BridgeWorldLight* lights, int capacity)
     {
@@ -216,6 +219,25 @@ public static unsafe class WorldExports
         try
         {
             return State?.DrainEvents(SpanOf(events, capacity)) ?? 0;
+        }
+        catch (Exception e)
+        {
+            Exports.ReportFailure(e.ToString());
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Writes the skins the followed actor named <paramref name="nameId"/> wears now: one name id per material slot,
+    /// 0 for the mesh's own material. Returns the slot count (8; only <paramref name="capacity"/> are written), or 0
+    /// when it is not a followed actor. Read it when an actor is first seen; SkinChanged events carry the changes.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetActorSkins(int nameId, int* skins, int capacity)
+    {
+        try
+        {
+            return State?.GetActorSkins(nameId, SpanOf(skins, capacity)) ?? 0;
         }
         catch (Exception e)
         {

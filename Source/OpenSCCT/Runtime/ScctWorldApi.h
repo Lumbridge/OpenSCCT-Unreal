@@ -20,7 +20,11 @@
 // Locations are simulation units (1 unit = 1 Unreal cm, same axes). Rotations are Unreal rotators in degrees
 // (Pitch, Yaw, Roll as FRotator takes them), -180 to 180.
 
-constexpr int32 ScctWorldApiVersion = 1;
+// Version 2: FScctWorldLight carries the light's place and bone, GetActorSkins added.
+constexpr int32 ScctWorldApiVersion = 2;
+
+/** How many material slots GetActorSkins reports for an actor. */
+constexpr int32 ScctWorldSkinSlots = 8;
 
 namespace EScctWorldActorInfoFlags
 {
@@ -47,6 +51,7 @@ struct FScctWorldActorInfo
 	float X, Y, Z;                         // where the map placed it (its Location, not pivot-corrected), cm
 	float Pitch, Yaw, Roll;                // the map's rotation, degrees
 };
+static_assert(sizeof(FScctWorldActorInfo) == 68, "FScctWorldActorInfo must match BridgeWorldActorInfo");
 
 namespace EScctWorldActorFlags
 {
@@ -54,7 +59,7 @@ namespace EScctWorldActorFlags
 	constexpr int32 Visible = 1;
 	/** It has left its map placement at some time (stays set): apply the transform. Clear: keep the importer's transform. */
 	constexpr int32 Moved = 2;
-	/** Its location changed in the last tick (a door that is opening right now). */
+	/** Its location or rotation changed in the last tick (a door that is opening right now). */
 	constexpr int32 Moving = 4;
 	/** Carried on a pawn's bone: X..Roll are relative to that bone. */
 	constexpr int32 Attached = 8;
@@ -77,6 +82,7 @@ struct FScctWorldActor
 	float X, Y, Z;
 	float Pitch, Yaw, Roll; // degrees; world rotation blended the shortest way, or RelativeRotation when carried
 };
+static_assert(sizeof(FScctWorldActor) == 44, "FScctWorldActor must match BridgeWorldActor");
 
 namespace EScctWorldLightFlags
 {
@@ -87,9 +93,13 @@ namespace EScctWorldLightFlags
 	constexpr int32 Breaking = 4;
 	/** The light draws its corona now (only known for Triggered lights). */
 	constexpr int32 Corona = 8;
+	/** It has left its placed location or rotation at some time (stays set): apply X..Roll to the level light. */
+	constexpr int32 Moved = 16;
+	/** It hangs on a bone of a skeletal map prop: attach it to bone AttachBoneId of the prop AttachNameId, X..Roll relative. */
+	constexpr int32 OnBone = 32;
 }
 
-/** One light of render/lighting.json as it should shine this frame (level light tag "Scct:" + name). */
+/** One light of render/lighting.json as it should shine and stand this frame (level light tag "Scct:" + name). */
 struct FScctWorldLight
 {
 	int32 NameId;
@@ -97,7 +107,14 @@ struct FScctWorldLight
 	int32 LightType; // the original's ELightType now: 0 none, 1 steady, 2 pulse, 3 blink, 4 flicker, 5 strobe, 7 subtle pulse
 	float Scale;     // multiply the light's placed intensity by this: 0 when off, else the light type's curve (1 steady) x any brightness change
 	float R, G, B;   // colour at full value, linear 0..1 (lighting.json "color"); follows a changed hue or saturation
+	// Where the light is, cm: the placed location until Moved is set, then the simulation actor's, blended between
+	// the last two ticks (a lift's lamp, a light riding a mover). With OnBone: the RelativeLocation from the bone.
+	float X, Y, Z;
+	float Pitch, Yaw, Roll; // degrees (a spot shines along the forward axis); with OnBone: RelativeRotation from the bone
+	int32 AttachNameId;     // with OnBone: FScctWorldAnimated::NameId of the skeletal prop it hangs on; else 0
+	int32 AttachBoneId;     // with OnBone: name id of the bone; else 0
 };
+static_assert(sizeof(FScctWorldLight) == 60, "FScctWorldLight must match BridgeWorldLight");
 
 namespace EScctWorldLaserFlags
 {
@@ -116,6 +133,7 @@ struct FScctWorldLaser
 	float EndX, EndY, EndZ;       // cm
 	float Heat;   // the beam's HeatIntensity (brightness in thermal vision; 1 by default)
 };
+static_assert(sizeof(FScctWorldLaser) == 44, "FScctWorldLaser must match BridgeWorldLaser");
 
 namespace EScctWorldMarkerKind
 {
@@ -154,12 +172,14 @@ struct FScctWorldMarker
 	float Progress;    // 0..1 through a running capture (a hack, a bomb's fuse) or alarm; 0 when nothing runs
 	float TimeLeft;    // seconds until the capture completes or the alarm stops; 0 when nothing runs
 };
+static_assert(sizeof(FScctWorldMarker) == 40, "FScctWorldMarker must match BridgeWorldMarker");
 
 namespace EScctWorldEventKind
 {
 	/** The actor shows another static mesh (a damage stage, a triggered mesh). A: new mesh name id (0 none), B: the one before. */
 	constexpr int32 MeshChanged = 1;
-	/** A material slot changed (cracked screen, warning lamp). A: the slot, B: the skin's name id (0: back to the mesh's own material). */
+	/** A material slot changed (cracked screen, warning lamp). A: the slot, B: the skin's name id (0: back to the mesh's own material).
+	 *  Skins an actor already wears when it is first seen raise no event: read them with GetActorSkins. */
 	constexpr int32 SkinChanged = 2;
 	/** A glass pane (SVitre) broke. A: 1 when X,Y,Z is where it was hit and DX,DY,DZ the unit direction of the hit; 0 when only the pane's location is known. */
 	constexpr int32 GlassBroken = 3;
@@ -167,11 +187,11 @@ namespace EScctWorldEventKind
 	constexpr int32 LightSwitched = 4;
 	/** A switched light was broken (shot out or chaffed) and flickers for half a second before going dark. */
 	constexpr int32 LightBreaking = 5;
-	/** A marker's state or flags changed. A: the state now, B: the flags now. */
+	/** A marker's state or flags changed (the Gone flag included). A: the state now, B: the flags now. */
 	constexpr int32 MarkerChanged = 6;
-	/** A mover started (A 1) or stopped (A 0) moving. B: its key number now. X,Y,Z: where it is. */
+	/** A mover started (A 1) or stopped (A 0) moving or turning. B: its key number now. X,Y,Z: where it is. */
 	constexpr int32 MoverMoving = 7;
-	/** An actor was shown (A 1) or hidden (A 0) by the simulation. */
+	/** An actor was shown (A 1) or hidden (A 0) by the simulation. A spawned prop that is destroyed raises A 0, B 1 and leaves the actor list. */
 	constexpr int32 ShownChanged = 8;
 }
 
@@ -184,6 +204,7 @@ struct FScctWorldEvent
 	float X, Y, Z;    // where it happened when the kind says so, else the actor's location, cm
 	float DX, DY, DZ; // a unit direction when the kind says so, else 0
 };
+static_assert(sizeof(FScctWorldEvent) == 40, "FScctWorldEvent must match BridgeWorldEvent");
 
 namespace EScctWorldAnimatedFlags
 {
@@ -204,6 +225,7 @@ struct FScctWorldAnimated
 	float Frame;      // where the sequence is this frame, 0 its first frame to 1 its last; -1 when only a loop is named (fish): play it at your own pace
 	float Rate;       // sequence lengths per second, negative backwards, 0 when it holds a frame
 };
+static_assert(sizeof(FScctWorldAnimated) == 60, "FScctWorldAnimated must match BridgeWorldAnimated");
 
 /**
  * The table. The Get* entries that fill an array return how many items there are, which can be more than Capacity
@@ -225,7 +247,7 @@ struct FScctWorldApi
 	int32 (__cdecl* GetActors)(FScctWorldActor* Actors, int32 Capacity);
 	/** The fixed facts of the followed actor named NameId. Returns 1, or 0 when it is not one. */
 	int32 (__cdecl* GetActorInfo)(int32 NameId, FScctWorldActorInfo* Info);
-	/** Every light of the map as it shines this frame, in lighting.json's order. */
+	/** Every light of the map as it shines and stands this frame, in lighting.json's order. */
 	int32 (__cdecl* GetLights)(FScctWorldLight* Lights, int32 Capacity);
 	/** The laser beams to draw this frame. */
 	int32 (__cdecl* GetLasers)(FScctWorldLaser* Lasers, int32 Capacity);
@@ -235,6 +257,12 @@ struct FScctWorldApi
 	int32 (__cdecl* GetAnimated)(FScctWorldAnimated* Animated, int32 Capacity);
 	/** Moves the oldest waiting events into Events; returns how many were written. Each event is handed out once. */
 	int32 (__cdecl* GetEvents)(FScctWorldEvent* Events, int32 Capacity);
+	/**
+	 * The skins the followed actor NameId wears now: one name id per material slot (the original's Actor.Skins:
+	 * Skins[i] replaces the material of the mesh's section i), 0 for the mesh's own material. Returns the slot count
+	 * (ScctWorldSkinSlots; only Capacity are written), 0 when NameId is not a followed actor.
+	 */
+	int32 (__cdecl* GetActorSkins)(int32 NameId, int32* Skins, int32 Capacity);
 };
 
 namespace FScctWorld

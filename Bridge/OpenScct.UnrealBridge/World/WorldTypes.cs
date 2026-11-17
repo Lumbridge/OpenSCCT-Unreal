@@ -102,7 +102,7 @@ public static class BridgeWorldActorFlags
     /// </summary>
     public const int Moved = 2;
 
-    /// <summary>The location changed in the last tick (a door that is opening right now).</summary>
+    /// <summary>The location or rotation changed in the last tick (a door that is opening right now).</summary>
     public const int Moving = 4;
 
     /// <summary>Carried on a pawn's bone: X..Roll are relative to the bone.</summary>
@@ -112,7 +112,7 @@ public static class BridgeWorldActorFlags
     public const int Gone = 16;
 }
 
-/// <summary>One light of render/lighting.json as it should shine this frame (<c>GetLights</c>).</summary>
+/// <summary>One light of render/lighting.json as it should shine and stand this frame (<c>GetLights</c>).</summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct BridgeWorldLight
 {
@@ -133,6 +133,22 @@ public struct BridgeWorldLight
 
     /// <summary>The light's colour at full value (linear 0..1, as lighting.json's "color"); follows a changed hue or saturation.</summary>
     public float R, G, B;
+
+    /// <summary>
+    /// Where the light is: the placed location until <see cref="BridgeWorldLightFlags.Moved"/> is set, then the
+    /// simulation actor's, blended between the last two ticks (a lift's lamp, a light riding a mover). With
+    /// <see cref="BridgeWorldLightFlags.OnBone"/>: the RelativeLocation from the bone.
+    /// </summary>
+    public float X, Y, Z;
+
+    /// <summary>Degrees (a spot light shines along the rotation's forward axis). With OnBone: RelativeRotation from the bone.</summary>
+    public float Pitch, Yaw, Roll;
+
+    /// <summary>With OnBone: the skeletal prop (<see cref="BridgeWorldAnimated.NameId"/>) the light hangs on; else 0.</summary>
+    public int AttachNameId;
+
+    /// <summary>With OnBone: the bone's name id; else 0.</summary>
+    public int AttachBoneId;
 }
 
 public static class BridgeWorldLightFlags
@@ -145,8 +161,17 @@ public static class BridgeWorldLightFlags
     /// <summary>A switched light in its half-second break flicker (shot out or chaffed) before it goes dark.</summary>
     public const int Breaking = 4;
 
-    /// <summary>The light draws its corona now.</summary>
+    /// <summary>The light draws its corona now (known only for Triggered lights).</summary>
     public const int Corona = 8;
+
+    /// <summary>The light has left its placed location or rotation at some time (it stays set): apply X..Roll to the level light.</summary>
+    public const int Moved = 16;
+
+    /// <summary>
+    /// The light hangs on a bone of a skeletal map prop (a beacon's lamp, a crane's flare): attach it to
+    /// AttachBoneId of the prop AttachNameId with X..Roll as the relative transform.
+    /// </summary>
+    public const int OnBone = 32;
 }
 
 /// <summary>One laser beam to draw this frame (<c>GetLasers</c>): a map tripwire or a mine's beam.</summary>
@@ -271,7 +296,10 @@ public static class BridgeWorldEventKind
     /// <summary>The actor shows another static mesh (a damage stage, a triggered mesh): A new mesh id (0 none), B the one before.</summary>
     public const int MeshChanged = 1;
 
-    /// <summary>A material slot changed (cracked screen, camera LED): A the slot, B the skin's name id (0: back to the mesh's own).</summary>
+    /// <summary>
+    /// A material slot changed (cracked screen, camera LED): A the slot, B the skin's name id (0: back to the mesh's
+    /// own). The skins an actor already wears when it is first seen raise no event: read them with GetActorSkins.
+    /// </summary>
     public const int SkinChanged = 2;
 
     /// <summary>
@@ -286,13 +314,16 @@ public static class BridgeWorldEventKind
     /// <summary>A switched light was broken (shot out or chaffed) and flickers for half a second before going dark.</summary>
     public const int LightBreaking = 5;
 
-    /// <summary>A marker's state or flags changed: A the state now, B the flags now.</summary>
+    /// <summary>A marker's state or flags changed (going out of network relevancy included: the Gone flag): A the state now, B the flags now.</summary>
     public const int MarkerChanged = 6;
 
-    /// <summary>A mover started (A 1) or stopped (A 0) moving; B is its key number now. X,Y,Z is where it is.</summary>
+    /// <summary>A mover started (A 1) or stopped (A 0) moving or turning; B is its key number now. X,Y,Z is where it is.</summary>
     public const int MoverMoving = 7;
 
-    /// <summary>An actor was hidden (A 0) or shown (A 1) by the simulation.</summary>
+    /// <summary>
+    /// An actor was hidden (A 0) or shown (A 1) by the simulation. A spawned prop that is destroyed raises A 0, B 1
+    /// and leaves the actor list.
+    /// </summary>
     public const int ShownChanged = 8;
 }
 
