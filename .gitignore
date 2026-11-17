@@ -1,0 +1,27 @@
+# Unreal build output
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+*.sln
+*.slnx
+*.suo
+*.VC.db
+*.opensdf
+*.sdf
+Plugins/*/Binaries/
+Plugins/*/Intermediate/
+
+# .NET build output
+bin/
+obj/
+
+# Converted game content never goes into Git (same rule as OpenSCCT).
+# Imported maps, original textures, meshes, sounds and animations live here.
+Content/Imported/
+.content/
+
+# Local tooling
+.mcp.json
+.claude/settings.local.json
