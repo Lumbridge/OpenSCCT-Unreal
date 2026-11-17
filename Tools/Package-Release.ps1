@@ -601,13 +601,16 @@ if (Test-Path -LiteralPath $packPath) {
 # Patches: for each file of 1 MB or more that a base release has at the same path with other contents, a binary patch
 # from that version of it, kept when it is under half the gzipped file. Named by both hashes, so the same patch is
 # never made or uploaded twice. Every patch is applied once here and checked against the file's SHA-256.
+# Files where either version is over 256 MB get no patch (the matcher's suffix array needs several GB and its pass runs
+# for tens of minutes on the cooked content's .ucas once maps are bundled); they update as whole changed files.
 $patchMin = 1MB
+$patchMax = 256MB
 $jobs = @{}
 foreach ($e in $listEntries) {
-    if ($e.size -lt $patchMin) { continue }
+    if ($e.size -lt $patchMin -or $e.size -gt $patchMax) { continue }
     foreach ($b in $bases) {
         $old = $b.Files | Where-Object path -eq $e.path | Select-Object -First 1
-        if (-not $old -or $old.sha256 -eq $e.sha256) { continue }
+        if (-not $old -or $old.sha256 -eq $e.sha256 -or $old.size -gt $patchMax) { continue }
         $name = "$($old.sha256)-$($e.sha256).osdiff"
         if (-not $jobs.ContainsKey($name)) {
             $jobs[$name] = [pscustomobject]@{ Name = $name; Path = $e.path; From = (Join-Path $b.Folder $old.path); FromSha = $old.sha256
