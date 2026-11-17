@@ -7,6 +7,7 @@
 
 class APostProcessVolume;
 class UMaterialInstanceDynamic;
+class UPrimitiveComponent;
 
 /**
  * The goggles: night vision, thermal vision, motion tracking and EMF vision as post-process materials over the
@@ -16,8 +17,15 @@ class UMaterialInstanceDynamic;
  * The materials are assets under /Game/OpenSCCT/UI/Vision, written by Tools/Materials/build_vision_materials.py
  * (run Tools/Materials/Build-VisionMaterials.ps1 after changing it). Each has one parameter, Amount, 0 to 1.
  *
- * Characters are marked for the materials through the custom depth stencil while a mode is on: 1 a spy, 2 a merc.
- * Thermal vision draws marked pixels hot. Other things only the goggles show are marked by whoever draws them
+ * Characters are marked for the materials through the custom depth stencil while a mode is on. In thermal and EMF
+ * each body follows the simulation's rule for that mode (the bridge's vision rows, FScctVisionData): thermal draws it
+ * by its HeatIntensity and HeatOpacity, EMF only while it is EMF visible (EmfVision.Shows: a spy with his weapon away
+ * is not drawn) and by its EMF glow and EMFOpacity. A body the mode hides is not drawn at all (neither the main pass
+ * nor the custom depth, as the original discards it); a see-through one (opacity below 0.99) is drawn only into the
+ * custom depth so the material lays it over the scene behind by its opacity; the stencil carries the level and the
+ * opacity (PawnStencil). What hangs on the body follows it, at the glow of what it carries when that is more (the
+ * spy's drawn pistol). Motion tracking still marks every body by side: 1 a spy, 2 a merc. Night vision reads no
+ * marks. Other things only the goggles show are marked by whoever draws them
  * (the detector beams: Play/ScctMarkersSubsystem): StencilEmfStreak is drawn as a dark grey streak in EMF, and
  * HeatStencil(Heat) as that heat in thermal.
  *
@@ -26,7 +34,9 @@ class UMaterialInstanceDynamic;
  * night and thermal vision.
  *
  * Unattended switch: -ScctForceVision=<34|36|37|38> holds that mode whatever the HUD says (0 holds plain sight), so
- * a mode can be shot without a player turning the goggles on.
+ * a mode can be shot without a player turning the goggles on. -ScctVisionHeatOpacity=<0..1> and
+ * -ScctVisionEmfOpacity=<0..1> hold every pawn's opacity in that mode (0 hides them all, 0.5 see-through), to check
+ * the opacity path. Thermal and EMF log 'Vision: <mode> marks n pawns (m hidden, k see-through)' when that changes.
  */
 UCLASS()
 class OPENSCCT_API UScctVisionSubsystem : public UWorldSubsystem
@@ -62,6 +72,16 @@ public:
 	/** The custom depth stencil of something thermal vision draws at Heat (0 to 1): 128 to 255. */
 	static int32 HeatStencil(float Heat) { return 128 + FMath::RoundToInt(FMath::Clamp(Heat, 0.0f, 1.0f) * 127.0f); }
 
+	/** The first custom depth stencil of a pawn body in thermal or EMF (64 to 127). */
+	static constexpr int32 StencilPawnFirst = 64;
+
+	/**
+	 * The custom depth stencil of a pawn body in thermal or EMF: 64 + level x 4 + opacity step, the level the mode's
+	 * intensity (HeatIntensity or EMF glow, 0 to 1) in 16 steps, the opacity step 0 to 2 for 1/4 to 3/4 see-through
+	 * and 3 for opaque (0.99 and up). Build_vision_materials.py decodes it.
+	 */
+	static int32 PawnStencil(float Intensity, float Opacity);
+
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
@@ -96,4 +116,15 @@ private:
 
 	/** -ScctForceVision: the mode held whatever the HUD says, INDEX_NONE when not forced. */
 	int32 ForcedMode = INDEX_NONE;
+
+	/** -ScctVisionHeatOpacity / -ScctVisionEmfOpacity: every pawn's opacity in that mode, negative when not held. */
+	float HeatOpacityOverride = -1.0f;
+	float EmfOpacityOverride = -1.0f;
+
+	/** The pawn primitives whose shadow a mode took away while it hid them, to be given back. */
+	TSet<TWeakObjectPtr<UPrimitiveComponent>> ShadowsTaken;
+
+	/** The last pawn marking summary and when it was logged. */
+	int32 LastMarkSummary = -1;
+	double LastMarkLog = 0.0;
 };

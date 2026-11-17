@@ -11,7 +11,8 @@ script again; the assets are rebuilt from nothing each time.
 
 Scene inputs the shaders read:
   14 the picture so far, 1 scene depth (cm), 13 custom depth (cm), 25 custom stencil.
-The game marks characters in the custom stencil while a mode is on: 1 a spy, 2 a merc. Detector beams are marked
+The game marks characters in the custom stencil while a mode is on: in motion tracking 1 a spy, 2 a merc; in thermal
+and EMF 64 to 127, the body's heat or EMF glow and its opacity in that mode (see PAWNS below). Detector beams are marked
 while thermal or EMF is on by a cylinder drawn only into the custom depth (Source/OpenSCCT/Play/ScctMarkersSubsystem):
 3 a beam EMF draws as a dark grey streak, 128 to 255 a beam thermal draws at the heat (stencil - 128) / 127.
 """
@@ -50,6 +51,41 @@ for (int k = 0; k < 8; k++)
     float Sk = SceneTextureLookup(O, 25, false).r;
     Ring += (Sk > 0.5 && Sk < 2.5
         && SceneTextureLookup(O, 13, false).r < SceneTextureLookup(O, 1, false).r + 30.0) ? 0.125 : 0.0;
+}
+"""
+
+# The pawn bodies of thermal and EMF, marked 64 to 127 by the simulation's rule for the mode
+# (UScctVisionSubsystem::PawnStencil): code = stencil - 64, level (the mode's intensity) = floor(code / 4) / 15,
+# opacity = (code % 4 + 1) / 4 (1 opaque). A body the mode hides is not drawn at all, so it is simply not here. A
+# see-through body is drawn only into the custom depth, so the scene under it is what lies behind it and the body is
+# laid over that by its opacity. Body: how much of the pixel is a body (its opacity), BodyLevel its level; Ring the
+# bodies around the pixel (for the figure's shape), RingLevel the same weighted by their level and opacity (for halos).
+PAWNS = """
+float2 SUV = GetDefaultSceneTextureUV(Parameters, 25);
+float2 SPx = GetSceneTextureBufferSize(25).zw;
+float S0 = SceneTextureLookup(SUV, 25, false).r;
+float Body = 0.0;
+float BodyLevel = 0.0;
+if (S0 > 63.5 && S0 < 127.5 && SceneTextureLookup(SUV, 13, false).r < SceneTextureLookup(SUV, 1, false).r + 30.0)
+{
+    float Code = round(S0) - 64.0;
+    BodyLevel = floor(Code / 4.0) / 15.0;
+    Body = (fmod(Code, 4.0) + 1.0) / 4.0;
+}
+float Ring = 0.0;
+float RingLevel = 0.0;
+for (int k = 0; k < 8; k++)
+{
+    float Ak = k * 0.785398;
+    float2 O = SUV + float2(cos(Ak), sin(Ak)) * SPx * Radius;
+    float Sk = SceneTextureLookup(O, 25, false).r;
+    if (Sk > 63.5 && Sk < 127.5 && SceneTextureLookup(O, 13, false).r < SceneTextureLookup(O, 1, false).r + 30.0)
+    {
+        float Ck = round(Sk) - 64.0;
+        float Ok = (fmod(Ck, 4.0) + 1.0) / 4.0;
+        Ring += 0.125;
+        RingLevel += 0.125 * Ok * floor(Ck / 4.0) / 15.0;
+    }
 }
 """
 
@@ -119,8 +155,9 @@ return lerp(C, Out, Amount);
 
 THERMAL = PRELUDE + """
 float Radius = 10.0;
-""" + BODY + BEAMS + """
-// The room as temperature rather than detail: a softened brightness, kept cold. Lamps read warmer.
+""" + PAWNS + BEAMS + """
+// The room as temperature rather than detail: a softened brightness, kept cold. Lamps read warmer. (The original drew
+// each surface from its own heat texture; those were not imported, so the room's heat comes from its brightness.)
 float Lb = L;
 for (int i = 0; i < 4; i++)
 {
@@ -130,10 +167,11 @@ for (int i = 0; i < 4; i++)
 Lb *= 0.2;
 float Heat = 0.13 + pow(Lb, 0.7) * 0.50 + smoothstep(0.80, 1.0, Lb) * 0.20;
 
-// Characters are hot: hottest in the middle of the body and cooler towards its outline, so the figure keeps its
-// form, with warm air around it.
-float Core = 0.56 + 0.26 * Ring * Ring + 0.18 * saturate(L * 6.0);
-Heat = lerp(max(Heat, Ring * 0.50), Core, Body);
+// Characters are as hot as the simulation says (HeatIntensity, 1 for both sides): hottest in the middle of the body
+// and cooler towards its outline, so the figure keeps its form, with warm air around it. A body thinned by its
+// HeatOpacity (the camo suit) is laid over what is behind it by that opacity; at 0 it is not marked at all.
+float Core = (0.56 + 0.26 * Ring * Ring + 0.18 * saturate(L * 6.0)) * BodyLevel;
+Heat = lerp(max(Heat, RingLevel * 0.50), Core, Body);
 
 // A detector beam is drawn at its own heat (HeatIntensity: 1 a tripwire, 0.4 a mine's beam).
 Heat = lerp(Heat, max(Heat, BeamHeat), Beam);
@@ -180,8 +218,8 @@ return lerp(C, Out, Amount);
 """
 
 EMF = PRELUDE + """
-float Radius = 2.5;
-""" + BODY + BEAMS + """
+float Radius = 3.5;
+""" + PAWNS + BEAMS + """
 // Electrical things glow: what is bright in the picture (lamps, screens) blooms blue-white over a dark field.
 float Glow = 0.0;
 for (int i = 0; i < 8; i++)
@@ -197,8 +235,13 @@ float Hot = smoothstep(0.55, 0.95, L);
 float3 Out = lerp(float3(0.008, 0.012, 0.045), float3(0.09, 0.15, 0.40), saturate(L * 0.9));
 Out += float3(0.55, 0.78, 1.0) * (Hot * 0.9 + Glow * 0.9);
 
-// People carry little that shows: only a thin cold outline.
-Out += float3(0.25, 0.45, 0.9) * saturate(abs(Ring - Body) * 2.0) * 0.55;
+// A pawn is here only while the simulation says EMF shows him (a spy with his weapon away is not marked and not
+// drawn at all). He is a dim figure in the field, glowing by his EMF glow (EMFIntensity while bEMFIsOn) and, on what
+// he carries, by its glow (the drawn pistol), with a halo of it around him; laid over the scene by his EMFOpacity.
+float3 Figure = lerp(float3(0.03, 0.05, 0.14), float3(0.12, 0.20, 0.48), saturate(L * 0.9));
+Figure += float3(0.55, 0.78, 1.0) * BodyLevel * (1.2 + 0.25 * sin(T * 5.0));
+Out = lerp(Out, Figure, Body);
+Out += float3(0.45, 0.65, 1.0) * RingLevel * (1.0 - saturate(Body * 4.0)) * 0.8;
 
 // A detector beam is a dark grey streak: it gives off nothing, the field only shows it is there.
 Out = lerp(Out, float3(0.24, 0.24, 0.25), Streak);
