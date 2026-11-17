@@ -21,12 +21,6 @@
 
 namespace
 {
-	const TCHAR* const HudUserSection = TEXT("OpenSCCT.Hud");
-	const TCHAR* const TeammateNameKeys[2] = { TEXT("TeammateNamesSpy"), TEXT("TeammateNamesMerc") };
-
-	/** A name sits this far over the top of its pawn's collision (the Godot client's 18 units). */
-	constexpr float NameLift = 18.0f;
-
 	/** Reads one of the bridge's lists: up to Capacity rows, the array sized to what was written. */
 	template <typename TRow>
 	void ReadRows(TArray<TRow>& Rows, int32 Capacity, int32 (__cdecl* Getter)(TRow*, int32))
@@ -63,11 +57,8 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Session->OnFrame.AddUObject(this, &UScctHudSubsystem::HandleFrame);
 
 	FParse::Value(FCommandLine::Get(), TEXT("ScctHudLog="), LogEvery);
-	for (int32 Side = 0; Side < 2; ++Side)
-	{
-		GConfig->GetBool(HudUserSection, TeammateNameKeys[Side], bTeammateNames[Side], GGameUserSettingsIni);
-	}
 
+	InitNames();
 	InitGadgetViews();
 	InitIcons();
 	InitRadar();
@@ -190,12 +181,7 @@ void UScctHudSubsystem::HandleLocalCommand(FName Name, int32 Arg, bool bPressed)
 	}
 	else if (bPressed && Name == TEXT("ToggleTeammateNames"))
 	{
-		// For the side played now, as the Godot client's key does, and kept with the user's settings.
-		const int32 Side = FMath::Clamp(Model->LocalTeam, 0, 1);
-		bTeammateNames[Side] = !bTeammateNames[Side];
-		GConfig->SetBool(HudUserSection, TeammateNameKeys[Side], bTeammateNames[Side], GGameUserSettingsIni);
-		GConfig->Flush(false, GGameUserSettingsIni);
-		UE_LOG(LogOpenSCCT, Log, TEXT("HUD: teammate names for the %s are now %s"), Side == 1 ? TEXT("mercs") : TEXT("spies"), bTeammateNames[Side] ? TEXT("on") : TEXT("off"));
+		ToggleTeammateNames();
 	}
 	else if (bPressed && Name == TEXT("DisplayStrategicMap") && !bStrategicMapNoted)
 	{
@@ -249,73 +235,6 @@ void UScctHudSubsystem::GiveInputToGame()
 		Player->SetInputMode(FInputModeGameOnly());
 	}
 	Player->SetShowMouseCursor(false);
-}
-
-void UScctHudSubsystem::ProjectNames()
-{
-	FScctHudModel& M = *Model;
-	M.NameLabels.Reset();
-	const APlayerController* Player = GetWorld()->GetFirstPlayerController();
-	const UScctSessionSubsystem* Session = GetWorld()->GetSubsystem<UScctSessionSubsystem>();
-	const int32 Side = FMath::Clamp(M.LocalTeam, 0, 1);
-	// Only for a living player with a side of his own: a free-for-all has no friends, and a spectator's page has
-	// its own names.
-	if (Player == nullptr || Session == nullptr || !bTeammateNames[Side] || !M.bHasState || !M.bHasRound || M.Round.GameMode == 7
-		|| M.State.Health <= 0 || (M.State.Flags & (EScctHudFlags::Spectating | EScctHudFlags::GameEnded | EScctHudFlags::HideHud)) != 0)
-	{
-		return;
-	}
-
-	const FScctBridgePawn* Own = nullptr;
-	for (const FScctBridgePawn& Pawn : Session->GetPawns())
-	{
-		if ((Pawn.Flags & EScctPawnFlags::Local) != 0)
-		{
-			Own = &Pawn;
-			break;
-		}
-	}
-	if (Own == nullptr)
-	{
-		return;
-	}
-
-	const float Scale = FMath::Max(UWidgetLayoutLibrary::GetViewportScale(GetWorld()), 0.01f);
-	const FVector2f Size = FVector2f(ViewportSize) / Scale;
-	for (const FScctBridgePawn& Pawn : Session->GetPawns())
-	{
-		if (&Pawn == Own || Pawn.Kind != Own->Kind || Pawn.Health <= 0)
-		{
-			continue;
-		}
-		// The scoreboard joins a drawn pawn to its player.
-		const FScctHudScoreRow* Row = M.Scores.FindByPredicate([&Pawn](const FScctHudScoreRow& Each) { return Each.PawnActorId == Pawn.ActorId; });
-		if (Row == nullptr || (Row->Flags & EScctHudScoreFlags::Spectator) != 0 || Row->Team != M.LocalTeam)
-		{
-			continue;
-		}
-		const FString& Name = M.Text(Row->NameId);
-		if (Name.TrimStartAndEnd().IsEmpty())
-		{
-			continue;
-		}
-
-		const FVector Head(Pawn.X, Pawn.Y, Pawn.Z + Pawn.CollisionHeight + NameLift);
-		FVector2D Screen;
-		if (!Player->ProjectWorldLocationToScreen(Head, Screen, false))
-		{
-			continue;
-		}
-		const FVector2f At = FVector2f(Screen) / Scale;
-		if (At.X < 0.0f || At.Y < 0.0f || At.X > Size.X || At.Y > Size.Y)
-		{
-			continue;
-		}
-		FScctHudNameLabel& NameLabel = M.NameLabels.AddDefaulted_GetRef();
-		NameLabel.Name = Name;
-		NameLabel.Screen = At;
-		NameLabel.Metres = static_cast<float>(FVector::Dist(FVector(Pawn.X, Pawn.Y, Pawn.Z), FVector(Own->X, Own->Y, Own->Z))) * 0.01f;
-	}
 }
 
 void UScctHudSubsystem::HandleMatchStopped()
@@ -563,7 +482,7 @@ void UScctHudSubsystem::RunTimedCommands()
 		else if (Command.Name.Equals(TEXT("TeammateNames"), ESearchCase::IgnoreCase))
 		{
 			// For this run only: the user's own setting is not written.
-			bTeammateNames[FMath::Clamp(Model->LocalTeam, 0, 1)] = Command.Argument != 0;
+			TeammateNamesForced[FMath::Clamp(Model->LocalTeam, 0, 1)] = Command.Argument != 0 ? 1 : 0;
 		}
 		else if (RunIconCommand(Command.Name, Command.Argument) || RunRadarCommand(Command.Name, Command.Argument)
 			|| RunBackpackCommand(Command.Name, Command.Argument) || RunMotionCommand(Command.Name, Command.Argument)
