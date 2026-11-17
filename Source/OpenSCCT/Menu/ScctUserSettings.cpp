@@ -122,8 +122,8 @@ void UScctUserSettings::ResetAudio()
 	EffectsVolume = 80;
 	AmbientVolume = 80;
 	MusicVolume = 70;
-	MenuMusicVolume = 50;
-	MenuSoundsVolume = 70;
+	MenuMusicVolume = 5;
+	MenuSoundsVolume = 5;
 	ObjectiveVolume = 80;
 	VoiceVolume = 100;
 }

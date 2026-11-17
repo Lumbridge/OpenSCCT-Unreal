@@ -66,8 +66,8 @@ public:
 	int32 EffectsVolume = 80;
 	int32 AmbientVolume = 80;
 	int32 MusicVolume = 70;
-	int32 MenuMusicVolume = 50;
-	int32 MenuSoundsVolume = 70;
+	int32 MenuMusicVolume = 5;
+	int32 MenuSoundsVolume = 5;
 	int32 ObjectiveVolume = 80;
 	int32 VoiceVolume = 100;
 
