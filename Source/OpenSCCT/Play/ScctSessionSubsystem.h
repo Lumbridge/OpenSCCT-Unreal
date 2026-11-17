@@ -91,6 +91,10 @@ struct FScctLocalMatchOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	bool bOfflineRules = false;
 
+	/** Visit a Map practice: unlimited gear, instant gear changes, and Switch Team in the in-match menu. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
+	bool bUnlimitedGear = false;
+
 	/** Empty: "Player". */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	FString PlayerName;

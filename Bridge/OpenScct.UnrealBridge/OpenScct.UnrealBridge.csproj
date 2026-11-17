@@ -28,5 +28,7 @@
     <Compile Include="$(OpenScctRoot)game\Scripts\Play\Session\*.cs" Link="Linked\PlaySession\%(Filename)%(Extension)" />
     <!-- The strategic map's data and page state (floors, snapshot camera, markers), Godot-free like the session. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\StrategicMapModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
+    <!-- The in-match menu's rules (which entries show for whom, the confirmations), Godot-free. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\UI\InGameMenuModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

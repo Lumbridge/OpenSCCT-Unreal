@@ -103,7 +103,8 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 	Start.Bots = FMath::Max(Options.Bots, 0);
 	Start.Flags = (Options.bSidearms ? EScctStartFlags::Sidearms : 0)
 		| (Options.bRifles ? EScctStartFlags::Rifles : 0)
-		| (Options.bOfflineRules ? EScctStartFlags::OfflineRules : 0);
+		| (Options.bOfflineRules ? EScctStartFlags::OfflineRules : 0)
+		| (Options.bUnlimitedGear ? EScctStartFlags::UnlimitedGear : 0);
 	Start.Difficulty = FMath::Clamp(Options.Difficulty, 0, 4);
 	CopyText(Start.Map, Options.Map);
 	CopyText(Start.Mode, Options.Mode);

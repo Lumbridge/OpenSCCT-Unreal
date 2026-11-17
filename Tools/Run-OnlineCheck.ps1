@@ -39,6 +39,8 @@ param(
     [switch] $NoServer,
     # Do not say ready: the game stays in the lobby (for a look at it).
     [switch] $StayInLobby,
+    # A practice server (unlimited lives, the in-match menu's Switch Team).
+    [switch] $Practice,
     # Anything else for the game's command line, as written.
     [string] $Extra = '',
     [string] $Engine = 'F:\UE_5.8'
@@ -66,6 +68,7 @@ try {
             maps = (Join-Path $Content 'svmap')
             rotation = @(@{ map = $Map; mode = 'Story'; timeLimit = $TimeLimit }, @{ map = $SecondMap; mode = 'Story' })
             minPlayersToLaunch = 1; launchCountdownSeconds = 2; resultsSeconds = 6; bansFile = $null; matchLog = $null
+            practice = [bool] $Practice
         } | ConvertTo-Json -Depth 4 | Set-Content -Path $config -Encoding utf8
 
         # The server's output goes straight to a file (cmd's redirection), so nothing here has to keep reading it;

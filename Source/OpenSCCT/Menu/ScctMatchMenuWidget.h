@@ -7,13 +7,23 @@
 class SScctMatchOverlay;
 
 /**
- * What a match level shows over the HUD: the in-match menu (resume, change gear, strategic map, options, leave the server or go back to the
- * main menu, after asking) and, in an online round, what the visit is waiting for and the round's results. Built in
- * code; the widgets are in the .cpp. AScctGameMode owns it and opens the menu on the player's ShowMenu binding.
+ * What a match level shows over the HUD: the in-match menu and, in an online round, what the visit is waiting for
+ * and the round's results. Built in code; the widgets are in the .cpp. AScctGameMode owns it and opens the menu on
+ * the player's ShowMenu binding.
+ *
+ * The menu's entries are the Godot client's In-Game Menu for who the player is (InGameMenuModel.Layout through
+ * Runtime/ScctMatchMenuApi.h, read again four times a second while it is open): RESUME, CHANGE GEAR, SWITCH TO
+ * SPY / MERC (a practice round), STRATEGIC MAP, OPTIONS, HELP (Menu/SScctHelpPage.h), RESIGN (an online round with
+ * lives left: the "!resign" command), RETURN TO LOBBY (the online host: everyone goes back), MAIN MENU / LEAVE THE
+ * SERVER / END SESSION, and QUIT GAME. A tutorial has no gear, map or team entries. Resign, Return to Lobby, leaving
+ * and quitting ask first (Menu/SScctConfirm.h). In its first half second the menu ignores its close keys.
  *
  * Unattended switches, acted on the first time the menu opens (use with -ScctMatchMenu=S):
  *   -ScctOptions=<Page>   open the Options screen on that page
  *   -ScctConfirmTest      ask the LEAVE question
+ *   -ScctMatchMenuAct=<entry>[,yes]  a second after it opens, press an entry (SwitchTeam, Resign, Lobby, Leave,
+ *                         Quit, Help, Gear, Map, Options, Resume); ",yes" answers its question yes. The log has the
+ *                         entries ("ScctMatchMenu: entries [...]"), each press, question and answer, and team changes.
  */
 UCLASS()
 class OPENSCCT_API UScctMatchMenuWidget : public UUserWidget

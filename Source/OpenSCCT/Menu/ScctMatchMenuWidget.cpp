@@ -5,10 +5,13 @@
 #include "Misc/Parse.h"
 #include "Menu/SScctConfirm.h"
 #include "Menu/SScctGearPage.h"
+#include "Menu/SScctHelpPage.h"
 #include "Menu/SScctOptionsPage.h"
 #include "Menu/SScctStrategicMapPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Online/ScctOnlineSubsystem.h"
+#include "OpenSCCT.h"
+#include "Runtime/ScctMatchMenuApi.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
@@ -18,6 +21,26 @@
 
 // Short for the menus' own widgets (a using-directive would leak into the files built together with this one).
 namespace Ui = ScctMenuStyle;
+
+namespace
+{
+	/** Quit Game, an entry of OpenSCCT's menu beside the original's buttons (EScctMatchMenuButton). */
+	constexpr int32 QuitGameEntry = 100;
+
+	/** GUI.SSMenu_LANMainPage s_Init: Sleep(0.5), then keys count (InGameMenuK.KeyIgnoreSeconds). */
+	constexpr float MenuKeyHoldSeconds = 0.5f;
+
+	/** -ScctMatchMenuAct acted on in this run. */
+	bool bMatchMenuActDone = false;
+
+	/** The context before it was first read: no team yet. */
+	FScctMatchMenuContext MakeUnknownContext()
+	{
+		FScctMatchMenuContext Unknown = {};
+		Unknown.LocalTeam = -1;
+		return Unknown;
+	}
+}
 
 /**
  * The layers of the match overlay. Nothing here takes the mouse while the menu is closed: the banner and the
@@ -40,7 +63,6 @@ public:
 		bOnlineLevel = InArgs._bOnlineLevel;
 		OnResume = InArgs._OnResume;
 		OnLeave = InArgs._OnLeave;
-		const bool bOnline = bOnlineLevel;
 
 		ChildSlot
 		[
@@ -71,7 +93,7 @@ public:
 				]
 			]
 
-			// The in-match menu.
+			// The in-match menu: its entries depend on who the player is (RebuildEntries).
 			+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
 			[
 				SNew(SBox)
@@ -81,26 +103,7 @@ public:
 					Ui::Glass(
 						SNew(SVerticalBox)
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 18.0f)[ Ui::Title(Ui::ToText(TEXT("MENU")), 22.0f) ]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
-						[
-							Ui::Button(Ui::ToText(TEXT("RESUME")), FOnClicked::CreateLambda([this] { OnResume.ExecuteIfBound(); return FReply::Handled(); }), true)
-						]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
-						[
-							Ui::Button(Ui::ToText(TEXT("CHANGE GEAR")), FOnClicked::CreateLambda([this] { ShowGear(-1, false); return FReply::Handled(); }))
-							]
-							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
-							[
-								Ui::Button(Ui::ToText(TEXT("STRATEGIC MAP")), FOnClicked::CreateLambda([this] { ShowStrategicMap(false); return FReply::Handled(); }))
-							]
-							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
-							[
-								Ui::Button(Ui::ToText(TEXT("OPTIONS")), FOnClicked::CreateLambda([this] { ShowOptions(NAME_None); return FReply::Handled(); }))
-						]
-						+ SVerticalBox::Slot().AutoHeight()
-						[
-							Ui::Button(Ui::ToText(bOnline ? TEXT("LEAVE THE SERVER") : TEXT("MAIN MENU")), FOnClicked::CreateLambda([this] { AskLeave(); return FReply::Handled(); }))
-						])
+						+ SVerticalBox::Slot().AutoHeight()[ SAssignNew(EntryList, SVerticalBox) ])
 				]
 			]
 
@@ -181,19 +184,297 @@ public:
 		bMapOnly = false;
 	}
 
-	/** The menu's last button asks first: leaving a match cannot be taken back. */
+	/**
+	 * Quit Session asks first, in the original's words (SSMenu_ConfirmQuitLAN): leaving a match cannot be taken back,
+	 * and the host of an online round ends it for everyone.
+	 */
 	void AskLeave()
 	{
-		SScctConfirm::Open(Root.ToSharedRef(), bOnlineLevel ? TEXT("Leave the server?") : TEXT("Leave the match and go back to the main menu?"),
-			TEXT("LEAVE"), TEXT("STAY"), FSimpleDelegate::CreateLambda([this] { OnLeave.ExecuteIfBound(); }));
+		const TCHAR* Question = !bOnlineLevel ? TEXT("Leave the match and go back to the main menu?")
+			: Context.IAmServer != 0 ? TEXT("Leaving the game now will end this session.\nAre you sure?")
+			: TEXT("Are you sure you wish to quit?\nYou will leave the server.");
+		Ask(EScctMatchMenuButton::QuitSession, Question, TEXT("LEAVE"), TEXT("STAY"), [this] { OnLeave.ExecuteIfBound(); });
 	}
 
-	/** Escape or the menu key while the menu is open: answers an open question, or leaves the Options screen. False when neither is open. */
+	/** Quit Game (GUIYesNoQuitPage.QuitButtonClick): leaves the session (telling the server), then the program quits. */
+	void AskQuitGame()
+	{
+		Ask(QuitGameEntry, TEXT("Quit OpenSCCT?\nYou will leave the match and the game closes."), TEXT("QUIT"), TEXT("STAY"), [this]
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: Quit Game: leaving the session, then quitting"));
+			if (bOnlineLevel)
+			{
+				if (UScctOnlineSubsystem* Visit = Online.Get())
+				{
+					Visit->Leave();
+				}
+			}
+			FPlatformMisc::RequestExit(false);
+		});
+	}
+
+	/** Opens a question whose subject is an entry, so it can be taken back when the entry goes (a resign once out of lives). */
+	void Ask(int32 Entry, const TCHAR* Question, const TCHAR* Yes, const TCHAR* No, TFunction<void()> OnYes)
+	{
+		Asking = Entry;
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: asks \"%s\" (%s / %s)"), *FString(Question).Replace(TEXT("\n"), TEXT(" ")), Yes, No);
+		SScctConfirm::Open(Root.ToSharedRef(), Question, Yes, No,
+			FSimpleDelegate::CreateLambda([this, OnYes] { Asking = -1; UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: answered yes")); OnYes(); }),
+			FSimpleDelegate::CreateLambda([this] { Asking = -1; UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: answered no")); }));
+	}
+
+	/** The Help page over the menu (Menu/SScctHelpPage.h); its BACK returns to the menu. */
+	void ShowHelp()
+	{
+		SScctHelpPage::Open(Root.ToSharedRef());
+	}
+
+	void CloseHelp()
+	{
+		if (const TSharedPtr<SScctHelpPage> Help = SScctHelpPage::FindOpen(Root.ToSharedRef()))
+		{
+			Help->Close();
+		}
+	}
+
+	/** The menu has just opened: the context is read again, the entries laid out, and keys are held for half a second. */
+	void Opened()
+	{
+		OpenedSeconds = 0.0f;
+		ContextTimer = 0.0f;
+		RefreshContext(true);
+	}
+
+	/**
+	 * InGameMenuModel.UpdateContext: the match goes on behind the menu, so who the player is is read again; the
+	 * entries are laid out anew when they change, and a resign question is taken back once resigning is no longer
+	 * allowed. Logs the entries when they change (or when bLog).
+	 */
+	void RefreshContext(bool bLog)
+	{
+		FScctMatchMenuContext Fresh = {};
+		const FScctMatchMenuApi* Api = ScctFeature<FScctMatchMenuApi>();
+		const bool bKnown = Api != nullptr && Api->GetContext(&Fresh) != 0;
+		TArray<int32> Entries;
+		if (bKnown)
+		{
+			Entries.Append(Fresh.Entries, FMath::Clamp(Fresh.EntryCount, 0, FScctMatchMenuContext::MaxEntries));
+		}
+		else
+		{
+			// Without the bridge's table (or before the round) the entries every player has.
+			Entries = { EScctMatchMenuButton::Back, EScctMatchMenuButton::ChangeGear, EScctMatchMenuButton::StrategicMap, EScctMatchMenuButton::Options,
+				EScctMatchMenuButton::QuitSession };
+		}
+		// OpenSCCT keeps Help beside Options (the Godot client's utility button) and Quit Game after Quit Session (the
+		// original's quit page had it as a third answer).
+		const int32 OptionsAt = Entries.IndexOfByKey(EScctMatchMenuButton::Options);
+		Entries.Insert(EScctMatchMenuButton::Help, OptionsAt == INDEX_NONE ? Entries.Num() : OptionsAt + 1);
+		Entries.Add(QuitGameEntry);
+
+		if (bKnown && Fresh.LocalTeam != Context.LocalTeam && Context.LocalTeam >= 0 && Fresh.LocalTeam >= 0)
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: the player's team is now %s"), Fresh.LocalTeam == 0 ? TEXT("the spies") : TEXT("the mercenaries"));
+		}
+		if (bKnown)
+		{
+			Context = Fresh;
+		}
+		if (Asking == EScctMatchMenuButton::Resign && Context.CanResign == 0)
+		{
+			if (const TSharedPtr<SScctConfirm> Open = SScctConfirm::FindOpen(Root.ToSharedRef()))
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: resigning is no longer allowed; the question is taken back"));
+				Open->AnswerNo();
+			}
+		}
+		if (!bMenuOpen || (Entries == ShownEntries && !bLog))
+		{
+			return;
+		}
+		ShownEntries = Entries;
+		EntryList->ClearChildren();
+		TArray<FString> Captions;
+		for (int32 Index = 0; Index < Entries.Num(); ++Index)
+		{
+			const int32 Entry = Entries[Index];
+			Captions.Add(Caption(Entry));
+			EntryList->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, Index + 1 < Entries.Num() ? 8.0f : 0.0f)
+			[
+				Ui::Button(Ui::ToText(Caption(Entry)), FOnClicked::CreateLambda([this, Entry] { Act(Entry); return FReply::Handled(); }),
+					Entry == EScctMatchMenuButton::Back)
+			];
+		}
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: entries [%s] (%s, %s%s%s%s, team %d, lives %d, mode %d)"), *FString::Join(Captions, TEXT(", ")),
+			!bKnown ? TEXT("no context") : Context.Online != 0 ? TEXT("online") : TEXT("offline"), Context.IAmServer != 0 ? TEXT("host") : TEXT("client"),
+			Context.Tutorial != 0 ? TEXT(", tutorial") : TEXT(""), Context.Practice != 0 ? TEXT(", practice") : TEXT(""),
+			Context.MatchBegun != 0 ? TEXT(", match begun") : TEXT(", match not begun"), Context.LocalTeam, Context.Lives, Context.GameMode);
+	}
+
+	FString Caption(int32 Entry) const
+	{
+		switch (Entry)
+		{
+		case EScctMatchMenuButton::Back: return TEXT("RESUME");
+		case EScctMatchMenuButton::ChangeGear: return TEXT("CHANGE GEAR");
+		case EScctMatchMenuButton::SwitchTeam: return Context.LocalTeam == 1 ? TEXT("SWITCH TO SPY") : TEXT("SWITCH TO MERC");
+		case EScctMatchMenuButton::StrategicMap: return TEXT("STRATEGIC MAP");
+		case EScctMatchMenuButton::Options: return TEXT("OPTIONS");
+		case EScctMatchMenuButton::Help: return TEXT("HELP");
+		case EScctMatchMenuButton::Resign: return TEXT("RESIGN");
+		case EScctMatchMenuButton::ReturnToLobby: return TEXT("RETURN TO LOBBY");
+		case EScctMatchMenuButton::QuitSession: return bOnlineLevel ? (Context.IAmServer != 0 ? TEXT("END SESSION") : TEXT("LEAVE THE SERVER")) : TEXT("MAIN MENU");
+		case QuitGameEntry: return TEXT("QUIT GAME");
+		default: return FString();
+		}
+	}
+
+	/** A button of the menu (PlayMenu.Act through InGameMenuModel.Click), or the same asked unattended. */
+	void Act(int32 Entry)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: %s"), *Caption(Entry));
+		const FScctMatchMenuApi* Api = ScctFeature<FScctMatchMenuApi>();
+		switch (Entry)
+		{
+		case EScctMatchMenuButton::Back:
+			OnResume.ExecuteIfBound();
+			break;
+		case EScctMatchMenuButton::ChangeGear:
+			ShowGear(-1, false);
+			break;
+		case EScctMatchMenuButton::StrategicMap:
+			ShowStrategicMap(false);
+			break;
+		case EScctMatchMenuButton::Options:
+			ShowOptions(NAME_None);
+			break;
+		case EScctMatchMenuButton::Help:
+			ShowHelp();
+			break;
+		case EScctMatchMenuButton::SwitchTeam:
+			// InGameMenuModel.Click(SwitchTeam): the menu closes and the side changes behind it.
+			if (Api != nullptr && Api->SwitchTeam() != 0)
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: Switch Team from team %d: %s"), Context.LocalTeam, *MatchMenuError(Api));
+			}
+			else
+			{
+				UE_LOG(LogOpenSCCT, Warning, TEXT("ScctMatchMenu: Switch Team refused: %s"), Api != nullptr ? *MatchMenuError(Api) : TEXT("the bridge has no menu table"));
+			}
+			OnResume.ExecuteIfBound();
+			break;
+		case EScctMatchMenuButton::Resign:
+			Ask(Entry, TEXT("Give up your remaining lives for this round?"), TEXT("RESIGN"), TEXT("CANCEL"), [this]
+			{
+				const FScctMatchMenuApi* Table = ScctFeature<FScctMatchMenuApi>();
+				const bool bDone = Table != nullptr && Table->Resign() != 0;
+				UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: Resign %s"), bDone ? TEXT("sent (!resign)") : *(TEXT("refused: ") + MatchMenuError(Table)));
+				OnResume.ExecuteIfBound();
+			});
+			break;
+		case EScctMatchMenuButton::ReturnToLobby:
+			Ask(Entry, TEXT("Are you sure you wish to return to lobby?\nEveryone goes back with you."), TEXT("RETURN TO LOBBY"), TEXT("CANCEL"), [this]
+			{
+				OnResume.ExecuteIfBound();
+				const FScctMatchMenuApi* Table = ScctFeature<FScctMatchMenuApi>();
+				const bool bDone = Table != nullptr && Table->ReturnToLobby() != 0;
+				UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: Return to Lobby %s"), bDone ? TEXT("asked of the server") : *(TEXT("refused: ") + MatchMenuError(Table)));
+			});
+			break;
+		case EScctMatchMenuButton::QuitSession:
+			AskLeave();
+			break;
+		case QuitGameEntry:
+			AskQuitGame();
+			break;
+		default:
+			break;
+		}
+	}
+
+	static FString MatchMenuError(const FScctMatchMenuApi* Api)
+	{
+		if (Api == nullptr)
+		{
+			return TEXT("the bridge has no menu table");
+		}
+		TCHAR Buffer[512];
+		Buffer[0] = 0;
+		Api->LastError(Buffer, UE_ARRAY_COUNT(Buffer));
+		return Buffer;
+	}
+
+	/**
+	 * -ScctMatchMenuAct=<entry>[,yes]: once a run, a second after the menu first opens, acts on an entry as its button
+	 * does (SwitchTeam, Resign, Lobby, Leave, Quit, Help, Gear, Map, Options, Resume); with ",yes" the question it asks
+	 * is answered yes a second later.
+	 */
+	void TickUnattended(float DeltaSeconds)
+	{
+		static bool bParsed = false;
+		static FString Script;
+		if (!bParsed)
+		{
+			bParsed = true;
+			FParse::Value(FCommandLine::Get(), TEXT("ScctMatchMenuAct="), Script, false);
+		}
+		if (Script.IsEmpty())
+		{
+			return;
+		}
+		UnattendedSeconds += DeltaSeconds;
+		if (!bUnattendedActed && !bMatchMenuActDone && UnattendedSeconds >= 1.0f)
+		{
+			bUnattendedActed = true;
+			bMatchMenuActDone = true;
+			FString Name = Script;
+			FString Answer;
+			Script.Split(TEXT(","), &Name, &Answer);
+			bUnattendedYes = Answer.Equals(TEXT("yes"), ESearchCase::IgnoreCase);
+			static const TMap<FString, int32> Names = {
+				{ TEXT("Resume"), EScctMatchMenuButton::Back }, { TEXT("Back"), EScctMatchMenuButton::Back }, { TEXT("Gear"), EScctMatchMenuButton::ChangeGear },
+				{ TEXT("ChangeGear"), EScctMatchMenuButton::ChangeGear }, { TEXT("SwitchTeam"), EScctMatchMenuButton::SwitchTeam },
+				{ TEXT("Map"), EScctMatchMenuButton::StrategicMap }, { TEXT("StrategicMap"), EScctMatchMenuButton::StrategicMap },
+				{ TEXT("Options"), EScctMatchMenuButton::Options }, { TEXT("Help"), EScctMatchMenuButton::Help }, { TEXT("Resign"), EScctMatchMenuButton::Resign },
+				{ TEXT("Lobby"), EScctMatchMenuButton::ReturnToLobby }, { TEXT("ReturnToLobby"), EScctMatchMenuButton::ReturnToLobby },
+				{ TEXT("Leave"), EScctMatchMenuButton::QuitSession }, { TEXT("QuitSession"), EScctMatchMenuButton::QuitSession }, { TEXT("Quit"), QuitGameEntry },
+			};
+			const int32* Entry = Names.Find(Name);
+			if (Entry == nullptr)
+			{
+				UE_LOG(LogOpenSCCT, Warning, TEXT("ScctMatchMenu: -ScctMatchMenuAct: no entry called %s"), *Name);
+				return;
+			}
+			if (!ShownEntries.Contains(*Entry))
+			{
+				// Acted on all the same, so a check can see the bridge refuse what the menu would not show.
+				UE_LOG(LogOpenSCCT, Warning, TEXT("ScctMatchMenu: -ScctMatchMenuAct: %s is not on the menu for this player; acting anyway"), *Caption(*Entry));
+			}
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: -ScctMatchMenuAct presses %s"), *Caption(*Entry));
+			Act(*Entry);
+		}
+		else if (bUnattendedActed && bUnattendedYes && UnattendedSeconds >= 2.5f)
+		{
+			bUnattendedYes = false;
+			if (const TSharedPtr<SScctConfirm> Open = SScctConfirm::FindOpen(Root.ToSharedRef()))
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: -ScctMatchMenuAct answers yes"));
+				Open->AnswerYes();
+			}
+		}
+	}
+
+	/** Escape or the menu key while the menu is open: answers an open question, or goes back from the page on top. False when only the menu is open. */
 	bool Back()
 	{
-		if (const TSharedPtr<SScctConfirm> Open = SScctConfirm::FindOpen(Root.ToSharedRef()))
+		if (const TSharedPtr<SScctConfirm> Open =SScctConfirm::FindOpen(Root.ToSharedRef()))
 		{
 			Open->AnswerNo();
+			return true;
+		}
+		if (const TSharedPtr<SScctHelpPage> Help = SScctHelpPage::FindOpen(Root.ToSharedRef()))
+		{
+			Help->Close();
 			return true;
 		}
 		if (const TSharedPtr<SScctGearPage> Gear = GetGear())
@@ -213,12 +494,31 @@ public:
 			Screen->RequestBack();
 			return true;
 		}
+		if (bMenuOpen && OpenedSeconds < MenuKeyHoldSeconds)
+		{
+			// SSMenu_LANMainPage s_Init: the menu takes no key in its first half second, so a key pressed twice by
+			// mistake does not close it again at once.
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: a close key %.2f s after opening is ignored (the first %.1f s are held)"), OpenedSeconds, MenuKeyHoldSeconds);
+			return true;
+		}
 		return false;
 	}
 
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override
 	{
 		SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+		// The context is followed while the menu is closed too, so a team change asked from it is logged when it lands.
+		ContextTimer += InDeltaTime;
+		if (ContextTimer >= 0.25f)
+		{
+			ContextTimer = 0.0f;
+			RefreshContext(false);
+		}
+		if (bMenuOpen)
+		{
+			OpenedSeconds += InDeltaTime;
+			TickUnattended(InDeltaTime);
+		}
 		const UScctOnlineSubsystem* Visit = Online.Get();
 		const bool bShow = bOnlineLevel && Visit != nullptr && Visit->GetState() == EScctOnlineState::Results;
 		if (bShow && (!bResultsShown || Visit->GetRevision() != SeenRevision))
@@ -322,6 +622,17 @@ private:
 	FSimpleDelegate OnResume;
 	FSimpleDelegate OnLeave;
 	TSharedPtr<SVerticalBox> ResultRows;
+	/** The menu's buttons, laid out from the context. */
+	TSharedPtr<SVerticalBox> EntryList;
+	TArray<int32> ShownEntries;
+	FScctMatchMenuContext Context = MakeUnknownContext();
+	/** The entry whose question is open, -1 none. */
+	int32 Asking = -1;
+	float OpenedSeconds = 0.0f;
+	float ContextTimer = 0.0f;
+	float UnattendedSeconds = 0.0f;
+	bool bUnattendedActed = false;
+	bool bUnattendedYes = false;
 	bool bOnlineLevel = false;
 	bool bResultsShown = false;
 	int32 SeenRevision = -1;
@@ -340,6 +651,10 @@ TSharedRef<SWidget> UScctMatchMenuWidget::RebuildWidget()
 		}))
 		.OnLeave(FSimpleDelegate::CreateUObject(this, &UScctMatchMenuWidget::LeaveMatch));
 	Overlay->bMenuOpen = bMenuOpen;
+	if (bMenuOpen)
+	{
+		Overlay->Opened();
+	}
 	return Overlay.ToSharedRef();
 }
 
@@ -375,13 +690,19 @@ void UScctMatchMenuWidget::SetMenuOpen(bool bOpen)
 	{
 		return;
 	}
+	const bool bWasOpen = Overlay->bMenuOpen;
 	Overlay->bMenuOpen = bOpen;
+	if (bOpen && !bWasOpen)
+	{
+		Overlay->Opened();
+	}
 	if (!bOpen)
 	{
 		// Closed from outside (the game mode): what the Options screen had not applied is dropped with it.
 		Overlay->CloseOptions();
 		Overlay->CloseGear();
 		Overlay->CloseStrategicMap();
+		Overlay->CloseHelp();
 		if (const TSharedPtr<SScctConfirm> Open = SScctConfirm::FindOpen(Overlay->GetRoot()))
 		{
 			Open->AnswerNo();

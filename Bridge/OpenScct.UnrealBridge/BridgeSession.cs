@@ -40,6 +40,9 @@ public sealed record LocalMatch
 
     /// <summary>Practice rules instead of the map's own: no time limit, unlimited lives, 5 s respawn.</summary>
     public bool OfflineRules { get; init; }
+
+    /// <summary>Visit a Map practice: unlimited ammunition and gadgets, instant gear changes, and Switch Team in the menu.</summary>
+    public bool UnlimitedGear { get; init; }
 }
 
 /// <summary>
@@ -124,6 +127,7 @@ public sealed class BridgeSession : IDisposable
             Sidearms = match.Sidearms,
             Rifles = match.Rifles,
             OfflineRules = match.OfflineRules,
+            UnlimitedGear = match.UnlimitedGear,
         }.ForLocalLaunch();
         return Wrap(new PlaySession(settings, new StopwatchClock()));
     }
