@@ -1,6 +1,8 @@
 #include "Hud/ScctHudElements.h"
 
+#include "Hud/ScctCrosshairShape.h"
 #include "Hud/ScctHudStyle.h"
+#include "OpenSCCT.h"
 #include "Hud/ScctVisorEffects.h"
 
 // The blocks about the player: status, equipment, prompt, crosshair, scope and the washes over the picture.
@@ -35,6 +37,19 @@ namespace
 		Painter.Polyline({ FVector2f(Right - Length, Top), FVector2f(Right, Top), FVector2f(Right, Top + Length) }, Colour, 1.5f);
 		Painter.Polyline({ FVector2f(Left, Bottom - Length), FVector2f(Left, Bottom), FVector2f(Left + Length, Bottom) }, Colour, 1.5f);
 		Painter.Polyline({ FVector2f(Right - Length, Bottom), FVector2f(Right, Bottom), FVector2f(Right, Bottom - Length) }, Colour, 1.5f);
+	}
+
+	/** Says in the log what the merc's reticle is each time that changes (not each frame). */
+	void LogPlayerCrosshair(const ScctCrosshair::FSettings& Crosshair, int32 Pieces, const FVector2f& At, const FVector2f& Size)
+	{
+		static FString LastPlayerCrosshairLine;
+		const FString Line = FString::Printf(TEXT("%s; %d pieces on a %.0f x %.0f HUD%s"), *ScctCrosshair::Describe(Crosshair), Pieces, Size.X, Size.Y,
+			Crosshair.bCustom && Crosshair.bFollowRecoil ? TEXT(" (on the aim point)") : *FString::Printf(TEXT(" at %.0f,%.0f"), At.X, At.Y));
+		if (Line != LastPlayerCrosshairLine)
+		{
+			LastPlayerCrosshairLine = Line;
+			UE_LOG(LogOpenSCCT, Log, TEXT("ScctCrosshair: %s"), *Line);
+		}
 	}
 
 	/** A red glow in from the edges of the picture. */
@@ -185,8 +200,27 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 	}
 
 	const bool bScoped = State.BinocularMode != 0;
-	if ((State.Flags & EScctHudFlags::ShowReticle) != 0 && !bScoped)
+	const bool bMercReticle = (State.Flags & EScctHudFlags::ShowReticle) != 0 && !bScoped && State.Side == 1;
+	const ScctCrosshair::FSettings Crosshair = bMercReticle ? ScctCrosshair::Read() : ScctCrosshair::FSettings();
+	// Reloaded's classic_crosshair: the merc reticle 3 units left and 3 down on the original's 480-high canvas.
+	const FVector2f ReticleCentre = Centre + (bMercReticle && Crosshair.bClassicPosition ? FVector2f(-3.0f, 3.0f) * (Size.Y / 480.0f) : FVector2f::ZeroVector);
+	if (bMercReticle && Crosshair.bCustom)
 	{
+		// The custom crosshair (Hud/ScctCrosshairShape.h): at the screen's centre, or on the aim point with follow
+		// recoil; a dynamic style opens as far as the original ticks would, and it is red after a hit like them.
+		const FVector2f FixedSpot = Size * 0.5f + (ReticleCentre - Centre);
+		const FVector2f At = Crosshair.bFollowRecoil ? ReticleCentre : FixedSpot;
+		const TArray<ScctCrosshair::FPiece> Pieces = ScctCrosshair::Build(Crosshair, At, Size.Y, Model.Spread * 24.0f, (State.Flags & EScctHudFlags::ReticleHit) != 0);
+		ScctCrosshair::Paint(Painter, Pieces);
+		LogPlayerCrosshair(Crosshair, Pieces.Num(), At, Size);
+	}
+	else if ((State.Flags & EScctHudFlags::ShowReticle) != 0 && !bScoped)
+	{
+		if (bMercReticle)
+		{
+			LogPlayerCrosshair(Crosshair, 0, ReticleCentre, Size);
+		}
+		const FVector2f TickCentre = ReticleCentre;
 		// Four ticks that open with the weapon's spread; they turn red for a moment when a shot lands.
 		const float Gap = 5.0f + Model.Spread * 24.0f;
 		constexpr float Length = 8.0f;
@@ -195,11 +229,11 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 		for (const FVector2f& Direction : Directions)
 		{
 			// A dark edge under each tick keeps it readable over a bright floor.
-			Painter.Line(Centre + Direction * (Gap - 1.0f), Centre + Direction * (Gap + Length + 1.0f), FLinearColor(0.0f, 0.0f, 0.0f, 0.6f), 4.0f);
-			Painter.Line(Centre + Direction * Gap, Centre + Direction * (Gap + Length), Colour, 2.0f);
+			Painter.Line(TickCentre + Direction * (Gap - 1.0f), TickCentre + Direction * (Gap + Length + 1.0f), FLinearColor(0.0f, 0.0f, 0.0f, 0.6f), 4.0f);
+			Painter.Line(TickCentre + Direction * Gap, TickCentre + Direction * (Gap + Length), Colour, 2.0f);
 		}
-		Painter.Fill(FBox2f(Centre - FVector2f(2.0f), Centre + FVector2f(2.0f)), FLinearColor(0.0f, 0.0f, 0.0f, 0.5f), 2.0f);
-		Painter.Fill(FBox2f(Centre - FVector2f(1.0f), Centre + FVector2f(1.0f)), Colour, 1.0f);
+		Painter.Fill(FBox2f(TickCentre - FVector2f(2.0f), TickCentre + FVector2f(2.0f)), FLinearColor(0.0f, 0.0f, 0.0f, 0.5f), 2.0f);
+		Painter.Fill(FBox2f(TickCentre - FVector2f(1.0f), TickCentre + FVector2f(1.0f)), Colour, 1.0f);
 
 		if (Model.HitConfirm > 0.01f)
 		{
@@ -209,7 +243,7 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 			for (const FVector2f& Diagonal : Diagonals)
 			{
 				const FVector2f Unit = Diagonal * UE_INV_SQRT_2;
-				Painter.Line(Centre + Unit * Out, Centre + Unit * (Out + 7.0f), Fade(Danger(), Model.HitConfirm), 2.0f);
+				Painter.Line(TickCentre + Unit * Out, TickCentre + Unit * (Out + 7.0f), Fade(Danger(), Model.HitConfirm), 2.0f);
 			}
 		}
 	}
