@@ -16,14 +16,6 @@ param(
 $ErrorActionPreference = 'Stop'
 $project = (Resolve-Path "$PSScriptRoot\..\..").Path
 
-# Unreal's command line treats backslashes in -script as escapes.
-function Fwd([string] $path) { $path -replace '\\', '/' }
-New-Item -ItemType Directory -Force (Join-Path $project 'Saved\Logs') | Out-Null
-$log = Fwd (Join-Path $project 'Saved\Logs\build-vision-materials.log')
-$script = Fwd "$PSScriptRoot\build_vision_materials.py"
-& "$Engine\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" (Fwd "$project\OpenSCCTUnreal.uproject") -run=pythonscript "-script=$script" -unattended -nosplash -nullrhi "-abslog=$log" *> $null
-$code = $LASTEXITCODE
-
-Select-String -Path $log -CaseSensitive -Pattern 'SCCT-VISION|Traceback|LogPython: Error|Error:.*M_ScctVision' |
-    ForEach-Object { $_.Line -replace '^\[[^\]]+\]\[[^\]]+\]', '' } | Select-Object -Unique
-"exit code $code (log: $log)"
+. "$PSScriptRoot\..\EditorScript.ps1"
+Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'build-vision-materials' -Script (Fwd "$PSScriptRoot\build_vision_materials.py") -Show 'SCCT-VISION|Error:.*M_ScctVision' | Out-Null
+Exit-ScctScripts

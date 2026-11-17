@@ -19,12 +19,6 @@ $project = (Resolve-Path "$PSScriptRoot\..\..").Path
 # A level that exists cannot be replaced from inside the editor's Python: it is rebuilt from nothing.
 Remove-Item (Join-Path $project 'Content\OpenSCCT\Maps\L_FrontEnd.umap') -ErrorAction SilentlyContinue
 
-# Unreal's command line treats backslashes in -script as escapes.
-function Fwd([string] $path) { $path -replace '\\', '/' }
-$log = Fwd (Join-Path $project 'Saved\Logs\build-front-end.log')
-& "$Engine\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" (Fwd "$project\OpenSCCTUnreal.uproject") -run=pythonscript "-script=$(Fwd "$PSScriptRoot\build_front_end.py")" -unattended -nosplash -nullrhi "-abslog=$log" *> $null
-$code = $LASTEXITCODE
-
-Select-String -Path $log -CaseSensitive -Pattern 'SCCT-FRONTEND|Traceback|LogPython: Error' |
-    ForEach-Object { $_.Line -replace '^\[[^\]]+\]\[[^\]]+\]', '' } | Select-Object -Unique
-"front end build exit code $code (log: $log)"
+. "$PSScriptRoot\..\EditorScript.ps1"
+Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'build-front-end' -Script (Fwd "$PSScriptRoot\build_front_end.py") -Show 'SCCT-FRONTEND' | Out-Null
+Exit-ScctScripts

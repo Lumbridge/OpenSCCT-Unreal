@@ -19,27 +19,13 @@ $project = (Resolve-Path "$PSScriptRoot\..\..").Path
 $source = Join-Path $project 'Art\Weapons\MercRifle'
 if (-not (Test-Path "$source\MercRifle.fbx")) { throw "No $source\MercRifle.fbx: run Art\Weapons\MercRifle\Build-MercRifle.ps1 first." }
 
-# Unreal's command line treats backslashes in -script as escapes.
-function Fwd([string] $path) { $path -replace '\\', '/' }
+. "$PSScriptRoot\..\EditorScript.ps1"
 $editor = "$Engine\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
 
 if (-not $SkipImport) {
     # A level that exists cannot be replaced from inside the editor's Python: it is rebuilt from nothing each import.
     Remove-Item (Join-Path $project 'Content\OpenSCCT\Weapons\MercRifle\L_RifleLook.umap') -ErrorAction SilentlyContinue
-
-    $log = Fwd (Join-Path $project 'Saved\Logs\import-MercRifle.log')
-    $script = "$(Fwd "$PSScriptRoot\import_merc_rifle.py") $(Fwd $source)"
-    & $editor (Fwd "$project\OpenSCCTUnreal.uproject") -run=pythonscript "-script=$script" -unattended -nosplash -nullrhi "-abslog=$log" *> $null
-    $code = $LASTEXITCODE
-    # The script's own lines, once each (the log repeats them at exit), and any Python error that names it. The
-    # engine's toolset plugins also log Python errors at start-up in a commandlet; those are not ours, and they
-    # are why the exit code is 1 even when the import worked: "merc rifle imported" is the sign of success.
-    $lines = Select-String -Path $log -CaseSensitive -Pattern 'SCCT-IMPORT |File ".*import_merc_rifle\.py"' |
-        Where-Object { $_.Line -notmatch 'LogInit: Display' } |
-        ForEach-Object { $_.Line -replace '^.*?(SCCT-IMPORT |LogPython: Error: )', '' } | Select-Object -Unique
-    $lines
-    if ($lines -notcontains 'merc rifle imported') { throw "The import did not finish (exit code $code): see $log" }
-    "imported (log: $log)"
+    Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'import-MercRifle' -Script "$(Fwd "$PSScriptRoot\import_merc_rifle.py") $(Fwd $source)" | Out-Null
 }
 
 if ($Look) {
@@ -55,3 +41,4 @@ if ($Look) {
     Select-String -Path $log -Pattern 'LogOpenSCCT' |
         ForEach-Object { $_.Line -replace '^\[[^\]]+\]\[[^\]]+\]', '' } | Select-Object -First 20
 }
+Exit-ScctScripts

@@ -277,11 +277,12 @@ def use_lens_materials():
 
 
 surface = unreal.load_asset(SURFACE_MATERIAL)
-if surface and not (surface.get_editor_property("used_with_skeletal_mesh") and surface.get_editor_property("used_with_nanite")):
-    surface.set_editor_property("used_with_skeletal_mesh", True)
-    surface.set_editor_property("used_with_nanite", True)
-    materials_lib.recompile_material(surface)
-    editor_assets.save_loaded_asset(surface, only_if_is_dirty=False)
+# The surface material is a committed asset built by scct_materials.py, which gives it the skeletal mesh and
+# Nanite usage the characters need. It is never changed or saved from here.
+if not surface:
+    raise RuntimeError("no %s: run Tools/Import/Import-Assets.ps1 -MaterialsOnly first" % SURFACE_MATERIAL)
+if not (surface.get_editor_property("used_with_skeletal_mesh") and surface.get_editor_property("used_with_nanite")):
+    log("WARNING: %s lacks the skeletal mesh or Nanite usage: rebuild it with Tools/Import/Import-Assets.ps1 -MaterialsOnly" % SURFACE_MATERIAL)
 
 import_models(BODIES, None)
 for package, mesh_name in BODIES:

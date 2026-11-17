@@ -26,18 +26,8 @@ $project = (Resolve-Path "$PSScriptRoot\..\..").Path
 if (-not $Content) { throw 'Pass -Content <converted content folder> or set SVM_CONTENT.' }
 if (-not (Test-Path (Join-Path $Content 'shared\chars'))) { throw "No converted characters at $Content\shared\chars." }
 
-# Unreal's command line treats backslashes in -script as escapes.
-function Fwd([string] $path) { $path -replace '\\', '/' }
-
-function Invoke-EditorScript([string] $name, [string] $script) {
-    $log = Fwd (Join-Path $project "Saved\Logs\$name.log")
-    & "$Engine\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" (Fwd "$project\OpenSCCTUnreal.uproject") -run=pythonscript "-script=$script" -unattended -nosplash -nullrhi "-abslog=$log" *> $null
-    $code = $LASTEXITCODE
-    Select-String -Path $log -CaseSensitive -Pattern 'SCCT-IMPORT|Traceback|LogPython: Error' |
-        ForEach-Object { $_.Line -replace '^\[[^\]]+\]\[[^\]]+\]', '' } | Select-Object -Unique
-    "$name exit code $code (log: $log)"
-}
-
+. "$PSScriptRoot\..\EditorScript.ps1"
 $rebuild = if ($RebuildMaterials) { ' rebuild' } else { '' }
-Invoke-EditorScript 'build-equipment' "$(Fwd "$PSScriptRoot\build_equipment_assets.py")$rebuild"
-Invoke-EditorScript 'import-characters' "$(Fwd "$PSScriptRoot\import_characters.py") $(Fwd $Content)"
+Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'build-equipment' -Script "$(Fwd "$PSScriptRoot\build_equipment_assets.py")$rebuild" | Out-Null
+Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'import-characters' -Script "$(Fwd "$PSScriptRoot\import_characters.py") $(Fwd $Content)" | Out-Null
+Exit-ScctScripts

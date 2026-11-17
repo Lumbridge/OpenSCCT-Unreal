@@ -23,14 +23,8 @@ if (-not $MaterialsOnly) {
     if ($LASTEXITCODE -ne 0) { throw 'Fetching the assets failed.' }
 }
 
-# Unreal's command line treats backslashes in -script as escapes.
-function Fwd([string] $path) { $path -replace '\\', '/' }
-$log = Fwd (Join-Path $project 'Saved\Logs\import-assets.log')
+. "$PSScriptRoot\..\EditorScript.ps1"
 $script = "$(Fwd "$PSScriptRoot\import_assets.py") $(Fwd $packed)"
 if ($MaterialsOnly) { $script += ' materials' }
-& "$Engine\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" (Fwd "$project\OpenSCCTUnreal.uproject") -run=pythonscript "-script=$script" -unattended -nosplash -nullrhi "-abslog=$log" *> $null
-$code = $LASTEXITCODE
-
-Select-String -Path $log -CaseSensitive -Pattern 'SCCT-IMPORT|Traceback|LogPython: Error' |
-    ForEach-Object { $_.Line -replace '^\[[^\]]+\]\[[^\]]+\]', '' } | Select-Object -Unique
-"import exit code $code (log: $log)"
+Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'import-assets' -Script $script | Out-Null
+Exit-ScctScripts
