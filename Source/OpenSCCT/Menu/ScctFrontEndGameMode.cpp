@@ -195,7 +195,7 @@ void AScctFrontEndGameMode::ShowMenu()
 	{
 		Menu->ShowOptions(FName(*OptionsPage));
 	}
-	if (FParse::Param(FCommandLine::Get(), TEXT("ScctConfirmTest")))
+	if (FParse::Param(FCommandLine::Get(), TEXT("ScctConfirmTest")) || FParse::Param(FCommandLine::Get(), TEXT("ScctMenuQuitConfirm")))
 	{
 		Menu->AskQuit();
 	}
