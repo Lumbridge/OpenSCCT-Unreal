@@ -24,6 +24,7 @@ namespace
 			if (UScctOnlineSubsystem* Visit = Host.Online.Get())
 			{
 				// The master's message of the day comes with its list.
+				Visit->EnsureConnected();
 				if (Visit->HasMaster() && Visit->GetMotd().IsEmpty())
 				{
 					Visit->RequestServerList();
@@ -148,8 +149,8 @@ namespace
 						SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim())
 						.Text(TAttribute<FText>::CreateLambda([Weak, IsSignedIn]
 						{
-							if (!Weak.IsValid() || !Weak->HasMaster()) { return FText::FromString(TEXT("Playing offline: no master server is set")); }
-							return FText::FromString(IsSignedIn() ? TEXT("Signed in: your name is your account's") : TEXT("Guest: sign in to join the official servers"));
+							if (!Weak.IsValid() || !Weak->HasMaster()) { return FText::FromString(TEXT("Offline: no master server set")); }
+							return FText::FromString(IsSignedIn() ? TEXT("Signed in to OpenSCCT") : TEXT("Guest (not signed in)"));
 						}))
 					]
 				]
@@ -173,7 +174,12 @@ namespace
 					SNew(STextBlock).Font(ScctUi::Body()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
 					.Text(FText::FromString(TEXT("No map can be played yet. Convert your game with OpenSCCT, then import a map (README: Tools\\Import\\Import-Map.ps1)."))));
 			}
-			FString Description = Menu->GetMapText(FeaturedMap, EScctMenuMapText::Description).Replace(TEXT("|"), TEXT(" "));
+			FString Description = Menu->GetMapText(FeaturedMap, EScctMenuMapText::Description);
+			if (Description.TrimStartAndEnd().IsEmpty())
+			{
+				Description = Menu->GetMapText(FeaturedMap, EScctMenuMapText::BriefSpy);
+			}
+			Description = Description.Replace(TEXT("|"), TEXT(" ")).TrimStartAndEnd();
 			return ScctUi::Card(FString::Printf(TEXT("%d map%s ready to play"), Count, Count == 1 ? TEXT("") : TEXT("s")),
 				SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Picture(Menu->GetMapPicture(FeaturedMap, false), 392.0f, 196.0f) ]

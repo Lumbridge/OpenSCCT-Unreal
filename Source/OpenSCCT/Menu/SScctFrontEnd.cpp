@@ -90,7 +90,7 @@ namespace
 			const double Age = FPlatformTime::Seconds() - Started;
 			const int32 Count = FMath::Min(Full.Len(), static_cast<int32>(Age * 40.0));
 			FString Shown = Full.Left(Count);
-			if (Count < Full.Len() || FMath::Fmod(Age, 1.0) < 0.5 && Age < 2.5)
+			if (Count < Full.Len() || FMath::Fmod(Age, 0.6) < 0.3 && Age < 1.2)
 			{
 				Shown += TEXT("_");
 			}
@@ -458,7 +458,13 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 			Host.Online = Online;
 			Host.Dialogs = Dialogs;
 			Host.Open = [this](const FString& Next) { Open(Next); };
-			Host.Back = [] {};
+			// The lobby's Leave: asked first, as leaving gives up the place on the server.
+			Host.Back = [this]
+			{
+				ScctUi::Confirm(Dialogs, ScctUi::GameText(TEXT("Lobby_Create"), TEXT("ButtonB"), TEXT("Leave")), TEXT("Leave the server and go back to the menus?"),
+					ScctUi::GameText(TEXT("Lobby_Create"), TEXT("ButtonB"), TEXT("Leave")), TEXT("Stay"),
+					[this] { if (UScctOnlineSubsystem* Visit = Online.Get()) { ScctUi::Play(EScctUiSound::Back); Visit->Leave(); } }, true);
+			};
 			LobbyPage = ScctMenuPages::MakeLobby(Host);
 		}
 		else if (VisitView != EVisitView::Lobby)

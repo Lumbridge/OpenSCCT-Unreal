@@ -166,6 +166,9 @@ public:
 	const FString& GetMasterError() const { return MasterError; }
 	bool HasMaster() const { return bMasterSet; }
 
+	/** Starts the bridge's online half now (it starts on first use otherwise), so HasMaster and the name are known. */
+	void EnsureConnected() { Connect(); }
+
 	/** Starts a sign-in in the player's browser (the official servers take signed-in players only). */
 	void BeginSignIn();
 	void SignOut();

@@ -1104,7 +1104,7 @@ void SScctTable::Construct(const FArguments& InArgs)
 		const TSharedRef<SWidget> Cell = SNew(SButton)
 			.ButtonStyle(&BareButton())
 			.IsFocusable(false)
-			.ContentPadding(FMargin(0.0f, 6.0f))
+			.ContentPadding(FMargin(0.0f, 6.0f, 10.0f, 6.0f))
 			.HAlign(Column.bRight ? HAlign_Right : HAlign_Left)
 			.OnClicked(FOnClicked::CreateLambda([this, Index] { SortBy(Index); return FReply::Handled(); }))
 			[
@@ -1113,7 +1113,7 @@ void SScctTable::Construct(const FArguments& InArgs)
 				.ColorAndOpacity(TAttribute<FSlateColor>::CreateLambda([this, Index] { return FSlateColor(SortColumn == Index ? ScctUi::Accent() : ScctHudStyle::TextDim()); }))
 				.Text(TAttribute<FText>::CreateLambda([this, Index]
 				{
-					const FString Mark = SortColumn != Index ? FString() : bSortDescending ? TEXT("  ▾") : TEXT("  ▴");
+					const FString Mark = SortColumn != Index ? FString() : bSortDescending ? TEXT(" ↓") : TEXT(" ↑");
 					return FText::FromString(Columns[Index].Title.ToUpper() + Mark);
 				}))
 			];

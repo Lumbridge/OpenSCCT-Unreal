@@ -283,8 +283,19 @@ namespace
 				return;
 			}
 			const FString Id = MapIds[MapIndex];
-			FString Legend = Menu->GetMapText(Id, EScctMenuMapText::Legend).Replace(TEXT("\n"), TEXT("   ·   "));
-			const FString Description = Menu->GetMapText(Id, EScctMenuMapText::Description).Replace(TEXT("|"), TEXT(" "));
+			// The legend's lines ("11 March 2008, 9:58 PM", "France, ...") with the empty ones left out.
+			TArray<FString> LegendLines;
+			Menu->GetMapText(Id, EScctMenuMapText::Legend).ParseIntoArray(LegendLines, TEXT("\n"));
+			for (FString& Line : LegendLines) { Line.TrimStartAndEndInline(); }
+			LegendLines.RemoveAll([](const FString& Line) { return Line.IsEmpty(); });
+			const FString Legend = FString::Join(LegendLines, TEXT("   ·   "));
+			// Most maps have no list description: the side's briefing says what the map is.
+			FString Description = Menu->GetMapText(Id, EScctMenuMapText::Description);
+			if (Description.TrimStartAndEnd().IsEmpty())
+			{
+				Description = Menu->GetMapText(Id, bMerc ? EScctMenuMapText::BriefMerc : EScctMenuMapText::BriefSpy);
+			}
+			Description = Description.Replace(TEXT("|"), TEXT(" ")).TrimStartAndEnd();
 			const FScctMenuMapInfo* Map = GetMap();
 			const FString Players = Map != nullptr && Map->Data.RecommendedPlayers > 0 ? FString::Printf(TEXT("%d PLAYERS RECOMMENDED"), Map->Data.RecommendedPlayers) : FString();
 

@@ -7,9 +7,9 @@
 class SScctMatchOverlay;
 
 /**
- * What a match level shows over the HUD: the in-match menu (resume, leave the server or go back to the main
- * menu) and, in an online round, what the visit is waiting for and the round's results. Built in code; the
- * widgets are in the .cpp. AScctGameMode owns it and opens the menu on the player's ShowMenu binding.
+ * What a match level shows over the HUD: the in-match menu and the round's results (Menu/SScctMatchMenu.h) and,
+ * in an online round, what the visit is waiting for. Built in code. AScctGameMode owns it and opens the menu on
+ * the player's ShowMenu binding.
  */
 UCLASS()
 class OPENSCCT_API UScctMatchMenuWidget : public UUserWidget
@@ -25,6 +25,9 @@ public:
 
 	/** Raised when the menu's own "resume" closes it. */
 	FSimpleDelegate OnResumed;
+
+	/** Raised when the menu wants to be opened (the results of a local match): the owner opens it. */
+	FSimpleDelegate OnWantsOpen;
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
