@@ -80,6 +80,9 @@ public:
 	 */
 	void Image(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint);
 
+	/** The same turned by Degrees (clockwise on screen) about the box's centre. */
+	void RotatedImage(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint, float Degrees);
+
 private:
 	FPaintGeometry BoxGeometry(const FBox2f& Box) const;
 
