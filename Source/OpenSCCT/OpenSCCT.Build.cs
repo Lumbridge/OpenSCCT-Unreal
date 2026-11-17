@@ -31,6 +31,9 @@ public class OpenSCCT : ModuleRules
 			"ApplicationCore",
 			// A sound wave class of our own (Play/ScctSoundWave) links against the audio proxy interfaces.
 			"AudioExtensions",
+			// The output device the player picks and its following of devices that come and go (Play/ScctAudioOutput).
+			"AudioMixer",
+			"AudioMixerCore",
 			// Voice chat's microphone (Voice/ScctVoiceCapture): the AudioCapture plugin's device back ends, and the
 			// lock-free ring its samples cross threads in.
 			"AudioCapture",

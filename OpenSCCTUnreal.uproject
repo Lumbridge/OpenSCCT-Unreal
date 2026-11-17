@@ -43,6 +43,10 @@
 		{
 			"Name": "AudioCapture",
 			"Enabled": true
+		},
+		{
+			"Name": "ResonanceAudio",
+			"Enabled": true
 		}
 	]
 }

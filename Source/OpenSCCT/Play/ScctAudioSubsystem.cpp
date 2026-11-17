@@ -15,6 +15,7 @@
 #include "Engine/GameInstance.h"
 #include "OpenSCCT.h"
 #include "Play/ScctAudioMix.h"
+#include "Play/ScctAudioOutput.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Play/ScctSoundWave.h"
@@ -166,6 +167,7 @@ void UScctAudioSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	ProbeCalls.Reset();
 	bLastListenerSet = false;
 	NumStarted =NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
+	NumHrtfStarted = NumPannedStarted = 0;
 }
 
 void UScctAudioSubsystem::HandleMatchStarted()
@@ -809,6 +811,14 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 			// play flat but are in the room all the same; music and the interface's flat sounds are not.
 			Component->AttenuationSettings = Voice.bPositional ? FindOrCreateAttenuation(Voice.MinDistance, Voice.Radius)
 				: (Voice.bAtListener && !Voice.bMusic ? FindOrCreateOwnSoundSettings() : nullptr);
+			if (Voice.bPositional && Component->AttenuationSettings != nullptr)
+			{
+				const bool bHrtf = Component->AttenuationSettings->Attenuation.SpatializationAlgorithm == ESoundSpatializationAlgorithm::SPATIALIZATION_HRTF;
+				int32& Count = bHrtf ? NumHrtfStarted : NumPannedStarted;
+				UE_CLOG(Count == 0, LogOpenSCCT, Log, TEXT("ScctAudio: first 3D voice %s ('%s')"),
+					bHrtf ? TEXT("created with HRTF (Headphones)") : TEXT("created with panning (Speakers)"), *GetName(Voice.FileId));
+				++Count;
+			}
 			Component->bIsMusic = Voice.bMusic;
 			// The category's class routes the voice to its submix (the reverb, the peaks); the player's volume of its
 			// kind is in AppliedVolume (Menu/ScctUserSettings.h), so the submix itself is not turned down again.
@@ -947,7 +957,12 @@ USoundAttenuation* UScctAudioSubsystem::FindOrCreateAttenuation(float MinDistanc
 	// Whole centimetres are fine enough, and keep the number of distinct settings small.
 	const uint32 MinKey = static_cast<uint32>(FMath::RoundToInt(FMath::Max(MinDistance, 1.0f)));
 	const uint32 RadiusKey = static_cast<uint32>(FMath::RoundToInt(FMath::Max(Radius, 0.0f)));
-	TObjectPtr<USoundAttenuation>& Found = Attenuations.FindOrAdd((static_cast<uint64>(MinKey) << 32) | RadiusKey);
+	// Headphones renders 3D voices by HRTF through the spatialization plugin (Play/ScctAudioOutput.h), Speakers pans
+	// them. Each has its own settings: a voice already playing keeps the ones it started with, as the engine cannot
+	// change a playing voice's spatialization.
+	const bool bHrtf = UScctAudioOutputSubsystem::UseHrtf();
+	const uint64 SettingsKey = (static_cast<uint64>(MinKey & 0x7fffffffu) << 32) | RadiusKey | (bHrtf ? (1ull << 63) : 0ull);
+	TObjectPtr<USoundAttenuation>& Found = Attenuations.FindOrAdd(SettingsKey);
 	if (Found != nullptr)
 	{
 		return Found;
@@ -965,6 +980,7 @@ USoundAttenuation* UScctAudioSubsystem::FindOrCreateAttenuation(float MinDistanc
 	FSoundAttenuationSettings& Settings = Found->Attenuation;
 	Settings.bAttenuate = true;
 	Settings.bSpatialize = true;
+	Settings.SpatializationAlgorithm = bHrtf ? ESoundSpatializationAlgorithm::SPATIALIZATION_HRTF : ESoundSpatializationAlgorithm::SPATIALIZATION_Default;
 	Settings.AttenuationShape = EAttenuationShape::Sphere;
 	Settings.AttenuationShapeExtents = FVector(Min, 0.0, 0.0);
 	Settings.FalloffDistance = Falloff;
@@ -1228,6 +1244,9 @@ void UScctAudioSubsystem::LogSummary() const
 	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: %d voices now (%d playing, %d waiting, %d ambient, peak %d), %d Unreal components in use of %d made; since the match began %d started, %d stopped, %d played beyond 100 x their radius, %d refused by the slot rule, %d replaced, %d objective jingles skipped; files: %d decoded (%.1f MB held), %d failed to decode, %d plays lost to them; listener at (%.0f, %.0f, %.0f)"),
 		Voices.Num(), Playing, Waiting, Ambient, PeakVoices, Sounding, Components.Num(), NumStarted, NumStopped, NumOutOfReach, NumRefused, NumStolen, NumObjectiveSkipped,
 		Cache.GetNumDecoded(), Cache.GetBytes() / (1024.0 * 1024.0), Cache.GetNumFailed(), NumFailedFiles, Listener.X, Listener.Y, Listener.Z);
+	UE_LOG(LogOpenSCCT, Log, TEXT("Audio summary: 3D voices started %d with HRTF, %d panned; output mode %s%s"), NumHrtfStarted, NumPannedStarted,
+		UScctAudioOutputSubsystem::HeadphonesChosen() ? TEXT("Headphones") : TEXT("Speakers"),
+		UScctAudioOutputSubsystem::SpatializerProblem().IsEmpty() ? TEXT("") : *(TEXT(" (") + UScctAudioOutputSubsystem::SpatializerProblem() + TEXT(")")));
 	LogAcousticSummary();
 	LogAudioViewSummary();
 	TArray<FString> Notes;

@@ -259,7 +259,7 @@ private:
 	UPROPERTY(Transient)
 	TMap<int64, TObjectPtr<UScctSoundWave>> Waves;
 
-	/** One attenuation per (minimum distance, radius) pair in use: a map has a few dozen. */
+	/** One attenuation per (minimum distance, radius, HRTF or panning) in use: a map has a few dozen. */
 	UPROPERTY(Transient)
 	TMap<uint64, TObjectPtr<USoundAttenuation>> Attenuations;
 
@@ -351,4 +351,7 @@ private:
 	int32 NumFailedFiles = 0;
 	int32 NumObjectiveSkipped = 0;
 	int32 PeakVoices = 0;
+	/** 3D voices started rendered by HRTF (Headphones, Play/ScctAudioOutput.h) and panned. */
+	int32 NumHrtfStarted = 0;
+	int32 NumPannedStarted = 0;
 };
