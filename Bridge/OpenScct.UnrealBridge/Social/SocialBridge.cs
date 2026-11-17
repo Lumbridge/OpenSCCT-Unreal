@@ -38,6 +38,7 @@ public sealed class SocialBridge : IDisposable
         Discord = new DiscordPresence(Log, join => _discordJoin = join);
         Web = new WebsiteJoin(this);
         Lease = new ClientPresence(this);
+        Account = new AccountService(this);
     }
 
     /// <summary>The one social bridge of the process, made on first use.</summary>
@@ -52,6 +53,9 @@ public sealed class SocialBridge : IDisposable
     public WebsiteJoin Web { get; }
 
     public ClientPresence Lease { get; }
+
+    /// <summary>The signed-in account, its progress and the settings sync (the Account page's table: AccountExports).</summary>
+    public AccountService Account { get; }
 
     /// <summary>The state Unreal last described, as Discord would show it (whether the status is on or not).</summary>
     public PresenceState? LastState { get; private set; }
@@ -120,6 +124,7 @@ public sealed class SocialBridge : IDisposable
         Web.Update(delta, ready);
         Lease.Update();
         PumpMasterJoin();
+        Account.Update();
     }
 
     public SocialStatus Status => new()

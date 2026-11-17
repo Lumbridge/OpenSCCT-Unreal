@@ -6,12 +6,14 @@
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformMisc.h"
 #include "Hub/ScctHubSubsystem.h"
+#include "Menu/SScctAccountPage.h"
 #include "Menu/SScctHubPage.h"
 #include "Menu/SScctJoinPasswordPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
+#include "Social/ScctAccountSubsystem.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -210,6 +212,10 @@ void SScctFrontEnd::ShowPageNamed(const FString& Name)
 	{
 		ShowPage(EPage::Hub);
 	}
+	else if (Name.Equals(TEXT("account"), ESearchCase::IgnoreCase))
+	{
+		ShowPage(EPage::Account);
+	}
 	else if (Name.Equals(TEXT("start"), ESearchCase::IgnoreCase))
 	{
 		// Unattended: the offline page with its choices as they stand, and its START pressed.
@@ -256,6 +262,7 @@ void SScctFrontEnd::Rebuild()
 	case EPage::Visit: Content = BuildVisit(); break;
 	case EPage::Hub: Content = BuildHub(); break;
 	case EPage::JoinPassword: Content = BuildJoinPassword(); break;
+	case EPage::Account: Content = BuildAccount(); break;
 	}
 	PageBox->SetContent(Content);
 	SeenRevision = -1;
@@ -294,7 +301,8 @@ TSharedRef<SWidget> SScctFrontEnd::BuildHome()
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("PLAY OFFLINE"), EPage::Offline) ]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("JOIN BY ADDRESS"), EPage::Join) ]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("SERVER LIST"), EPage::Servers) ]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 20.0f)[ Entry(TEXT("HUB"), EPage::Hub) ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ Entry(TEXT("HUB"), EPage::Hub) ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 20.0f)[ Entry(TEXT("ACCOUNT"), EPage::Account) ]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				Ui::Button(Ui::ToText(TEXT("QUIT")), FOnClicked::CreateLambda([] { FPlatformMisc::RequestExit(false); return FReply::Handled(); }))
@@ -318,6 +326,15 @@ TSharedRef<SWidget> SScctFrontEnd::BuildJoinPassword()
 		.Social(Social)
 		.Prompt(PasswordPrompt)
 		.OnDone(FSimpleDelegate::CreateLambda([this] { ShowPage(EPage::Home); }));
+}
+
+TSharedRef<SWidget> SScctFrontEnd::BuildAccount()
+{
+	UScctAccountSubsystem* Account = Online.IsValid() ? Online->GetGameInstance()->GetSubsystem<UScctAccountSubsystem>() : nullptr;
+	return SNew(SScctAccountPage)
+		.Account(Account)
+		.Online(Online)
+		.OnBack(FSimpleDelegate::CreateLambda([this] { ShowPage(EPage::Home); }));
 }
 
 FReply SScctFrontEnd::HandleShowPage(EPage Target)

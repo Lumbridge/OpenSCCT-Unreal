@@ -23,6 +23,7 @@ class UScctOnlineSubsystem;
  *   Servers   the master's list, refresh, sign in
  *   Hub       the master's hubs, join by address, host a hub on this PC (SScctHubPage)
  *   Password  a friend's or the website's join to a server with a password (SScctJoinPasswordPage)
+ *   Account   sign-in, the claimed name, rank, XP, prestige, titles and career (SScctAccountPage)
  *   Visit     shown instead of the above while UScctOnlineSubsystem::IsVisiting
  */
 class SScctFrontEnd : public SCompoundWidget
@@ -49,6 +50,7 @@ private:
 		Visit,
 		Hub,
 		JoinPassword,
+		Account,
 	};
 
 	/** What the visit page is showing; a change rebuilds it. */
@@ -75,6 +77,7 @@ private:
 	TSharedRef<SWidget> BuildLobby();
 	TSharedRef<SWidget> BuildHub();
 	TSharedRef<SWidget> BuildJoinPassword();
+	TSharedRef<SWidget> BuildAccount();
 
 	void RefillLobby();
 	void RefillServers();

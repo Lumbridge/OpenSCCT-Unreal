@@ -487,6 +487,8 @@ void UScctOnlineSubsystem::RefreshTexts()
 	SetupDescription = ReadText(EScctOnlineText::SetupDescription);
 	ConnectLog = ReadText(EScctOnlineText::ConnectLog);
 	MapToLoad = ReadText(EScctOnlineText::MapToLoad);
+	// A name claimed or changed on the Account page is the name signed-in joins use from now on.
+	AccountName = ReadText(EScctOnlineText::AccountName);
 
 	if (Status.MasterState != LastMasterState)
 	{
