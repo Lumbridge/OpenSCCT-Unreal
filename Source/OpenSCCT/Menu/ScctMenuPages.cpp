@@ -11,6 +11,8 @@ TSharedPtr<SScctMenuPage> ScctMenuPages::Make(const FString& Name, const FScctMe
 	if (Name.Equals(TEXT("play"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("offline"), ESearchCase::IgnoreCase)) { return MakePlay(Host); }
 	if (Name.Equals(TEXT("online"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("servers"), ESearchCase::IgnoreCase)) { return MakeOnline(Host, false); }
 	if (Name.Equals(TEXT("address"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("join"), ESearchCase::IgnoreCase)) { return MakeOnline(Host, true); }
+	if (Name.Equals(TEXT("host"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("create"), ESearchCase::IgnoreCase)) { return MakeHostGame(Host); }
+	if (Name.Equals(TEXT("hub"), ESearchCase::IgnoreCase)) { return MakeHub(Host); }
 	if (Name.Equals(TEXT("settings"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("options"), ESearchCase::IgnoreCase)) { return MakeSettings(Host); }
 	if (Name.Equals(TEXT("credits"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("about"), ESearchCase::IgnoreCase)) { return MakeCredits(Host); }
 	return nullptr;

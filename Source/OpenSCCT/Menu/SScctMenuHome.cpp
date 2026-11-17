@@ -61,6 +61,12 @@ namespace
 			Entry(TEXT("Play online"), TEXT("Find a server or join one by its address"),
 				TEXT("The servers the master lists, with their maps, modes and players, and joining a server by its address."),
 				[this] { Host.Open(TEXT("online")); });
+			Entry(TEXT("Host game"), TEXT("Create a session on this PC for others to join"),
+				TEXT("Pick a map and the rules, choose how the server is reached and listed, and start a listen server that you play on."),
+				[this] { Host.Open(TEXT("host")); });
+			Entry(TEXT("Hub"), TEXT("Meet other players between matches"),
+				TEXT("The hubs the master lists, joining one by its address, or hosting a hub on this PC."),
+				[this] { Host.Open(TEXT("hub")); });
 			Entry(ScctUi::GameText(TEXT("All_Settings"), TEXT("TitlePage"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
 				TEXT("Everything you can set: the picture, the sound, the mouse and the controller, every key of both sides, and your name."),
 				[this] { Host.Open(TEXT("settings")); });

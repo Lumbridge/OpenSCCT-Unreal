@@ -71,7 +71,7 @@ protected:
 
 namespace ScctMenuPages
 {
-	/** The front end's pages by name: home, play, online, address, settings, credits. Null for an unknown name. */
+	/** The front end's pages by name: home, play, online, address, host, hub, settings, credits. Null for an unknown name. */
 	TSharedPtr<SScctMenuPage> Make(const FString& Name, const FScctMenuHost& Host);
 
 	TSharedRef<SScctMenuPage> MakeHome(const FScctMenuHost& Host);
@@ -80,6 +80,10 @@ namespace ScctMenuPages
 	TSharedRef<SScctMenuPage> MakeSettings(const FScctMenuHost& Host);
 	TSharedRef<SScctMenuPage> MakeCredits(const FScctMenuHost& Host);
 	TSharedRef<SScctMenuPage> MakeLobby(const FScctMenuHost& Host);
+
+	/** Create Session (Menu/SScctHostPage.h) and the hub list (Menu/SScctHubPage.h): Menu/SScctMenuHostHub.cpp. */
+	TSharedRef<SScctMenuPage> MakeHostGame(const FScctMenuHost& Host);
+	TSharedRef<SScctMenuPage> MakeHub(const FScctMenuHost& Host);
 }
 
 namespace ScctUi
