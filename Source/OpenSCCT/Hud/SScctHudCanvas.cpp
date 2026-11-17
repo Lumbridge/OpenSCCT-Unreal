@@ -36,11 +36,15 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 		PaintMarkers(Painter, *Model);
 		PaintTeammateNames(Painter, *Model);
 		PaintScope(Painter, *Model);
+		PaintSpyBinoculars(Painter, *Model);
 		PaintCameraPages(Painter, *Model);
+		PaintMotionTracking(Painter, *Model);
 		PaintCrosshair(Painter, *Model);
+		PaintTeamPings(Painter, *Model);
 	}
 	else
 	{
+		PaintRadar(Painter, *Model);
 		PaintObjectives(Painter, *Model);
 		PaintRound(Painter, *Model);
 		PaintFeed(Painter, *Model);
@@ -48,6 +52,7 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 		PaintLog(Painter, *Model);
 		PaintStatus(Painter, *Model);
 		PaintEquipment(Painter, *Model);
+		PaintBackpack(Painter, *Model);
 		PaintPrompt(Painter, *Model);
 		PaintGadgetMenu(Painter, *Model);
 		PaintCoopIcon(Painter, *Model);

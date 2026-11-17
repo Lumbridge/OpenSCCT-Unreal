@@ -41,6 +41,21 @@ class UScctHudWidget;
  *        PreviewCoop N shows coop icon N (1 offer a ladder, 2 climb on the mate, 3 offer a hoist, 4 be boosted up;
  *        0 takes it away) as if the game offered it. Die kills the local pawn on the local match's server (lives
  *        left as they are), e.g. to see the Merc Deathmatch respawn weapon pick.
+ *        Heart 1 selects the local spy's heart beat sensor; Weapon 1/0 holds or lets go of the weapon key (a spy
+ *        draws the Shocker with it, which starts the sensor's scan). RadarRotate 0/1 and RadarScale P (percent) set
+ *        the player's radar options for the run without saving them.
+ *        GiveBackpack 1/2 gives the local merc (2: every merc of his side) the backpack in his last gadget slot on the
+ *        local match's server, as a gear change would; Backpack 1 selects it; Refill S holds the mate carrying the
+ *        player's share in front of him for S seconds with one of his charges spent and the refill entry focused, as
+ *        when the player opens the interaction menu next to him.
+ *        Summon 0/1 puts the nearest pawn of the other side (0) or of the player's side (1) a few metres in front of
+ *        the local pawn on the local match's server (the bots start across the map), so the merc's motion tracking has
+ *        a moving target to lock; AimMate S keeps the player's view and aim on his nearest teammate for S seconds (the
+ *        laser gadget's target, whose bracket gets the friend marks); Laser 1/0 switches the merc's laser gadget on
+ *        or off by the simulation's GadLaserSwitch (its default key also presses the roll button, so a key press would do more).
+ *        PingKey 1/0 holds or lets go of the key bound to TeamPing (UScctTeamPingSubsystem: a tap marks the aimed spot,
+ *        a hold opens the wheel); PingWheel D points the wheel's choice as the mouse would (1 up, 2 right, 3 down,
+ *        4 left, 0 the middle).
  *   -ScctHudTexture=Package.Name[,Package.Name...]
  *        loads those textures of the content as the session starts and logs their size ("ScctHudTextures: ...").
  *   -ScctHudLog=S
@@ -56,6 +71,13 @@ class UScctHudWidget;
  *        camera network gadget is selected; a spy then draws the Shocker (the weapon key held) and fires the cam with
  *        Alt-fire, a merc uses the network with Alt-fire; Stay seconds later (default 10) Alt-fire leaves the view.
  *        The view's changes go to the log ("ScctHud: gadget view ...", "ScctHud: CamNetworkAlert ...").
+ *   -ScctBinoculars=At[,Zoom+Zoom...[,Lower[,Use+Use...]]]   and   -ScctBinocularsAim
+ *        raises the spy's binoculars by the player's own keys: at At seconds (default 4) the key bound to
+ *        SwitchBinocularVision is pressed, at each Zoom time one notch of the mouse wheel up (one zoom step in), at
+ *        each Use time the Use key (locks the target in the lock panel, or unlocks it), and at Lower the binocular key
+ *        again (an empty field skips it). With -ScctBinocularsAim the view is turned onto the nearest objective target every half
+ *        second while the binoculars are up, so the lock panel shows. The page's changes go to the log
+ *        ("ScctHud: binoculars ...": mode, zoom step, the target count and the lock candidate).
  */
 UCLASS()
 class OPENSCCT_API UScctHudSubsystem : public UWorldSubsystem
@@ -67,6 +89,9 @@ public:
 
 	/** What the HUD shows this frame. */
 	const FScctHudModel& GetModel() const { return *Model; }
+
+	/** For the HUD's other subsystems that fill a part of the model themselves (the team ping's badges and wheel). */
+	FScctHudModel& GetMutableModel() { return *Model; }
 
 	/**
 	 * Every message drained from the bridge, as it is drained (once each, oldest first), before the model files it.
@@ -143,6 +168,69 @@ private:
 	int32 LastCoopIcon = 0;
 	FIntPoint LastRespawnTile = FIntPoint(-1, -1);
 	float RespawnKeyAge = -100.0f;
+
+	// The radar (ScctHudRadar.cpp): the player's radar options and the heart sensor into the model, the radar's log
+	// line, and the timed commands Heart and Weapon. ReadSnapshot reads the blips themselves.
+	void InitRadar();
+	void ReadRadar();
+	bool RunRadarCommand(const FString& Name, int32 Argument);
+	void LogRadar();
+	int32 LastHeartCone = 0;
+	bool bRadarTextureMissingLogged = false;
+
+	// The merc backpack panels (ScctHudBackpack.cpp): the bridge's backpack table into the model, a log line when the
+	// panels change and with each snapshot line, and the timed commands GiveBackpack, Backpack and Refill.
+	void InitBackpack();
+	void ReadBackpack();
+	bool RunBackpackCommand(const FString& Name, int32 Argument);
+	void LogBackpack();
+	uint32 LastBackpackSignature = 0;
+	bool bBackpackTableMissingLogged = false;
+
+	// The spy binoculars (ScctHudBinoculars.cpp): the page's clocks, key names and layers into the model, the targets
+	// placed on the screen, a log line when the page opens, closes or its zoom step or targets change, and the
+	// unattended -ScctBinoculars check.
+	void InitBinoculars();
+	void ReadBinoculars(float DeltaSeconds);
+	void ProjectBinocularTargets();
+	void RunBinocularCheck();
+	void LogBinoculars(bool bChange);
+
+	struct FBinocularCheck
+	{
+		bool bOn = false;
+		float At = 4.0f;         // seconds into the match when the binocular key is pressed
+		TArray<float> ZoomAt;    // seconds into the match when the zoom-in key (the wheel's up notch) is pressed
+		bool bAim = false;       // keep the view on the nearest target while the binoculars are up
+		float Lower = -1.0f;     // seconds into the match when the binocular key is pressed again, below 0 never
+		TArray<float> UseAt;     // seconds into the match when the Use key (lock, unlock) is pressed
+		int32 Stage = 0;         // 0 waiting, 1 raised, 2 lowered
+		int32 NextZoom = 0;
+		int32 NextUse = 0;
+		bool bUseHeld = false;
+		float UseReleaseAt = 0.0f;
+		float AimClock = 0.0f;
+	} BinocularCheck;
+
+	float BinocularAge = 0.0f;   // seconds since the binoculars came up
+	float SpeakAge = -1.0f;      // seconds since the speak box appeared, below 0 while it is not shown
+	float BinocularKeysAge = -100.0f;
+	FString BinocularZoomKeys, BinocularExitKey;
+	int32 LastBinocularMode = 0;
+	int32 LastZoomStep = 0;
+	int32 LastBinocularTargetCount = -1;
+	FString LastLockCandidate;
+	bool bLastLockMarked = false;
+	bool bBinocularPageMissingLogged = false;
+
+	// The merc's motion tracking (ScctHudMotion.cpp): the view handed to the bridge's motion table each frame and its
+	// rows into the model, a log line when the locks change and with each snapshot line, and the timed command Summon.
+	void BuildMotion();
+	bool RunMotionCommand(const FString& Name, int32 Argument);
+	void LogMotion(bool bChange);
+	uint32 LastMotionSignature = 0;
+	float AimMateUntil = -1.0f;  // AimMate: the clock until which the view is kept on the nearest teammate
+	bool bMotionTableMissingLogged = false;
 
 	float GadgetKeysAge = 0.0f;
 	int32 LastGadgetView = 0;

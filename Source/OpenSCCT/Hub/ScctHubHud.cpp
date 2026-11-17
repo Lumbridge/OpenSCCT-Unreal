@@ -7,6 +7,8 @@
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "Hub/SScctHubHud.h"
+#include "Hub/ScctHubActivities.h"
+#include "Hub/ScctHubPads.h"
 #include "Hub/ScctHubSubsystem.h"
 #include "Misc/App.h"
 #include "Misc/CommandLine.h"
@@ -314,7 +316,25 @@ void FScctHubHud::ReadTable(const FVector& Eye)
 		Model->EmoteMenu = ReadText(EScctHubSocialText::EmoteMenu);
 		Model->Queue = ReadText(EScctHubSocialText::Queue);
 		Model->HubName = ReadText(EScctHubSocialText::HubName);
+		if (const FScctHubPads* Pads = Owner->GetPads())
+		{
+			// The pad panel: the queue line in its pad's state colour, the note about the last match.
+			Model->QueueColour = Pads->GetQueueColour();
+			Model->Note = Pads->ReadText(EScctHubPadsText::Note);
+		}
+		if (const FScctHubActivities* Activities = Owner->GetActivities())
+		{
+			Model->Notices = Activities->GetNotices();
+			Model->BoardTitle = Activities->GetBoardTitle();
+			Model->BoardLines = Activities->GetBoardLines();
+		}
 		Model->bBusy = (State.Flags & (EScctHubSocialFlags::Running | EScctHubSocialFlags::InRound | EScctHubSocialFlags::OnPad)) != 0;
+	}
+
+	// The clock of a run or a round counts every frame.
+	if (const FScctHubActivities* Activities = Owner->GetActivities())
+	{
+		Model->Activity = Activities->GetActivity();
 	}
 
 	if (Model->bTravel || Model->Destinations.Num() != State.DestinationCount)

@@ -61,7 +61,9 @@ bool ScctHudElements::ShowsPlayerHud(const FScctHudModel& Model)
 		&& (Model.State.Flags & EScctHudFlags::HasPawn) != 0
 		&& (Model.State.Flags & (EScctHudFlags::HideHud | EScctHudFlags::Spectating | EScctHudFlags::GameEnded)) == 0
 		&& !ScctVisorEffects::IsHudShutDown(Model) // an EMP keeps the merc's HUD down for 12 s
-		&& Model.State.GadgetView == 0;
+		&& Model.State.GadgetView == 0
+		// The spy's binocular page replaces his HUD, as P_BinocularsATT replaces P_HudATT in the original.
+		&& Model.State.BinocularMode != 1;
 }
 
 FString ScctHudElements::LivesText(const FScctHudModel& Model, int32 Lives, int32 InfiniteFrom)
@@ -224,9 +226,11 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 		Painter.Arc(Centre, 34.0f, 240.0f, 240.0f - 120.0f * FMath::Clamp(State.Ballistic, 0.0f, 1.0f), Accent, 2.0f, 1.0f);
 	}
 
-	// Who the laser sight holds, once the original would have typed the name.
+	// Who the laser sight holds, once the original would have typed the name; left out while the motion tracking writes
+	// the name over the target's bracket itself (ScctHudElementsMotion.cpp).
 	float TextY = Centre.Y + 40.0f;
-	if (State.TargetActorId != 0 && State.TargetNameId != 0 && State.TimeSeconds >= State.TargetLockTime + State.TargetNameDelay)
+	if (State.TargetActorId != 0 && State.TargetNameId != 0 && State.TimeSeconds >= State.TargetLockTime + State.TargetNameDelay
+		&& Model.Motion.NameRow == 0)
 	{
 		const bool bFriend = (State.Flags & EScctHudFlags::TargetFriend) != 0;
 		Painter.Text(FVector2f(Centre.X, TextY), Model.Text(State.TargetNameId), Font(EWeight::Regular, 11.0f), bFriend ? Accent : Danger(), EAlign::Centre);
@@ -270,7 +274,8 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 
 void ScctHudElements::PaintScope(FScctHudPainter& Painter, const FScctHudModel& Model)
 {
-	if (!ShowsPlayerHud(Model) || Model.State.BinocularMode == 0)
+	// The merc's scope only: the spy's binoculars are their own page (PaintSpyBinoculars).
+	if (!ShowsPlayerHud(Model) || Model.State.BinocularMode != 2)
 	{
 		return;
 	}
