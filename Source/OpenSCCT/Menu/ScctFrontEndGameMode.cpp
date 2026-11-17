@@ -5,6 +5,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
+#include "Menu/SScctGearPage.h"
 #include "Menu/ScctFrontEndWidget.h"
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
@@ -128,6 +129,22 @@ void AScctFrontEndGameMode::ShowMenu()
 	if (FParse::Param(FCommandLine::Get(), TEXT("ScctConfirmTest")))
 	{
 		Menu->AskQuit();
+	}
+	// -ScctGear[=spy|merc] opens the Equipment page over the offline page; -ScctGearApply also picks and applies.
+	FString GearSide, GearScript;
+	const bool bGearApply = FParse::Value(FCommandLine::Get(), TEXT("ScctGearApply="), GearScript, false);
+	if (bGearApply || FParse::Param(FCommandLine::Get(), TEXT("ScctGear")) || FParse::Value(FCommandLine::Get(), TEXT("ScctGear="), GearSide))
+	{
+		if (bGearApply)
+		{
+			GearScript.Split(TEXT(","), &GearSide, nullptr);
+		}
+		Menu->ShowPageNamed(TEXT("offline"));
+		const int32 Side = GearSide.Equals(TEXT("merc"), ESearchCase::IgnoreCase) ? 1 : 0;
+		if (const TSharedPtr<SScctGearPage> Gear = Menu->ShowGear(Side); Gear.IsValid() && bGearApply)
+		{
+			Gear->RunScript(GearScript);
+		}
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: front end shown"));
 }

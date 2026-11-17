@@ -7,7 +7,7 @@
 class SScctMatchOverlay;
 
 /**
- * What a match level shows over the HUD: the in-match menu (resume, options, leave the server or go back to the
+ * What a match level shows over the HUD: the in-match menu (resume, change gear, options, leave the server or go back to the
  * main menu, after asking) and, in an online round, what the visit is waiting for and the round's results. Built in
  * code; the widgets are in the .cpp. AScctGameMode owns it and opens the menu on the player's ShowMenu binding.
  *
@@ -31,8 +31,21 @@ public:
 	void ShowOptions(FName Page);
 
 	/**
+	 * Opens the Equipment page (Menu/SScctGearPage.h) on a side's tab (-1 the side played). When the menu is closed
+	 * it is opened first through OnOpenRequested, and closing the page then goes back to the game. False when it
+	 * could not open.
+	 */
+	bool ShowGear(int32 Side);
+
+	/** The Equipment page open over the match, if any. */
+	TSharedPtr<class SScctGearPage> GetGearPage() const;
+
+	/** Asked to open the menu (the game mode binds it to its own SetMenuOpen, which hands the keys and the mouse over). */
+	FSimpleDelegate OnOpenRequested;
+
+	/**
 	 * The menu's close keys (Escape, ShowMenu) while it is open: answers an open question No, or goes BACK on the
-	 * Options screen. False when neither is open, and the keys close the menu.
+	 * Options screen or the Equipment page. False when none is open, and the keys close the menu.
 	 */
 	bool Back();
 

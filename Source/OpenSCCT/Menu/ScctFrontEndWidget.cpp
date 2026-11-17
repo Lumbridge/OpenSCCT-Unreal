@@ -1,6 +1,7 @@
 #include "Menu/ScctFrontEndWidget.h"
 
 #include "Menu/SScctFrontEnd.h"
+#include "Menu/SScctGearPage.h"
 #include "Online/ScctOnlineSubsystem.h"
 
 TSharedRef<SWidget> UScctFrontEndWidget::RebuildWidget()
@@ -30,6 +31,11 @@ void UScctFrontEndWidget::ShowOptions(FName Page)
 	{
 		FrontEnd->ShowOptions(Page);
 	}
+}
+
+TSharedPtr<SScctGearPage> UScctFrontEndWidget::ShowGear(int32 Side)
+{
+	return FrontEnd.IsValid() ? FrontEnd->ShowGear(Side) : nullptr;
 }
 
 void UScctFrontEndWidget::AskQuit()

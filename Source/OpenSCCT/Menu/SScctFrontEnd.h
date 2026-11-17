@@ -19,7 +19,8 @@ class UScctOnlineSubsystem;
  * player lists and chat are refilled whenever the online subsystem's revision changes.
  *
  *   Home      play offline, join by address, server list, options, quit (after asking)
- *   Offline   map, mode, side, bots and their skill, start
+ *   Offline   map, mode, side, the side's gear (EQUIPMENT opens Menu/SScctGearPage.h), bots and their skill, start
+ *   (lobby)   also shows the player's gear for his side and has EQUIPMENT, under the lobby's rules
  *   Join      name, address, password, side
  *   Servers   the master's list, refresh, sign in
  *   Options   the Options screen (Menu/SScctOptionsPage.h), from the home page or the lobby; a visit does not
@@ -47,6 +48,12 @@ public:
 
 	/** QUIT: asks, then ends the game. */
 	void AskQuit();
+
+	/**
+	 * EQUIPMENT: opens the Equipment page (Menu/SScctGearPage.h) over the front end, for the lobby's rules while in a
+	 * server's lobby. Side -1 is the lobby's team, else the offline page's side.
+	 */
+	TSharedPtr<class SScctGearPage> ShowGear(int32 Side = -1);
 
 private:
 	enum class EPage : uint8

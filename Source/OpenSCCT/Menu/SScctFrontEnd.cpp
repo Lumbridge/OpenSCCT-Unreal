@@ -6,6 +6,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformMisc.h"
 #include "Menu/SScctConfirm.h"
+#include "Menu/SScctGearPage.h"
 #include "Menu/SScctOptionsPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Misc/ConfigCacheIni.h"
@@ -198,6 +199,11 @@ void SScctFrontEnd::ShowPageNamed(const FString& Name)
 	{
 		ShowOptions(NAME_None);
 	}
+	else if (Name.Equals(TEXT("gear"), ESearchCase::IgnoreCase))
+	{
+		ShowPage(EPage::Offline);
+		ShowGear();
+	}
 	else if (Name.Equals(TEXT("start"), ESearchCase::IgnoreCase))
 	{
 		// Unattended: the offline page with its choices as they stand, and its START pressed.
@@ -214,6 +220,17 @@ void SScctFrontEnd::ShowOptions(FName OptionsPage)
 	}
 	OptionsFirstPage = OptionsPage;
 	ShowPage(EPage::Options);
+}
+
+TSharedPtr<SScctGearPage> SScctFrontEnd::ShowGear(int32 Side)
+{
+	const bool bLobby = Page == EPage::Visit && VisitView == EVisitView::Lobby;
+	if (Side < 0)
+	{
+		const int32 Team = Online.IsValid() ? Online->GetStatus().LocalTeam : -1;
+		Side = bLobby ? (Team == 0 || Team == 1 ? Team : -1) : SideIndex;
+	}
+	return SScctGearPage::Open(Root.ToSharedRef(), Side, bLobby ? EScctGearMenuContext::Lobby : EScctGearMenuContext::Menus, true);
 }
 
 void SScctFrontEnd::AskQuit()
@@ -355,6 +372,17 @@ TSharedRef<SWidget> SScctFrontEnd::BuildOffline()
 			[
 				Ui::Button(Ui::ToText(TEXT("MERCENARY")), FOnClicked::CreateLambda([this] { SideIndex = 1; return FReply::Handled(); }),
 					TAttribute<bool>::CreateLambda([this] { return SideIndex == 1; }), ScctHudStyle::Accent(1), 110.0f)
+			]);
+		// The side's saved kit, and the Equipment page to change it.
+		AddBlock(Box, TEXT("Gear"), SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 10.0f, 0.0f)
+			[
+				Ui::Text(TAttribute<FText>::CreateLambda([this] { return Ui::ToText(SScctGearPage::SummaryLine(SideIndex)); }), 11.5f,
+					FSlateColor(ScctHudStyle::TextDim()), ScctHudStyle::EWeight::Regular, true)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				Ui::Button(Ui::ToText(TEXT("EQUIPMENT")), FOnClicked::CreateLambda([this] { ShowGear(SideIndex); return FReply::Handled(); }))
 			]);
 
 		TArray<FString> BotLabels;
@@ -774,7 +802,34 @@ TSharedRef<SWidget> SScctFrontEnd::BuildLobby()
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)[ ChatBox.ToSharedRef() ]
 		]
 	];
-	Box->AddSlot().AutoHeight().Padding(0.0f, 18.0f, 0.0f, 16.0f)[ Ui::Rule() ];
+	Box->AddSlot().AutoHeight().Padding(0.0f, 18.0f, 0.0f, 12.0f)[ Ui::Rule() ];
+
+	// The kit the player takes into the round, for the side he is on (the spy's while he watches).
+	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 12.0f)
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 12.0f, 0.0f)
+		[
+			SNew(STextBlock)
+			.Font(ScctHudStyle::Label(9.0f))
+			.ColorAndOpacity(TAttribute<FSlateColor>::CreateLambda([Weak]
+			{
+				const int32 Team = Weak.IsValid() ? Weak->GetStatus().LocalTeam : 0;
+				return FSlateColor(ScctHudStyle::Accent(Team == 1 ? 1 : 0));
+			}))
+			.Text(TAttribute<FText>::CreateLambda([Weak]
+			{
+				return Ui::ToText(Weak.IsValid() && Weak->GetStatus().LocalTeam == 1 ? TEXT("YOUR GEAR  /  MERCENARY") : TEXT("YOUR GEAR  /  SPY"));
+			}))
+		]
+		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+		[
+			Ui::Text(TAttribute<FText>::CreateLambda([Weak]
+			{
+				return Ui::ToText(SScctGearPage::SummaryLine(Weak.IsValid() && Weak->GetStatus().LocalTeam == 1 ? 1 : 0));
+			}), 11.5f, FSlateColor(ScctHudStyle::TextDim()))
+		]
+	];
 
 	Box->AddSlot().AutoHeight()
 	[
@@ -805,6 +860,10 @@ TSharedRef<SWidget> SScctFrontEnd::BuildLobby()
 			]
 		]
 		+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right).Padding(0.0f, 0.0f, 6.0f, 0.0f)
+		[
+			Ui::Button(Ui::ToText(TEXT("EQUIPMENT")), FOnClicked::CreateLambda([this] { ShowGear(); return FReply::Handled(); }))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
 		[
 			Ui::Button(Ui::ToText(TEXT("OPTIONS")), FOnClicked::CreateLambda([this] { ShowOptions(NAME_None); return FReply::Handled(); }))
 		]

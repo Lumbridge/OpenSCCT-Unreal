@@ -4,6 +4,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Menu/SScctConfirm.h"
+#include "Menu/SScctGearPage.h"
 #include "Menu/SScctOptionsPage.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -74,7 +75,7 @@ public:
 			[
 				SNew(SBox)
 				.WidthOverride(320.0f)
-				.Visibility(TAttribute<EVisibility>::CreateLambda([this] { return bMenuOpen && !Options.IsValid() ? EVisibility::Visible : EVisibility::Collapsed; }))
+				.Visibility(TAttribute<EVisibility>::CreateLambda([this] { return bMenuOpen && !Options.IsValid() && !bGearOnly ? EVisibility::Visible : EVisibility::Collapsed; }))
 				[
 					Ui::Glass(
 						SNew(SVerticalBox)
@@ -85,7 +86,11 @@ public:
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
 						[
-							Ui::Button(Ui::ToText(TEXT("OPTIONS")), FOnClicked::CreateLambda([this] { ShowOptions(NAME_None); return FReply::Handled(); }))
+							Ui::Button(Ui::ToText(TEXT("CHANGE GEAR")), FOnClicked::CreateLambda([this] { ShowGear(-1, false); return FReply::Handled(); }))
+							]
+							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
+							[
+								Ui::Button(Ui::ToText(TEXT("OPTIONS")), FOnClicked::CreateLambda([this] { ShowOptions(NAME_None); return FReply::Handled(); }))
 						]
 						+ SVerticalBox::Slot().AutoHeight()
 						[
@@ -120,6 +125,30 @@ public:
 		OptionsBox->SetContent(SNullWidget::NullWidget);
 	}
 
+	/**
+	 * The Equipment page over the menu. Opened by the ChangeGear binding (bOnly) its closing goes back to the game;
+	 * from the menu's CHANGE GEAR it goes back to the menu. APPLY goes back to the game either way: the server's
+	 * answer is the HUD's message line.
+	 */
+	TSharedPtr<SScctGearPage> ShowGear(int32 Side, bool bOnly)
+	{
+		bGearOnly = bOnly;
+		return SScctGearPage::Open(Root.ToSharedRef(), Side, EScctGearMenuContext::Match, false,
+			FSimpleDelegate::CreateLambda([this] { if (bMenuOpen) { OnResume.ExecuteIfBound(); } }),
+			FSimpleDelegate::CreateLambda([this] { if (bGearOnly && bMenuOpen) { OnResume.ExecuteIfBound(); } bGearOnly = false; }));
+	}
+
+	TSharedPtr<SScctGearPage> GetGear() const { return SScctGearPage::FindOpen(Root.ToSharedRef()); }
+
+	void CloseGear()
+	{
+		if (const TSharedPtr<SScctGearPage> Gear = GetGear())
+		{
+			Gear->Close();
+		}
+		bGearOnly = false;
+	}
+
 	/** The menu's last button asks first: leaving a match cannot be taken back. */
 	void AskLeave()
 	{
@@ -133,6 +162,11 @@ public:
 		if (const TSharedPtr<SScctConfirm> Open = SScctConfirm::FindOpen(Root.ToSharedRef()))
 		{
 			Open->AnswerNo();
+			return true;
+		}
+		if (const TSharedPtr<SScctGearPage> Gear = GetGear())
+		{
+			Gear->RequestBack();
 			return true;
 		}
 		if (Options.IsValid())
@@ -161,6 +195,9 @@ public:
 	TSharedRef<SOverlay> GetRoot() const { return Root.ToSharedRef(); }
 
 	bool bMenuOpen = false;
+
+	/** The Equipment page was opened on its own (the ChangeGear binding), not from the menu. */
+	bool bGearOnly = false;
 
 private:
 	EVisibility GetBannerVisibility() const
@@ -303,6 +340,7 @@ void UScctMatchMenuWidget::SetMenuOpen(bool bOpen)
 	{
 		// Closed from outside (the game mode): what the Options screen had not applied is dropped with it.
 		Overlay->CloseOptions();
+		Overlay->CloseGear();
 		if (const TSharedPtr<SScctConfirm> Open = SScctConfirm::FindOpen(Overlay->GetRoot()))
 		{
 			Open->AnswerNo();
@@ -333,6 +371,30 @@ void UScctMatchMenuWidget::ShowOptions(FName Page)
 	{
 		Overlay->ShowOptions(Page);
 	}
+}
+
+bool UScctMatchMenuWidget::ShowGear(int32 Side)
+{
+	if (!Overlay.IsValid())
+	{
+		return false;
+	}
+	// The game mode opens the menu (the keys and the mouse go to it); the page then opens over it on its own.
+	const bool bWasOpen = bMenuOpen;
+	if (!bWasOpen)
+	{
+		OnOpenRequested.ExecuteIfBound();
+	}
+	if (!bMenuOpen)
+	{
+		return false;
+	}
+	return Overlay->ShowGear(Side, !bWasOpen).IsValid();
+}
+
+TSharedPtr<SScctGearPage> UScctMatchMenuWidget::GetGearPage() const
+{
+	return Overlay.IsValid() ? Overlay->GetGear() : nullptr;
 }
 
 bool UScctMatchMenuWidget::Back()
