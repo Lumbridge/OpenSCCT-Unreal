@@ -6,7 +6,14 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "ScctHubSubsystem.generated.h"
 
+class FScctHubActivities;
+class FScctHubAudio;
+class FScctHubEmotes;
 class FScctHubHud;
+class FScctHubPads;
+class FScctHubProps;
+class FScctHubVoice;
+struct FScctHubVoiceSpeaker;
 class SScctHubLoadingScreen;
 class UScctSessionSubsystem;
 
@@ -51,8 +58,22 @@ DECLARE_MULTICAST_DELEGATE(FScctHubChanged);
  *   -ScctHubLog=S                 seconds between the status lines in the log (default 2 with the switches above)
  *   -ScctHubBots=N                (or the level URL's ?Bots=N) with -ScctHostHub: N bot players join the hosted hub,
  *                                 walk about, chat and change sides (the bridge's HubSoak)
- * The hub's own HUD (Hub/ScctHubHud.h: name tags, chat, signs, the player list) belongs to this subsystem and runs
- * while the hub level presents the visit; its switches are listed there.
+ *   -ScctHubPad=<n>:spy|merc      with -ScctHostHub: once in the hub the player takes that side, uses pad n's laptop
+ *                                 (its draft takes -ScctHubPadOptions, default "?TimeLimit=1?SvmBots=2": a one
+ *                                 minute round with bots filling the empty slots), stands on the pad and readies up;
+ *                                 the countdown, the match and the way back follow as for a player
+ *   -ScctHubPadOptions=<options>  the lobby options the laptop applies for -ScctHubPad
+ * The hub's own HUD (Hub/ScctHubHud.h: name tags, chat, signs, the player list) and the match pads (Hub/ScctHubPads.h:
+ * floor overlays, map pictures, theme kits, the pad laptop) belong to this subsystem and run while the hub level
+ * presents the visit; the HUD's switches are listed there. So do the activities (Hub/ScctHubActivities.h: the course
+ * gates, the aim range, the plaza ball, their boards), their props (Hub/ScctHubProps.h), the jukebox and chimes
+ * (Hub/ScctHubAudio.h, -ScctHubJukebox), the emote poses (Hub/ScctHubEmotes.h, -ScctHubEmote=<1-8>) and the proximity
+ * voice's gains (Hub/ScctHubVoice.h; no voice transport yet).
+ *
+ * A pad's match: when the hub sends the player to it the visit's state is InMatch; the online subsystem follows the
+ * online visit the bridge started (it is woken when a hub visit starts, UScctOnlineSubsystem::EnsureReady) and opens
+ * the match's level; after the results the bridge joins the hub again, and the hub level is opened at once (before
+ * the online subsystem would go back to the front end), where the hub puts the player beside the pad.
  * Started in the hub level itself (Tools\Run-Offscreen.ps1 -Map Hub -Extra "-ScctHostHub") the level presents the
  * visit at once instead of starting a local match on the hub map.
  */
@@ -80,6 +101,12 @@ public:
 
 	/** Joins the hub at Index of GetHubList through the master's join answer. False when it could not start (GetNotice says why). */
 	bool JoinListed(int32 Index, int32 Team = 0);
+
+	/**
+	 * Joins the hub the master lists as Id without the list (a website join): the same join answer, under the
+	 * signed-in account's name when there is one. bRequireAccount refuses the visit without the master's ticket.
+	 */
+	bool JoinListedId(const FString& Id, const FString& ListedName, bool bRequireAccount, int32 Team = 0);
 
 	/** Leaves the hub (and closes the hub this PC hosts), or dismisses a failure. The state is Idle afterwards. */
 	void Leave();
@@ -135,6 +162,9 @@ public:
 	/** The hub's own HUD (null before Initialize). */
 	FScctHubHud* GetHud() const { return Hud.Get(); }
 
+	/** The match pads' view (null before Initialize). */
+	FScctHubPads* GetPads() const { return Pads.Get(); }
+
 	/** A player's voice volume, 0 to 2 (1 when never set); kept for this run for the hub's voice chat. */
 	float GetVoiceVolume(const FString& PlayerName) const;
 	void SetVoiceVolume(const FString& PlayerName, float Volume);
@@ -143,6 +173,16 @@ public:
 
 	/** What a voice chat multiplies a player's voice by: 0 when muted, else the volume. */
 	float GetVoiceGain(const FString& PlayerName) const { return IsVoiceMuted(PlayerName) ? 0.0f : GetVoiceVolume(PlayerName); }
+
+	/**
+	 * Every other player's voice as this listener would hear it (Hub/ScctHubVoice.h): his mouth, the proximity gain,
+	 * the wall muffle and the gain with his volume and mute in, nearest first; updated ten times a second in the hub.
+	 * There is no voice transport to play them yet.
+	 */
+	const TArray<FScctHubVoiceSpeaker>& GetVoiceSpeakers() const;
+
+	/** The hub's activities as last read (Hub/ScctHubActivities.h; null before Initialize). */
+	FScctHubActivities* GetActivities() const { return Activities.Get(); }
 
 	// UGameInstanceSubsystem
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -157,6 +197,7 @@ private:
 	bool TickFromTicker(float DeltaSeconds);
 	void HandleBeforeTicks(float DeltaSeconds);
 	void HandleFrame(float DeltaSeconds);
+	void StopActivities();
 	void StartBots();
 
 	void RefreshTexts();
@@ -228,9 +269,18 @@ private:
 	float LogEvery = 0.0f;
 	float LogTimer = 0.0f;
 	int32 AutoBots = -1;
+	int32 AutoPad = 0;
+	int32 AutoPadSide = 0;
+	FString AutoPadOptions;
 
 	// The hub HUD and the per-player voice settings.
 	TSharedPtr<FScctHubHud> Hud;
+	TSharedPtr<FScctHubPads> Pads;
+	TSharedPtr<FScctHubActivities> Activities;
+	TSharedPtr<FScctHubProps> Props;
+	TSharedPtr<FScctHubAudio> Audio;
+	TSharedPtr<FScctHubEmotes> Emotes;
+	TSharedPtr<FScctHubVoice> Voice;
 	TMap<FString, float> VoiceVolumes;
 	TSet<FString> VoiceMuted;
 };

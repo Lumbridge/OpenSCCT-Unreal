@@ -61,8 +61,8 @@ public enum RootLock
 /// started.
 /// <para>A port of OpenSCCT's game/Scripts/Views/ChannelPoseApplier.cs without Godot. Where that one writes a
 /// Skeleton3D, this one leaves the pose in <see cref="Positions"/>, <see cref="Rotations"/> and <see cref="Scales"/>:
-/// each bone's transform relative to its parent, in the character file's own space. The hub's emote turns
-/// (ExtraTurns, ExtraShift) are not ported.</para>
+/// each bone's transform relative to its parent, in the character file's own space. The hub's emote turns are laid
+/// over the finished pose (<see cref="ExtraTurns"/>, <see cref="ExtraShift"/>).</para>
 /// </summary>
 public sealed class ChannelPoseApplier
 {
@@ -271,6 +271,35 @@ public sealed class ChannelPoseApplier
         }
     }
 
+    /// <summary>
+    /// Extra turns laid over the blended pose before it is read (an OpenSCCT addition: the hub's emotes,
+    /// Hub/HubEmotePoses.cs): bone index to a turn in skeleton space about the bone's origin, applied parent first so a
+    /// child's turn adds to its parent's. Cleared by the caller; empty for an ordinary pose.
+    /// </summary>
+    public Dictionary<int, Quaternion> ExtraTurns { get; } = new();
+
+    /// <summary>A shift of the first root bone in skeleton space laid over the pose with <see cref="ExtraTurns"/> (a sit lowers the hips).</summary>
+    public Vector3 ExtraShift { get; set; }
+
+    private void TurnExtraBones()
+    {
+        if (ExtraTurns.Count == 0)
+        {
+            return;
+        }
+
+        foreach (int b in _order)
+        {
+            if (!ExtraTurns.TryGetValue(b, out Quaternion turn))
+            {
+                continue;
+            }
+
+            Quaternion parent = ParentRotation(b);
+            _rot[b] = Quat.Normalized(Quat.Inverse(parent) * Quat.Normalized(turn) * parent * Quat.Normalized(_rot[b]));
+        }
+    }
+
     /// <summary>The skeleton-space rotation of a bone's parent in the pose so far (identity for a root).</summary>
     private Quaternion ParentRotation(int bone)
     {
@@ -352,6 +381,13 @@ public sealed class ChannelPoseApplier
 
         TurnAimBone();
         TurnDirectedBones();
+        TurnExtraBones();
+        if (ExtraShift != Vector3.Zero && RootBone >= 0)
+        {
+            // The root's local space is the skeleton's (it has no parent).
+            _pos[RootBone] += ExtraShift;
+        }
+
         for (int b = 0; b < _count; b++)
         {
             _rot[b] = Quat.Normalized(_rot[b]);

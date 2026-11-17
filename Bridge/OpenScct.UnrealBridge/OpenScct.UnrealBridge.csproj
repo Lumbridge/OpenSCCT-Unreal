@@ -23,6 +23,11 @@
     <ProjectReference Include="$(OpenScctRoot)src\OpenScct.Server\OpenScct.Server.csproj" />
     <ProjectReference Include="$(OpenScctRoot)src\OpenScct.Bots\OpenScct.Bots.csproj" />
   </ItemGroup>
+  <!-- Discord Rich Presence over the local Discord app's pipe (Social/DiscordPresence.cs), the version the Godot
+       client uses (OpenSCCT's Directory.Packages.props). -->
+  <ItemGroup>
+    <PackageReference Include="DiscordRichPresence" Version="1.6.1.70" />
+  </ItemGroup>
   <!-- The play session lives in the Godot project but has no Godot in it; it is linked, as OpenSCCT's map sweep does. -->
   <ItemGroup>
     <Compile Include="$(OpenScctRoot)game\Scripts\Play\Session\*.cs" Link="Linked\PlaySession\%(Filename)%(Extension)" />

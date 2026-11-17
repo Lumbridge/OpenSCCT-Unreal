@@ -10,6 +10,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "Hud/ScctVisionSubsystem.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/CommandLine.h"
@@ -565,6 +566,9 @@ void UScctEquipmentSubsystem::UpdateTorch(FPawnGear& Found, AScctPawnProxy& Prox
 	FQuat Rotation = FRotator(Pawn.TorchPitch, Pawn.TorchYaw, Pawn.TorchRoll).Quaternion();
 	const bool bInCamera = (Pawn.Flags & EScctEquipmentFlags::TorchInCamera) != 0;
 	bool bCorona = (Pawn.Flags & EScctEquipmentFlags::TorchCorona) != 0;
+	// Thermal and EMF draw no coronas (the goggles say so), or the bright card would read as hot or glowing.
+	const UScctVisionSubsystem* Vision = UScctVisionSubsystem::Find(GetWorld());
+	bCorona = bCorona && (Vision == nullptr || !Vision->ShouldHideCoronasAndSky());
 	if (!bInCamera && bFromEye)
 	{
 		const FTransform Camera = GetCamera();

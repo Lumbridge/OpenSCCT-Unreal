@@ -49,6 +49,12 @@ public class OpenSCCT : ModuleRules
 			"VorbisAudioDecoder",
 		});
 
+		// The account's sign-in is sealed with DPAPI for the Windows user (Online/ScctTokenStore).
+		if (Target.Platform == UnrealTargetPlatform.Win64)
+		{
+			PublicSystemLibraries.Add("crypt32.lib");
+		}
+
 		// FSoundQualityInfo, which the engine's audio decoders fill.
 		PrivateIncludePathModuleNames.Add("TargetPlatform");
 

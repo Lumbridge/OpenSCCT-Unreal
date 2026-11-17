@@ -1545,6 +1545,14 @@ void UScctEffectsSubsystem::SpawnSparkBurst(const FVector& At, const FVector& No
 	AcquireLight(At + Out * 10.0, FLinearColor(0.55f, 0.7f, 1.0f), 30.0f, 350.0f, 0.1f, false);
 }
 
+UStaticMeshComponent* UScctEffectsSubsystem::FindActorMesh(int32 ActorId) const
+{
+	// Beams are not here: the goggles draw the detector beams from the markers.
+	const FActorFx* Fx = Actors.Find(ActorId);
+	const bool bObject = Fx != nullptr && (Fx->Kind == EScctEffectKind::Projectile || Fx->Kind == EScctEffectKind::Mine || Fx->Kind == EScctEffectKind::Gadget);
+	return bObject && MeshPool.IsValidIndex(Fx->Mesh) ? MeshPool[Fx->Mesh].Get() : nullptr;
+}
+
 void UScctEffectsSubsystem::SpawnGlassBurst(const FVector& At, const FVector& Direction)
 {
 	if (!bSceneReady || !IsValid(Host))

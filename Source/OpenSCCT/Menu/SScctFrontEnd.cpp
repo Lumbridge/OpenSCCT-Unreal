@@ -7,8 +7,10 @@
 #include "Menu/ScctMenuPage.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Engine/GameInstance.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
+#include "Social/ScctSocialSubsystem.h"
 #include "Fonts/FontMeasure.h"
 #include "Rendering/DrawElements.h"
 #include "Widgets/Layout/SBox.h"
@@ -249,6 +251,8 @@ void SScctFrontEnd::Open(const FString& Name)
 		return;
 	}
 	Push(Made.ToSharedRef());
+	StackNames.SetNum(Stack.Num());
+	StackNames.Last() = Page.ToLower();
 	if (!Sub.IsEmpty())
 	{
 		Made->ShowSub(Sub);
@@ -466,6 +470,8 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 	{
 		return;
 	}
+	TickSocial();
+
 	// A visit takes the screen over, whichever page it was started from, and gives that page back at its end.
 	const EVisitView Wanted = Visit->IsVisiting() ? FindVisitView() : EVisitView::None;
 	if (Wanted != VisitView)
@@ -492,6 +498,57 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 		}
 		Present();
 	}
+}
+
+void SScctFrontEnd::TickSocial()
+{
+	UScctOnlineSubsystem* Visit = Online.Get();
+	UScctSocialSubsystem* Social = Visit != nullptr && Visit->GetGameInstance() != nullptr ? Visit->GetGameInstance()->GetSubsystem<UScctSocialSubsystem>() : nullptr;
+	if (Social == nullptr)
+	{
+		return;
+	}
+
+	// A friend's Join or a website join asks for a server's password, or for the page where the player signs in.
+	FScctSocialPasswordPrompt Prompt;
+	if (Social->TakePasswordPrompt(Prompt))
+	{
+		ShowPageNamed(TEXT("home"));
+		FScctMenuHost Host;
+		Host.Online = Online;
+		Host.Dialogs = Dialogs;
+		Host.Open = [this](const FString& Next) { Open(Next); };
+		Host.Back = [this] { GoBack(); };
+		Push(ScctMenuPages::MakeJoinPassword(Host, Prompt));
+		StackNames.SetNum(Stack.Num());
+		StackNames.Last() = TEXT("password");
+	}
+	if (const FString PageToOpen = Social->TakePageToOpen(); !PageToOpen.IsEmpty())
+	{
+		ShowPageNamed(PageToOpen);
+	}
+	ReportSocialPage();
+}
+
+void SScctFrontEnd::ReportSocialPage()
+{
+	UScctOnlineSubsystem* Visit = Online.Get();
+	UScctSocialSubsystem* Social = Visit != nullptr && Visit->GetGameInstance() != nullptr ? Visit->GetGameInstance()->GetSubsystem<UScctSocialSubsystem>() : nullptr;
+	if (Social == nullptr)
+	{
+		return;
+	}
+	// The Discord status names the page on top (Godot's front end pages, by the names the menus open them by).
+	StackNames.SetNum(Stack.Num());
+	const FString Top = VisitView == EVisitView::None && StackNames.Num() > 0 ? StackNames.Last() : FString();
+	EScctSocialPage Page = EScctSocialPage::Other;
+	if (Top == TEXT("online") || Top == TEXT("servers")) { Page = EScctSocialPage::Servers; }
+	else if (Top == TEXT("address") || Top == TEXT("join")) { Page = EScctSocialPage::JoinByAddress; }
+	else if (Top == TEXT("play") || Top == TEXT("offline")) { Page = EScctSocialPage::OfflineSetup; }
+	else if (Top == TEXT("hub")) { Page = EScctSocialPage::Hub; }
+	else if (Top == TEXT("settings") || Top == TEXT("options")) { Page = EScctSocialPage::Options; }
+	else if (Top == TEXT("host") || Top == TEXT("create")) { Page = EScctSocialPage::HostSetup; }
+	Social->SetFrontEndPage(Page);
 }
 
 SScctFrontEnd::EVisitView SScctFrontEnd::FindVisitView() const

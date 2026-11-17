@@ -141,6 +141,12 @@ public sealed class HudFeature : IDisposable
     public int Received { get; private set; }
 
     /// <summary>
+    /// Whether the last tick ran the laser sight's target name pass (SHud.DrawTargetName): the motion tracking draw
+    /// (<see cref="HudMotionExports"/>) draws the HUD's own tracker only then, as the Godot client's HudLayer does.
+    /// </summary>
+    public bool TargetNameRan { get; private set; }
+
+    /// <summary>
     /// The view's width over its height, for the merc's aim point (SHud.SpotReticule is projected through the camera
     /// onto the 640 x 480 canvas). 16:9 until set.
     /// </summary>
@@ -406,6 +412,7 @@ public sealed class HudFeature : IDisposable
         }
 
         float now = pc.Level.TimeSeconds;
+        HudHitZones.Ensure(pc.XLevel);
         var shud = pc.myHUD as SHud;
         if (shud is not null && !ReferenceEquals(shud, _lastHud))
         {
@@ -426,6 +433,7 @@ public sealed class HudFeature : IDisposable
         _effects.Update(pc, now);
         _console.Prune(now);
         bool aimRan = false, targetName = false;
+        TargetNameRan = false;
         if (shud is not null)
         {
             HudMessageRules.Tick(shud, shud.sTutoMap.Length > 4);
@@ -453,6 +461,8 @@ public sealed class HudFeature : IDisposable
                 shud.TargetNameLocks();
                 shud.ExpireTargetLocks();
             }
+
+            TargetNameRan = targetName;
 
             EmitNewMessages(shud, now);
         }

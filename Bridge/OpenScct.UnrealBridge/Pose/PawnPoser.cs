@@ -16,9 +16,9 @@ namespace OpenScct.UnrealBridge.Pose;
 /// lock of a root-motion move), interpolated between the last two ticks, then the upper-body aim and the bone
 /// direction controllers. It reads the simulation and never writes it.
 /// <para>A port of the posing half of OpenSCCT's game/Scripts/Views/SimPawnView.cs (OnTick, SetAim, SetDirections,
-/// Pose, RootLockOf, Interpolated). A map outfit's model is posed with its team's stock clips (see the constructor).
-/// Not ported: the hub's emote overlay (IPawnPoseOverlay), the local player's look-ahead aim (DrawnView, which needs
-/// the camera of the frame) and replacement clips of an animation project.</para>
+/// Pose, RootLockOf, Interpolated, ApplyOverlay), with the hub's emote overlay (<see cref="Overlay"/>). A map
+/// outfit's model is posed with its team's stock clips (see the constructor). Not ported: the local player's
+/// look-ahead aim (DrawnView, which needs the camera of the frame) and replacement clips of an animation project.</para>
 /// </summary>
 public sealed class PawnPoser
 {
@@ -42,6 +42,10 @@ public sealed class PawnPoser
     private long _tick;
     private long _posedTick = -1;
     private float _posedAlpha;
+    private readonly List<PoseTurn> _overlayTurns = new();
+
+    /// <summary>Extra posing laid over every posed pawn (the hub's emotes while a visit is drawn), or null.</summary>
+    public static IPawnPoseOverlay? Overlay { get; set; }
 
     /// <summary>
     /// Poses <paramref name="character"/>'s skeleton: the team's stock file, or a map outfit's model
@@ -313,7 +317,47 @@ public sealed class PawnPoser
             RootLockOf(pawn, c0, out offset, out turn);
         }
 
+        ApplyOverlay(pawn);
         _applier.Apply(_channels, rootLock, c0.bBackward ? c0.AnimLast : 0f, offset, turn);
+    }
+
+    /// <summary>
+    /// Turns the <see cref="Overlay"/>'s pawn-frame turns into skeleton-space turns for the applier (the frame of the
+    /// drawn yaw, the way <see cref="SetAim"/> turns the aim), and the hips' drop into a root shift.
+    /// </summary>
+    private void ApplyOverlay(SBasePawn pawn)
+    {
+        _applier.ExtraTurns.Clear();
+        _applier.ExtraShift = Vector3.Zero;
+        _overlayTurns.Clear();
+        float drop = Overlay?.Collect(pawn, _overlayTurns) ?? 0f;
+        if (_overlayTurns.Count == 0 && drop == 0f)
+        {
+            return;
+        }
+
+        Vector3 forward = Vector3.Normalize(RenderSpace.Direction(new FRotator(0, _drawYaw, 0).Vector()));
+        Vector3 right = Vector3.Normalize(RenderSpace.Direction(new FRotator(0, _drawYaw + 16384, 0).Vector()));
+        Vector3 up = Vector3.UnitY;
+        Basis3 skeleton = SkeletonBasis().Orthonormalized();
+        Basis3 toSkeleton = skeleton.Inverse();
+        foreach (PoseTurn t in _overlayTurns)
+        {
+            int bone = _applier.FindBone(t.Bone);
+            if (bone < 0 || t.Radians == 0f)
+            {
+                continue;
+            }
+
+            Vector3 axis = Vector3.Normalize((forward * t.Axis.X) + (right * t.Axis.Y) + (up * t.Axis.Z));
+            Quaternion local = (toSkeleton * Basis3.FromQuaternion(Quat.AxisAngle(axis, t.Radians)) * skeleton).GetRotationQuaternion();
+            _applier.ExtraTurns[bone] = _applier.ExtraTurns.TryGetValue(bone, out Quaternion had) ? Quat.Normalized(local * had) : local;
+        }
+
+        if (drop != 0f)
+        {
+            _applier.ExtraShift = SkeletonBasis().Inverse() * (-Vector3.UnitY * (drop / RenderSpace.UnitsPerMetre));
+        }
     }
 
     /// <summary>

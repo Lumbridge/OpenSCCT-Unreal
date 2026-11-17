@@ -22,6 +22,12 @@ public enum HubState
 
     /// <summary>The visit ended with an error (text <see cref="HubText.Error"/>). Leave clears it.</summary>
     Failed = 4,
+
+    /// <summary>
+    /// Away at a pad's match: the hub connection is closed, the online bridge plays the match, and the visit joins the
+    /// hub again after its results (HubPadsExports reads the trip). Not a reason to leave the hub when its level closes.
+    /// </summary>
+    InMatch = 5,
 }
 
 public static class HubStatusFlags

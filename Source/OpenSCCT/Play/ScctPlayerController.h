@@ -135,7 +135,18 @@ public:
 	 */
 	bool TapBoundCommand(const FString& Command);
 
+	/** The same, held down (true) or let go (false) until called again, for a held command such as TeamPing. */
+	bool HoldBoundCommand(const FString& Command, bool bHeld);
+
 	FScctLocalCommandEvent OnLocalCommand;
+
+	/**
+	 * While bound and returning true for a frame, that frame's mouse counts and right stick (X, Y, right X, right Y as
+	 * ReadDevices has them) go to it instead of the simulation: the view does not turn. The team ping wheel chooses
+	 * with them while it is open.
+	 */
+	DECLARE_DELEGATE_RetVal_FourParams(bool, FScctLookSink, float /*MouseX*/, float /*MouseY*/, float /*RightX*/, float /*RightY*/);
+	FScctLookSink LookSink;
 
 	UFUNCTION(Exec)
 	void ScctInvertY(int32 bInvert);
