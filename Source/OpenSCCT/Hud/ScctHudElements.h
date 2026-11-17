@@ -25,6 +25,13 @@ namespace ScctHudElements
 	 */
 	void PaintMotionTracking(FScctHudPainter& Painter, const FScctHudModel& Model);
 
+	/**
+	 * The team pings: each teammate's mark as a disc with its kind's icon above the spot and its distance, or at the
+	 * screen's edge with an arrow when out of view; and the ping wheel while the TeamPing key is held.
+	 * ScctHudElementsTeamPing.cpp.
+	 */
+	void PaintTeamPings(FScctHudPainter& Painter, const FScctHudModel& Model);
+
 	/** The crosshair with its spread and hit confirmation, what the laser holds, noise and hit arcs around it. */
 	void PaintCrosshair(FScctHudPainter& Painter, const FScctHudModel& Model);
 

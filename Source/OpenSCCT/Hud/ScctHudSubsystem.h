@@ -42,6 +42,9 @@ class UScctHudWidget;
  *        a moving target to lock; AimMate S keeps the player's view and aim on his nearest teammate for S seconds (the
  *        laser gadget's target, whose bracket gets the friend marks); Laser 1/0 switches the merc's laser gadget on
  *        or off by the simulation's GadLaserSwitch (its default key also presses the roll button, so a key press would do more).
+ *        PingKey 1/0 holds or lets go of the key bound to TeamPing (UScctTeamPingSubsystem: a tap marks the aimed spot,
+ *        a hold opens the wheel); PingWheel D points the wheel's choice as the mouse would (1 up, 2 right, 3 down,
+ *        4 left, 0 the middle).
  *   -ScctHudTexture=Package.Name[,Package.Name...]
  *        loads those textures of the content as the session starts and logs their size ("ScctHudTextures: ...").
  *   -ScctHudLog=S
@@ -75,6 +78,9 @@ public:
 
 	/** What the HUD shows this frame. */
 	const FScctHudModel& GetModel() const { return *Model; }
+
+	/** For the HUD's other subsystems that fill a part of the model themselves (the team ping's badges and wheel). */
+	FScctHudModel& GetMutableModel() { return *Model; }
 
 	/**
 	 * Every message drained from the bridge, as it is drained (once each, oldest first), before the model files it.

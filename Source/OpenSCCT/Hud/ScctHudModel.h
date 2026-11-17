@@ -8,6 +8,7 @@
 #include "Runtime/ScctHudMotionApi.h"
 #include "Runtime/ScctHudRadarApi.h"
 #include "Runtime/ScctHudTextureApi.h"
+#include "Hud/ScctTeamPingView.h"
 
 /**
  * The HUD's own labels. Their text is the original game's, read from the player's content with the bridge's
@@ -152,6 +153,12 @@ public:
 	 */
 	FScctHudMotionState Motion = {};
 	TArray<FScctHudMotionRow> MotionRows;
+
+	/**
+	 * The team pings for this frame's view: teammates' (and the player's own) pings placed on the screen and the ping
+	 * wheel while the TeamPing key is held. Filled by UScctTeamPingSubsystem; empty when there are none.
+	 */
+	FScctTeamPingView TeamPing;
 
 	/** The team of the player at this machine (0 spies, 1 mercs), from the scoreboard, else the side played. */
 	int32 LocalTeam = 0;

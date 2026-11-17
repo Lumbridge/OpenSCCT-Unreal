@@ -35,6 +35,7 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 		PaintCameraPages(Painter, *Model);
 		PaintMotionTracking(Painter, *Model);
 		PaintCrosshair(Painter, *Model);
+		PaintTeamPings(Painter, *Model);
 	}
 	else
 	{

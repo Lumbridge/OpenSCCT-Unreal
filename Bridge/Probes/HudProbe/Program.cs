@@ -71,6 +71,13 @@ if (args.Length > 5 && args[5].Equals("motion", StringComparison.OrdinalIgnoreCa
     return MotionRun(content, map, mode, merc, seconds);
 }
 
+Console.WriteLine($"sizes: TeamPingCamera {Unsafe.SizeOf<TeamPingCamera>()}, TeamPingState {Unsafe.SizeOf<TeamPingState>()}, TeamPingRow {Unsafe.SizeOf<TeamPingRow>()}, TeamPingApi {Unsafe.SizeOf<TeamPingApi>()}");
+
+if (args.Length > 5 && args[5].Equals("ping", StringComparison.OrdinalIgnoreCase))
+{
+    return PingRun(content, map, mode, merc, seconds);
+}
+
 BridgeSession.Configure(content);
 var load = Stopwatch.StartNew();
 using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
@@ -1102,6 +1109,84 @@ static unsafe int MotionRun(string content, string map, string mode, bool merc, 
 
     Console.WriteLine($"motion summary: most locks {maxLocks}, most drawn {maxDrawn}, most friends {maxFriends}, frames with rows {framesWithRows}, corner rows {cornersInFront}, friend mark rows {friendMarks}, Hold Fire rows {holdFire}, actors locked [{string.Join(",", lockedIds)}]");
     return 0;
+}
+
+// The team ping through a local match: once a ping can be placed, a tap (generic) aimed through the session's view and,
+// after the server's one-second limit, a "check here" and a spy-only kind (refused for a merc); every second the state
+// and the team's pings as Unreal reads them.
+static int PingRun(string content, string map, string mode, bool merc, double seconds)
+{
+    BridgeSession.Configure(content);
+    using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
+    HudFeature hud = HudFeature.Of(session);
+    TeamPingFeature pings = TeamPingFeature.Of(session);
+    var input = default(BridgeInput);
+    var rows = new TeamPingRow[8];
+    var run = Stopwatch.StartNew();
+    double nextReport = 1, firstSendAt = -1;
+    int step = 0, lastContext = 0, mostRows = 0, ownRows = 0;
+    while (run.Elapsed.TotalSeconds < seconds)
+    {
+        double t = run.Elapsed.TotalSeconds;
+        session.SetInput(input);
+        session.Update();
+        if (session.Failure is { } failure)
+        {
+            Console.WriteLine("FAILED: " + failure);
+            return 1;
+        }
+
+        while (hud.DrainMessages(new HudMessage[8]) > 0)
+        {
+        }
+
+        TeamPingState state = pings.State();
+        if (state.Context != lastContext)
+        {
+            Console.WriteLine($"t={t:F1} context {lastContext} -> {state.Context} team {state.Team} supported {state.Supported}");
+            lastContext = state.Context;
+        }
+
+        var view = session.Session.View;
+        var camera = new TeamPingCamera
+        {
+            X = view.Location.X, Y = view.Location.Y, Z = view.Location.Z,
+            Pitch = view.Rotation.Pitch * 360f / 65536f, Yaw = view.Rotation.Yaw * 360f / 65536f, Roll = view.Rotation.Roll * 360f / 65536f,
+        };
+        (OpenScct.Server.TeamPingKind Kind, double Delay)[] plan =
+            [(OpenScct.Server.TeamPingKind.Generic, 0), (OpenScct.Server.TeamPingKind.Check, 1.3), (OpenScct.Server.TeamPingKind.Mine, 2.6)];
+        if (state.Context != 0 && step < plan.Length && t > 3)
+        {
+            firstSendAt = firstSendAt < 0 ? t : firstSendAt;
+            if (t >= firstSendAt + plan[step].Delay)
+            {
+                int result = pings.Send(plan[step].Kind, camera, out OpenScct.Core.FVector target);
+                Console.WriteLine($"t={t:F1} send {plan[step].Kind} from ({camera.X:F0},{camera.Y:F0},{camera.Z:F0}) yaw {camera.Yaw:F0} pitch {camera.Pitch:F0} -> {result} at ({target.X:F0},{target.Y:F0},{target.Z:F0})");
+                step++;
+            }
+        }
+
+        int count = pings.Rows(rows);
+        mostRows = Math.Max(mostRows, count);
+        for (int i = 0; i < count; i++)
+        {
+            ownRows += rows[i].Own;
+        }
+
+        if (t >= nextReport)
+        {
+            nextReport += 1;
+            string list = string.Join(" ", rows.Take(count).Select(r =>
+                $"[{(OpenScct.Server.TeamPingKind)r.Kind} team {r.Team} from #{r.SenderId} '{hud.Texts.Text(r.SenderNameId)}'{(r.Own != 0 ? " own" : "")} at ({r.X:F0},{r.Y:F0},{r.Z:F0}) age {r.Age:F2} opacity {r.Opacity:F2}]"));
+            Console.WriteLine($"t={t:F1} ping state: context {state.Context} team {state.Team} supported {state.Supported} sent {state.Sent} received {state.Received} refused {state.Refused} | {count} rows {list}");
+        }
+
+        Thread.Sleep(5);
+    }
+
+    TeamPingState end = pings.State();
+    Console.WriteLine($"ping summary: sent {end.Sent} received {end.Received} refused {end.Refused}, most rows at once {mostRows}, frames with an own row {ownRows}");
+    return end.Received > 0 ? 0 : 2;
 }
 
 static unsafe string Pairs(HudRound r) =>

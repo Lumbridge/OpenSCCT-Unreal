@@ -200,6 +200,19 @@ bool AScctPlayerController::TapBoundCommand(const FString& Command)
 	return true;
 }
 
+bool AScctPlayerController::HoldBoundCommand(const FString& Command, bool bHeld)
+{
+	const TArray<FKey> Keys = FindKeysBoundTo(Command);
+	if (Keys.Num() == 0)
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Controls: no key of the current side is bound to '%s', so a script cannot hold it"), *Command);
+		return false;
+	}
+	bScripted = true;
+	FScctControlAutoplay::SendKey(*this, Keys[0], bHeld);
+	return true;
+}
+
 bool AScctPlayerController::HasPlayInput() const
 {
 	// A menu over the match has the keys and the mouse, whoever plays.
@@ -256,6 +269,10 @@ void AScctPlayerController::FeedControls(float DeltaSeconds)
 	{
 		ReadDevices(Raw);
 		Raw.Flags = EScctRawInputFlags::Play;
+		if (LookSink.IsBound() && LookSink.Execute(Raw.MouseX, Raw.MouseY, Raw.RightX, Raw.RightY))
+		{
+			Raw.MouseX = Raw.MouseY = Raw.RightX = Raw.RightY = 0.0f;
+		}
 	}
 	FrameMouseX = Raw.MouseX;
 	Controls->Frame(&Raw);

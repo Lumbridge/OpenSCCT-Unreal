@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Hud/ScctHudModel.h"
 #include "Hud/ScctHudWidget.h"
+#include "Hud/ScctTeamPingSubsystem.h"
 #include "Hud/ScctVisionSubsystem.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -367,7 +368,8 @@ void UScctHudSubsystem::RunTimedCommands()
 			Api->SetOption(EScctHudOption::SwitchEnhancedReality, 0);
 		}
 		else if (RunIconCommand(Command.Name, Command.Argument) || RunRadarCommand(Command.Name, Command.Argument)
-			|| RunBackpackCommand(Command.Name, Command.Argument) || RunMotionCommand(Command.Name, Command.Argument))
+			|| RunBackpackCommand(Command.Name, Command.Argument) || RunMotionCommand(Command.Name, Command.Argument)
+			|| (GetWorld()->GetSubsystem<UScctTeamPingSubsystem>() != nullptr && GetWorld()->GetSubsystem<UScctTeamPingSubsystem>()->RunCommand(Command.Name, Command.Argument)))
 		{
 		}
 		else if (AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController()))
