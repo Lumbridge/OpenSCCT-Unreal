@@ -22,6 +22,7 @@
 #include "Runtime/ScctSocialApi.h"
 #include "Runtime/ScctPlayApi.h"
 #include "Runtime/ScctProjectionsApi.h"
+#include "Runtime/ScctReverbRoomApi.h"
 #include "Runtime/ScctVisionApi.h"
 #include "Runtime/ScctVoiceApi.h"
 #include "Runtime/ScctWorldApi.h"
@@ -67,6 +68,7 @@ SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
 SCCT_FEATURE_TABLE(FScctSocialApi, "SocialExports", ScctSocialApiVersion);
 SCCT_FEATURE_TABLE(FScctPlayApi, "PlayExports", ScctPlayApiVersion);
 SCCT_FEATURE_TABLE(FScctProjectionsApi, "ProjectionExports", ScctProjectionsApiVersion);
+SCCT_FEATURE_TABLE(FScctReverbRoomApi, "ReverbRoomExports", ScctReverbRoomApiVersion);
 SCCT_FEATURE_TABLE(FScctVisionApi, "VisionExports", ScctVisionApiVersion);
 SCCT_FEATURE_TABLE(FScctVoiceApi, "VoiceExports", ScctVoiceApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);

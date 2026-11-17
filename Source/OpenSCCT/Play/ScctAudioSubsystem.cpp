@@ -127,6 +127,7 @@ void UScctAudioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 void UScctAudioSubsystem::Deinitialize()
 {
 	StopAllVoices();
+	ReleaseRoomFields();
 	Cache.Reset();
 	if (Session != nullptr)
 	{
@@ -164,6 +165,7 @@ void UScctAudioSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	ZoneEffects.Reset();
 	ListenerZone = INDEX_NONE;
 	ActiveZone = -2;
+	ReleaseRoomFields();
 	ProbeCalls.Reset();
 	bLastListenerSet = false;
 	NumStarted =NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
@@ -211,6 +213,8 @@ void UScctAudioSubsystem::HandleMatchStarted()
 		CheckSong = Song;
 	}
 	LoadZones(Session->GetSessionInfo().Map);
+	ReadRoomSwitches();
+	CreateRoomFields();
 	const FAudioDevice* Device = GetWorld()->GetAudioDeviceRaw();
 	UE_LOG(LogOpenSCCT, Log, TEXT("Audio: ready for %s (%s, %d zones with reverb, content %s)"), Session->GetSessionInfo().Map,
 		Device != nullptr ? *FString::Printf(TEXT("audio device present, %d engine voices"), Device->GetMaxChannels())
@@ -236,6 +240,8 @@ void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
 	const FScctBridgeView& View = Session->GetView();
 	bListenerValid = View.Valid != 0;
 	Listener = FVector(View.X, View.Y, View.Z);
+	// -ScctAudioListener holds it at a forced place (Play/ScctAudioRooms.cpp).
+	UpdateForcedListener(DeltaSeconds);
 	// The scope's audio zoom and the listener's velocity (Play/ScctAudioView.cpp).
 	UpdateAudioView(DeltaSeconds);
 
@@ -256,6 +262,8 @@ void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
 	UpdateAmbient();
 	UpdateAcoustics(DeltaSeconds);
 	UpdateVoices(DeltaSeconds);
+	// The listener's zone and every voice's source room (Play/ScctAudioRooms.cpp), then the main reverb of that zone.
+	UpdateRooms(DeltaSeconds);
 	UpdateReverb();
 
 	TrimTimer -= DeltaSeconds;
@@ -819,6 +827,12 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 					bHrtf ? TEXT("created with HRTF (Headphones)") : TEXT("created with panning (Speakers)"), *GetName(Voice.FileId));
 				++Count;
 			}
+			// A reused component may still carry the last voice's room routing (Play/ScctAudioRooms.cpp): this voice starts
+			// on its attenuation's own reverb send and is routed again on the next frame.
+			Component->bOverrideAttenuation = false;
+			Voice.AppliedRoomMix = 0.0f;
+			Voice.AppliedRoomSend = 0.0f;
+			Voice.AppliedRoomField = INDEX_NONE;
 			Component->bIsMusic = Voice.bMusic;
 			// The category's class routes the voice to its submix (the reverb, the peaks); the player's volume of its
 			// kind is in AppliedVolume (Menu/ScctUserSettings.h), so the submix itself is not turned down again.
@@ -1249,6 +1263,7 @@ void UScctAudioSubsystem::LogSummary() const
 		UScctAudioOutputSubsystem::SpatializerProblem().IsEmpty() ? TEXT("") : *(TEXT(" (") + UScctAudioOutputSubsystem::SpatializerProblem() + TEXT(")")));
 	LogAcousticSummary();
 	LogAudioViewSummary();
+	LogRoomSummary();
 	TArray<FString> Notes;
 	OnSummary().Broadcast(Notes);
 	UE_CLOG(Notes.Num() > 0, LogOpenSCCT, Log, TEXT("Audio summary: also %s"), *FString::Join(Notes, TEXT("; ")));

@@ -25,7 +25,14 @@ internal sealed class AcousticPortal
         }
 
         Center /= Math.Max(1, vertices.Length);
+        for (int i = 1; i + 1 < vertices.Length; i++)
+        {
+            Area += ((vertices[i] - vertices[0]) ^ (vertices[i + 1] - vertices[0])).Size() * 0.5f;
+        }
     }
+
+    /// <summary>The opening's area in square units (a fan of the polygon), which weights it as a reverb aperture.</summary>
+    public float Area { get; }
 
     public int Back { get; }
 
@@ -141,6 +148,70 @@ internal sealed class AcousticScene
     public long PortalQueries { get; private set; }
 
     public AcousticPath PathTo(int zone) => zone >= 0 && zone < _paths.Length ? _paths[zone] : default;
+
+    /// <summary>
+    /// The openings of a zone as seen from <paramref name="origin"/> for the reverb geometry probe (Godot's
+    /// AcousticScene.ReverbApertures): each opening's centre, weighted by its solid angle; coincident polygons count
+    /// once, and when there are more than the span holds the weakest are dropped.
+    /// </summary>
+    public int ReverbApertures(int zone, FVector origin, Span<FVector> points, Span<float> weights)
+    {
+        if (zone < 0 || zone >= _links.Length)
+        {
+            return 0;
+        }
+
+        int count = 0;
+        foreach (int index in _links[zone])
+        {
+            AcousticPortal portal = _portals[index];
+            FVector delta = portal.Center - origin;
+            float w = portal.Area * Math.Abs(delta.SafeNormal() | portal.Normal) / (4f * MathF.PI * Math.Max(64f * 64f, delta.SizeSquared()));
+            int duplicate = -1;
+            for (int i = 0; i < count; i++)
+            {
+                if (FVector.DistSquared(points[i], portal.Center) < 8f * 8f)
+                {
+                    duplicate = i;
+                    break;
+                }
+            }
+
+            if (duplicate >= 0)
+            {
+                weights[duplicate] = Math.Max(weights[duplicate], w);
+                continue;
+            }
+
+            if (count < points.Length)
+            {
+                points[count] = portal.Center;
+                weights[count++] = w;
+                continue;
+            }
+
+            int smallest = 0;
+            for (int i = 1; i < count; i++)
+            {
+                if (weights[i] < weights[smallest])
+                {
+                    smallest = i;
+                }
+            }
+
+            if (w > weights[smallest])
+            {
+                points[smallest] = portal.Center;
+                weights[smallest] = w;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>Godot's AcousticScene.ReflectedGain: what a room's reverb field keeps on its way to the listener.</summary>
+    public static float ReflectedGain(AcousticPath path) =>
+        !path.Valid ? 0f : path.Hops == 0 ? 1f : path.Gain / (1f + (path.Distance / 650f));
 
     /// <summary>Probes every opening at once (a check, or the first update of a session).</summary>
     public void ProbeAll(FVector listener, Func<FVector, FVector, PortalTransmission> passage)
