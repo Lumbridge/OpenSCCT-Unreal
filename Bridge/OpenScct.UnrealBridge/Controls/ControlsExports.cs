@@ -48,6 +48,11 @@ public static unsafe class ControlsExports
     [UnmanagedCallersOnly]
     public static int GetApi(ControlsApi* api)
     {
+        if (api == null)
+        {
+            return ApiVersion;
+        }
+
         api->Version = ApiVersion;
         api->Frame = &Frame;
         api->GetView = &GetView;
@@ -157,8 +162,18 @@ public static unsafe class ControlsExports
 
     /// <summary>Copies the name behind a command name id. Returns its full length, 0 for an unknown id.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int GetName(int id, char* buffer, int capacity) =>
-        (uint)id < (uint)s_names.Count ? Copy(s_names[id], buffer, capacity) : 0;
+    private static int GetName(int id, char* buffer, int capacity)
+    {
+        try
+        {
+            return (uint)id < (uint)s_names.Count ? Copy(s_names[id], buffer, capacity) : 0;
+        }
+        catch (Exception e)
+        {
+            s_lastError = e.ToString();
+            return 0;
+        }
+    }
 
     /// <summary>The side whose bindings play: 0 spy, 1 merc, -1 with no session.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -341,14 +356,36 @@ public static unsafe class ControlsExports
     /// "LB"). Returns its full length, 0 for a spare code.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int GetKeyName(int code, char* buffer, int capacity) => Copy(BridgeKeys.NameOf(code) ?? "", buffer, capacity);
+    private static int GetKeyName(int code, char* buffer, int capacity)
+    {
+        try
+        {
+            return Copy(BridgeKeys.NameOf(code) ?? "", buffer, capacity);
+        }
+        catch (Exception e)
+        {
+            s_lastError = e.ToString();
+            return 0;
+        }
+    }
 
     /// <summary>
     /// Copies the last error of a settings or bindings call (a file that could not be read or written). Returns its
     /// full length. Failures that stop the session are reported through the bridge's own LastError instead.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int LastError(char* buffer, int capacity) => Copy(s_lastError, buffer, capacity);
+    private static int LastError(char* buffer, int capacity)
+    {
+        try
+        {
+            return Copy(s_lastError, buffer, capacity);
+        }
+        catch (Exception)
+        {
+            // Nothing may cross into native code, and there is nowhere left to report this.
+            return 0;
+        }
+    }
 
     private static int Intern(string name)
     {

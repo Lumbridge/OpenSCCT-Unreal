@@ -151,12 +151,12 @@ struct FScctLookView
 	float X, Y, Z;           // simulation units = Unreal centimetres, same axes
 	float Pitch, Yaw, Roll;  // degrees, -180 to 180
 	float Fov;               // the simulation's FovAngle, degrees: horizontal over a 4:3 picture, merc aim zoom included
-	float HorizontalFov;     // degrees across a screen of the aspect given to GetView (widescreen rule and FOV cap applied)
+	float HorizontalFov;     // degrees across a screen of the aspect given to GetView (widescreen rule and FOV cap applied); past 16:9 it is the 16:9 angle (the original stretches that picture)
 	float VerticalFov;       // degrees up and down on that screen: give the camera this one
 	float AimPitch, AimYaw;  // degrees: the controller's rotation plus the pending mouse turn (the spy's arm aims along it)
 	int32 Valid;             // 1 when there is a view to draw
 	int32 SpyFirstPerson;    // 1 when the spy is seen through his own eyes
-	int32 Cut;               // 1 when this view does not continue the last one (respawn, change of camera)
+	int32 Cut;               // 1 when this view does not continue the last one (respawn, change of camera, a cinematic sequence's camera); it stays 1 for every frame drawn until the next tick
 	int32 Occluded;          // 1 when no collision-free eye position exists: cover the world this frame
 	int32 LookAhead;         // 1 while the mouse turn is drawn ahead of the simulation
 	float RifleAimBlend;     // the merc's rifle aim zoom, 0 (hip) to 1 (aimed), eased as the FOV is
@@ -275,6 +275,15 @@ struct FScctControlsApi
 	int32 (__cdecl* LastError)(TCHAR* Buffer, int32 Capacity);
 };
 
+// The sizes the C# side has (the probe prints them: Bridge/Probes/ControlsProbe). A mismatch here means the two
+// files have drifted apart.
+static_assert(sizeof(FScctRawInput) == 168, "FScctRawInput must match BridgeRawInput");
+static_assert(sizeof(FScctLookView) == 68, "FScctLookView must match BridgeLookView");
+static_assert(sizeof(FScctLocalCommand) == 12, "FScctLocalCommand must match BridgeLocalCommand");
+static_assert(sizeof(FScctLookSettings) == 72, "FScctLookSettings must match BridgeLookSettings");
+static_assert(sizeof(FScctControlSettings) == 372, "FScctControlSettings must match BridgeControlSettings");
+static_assert(sizeof(FScctControlsApi) == 152, "FScctControlsApi must match ControlsApi (64-bit)");
+
 namespace FScctControls
 {
 	/** The Unreal keys of ScctKeyNames, made once (an invalid FKey where there is none). */
@@ -297,6 +306,10 @@ namespace FScctControls
 	/**
 	 * Fills the keys, buttons, wheel, sticks and triggers of Raw from a player controller's input state. The caller
 	 * sets MouseX, MouseY (raw counts, Y up positive), DeltaSeconds and Flags.
+	 *
+	 * Mouse counts: APlayerController::GetInputMouseDelta is NOT raw. It is the value after Unreal's axis
+	 * sensitivity (0.07 by default), mouse smoothing and FOV scaling. Give the bridge the device's own counts
+	 * (the player input's raw value of EKeys::MouseX / MouseY), or switch those three off in the input settings.
 	 */
 	inline void ReadDevices(const APlayerController& Controller, FScctRawInput& Raw)
 	{
@@ -323,6 +336,23 @@ namespace FScctControls
 			const bool bWheel = Code == static_cast<int32>(EScctKey::MouseWheelUp) || Code == static_cast<int32>(EScctKey::MouseWheelDown);
 			// The wheel's byte is a count of notches: one when the wheel key was pressed this frame.
 			Raw.Keys[Code] = bWheel ? ((State & EScctKeyState::Pressed) != 0 ? 1 : 0) : State;
+		}
+
+		// Codes past the last key are spare and must read 0.
+		for (int32 Code = Table.Num(); Code < ScctKeyCount; ++Code)
+		{
+			Raw.Keys[Code] = 0;
+		}
+
+		// Several notches in one frame: the wheel keys only say "turned", the wheel axis holds how far (up positive).
+		const int32 Notches = FMath::Clamp(FMath::RoundToInt(Controller.GetInputAnalogKeyState(EKeys::MouseWheelAxis)), -100, 100);
+		if (Notches > 1)
+		{
+			Raw.Keys[static_cast<int32>(EScctKey::MouseWheelUp)] = static_cast<uint8>(Notches);
+		}
+		else if (Notches < -1)
+		{
+			Raw.Keys[static_cast<int32>(EScctKey::MouseWheelDown)] = static_cast<uint8>(-Notches);
 		}
 
 		Raw.LeftX = Controller.GetInputAnalogKeyState(EKeys::Gamepad_LeftX);

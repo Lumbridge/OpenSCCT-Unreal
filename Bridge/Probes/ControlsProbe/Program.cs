@@ -68,6 +68,14 @@ var stock = new ControlSettings();
 Check(stock.SpyKbm.FreeLook == 1.4f && stock.SpyKbm.Look == 1f && stock.MercKbm.Look == 1f && stock.MercKbm.ScopeVertical == 2.45f &&
     stock.SpyKbm.Scope == 0.75f && !stock.InvertY && stock.Widescreen && stock.MercFovCap == 112f && MouseLook.UnitsPerCount == 3f,
     $"original defaults: spy free look 1.4, gun look 1, merc look 1, scope 0.75, scope vertical 2.45, no invert, widescreen with a 112 degree cap; a count turns {MouseLook.UnitsPerCount} x multiplier rotation units");
+unsafe
+{
+    // The sizes Source/OpenSCCT/Runtime/ScctControlsApi.h asserts for its mirrors.
+    Check(sizeof(BridgeRawInput) == 168 && sizeof(BridgeLookView) == 68 && sizeof(BridgeLocalCommand) == 12 &&
+        sizeof(BridgeLookSettings) == 72 && sizeof(BridgeControlSettings) == 372 && sizeof(ControlsApi) == 152,
+        $"struct sizes for the C++ mirror: raw input {sizeof(BridgeRawInput)}, look view {sizeof(BridgeLookView)}, local command {sizeof(BridgeLocalCommand)}, look settings {sizeof(BridgeLookSettings)}, control settings {sizeof(BridgeControlSettings)}, table {sizeof(ControlsApi)}");
+}
+
 (float h169, float v169) = ViewFov.Screen(90f, 16f / 9f, stock, capped: true);
 (float h43, float v43) = ViewFov.Screen(90f, 4f / 3f, stock, capped: true);
 Check(MathF.Abs(v169 - v43) < 0.01f && MathF.Abs(h43 - 90f) < 0.01f && h169 > 100f,
@@ -267,6 +275,103 @@ ControlsStore.Settings = new ControlSettings { AutoHackComms = true };
 probe.Taps.Add(BridgeKey.X);
 probe.Run(0.3);
 
+// ---- Other frame rates, the wheel's speed mode, the clutch key --------------------------------------------------
+
+Console.WriteLine("Frame rates:");
+foreach ((string rate, double pace, float counts) in new[] { ("240 frames a second (a tick every 4th frame)", 1.0 / 240.0, 3f), ("30 frames a second (2 ticks a frame)", 1.0 / 30.0, 24f) })
+{
+    probe.Pace = pace;
+    probe.MouseX = counts;
+    probe.Run(0.3);
+    probe.Steps.Clear();
+    probe.Run(1.0);
+    probe.MouseX = 0f;
+    float worth = MouseLook.UnitsPerCount * probe.Bridge.Session.Mouse.SpyFreeLook * counts * 360f / 65536f;
+    float[] ahead = Signed(probe.Steps.Select(s => s.Look)), behind = Signed(probe.Steps.Select(s => s.Plain));
+    Console.WriteLine($"   {rate}: {counts} counts a frame over {ahead.Length} frames, each worth {worth:F3} deg");
+    Console.WriteLine($"      look-ahead view: yaw step per frame min {ahead.Min():F3} max {ahead.Max():F3} mean {ahead.Average():F3} deg");
+    Console.WriteLine($"      plain view     : yaw step per frame min {behind.Min():F3} max {behind.Max():F3} mean {behind.Average():F3} deg");
+    Check(probe.Controls.LookAheadActive && ahead.Min() > worth * 0.5f && ahead.Max() < worth * 1.5f,
+        "the look-ahead view turns by each frame's own counts at this frame rate too");
+    probe.Run(0.3);
+    Check(MathF.Abs(Angle(probe.View.Yaw - probe.Bridge.GetView().Yaw)) < 0.02f, "mouse still: no snap back");
+    probe.Pace = 0;
+}
+
+// One frame's worth of counts after a still mouse: the look-ahead view has it in that very frame, the plain view
+// only once a tick has taken it and the blend has caught up.
+probe.Pace = 1.0 / 240.0;
+probe.Run(0.2);
+float burstWorth = MouseLook.UnitsPerCount * probe.Bridge.Session.Mouse.SpyFreeLook * 40f * 360f / 65536f;
+float sameFrameLook = 0f, sameFramePlain = 0f;
+int bursts = 0;
+for (int i = 0; i < 20; i++)
+{
+    probe.Run(0.05);
+    probe.Steps.Clear();
+    probe.MouseX = 40f;
+    probe.Run(0);
+    probe.MouseX = 0f;
+    sameFrameLook += MathF.Abs(probe.Steps[^1].Look);
+    sameFramePlain += MathF.Abs(probe.Steps[^1].Plain);
+    bursts++;
+}
+
+probe.Pace = 0;
+sameFrameLook /= bursts;
+sameFramePlain /= bursts;
+Check(MathF.Abs(sameFrameLook - burstWorth) < burstWorth * 0.05f && sameFramePlain < burstWorth * 0.5f,
+    $"40 counts in one frame after a still mouse, {bursts} times at 240 frames a second: that frame's look-ahead view turned {sameFrameLook:F3} deg of the counts' {burstWorth:F3}, the plain view {sameFramePlain:F3}");
+
+probe.ResetLog();
+probe.Pace = 1.0 / 240.0;
+probe.Taps.Add(BridgeKey.C);
+probe.Run(0.1);
+int fastTapTicks = probe.ButtonTicks("bCrouch");
+probe.ResetLog();
+probe.Pace = 1.0 / 30.0;
+probe.Taps.Add(BridgeKey.C);
+probe.Run(0.2);
+probe.Pace = 0;
+Check(fastTapTicks == 1 && probe.ButtonTicks("bCrouch") == 1,
+    $"a key down and up inside one frame is one tick of its button at 240 frames a second ({fastTapTicks}) and at 30 ({probe.ButtonTicks("bCrouch")})");
+
+Console.WriteLine("Wheel speed mode, clutch key:");
+ControlSettings speedWheel = ControlSettings.FromJson(ControlsStore.Settings.ToJson());
+speedWheel.MouseWheel = "Speed";
+speedWheel.ClutchOneKey = "Ctrl+V";
+speedWheel.SpyKbm.ClutchOne = 0.5f;
+speedWheel.SpyKbm.ClutchOneEnabled = true;
+ControlsStore.Settings = speedWheel;
+string wheelUpNow = ControlsStore.Bindings.Spy.Keys.Bindings["MouseWheelUp"], wheelDownNow = ControlsStore.Bindings.Spy.Keys.Bindings["MouseWheelDown"];
+probe.Run(0.1);
+probe.ResetLog();
+probe.Wheel = -1;
+probe.Run(0.1);
+bool wheelWalks = !probe.Bridge.Session.LocalController!.bFastSpeed;
+probe.Wheel = 1;
+probe.Run(0.1);
+Check(wheelUpNow == "Run" && wheelDownNow == "Walk" && wheelWalks && probe.Bridge.Session.LocalController!.bFastSpeed &&
+    probe.Saw("NextGadget") == 0 && probe.Saw("PreviousGadget") == 0,
+    $"mouse_wheel Speed: the wheel is bound to {wheelUpNow} and {wheelDownNow}; a notch down walks, a notch up runs: " + string.Join(", ", probe.Log.Where(l => !l.StartsWith('#'))));
+probe.Held.Add(BridgeKey.V);
+probe.Run(0.1);
+float clutchPlain = probe.Bridge.Session.Mouse.Clutch;
+probe.Held.Clear();
+probe.Run(0.1);
+probe.Held.Add(BridgeKey.Ctrl);
+probe.Run(0.05);
+probe.Held.Add(BridgeKey.V);
+probe.Run(0.1);
+float clutchHeld = probe.Bridge.Session.Mouse.Clutch;
+probe.Held.Clear();
+probe.Run(0.1);
+Check(clutchPlain == 1f && clutchHeld == 0.5f && probe.Bridge.Session.Mouse.Clutch == 1f,
+    $"clutch key Ctrl+V: V alone leaves the look at x{clutchPlain}, Ctrl+V held makes it x{clutchHeld}, released x{probe.Bridge.Session.Mouse.Clutch}");
+ControlsStore.Settings = new ControlSettings { AutoHackComms = true };
+Check(ControlsStore.Bindings.Spy.Keys.Bindings["MouseWheelUp"] == "NextGadget", "mouse_wheel back to Gadget: the wheel is NextGadget again");
+probe.Run(0.2);
+
 // ---- Controller ------------------------------------------------------------------------------------------------
 
 Console.WriteLine("Controller:");
@@ -371,12 +476,19 @@ probe.Run(0.3);
 Check(MathF.Abs(Angle(probe.View.Yaw - probe.Bridge.GetView().Yaw)) < 0.02f, $"mouse still: the views agree (turned {Angle(probe.View.Yaw - mercYaw0):F1} deg)");
 
 probe.ResetLog();
+float hipFov = probe.View.Fov;
 probe.Taps.Add(BridgeKey.B);
 probe.Run(0.5);
 bool scoped = probe.Bridge.Session.LocalController!.bBinocularVision || probe.Saw("SwitchBinocularVision") == 1;
+bool aimed = probe.Bridge.Session.LocalPawn?.MyWeapon is OpenScct.Game.Svm.MercRifle { AimRequested: true };
+float aimBlend = probe.View.RifleAimBlend, aimFov = probe.View.Fov;
 probe.Taps.Add(BridgeKey.B);
 probe.Run(0.5);
 Check(scoped && probe.Saw("SwitchBinocularVision") == 2, "B toggles the scope (SwitchBinocularVision on each press)");
+Check(aimed ? aimBlend > 0.95f && aimFov < hipFov * 0.85f && probe.View.RifleAimBlend < 0.05f : aimBlend == 0f,
+    aimed
+        ? $"rifle aimed: RifleAimBlend eased to {aimBlend:F2} and the view's fov went from {hipFov:F1} to {aimFov:F1}; lowered again the blend is {probe.View.RifleAimBlend:F2} and the fov {probe.View.Fov:F1}"
+        : $"the merc's weapon here is not an aimed rifle ({probe.Bridge.Session.LocalPawn?.MyWeapon?.GetType().Name ?? "none"}): no aim zoom, blend {aimBlend:F2}");
 ControlSettings hold = new();
 hold.MercKbm.ScopeBehavior = "Hold";
 ControlsStore.Settings = hold;
@@ -494,6 +606,12 @@ internal sealed class Driver
 
     public bool Play = true;
 
+    /// <summary>
+    /// The length of a frame in seconds, kept by spinning (240 a second, 30 a second); 0 sleeps between frames,
+    /// which Windows makes about 15 ms.
+    /// </summary>
+    public double Pace;
+
     public BridgeLookView View { get; private set; }
 
     public void ResetLog()
@@ -522,8 +640,19 @@ internal sealed class Driver
         double until = _clock.Elapsed.TotalSeconds + seconds;
         do
         {
+            double next = _clock.Elapsed.TotalSeconds + Pace;
             Frame();
-            Thread.Sleep(4);
+            if (Pace > 0)
+            {
+                while (_clock.Elapsed.TotalSeconds < next)
+                {
+                    Thread.SpinWait(50);
+                }
+            }
+            else
+            {
+                Thread.Sleep(4);
+            }
         }
         while (_clock.Elapsed.TotalSeconds < until);
     }

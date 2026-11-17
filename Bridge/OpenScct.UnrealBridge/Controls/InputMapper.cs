@@ -73,8 +73,25 @@ public sealed class InputMapper
     /// <summary>True while game input is read (the last frame had the play flag).</summary>
     public bool Playing => _playing;
 
-    /// <summary>A key or mouse button (binding name) is physically down and counts (not held over an interruption).</summary>
-    public bool PhysicalHeld(string key) => _state.Held(key);
+    /// <summary>
+    /// A key or mouse button (binding name) is physically down and counts (not held over an interruption). A chord
+    /// ("Ctrl+X") is held with its key and every modifier it names, as OptionsRuntime.KeyHeld reads a clutch key.
+    /// </summary>
+    public bool PhysicalHeld(string key)
+    {
+        if (key.IndexOf('+', StringComparison.Ordinal) < 0)
+        {
+            return _state.Held(key);
+        }
+
+        if (!BindingKey.TryParse(key, out BindingKey chord) || !_state.Held(chord.Base))
+        {
+            return false;
+        }
+
+        BindingModifiers held = _state.HeldModifiers;
+        return (chord.Modifiers & ~BindingModifiers.Double & ~held) == BindingModifiers.None;
+    }
 
     /// <summary>
     /// Plays another layout or side. A layout with other bindings lets go of everything first, so no button stays

@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using OpenScct.Animation;
 using OpenScct.Core;
 using OpenScct.Game.Camera;
 using OpenScct.Game.SBase;
+using OpenScct.Server;
 using OpenScctGame.Play.Session;
 
 namespace OpenScct.UnrealBridge.Controls;
@@ -85,6 +87,7 @@ public sealed class ControlsFeature
     private ControlSettings? _applied;
     private bool _merc;
     private bool _placed;
+    private bool _wasCinematic;
     private float _aimBlend;
 
     private ControlsFeature(BridgeSession bridge)
@@ -138,9 +141,10 @@ public sealed class ControlsFeature
         fixed (byte* keys = raw.Keys)
         {
             var state = new ReadOnlySpan<byte>(keys, BridgeRawInput.KeyCount);
-            Keys.Frame(state, raw.MouseX, raw.MouseY, delta, play);
-            Pad.Frame(state, new Vector2(raw.LeftX, raw.LeftY), new Vector2(raw.RightX, raw.RightY), raw.LeftTrigger,
-                raw.RightTrigger, settings, side.Pad, _merc, play, delta);
+            // A value that is not a number (a device glitch) must not reach the simulation's rotation.
+            Keys.Frame(state, Finite(raw.MouseX), Finite(raw.MouseY), delta, play);
+            Pad.Frame(state, new Vector2(Finite(raw.LeftX), Finite(raw.LeftY)), new Vector2(Finite(raw.RightX), Finite(raw.RightY)),
+                Finite(raw.LeftTrigger), Finite(raw.RightTrigger), settings, side.Pad, _merc, play, delta);
         }
 
         UpdateClutch(settings);
@@ -152,8 +156,8 @@ public sealed class ControlsFeature
 
     /// <summary>
     /// The camera to draw this frame (PlayCamera.Apply): the view between the last two ticks, plus the mouse turn not
-    /// yet simulated; a jump (a respawn, a change of view source) is a cut. The cinematic sequences' cameras are not
-    /// handled here.
+    /// yet simulated; a jump (a respawn, a change of view source) is a cut. While a map's cinematic sequence has a
+    /// camera, that camera is the view (a cut on its first frame and on the first frame after it).
     /// </summary>
     /// <param name="aspect">The picture's width over its height, for the screen's field of view; 0 for 16:9.</param>
     /// <param name="clearance">
@@ -180,7 +184,7 @@ public sealed class ControlsFeature
             : _look.Offset(pc, _session.Mouse, pendingX + _session.Input.MouseX, pendingY + _session.Input.MouseY, alpha);
         float orbit = _look.OrbitDistance(pc);
 
-        bool cut = !_placed || ViewBlend.IsCut(previous, current);
+        bool cut = !_placed || _wasCinematic || ViewBlend.IsCut(previous, current);
         (FVector Location, FRotator Rotation, float Fov) camera = cut
             ? (current.Location, current.Rotation, current.Fov)
             : ViewBlend.Blend(previous, current, alpha);
@@ -198,10 +202,28 @@ public sealed class ControlsFeature
             camera.Rotation = turned;
         }
 
+        // A playing sequence with a camera track takes the view (PlayCamera.Apply): its transform is in the
+        // sequence editor's space (metres, Y up), and it brings its own field of view when the track has one.
+        bool cinematic = false;
+        if (!overridden && pc?.XLevel.GetService<AnimationWorld>() is not null)
+        {
+            foreach (AnimationController sequence in pc.XLevel.AllActors<AnimationController>())
+            {
+                if (sequence.Camera() is { } shot)
+                {
+                    camera = (StudioSpace.ToUe(shot.Transform.Position), StudioSpace.ToUe(shot.Transform.Rotation),
+                        shot.FieldOfView ?? camera.Fov);
+                    cinematic = true;
+                    cut = true;
+                    break;
+                }
+            }
+        }
+
         // Recheck the final location: interpolation and reconciliation can cross a corner even when both simulation
         // samples were clear. Also protect the return to third person, including its pending mouse orbit.
         bool occluded = false;
-        if (!overridden && (current.SpyFirstPerson || previous.SpyFirstPerson) && pc?.Pawn is SPawnAttaque spy
+        if (!cinematic && !overridden && (current.SpyFirstPerson || previous.SpyFirstPerson) && pc?.Pawn is SPawnAttaque spy
             && ReferenceEquals(pc.ViewTarget, spy)
             && PlayerCalcView.SourceOf(pc) == PlayerCalcView.EViewSource.Default
             && pc.FreeCameraFlying == 0)
@@ -211,7 +233,12 @@ public sealed class ControlsFeature
                 withinBody: current.SpyFirstPerson);
         }
 
-        camera.Fov *= 1f - AimFovScale * _aimBlend;
+        if (!cinematic)
+        {
+            camera.Fov *= 1f - AimFovScale * _aimBlend;
+        }
+
+        _wasCinematic = cinematic;
         _placed = true;
 
         // The uncapped views are the two camera states, by name (Reloaded's GotoState hook).
@@ -280,6 +307,8 @@ public sealed class ControlsFeature
     }
 
     private void OnTicked() => _look.AfterTick(_session.LocalController, _session.View);
+
+    private static float Finite(float value) => float.IsFinite(value) ? value : 0f;
 
     /// <summary>Rotation units (65536 to a turn) as degrees, the short way round.</summary>
     private static float Degrees(int units) => FRotator.NormalizeAxis(units) * (360f / 65536f);
