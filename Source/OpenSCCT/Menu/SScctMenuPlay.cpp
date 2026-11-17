@@ -148,6 +148,26 @@ namespace
 
 		virtual void OnClosing() override { Save(); }
 
+		/**
+		 * Across the page: Right from the map list goes to the match settings, Left from the settings (a control that
+		 * does not take Left itself, as a stepper does) back to the chosen map. Up and down stay in their column.
+		 */
+		virtual FNavigationReply OnNavigation(const FGeometry& MyGeometry, const FNavigationEvent& InNavigationEvent) override
+		{
+			const EUINavigation Type = InNavigationEvent.GetNavigationType();
+			const TSharedPtr<SWidget> List = MapList.Pin();
+			const bool bInList = List.IsValid() && List->HasFocusedDescendants();
+			if (Type == EUINavigation::Right && bInList && FirstOption.IsValid())
+			{
+				return FNavigationReply::Explicit(FirstOption.Pin());
+			}
+			if (Type == EUINavigation::Left && !bInList && MapItems.IsValidIndex(MapIndex) && MapItems[MapIndex].IsValid())
+			{
+				return FNavigationReply::Explicit(MapItems[MapIndex].Pin());
+			}
+			return SScctMenuPage::OnNavigation(MyGeometry, InNavigationEvent);
+		}
+
 	private:
 		// ---- what is chosen ---------------------------------------------------------------------------------------
 
@@ -265,12 +285,15 @@ namespace
 						]
 					]
 				];
+				MapItems.Add(Item);
 				if (Index == MapIndex)
 				{
 					DefaultFocus = Item;
 				}
 			}
-			return SNew(SScrollBox).ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll) + SScrollBox::Slot()[ List ];
+			const TSharedRef<SScrollBox> Scroll = SNew(SScrollBox).ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll) + SScrollBox::Slot()[ List ];
+			MapList = Scroll;
+			return Scroll;
 		}
 
 		FString MapTitle() const
@@ -293,7 +316,8 @@ namespace
 			TArray<FString> LegendLines;
 			Menu->GetMapText(Id, EScctMenuMapText::Legend).ParseIntoArray(LegendLines, TEXT("\n"));
 			for (FString& Line : LegendLines) { Line.TrimStartAndEndInline(); }
-			LegendLines.RemoveAll([](const FString& Line) { return Line.IsEmpty(); });
+			// A legend line is a date, a place or a building; a longer one is a sentence of the briefing below, said twice.
+			LegendLines.RemoveAll([](const FString& Line) { return Line.IsEmpty() || Line.Len() > 56; });
 			const FString Legend = FString::Join(LegendLines, TEXT("   ·   "));
 			// Most maps have no list description: the side's briefing says what the map is.
 			FString Description = Menu->GetMapText(Id, EScctMenuMapText::Description);
@@ -393,7 +417,7 @@ namespace
 			Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Match")) ];
 			TSharedPtr<SWidget> First;
 			Add(SAssignNew(First, SScctStepper)
-				.Label(FText::FromString(ScctUi::GameText(TEXT("Create_Match"), TEXT("Mode.Caption"), TEXT("Game Mode"))))
+				.Label(FText::FromString(ScctUi::GameLabel(TEXT("Create_Match"), TEXT("Mode.Caption"), TEXT("Game Mode"))))
 				.Description(FText::FromString(TEXT("Story: the spies take the map's objectives. Disk Hunt: the spies carry disks out. Deathmatch: the sides fight. Merc Deathmatch: every player is a mercenary. Only the modes this map has are offered.")))
 				.GetOptions([this] { TArray<FString> Names; UScctMenuSubsystem* M = UScctMenuSubsystem::GetCurrent(); for (const int32 Mode : GetModes()) { Names.Add(M != nullptr ? M->GetModeName(Mode) : FString()); } return Names; })
 				.Get([this] { return GetModes().IndexOfByKey(ModeIndex); })
@@ -424,28 +448,28 @@ namespace
 
 			Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Rules")) ];
 			Add(SNew(SScctStepper)
-				.Label(FText::FromString(ScctUi::GameText(TEXT("Create_Match"), TEXT("TimeLimitCaption"), TEXT("Game Length (min)"))))
+				.Label(FText::FromString(ScctUi::GameLabel(TEXT("Create_Match"), TEXT("TimeLimitCaption"), TEXT("Game Length (min)"))))
 				.Description(FText::FromString(TEXT("The round's length. \"Map's\" keeps what the map sets for this mode.")))
 				.Wrap(false)
 				.GetOptions([this] { TArray<FString> Out; const FScctMenuMode* R = GetModeRules(); for (const int32 V : PlayTimeChoices) { Out.Add(Choice(V, R != nullptr ? R->TimeLimit : 0, TEXT(" min"), TEXT("No limit"))); } return Out; })
 				.Get([this] { return IndexIn(PlayTimeChoices, TimeLimit); })
 				.Set([this](int32 Value) { TimeLimit = PlayTimeChoices[Value]; }));
 			Add(SNew(SScctStepper)
-				.Label(FText::FromString(ScctUi::GameText(TEXT("Create_Match"), TEXT("SpyLivesCaption"), TEXT("Spy Lives"))))
+				.Label(FText::FromString(ScctUi::GameLabel(TEXT("Create_Match"), TEXT("SpyLivesCaption"), TEXT("Spy Lives"))))
 				.Description(FText::FromString(TEXT("Lives of each spy. Not used in Merc Deathmatch.")))
 				.Wrap(false)
 				.GetOptions([this] { TArray<FString> Out; const FScctMenuMode* R = GetModeRules(); for (const int32 V : PlayLivesChoices) { Out.Add(Choice(V, R != nullptr ? R->SpyLives : 0, TEXT(""), TEXT("Unlimited"))); } return Out; })
 				.Get([this] { return IndexIn(PlayLivesChoices, SpyLives); })
 				.Set([this](int32 Value) { SpyLives = PlayLivesChoices[Value]; }));
 			Add(SNew(SScctStepper)
-				.Label(FText::FromString(ScctUi::GameText(TEXT("Create_Match"), TEXT("MercLivesCaption"), TEXT("Mercenary Lives"))))
+				.Label(FText::FromString(ScctUi::GameLabel(TEXT("Create_Match"), TEXT("MercLivesCaption"), TEXT("Mercenary Lives"))))
 				.Description(FText::FromString(TEXT("Lives of each mercenary.")))
 				.Wrap(false)
 				.GetOptions([this] { TArray<FString> Out; const FScctMenuMode* R = GetModeRules(); for (const int32 V : PlayLivesChoices) { Out.Add(Choice(V, R != nullptr ? R->MercLives : 0, TEXT(""), TEXT("Unlimited"))); } return Out; })
 				.Get([this] { return IndexIn(PlayLivesChoices, MercLives); })
 				.Set([this](int32 Value) { MercLives = PlayLivesChoices[Value]; }));
 			Add(SNew(SScctStepper)
-				.Label(FText::FromString(ScctUi::GameText(TEXT("Create_Match"), TEXT("RespawnCaption"), TEXT("Respawn Length (sec)"))))
+				.Label(FText::FromString(ScctUi::GameLabel(TEXT("Create_Match"), TEXT("RespawnCaption"), TEXT("Respawn Length (sec)"))))
 				.Description(FText::FromString(TEXT("Seconds between a death and the next life.")))
 				.Wrap(false)
 				.GetOptions([this] { TArray<FString> Out; const FScctMenuMode* R = GetModeRules(); for (const int32 V : PlayRespawnChoices) { Out.Add(Choice(V, R != nullptr ? R->RespawnSeconds : 0, TEXT(" s"), TEXT("0 s"))); } return Out; })
@@ -558,6 +582,8 @@ namespace
 
 		TSharedPtr<SBox> HeroBox;
 		TWeakPtr<SWidget> FirstOption;
+		TWeakPtr<SWidget> MapList;
+		TArray<TWeakPtr<SWidget>> MapItems;
 	};
 }
 

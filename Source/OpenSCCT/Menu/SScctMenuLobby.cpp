@@ -95,16 +95,14 @@ namespace
 								SNew(SHorizontalBox)
 								+ SHorizontalBox::Slot().FillWidth(1.0f)
 								[
-									SAssignNew(ChatBox, SEditableTextBox)
-									.HintText(FText::FromString(TEXT("Say something (Enter sends)")))
-									.ClearKeyboardFocusOnCommit(false)
-									.OnTextCommitted(FOnTextCommitted::CreateSP(this, &SScctMenuLobby::SendChat))
+									// The menus' own field, as on the other pages (it kept Slate's default look).
+									MakeChatBox()
 								]
 								+ SHorizontalBox::Slot().AutoWidth().Padding(8.0f, 0.0f, 0.0f, 0.0f)
 								[
 									SNew(SScctButton)
 									.Look(EScctButtonLook::Chip)
-									.Text_Lambda([this] { return FText::FromString(bTeamChat ? ScctUi::GameText(TEXT("Lobby_Create"), TEXT("ChatBox.txtTeam"), TEXT("Team")).ToUpper() : FString(TEXT("ALL"))); })
+									.Text_Lambda([this] { return FText::FromString(bTeamChat ? ScctUi::GameText(TEXT("Lobby_Create"), TEXT("ChatBox.txtTeam"), TEXT("Team")).Replace(TEXT("("), TEXT("")).Replace(TEXT(")"), TEXT("")).TrimStartAndEnd().ToUpper() : FString(TEXT("ALL"))); })
 									.Description(FText::FromString(TEXT("Who reads what you write: everyone, or your side only.")))
 									.OnPressed(FSimpleDelegate::CreateLambda([this] { bTeamChat = !bTeamChat; }))
 								]
@@ -210,6 +208,23 @@ namespace
 		{
 			OutKeyAndWhat.Add({ TEXT("T"), TEXT("Chat") });
 			OutPadKeys.Add(FString());
+		}
+
+		/** Escape or B: the same question as Leave (Stay has the focus), so the footer's Back does what it says. */
+		virtual bool HandleBack() override
+		{
+			if (Host.Back)
+			{
+				Host.Back();
+			}
+			return true;
+		}
+
+		TSharedRef<SEditableTextBox> MakeChatBox()
+		{
+			ChatBox = ScctUi::TextBox(TEXT("Say something (Enter sends)"), FString(), false, FOnTextCommitted::CreateSP(this, &SScctMenuLobby::SendChat));
+			ChatBox->SetClearKeyboardFocusOnCommit(false);
+			return ChatBox.ToSharedRef();
 		}
 
 		virtual bool HandleShortcut(const FKey& Key) override
@@ -383,7 +398,7 @@ namespace
 			const FString ModeName = Menu != nullptr ? Menu->GetModeName(LobbyModeIndex(Status.Mode)) : Visit->GetModeName();
 			return ScctUi::Card(TEXT("Next match"),
 				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Picture(Menu != nullptr ? Menu->GetMapPicture(Map, Status.LocalTeam == 1) : nullptr, 472.0f, 170.0f) ]
+				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Picture(Menu != nullptr ? Menu->GetMapPicture(Map, Status.LocalTeam == 1) : nullptr, 472.0f, 130.0f) ]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 2.0f)
 				[
 					SNew(STextBlock).Font(ScctUi::H2()).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true).Text(FText::FromString(Menu != nullptr ? Menu->GetMapTitle(Map) : Map))
@@ -428,7 +443,7 @@ namespace
 			Rows->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 3.0f)
 			[
 				SNew(SScctStepper)
-				.Label(FText::FromString(ScctUi::GameText(TEXT("Create_Match"), TEXT("Mode.Caption"), TEXT("Game Mode"))))
+				.Label(FText::FromString(ScctUi::GameLabel(TEXT("Create_Match"), TEXT("Mode.Caption"), TEXT("Game Mode"))))
 				.Description(FText::FromString(TEXT("The mode of the next match. A mode the map does not have is refused by the server.")))
 				.Options(LobbyModeChoices)
 				.Get([Weak] { return Weak.IsValid() ? LobbyModeIndex(Weak->GetStatus().Mode) : 0; })
@@ -458,11 +473,11 @@ namespace
 				];
 			};
 			const FString Infinite = ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Infini"), TEXT("Unlimited"));
-			Option(ScctUi::GameText(TEXT("Create_Match"), TEXT("TimeLimitCaption"), TEXT("Time Limit")), TEXT("Minutes of the match."), TEXT("TimeLimit"),
+			Option(ScctUi::GameLabel(TEXT("Create_Match"), TEXT("TimeLimitCaption"), TEXT("Time Limit")), TEXT("Minutes of the match."), TEXT("TimeLimit"),
 				TArray<int32>(LobbyTimeLimits, UE_ARRAY_COUNT(LobbyTimeLimits)), [Infinite](int32 V) { return V == 0 ? Infinite : FString::Printf(TEXT("%d min"), V); });
-			Option(ScctUi::GameText(TEXT("Create_Match"), TEXT("SpyLivesCaption"), TEXT("Spy Lives")), TEXT("Lives of each spy."), TEXT("LivesATT"),
+			Option(ScctUi::GameLabel(TEXT("Create_Match"), TEXT("SpyLivesCaption"), TEXT("Spy Lives")), TEXT("Lives of each spy."), TEXT("LivesATT"),
 				{ 0, 1, 2, 3, 4, 5, 6, 8, 10 }, [Infinite](int32 V) { return V == 0 ? Infinite : FString::FromInt(V); });
-			Option(ScctUi::GameText(TEXT("Create_Match"), TEXT("MercLivesCaption"), TEXT("Merc Lives")), TEXT("Lives of each mercenary."), TEXT("LivesDEF"),
+			Option(ScctUi::GameLabel(TEXT("Create_Match"), TEXT("MercLivesCaption"), TEXT("Merc Lives")), TEXT("Lives of each mercenary."), TEXT("LivesDEF"),
 				{ 0, 1, 2, 3, 4, 5, 6, 8, 10 }, [Infinite](int32 V) { return V == 0 ? Infinite : FString::FromInt(V); });
 			Option(TEXT("Bots"), TEXT("Server bots: none, a number on each side, or enough to fill the empty places."), TEXT("SvmBots"),
 				{ 0, 1, 2 }, [](int32 V) { return V == 0 ? FString(TEXT("Off")) : V == 1 ? FString(TEXT("Per side")) : FString(TEXT("Fill")); });

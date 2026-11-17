@@ -69,6 +69,12 @@ private:
 	TSharedPtr<SBox> PageBox;
 	TArray<TSharedPtr<SScctMenuPage>> Stack;
 
+	/** Per page under the top one, the control that had the focus when the page above was opened. */
+	TArray<TWeakPtr<SWidget>> CoveredFocus;
+
+	/** Back on a page: the control the focus returns to, instead of the page's default. */
+	TWeakPtr<SWidget> ReturnFocus;
+
 	/** The lobby while it is shown (a page of its own, over nothing). */
 	TSharedPtr<SScctMenuPage> LobbyPage;
 

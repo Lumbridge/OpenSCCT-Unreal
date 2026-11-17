@@ -177,6 +177,77 @@ namespace
 
 namespace
 {
+	/** Every control under Widget that can take the focus and is on screen (collapsed and hidden parts are left out). */
+	void GatherFocusable(const TSharedRef<SWidget>& Widget, TArray<TSharedRef<SWidget>>& Out)
+	{
+		if (!Widget->GetVisibility().IsVisible() || !Widget->IsEnabled())
+		{
+			return;
+		}
+		if (Widget->SupportsKeyboardFocus())
+		{
+			Out.Add(Widget);
+		}
+		FChildren* Children = Widget->GetChildren();
+		for (int32 Index = 0; Children != nullptr && Index < Children->Num(); ++Index)
+		{
+			GatherFocusable(Children->GetChildAt(Index), Out);
+		}
+	}
+
+	/**
+	 * The nearest control that way by where the controls were last drawn: what the hit test grid's search finds on
+	 * a screen, for when it finds nothing (an off-screen run draws the interface without filling the window's grid).
+	 */
+	TSharedPtr<SWidget> NearestThatWay(const TSharedRef<SWidget>& Root, const TSharedRef<SWidget>& From, EUINavigation Type)
+	{
+		const FSlateRect Start = From->GetPaintSpaceGeometry().GetLayoutBoundingRect();
+		if (Start.GetSize().IsNearlyZero())
+		{
+			return nullptr;
+		}
+		TArray<TSharedRef<SWidget>> Candidates;
+		GatherFocusable(Root, Candidates);
+		TSharedPtr<SWidget> Best;
+		double BestScore = TNumericLimits<double>::Max();
+		const bool bVertical = Type == EUINavigation::Up || Type == EUINavigation::Down;
+		for (const TSharedRef<SWidget>& Candidate : Candidates)
+		{
+			if (Candidate == From)
+			{
+				continue;
+			}
+			const FSlateRect Rect = Candidate->GetPaintSpaceGeometry().GetLayoutBoundingRect();
+			if (Rect.GetSize().IsNearlyZero())
+			{
+				continue;
+			}
+			// How far it lies that way (it must start beyond the control's edge), and how far off to the side.
+			double Ahead = 0.0;
+			switch (Type)
+			{
+			case EUINavigation::Up: Ahead = Start.Top - Rect.Bottom; break;
+			case EUINavigation::Down: Ahead = Rect.Top - Start.Bottom; break;
+			case EUINavigation::Left: Ahead = Start.Left - Rect.Right; break;
+			default: Ahead = Rect.Left - Start.Right; break;
+			}
+			if (Ahead < -2.0)
+			{
+				continue;
+			}
+			const double Aside = bVertical
+				? FMath::Max(0.0, FMath::Max(Rect.Left - Start.Right, Start.Left - Rect.Right))
+				: FMath::Max(0.0, FMath::Max(Rect.Top - Start.Bottom, Start.Top - Rect.Bottom));
+			const double Score = FMath::Max(Ahead, 0.0) + 3.0 * Aside;
+			if (Score < BestScore)
+			{
+				BestScore = Score;
+				Best = Candidate;
+			}
+		}
+		return Best;
+	}
+
 	/** ScctUi::Navigate's search, from the control that has the focus. */
 	TSharedPtr<SWidget> NavigateFromFocus(EUINavigation Type)
 	{
@@ -193,7 +264,11 @@ namespace
 		{
 			return Found;
 		}
-		// Nothing that way on screen (or no hit test data, as in an off-screen run): the page's order.
+		if (const TSharedPtr<SWidget> Near = NearestThatWay(Root.Widget, Focused.ToSharedRef(), Type))
+		{
+			return Near;
+		}
+		// Nothing at all that way: the page's order, so the focus is never stuck.
 		const EUINavigation Order = Type == EUINavigation::Down || Type == EUINavigation::Right ? EUINavigation::Next : EUINavigation::Previous;
 		const FWidgetPath Next = FWeakWidgetPath(Path).ToNextFocusedPath(Order, FNavigationReply::Escape(), Root);
 		return Next.IsValid() && Next.Widgets.Num() > 0 && Next.Widgets.Last().Widget != Focused ? TSharedPtr<SWidget>(Next.Widgets.Last().Widget) : nullptr;
@@ -374,6 +449,9 @@ namespace ScctUi
 			.HintText(FText::FromString(Hint))
 			.Text(FText::FromString(Initial))
 			.IsPassword(bPassword)
+			// Moving onto a field with the keys or the pad selects what is in it, so typing replaces it (an address
+			// typed onto the last one ran the two together).
+			.SelectAllTextWhenFocused(true)
 			.OnTextCommitted(OnCommitted)
 			.MinDesiredWidth(200.0f);
 	}
@@ -1194,7 +1272,8 @@ void SScctTable::Construct(const FArguments& InArgs)
 		const TSharedRef<SWidget> Cell = SNew(SButton)
 			.ButtonStyle(&BareButton())
 			.IsFocusable(false)
-			.ContentPadding(FMargin(0.0f, 6.0f, 10.0f, 6.0f))
+			// A right-aligned column keeps a wider gap before the next one, so "0 / 24" and "In lobby" do not touch.
+			.ContentPadding(FMargin(0.0f, 6.0f, Column.bRight ? 22.0f : 10.0f, 6.0f))
 			.HAlign(Column.bRight ? HAlign_Right : HAlign_Left)
 			.OnClicked(FOnClicked::CreateLambda([this, Index] { SortBy(Index); return FReply::Handled(); }))
 			[
@@ -1301,7 +1380,7 @@ void SScctTable::Rebuild()
 			const FScctTableColumn& Column = Columns[Index];
 			const bool bAccent = (Row.AccentCells & (1u << Index)) != 0;
 			const FLinearColor Colour = ScctHudStyle::Fade(bAccent ? Row.Accent : ScctHudStyle::Text(), Row.bDim ? 0.42f : 1.0f);
-			const TSharedRef<SWidget> Cell = SNew(SBox).HAlign(Column.bRight ? HAlign_Right : HAlign_Left).VAlign(VAlign_Center).Padding(FMargin(0.0f, 0.0f, 10.0f, 0.0f))
+			const TSharedRef<SWidget> Cell = SNew(SBox).HAlign(Column.bRight ? HAlign_Right : HAlign_Left).VAlign(VAlign_Center).Padding(FMargin(0.0f, 0.0f, Column.bRight ? 22.0f : 10.0f, 0.0f))
 			[
 				SNew(STextBlock)
 				.Text(FText::FromString(Row.Cells.IsValidIndex(Index) ? Row.Cells[Index] : FString()))

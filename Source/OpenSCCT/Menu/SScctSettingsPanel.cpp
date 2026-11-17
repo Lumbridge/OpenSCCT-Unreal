@@ -342,7 +342,7 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 		.Set([this](int32 Value) { PendingMode = Value; }));
 	DefaultFocus = First;
 	Add(SNew(SScctStepper)
-		.Label(FText::FromString(ScctUi::GameText(TEXT("Video_Settings"), TEXT("NUMResolution.Caption"), TEXT("Screen Resolution"))))
+		.Label(FText::FromString(ScctUi::GameLabel(TEXT("Video_Settings"), TEXT("NUMResolution.Caption"), TEXT("Screen Resolution"))))
 		.Description(FText::FromString(TEXT("The window's size in pixels (in borderless the desktop's is used). Takes effect with Apply display.")))
 		.Wrap(false)
 		.GetOptions([this] { TArray<FString> Out; for (const FIntPoint& Size : Sizes) { Out.Add(FString::Printf(TEXT("%d x %d"), Size.X, Size.Y)); } return Out; })
@@ -519,9 +519,9 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildAudio()
 
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Volume")) ];
 	DefaultFocus = Volume(TEXT("Master volume"), TEXT("Everything the game plays."), &Settings->MasterVolume);
-	Volume(ScctUi::GameText(TEXT("Audio_Settings"), TEXT("Effect.Caption"), TEXT("Effects Volume")), TEXT("Footsteps, weapons, gadgets, voices of the match."), &Settings->EffectsVolume);
+	Volume(ScctUi::GameLabel(TEXT("Audio_Settings"), TEXT("Effect.Caption"), TEXT("Effects Volume")), TEXT("Footsteps, weapons, gadgets, voices of the match."), &Settings->EffectsVolume);
 	Volume(TEXT("Ambience volume"), TEXT("The maps' ambient sound: machines, rain, crowds, the hum of a room."), &Settings->AmbientVolume);
-	Volume(ScctUi::GameText(TEXT("Audio_Settings"), TEXT("Music.Caption"), TEXT("Music Volume")), TEXT("The match's music."), &Settings->MusicVolume);
+	Volume(ScctUi::GameLabel(TEXT("Audio_Settings"), TEXT("Music.Caption"), TEXT("Music Volume")), TEXT("The match's music."), &Settings->MusicVolume);
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Menus")) ];
 	Volume(TEXT("Menu music volume"), TEXT("The music of the menus and the lobby."), &Settings->MenuMusicVolume);
 	Volume(TEXT("Menu sounds volume"), TEXT("The menus' clicks and beeps."), &Settings->MenuSoundsVolume);
@@ -574,8 +574,8 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildControls()
 
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Mouse")) ];
 	DefaultFocus = Speed(TEXT("Mouse speed"), TEXT("A multiplier over every mouse count, for both sides. 1 is the original game's turn per count."), &Controls->MouseScale, 0.1f, 4.0f, 0.05f);
-	Switch(ScctUi::GameText(TEXT("Controller_Settings"), TEXT("InvertYCaption"), TEXT("Invert Y Axis")), TEXT("Pushing the mouse forward looks down."), [Controls] { return Controls->bInvertY; }, [Controls](bool bValue) { Controls->bInvertY = bValue; });
-	Switch(ScctUi::GameText(TEXT("Controller_Settings"), TEXT("InvertXCaption"), TEXT("Invert X Axis (Spy)")), TEXT("The spy's free look turns the other way."), [Controls] { return Controls->bInvertXSpy; }, [Controls](bool bValue) { Controls->bInvertXSpy = bValue; });
+	Switch(ScctUi::GameLabel(TEXT("Controller_Settings"), TEXT("InvertYCaption"), TEXT("Invert Y Axis")), TEXT("Pushing the mouse forward looks down."), [Controls] { return Controls->bInvertY; }, [Controls](bool bValue) { Controls->bInvertY = bValue; });
+	Switch(ScctUi::GameLabel(TEXT("Controller_Settings"), TEXT("InvertXCaption"), TEXT("Invert X Axis (Spy)")), TEXT("The spy's free look turns the other way."), [Controls] { return Controls->bInvertXSpy; }, [Controls](bool bValue) { Controls->bInvertXSpy = bValue; });
 
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Spy")) ];
 	Speed(TEXT("Free look"), TEXT("The spy's look with the gun holstered."), &Controls->SpyMouse.FreeLook, 0.05f, 10.0f, 0.05f);
@@ -749,7 +749,7 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildGame()
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Interface")) ];
 	TSharedPtr<SWidget> First;
 	Add(SAssignNew(First, SScctStepper)
-		.Label(FText::FromString(ScctUi::GameText(TEXT("Controller_Settings"), TEXT("UnitSystem.Caption"), TEXT("Unit System"))))
+		.Label(FText::FromString(ScctUi::GameLabel(TEXT("Controller_Settings"), TEXT("UnitSystem.Caption"), TEXT("Unit System"))))
 		.Description(FText::FromString(TEXT("The unit of the distances the HUD shows.")))
 		.Options({ ScctUi::GameTextItem(TEXT("Controller_Settings"), TEXT("txt_Unit"), 1, TEXT("Meters")), ScctUi::GameTextItem(TEXT("Controller_Settings"), TEXT("txt_Unit"), 0, TEXT("Feet")) })
 		.Get([Settings] { return Settings->bDistanceInFeet ? 1 : 0; })

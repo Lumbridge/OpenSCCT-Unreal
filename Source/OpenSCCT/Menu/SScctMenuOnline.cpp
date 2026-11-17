@@ -18,6 +18,61 @@ namespace
 	const TCHAR* const OnlineMenuSection = TEXT("OpenSCCT.Online");
 	constexpr int32 RecentCount = 6;
 
+	/** "host", "host:port" or "[v6]:port": a name or address of letters, digits, dots and dashes, a port of 1 to 65535. */
+	bool OnlineIsServerAddress(const FString& Address)
+	{
+		FString HostPart = Address, Port;
+		if (Address.StartsWith(TEXT("[")))
+		{
+			int32 Close = INDEX_NONE;
+			if (!Address.FindChar(TEXT(']'), Close) || Close < 2)
+			{
+				return false;
+			}
+			HostPart = Address.Mid(1, Close - 1);
+			const FString After = Address.Mid(Close + 1);
+			if (!After.IsEmpty() && !After.StartsWith(TEXT(":")))
+			{
+				return false;
+			}
+			Port = After.Mid(1);
+			for (const TCHAR Character : HostPart)
+			{
+				if (!FChar::IsHexDigit(Character) && Character != TEXT(':') && Character != TEXT('.')) { return false; }
+			}
+		}
+		else
+		{
+			if (Address.Split(TEXT(":"), &HostPart, &Port) && Port.Contains(TEXT(":")))
+			{
+				return false;
+			}
+			if (HostPart.IsEmpty() || HostPart.Len() > 253)
+			{
+				return false;
+			}
+			for (const TCHAR Character : HostPart)
+			{
+				if (!FChar::IsAlnum(Character) && Character != TEXT('.') && Character != TEXT('-')) { return false; }
+			}
+		}
+		if (Address.EndsWith(TEXT(":")))
+		{
+			return false;
+		}
+		if (!Port.IsEmpty())
+		{
+			if (Port.Len() > 5) { return false; }
+			for (const TCHAR Character : Port)
+			{
+				if (!FChar::IsDigit(Character)) { return false; }
+			}
+			const int32 Number = FCString::Atoi(*Port);
+			return Number >= 1 && Number <= 65535;
+		}
+		return true;
+	}
+
 	FString OnlineModeName(int32 Mode)
 	{
 		switch (Mode)
@@ -223,9 +278,9 @@ namespace
 						{ TEXT("Server"), 1.0f, 0.0f, false, false },
 						{ TEXT("Map"), 0.0f, 210.0f, false, false },
 						{ TEXT("Mode"), 0.0f, 150.0f, false, false },
-						{ ScctUi::GameText(TEXT("Browser_ServersList"), TEXT("ColumnHeadings[2]"), TEXT("Players")), 0.0f, 100.0f, true, true },
-						{ TEXT("State"), 0.0f, 110.0f, false, false },
-						{ TEXT("Region"), 0.0f, 90.0f, false, false },
+						{ ScctUi::GameText(TEXT("Browser_ServersList"), TEXT("ColumnHeadings[2]"), TEXT("Players")), 0.0f, 110.0f, true, true },
+						{ TEXT("State"), 0.0f, 130.0f, false, false },
+						{ TEXT("Region"), 0.0f, 80.0f, false, false },
 					})
 					.SortColumn(3)
 					.SortDescending(true)
@@ -479,7 +534,7 @@ namespace
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
 				[
-					SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::Danger()).Text(TAttribute<FText>::CreateLambda([this] { return FText::FromString(AddressError); }))
+					SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::Danger()).AutoWrapText(true).Text(TAttribute<FText>::CreateLambda([this] { return FText::FromString(AddressError); }))
 				]
 				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)
 				[
@@ -532,6 +587,8 @@ namespace
 			GConfig->GetString(OnlineMenuSection, TEXT("RecentAddresses"), Joined, GGameUserSettingsIni);
 			TArray<FString> Addresses;
 			Joined.ParseIntoArray(Addresses, TEXT(" "));
+			// What an older build saved without checking (two addresses run together) is not offered.
+			Addresses.RemoveAll([](const FString& Address) { return !OnlineIsServerAddress(Address); });
 			return Addresses;
 		}
 
@@ -546,6 +603,12 @@ namespace
 			if (Address.IsEmpty())
 			{
 				AddressError = TEXT("Type the server's address first.");
+				FSlateApplication::Get().SetKeyboardFocus(AddressBox, EFocusCause::SetDirectly);
+				return;
+			}
+			if (!OnlineIsServerAddress(Address))
+			{
+				AddressError = TEXT("That is not a server address: type a name or an IP address, with :port after it when the port is not 28888.");
 				FSlateApplication::Get().SetKeyboardFocus(AddressBox, EFocusCause::SetDirectly);
 				return;
 			}

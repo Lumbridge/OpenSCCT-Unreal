@@ -87,6 +87,12 @@ namespace ScctUi
 	/** A string of the content's GUI.int, or Fallback (Menu/ScctMenuSubsystem.h). */
 	FString GameText(const TCHAR* Section, const TCHAR* Key, const TCHAR* Fallback);
 
+	/**
+	 * A GUI.int caption as a row label in the menus' sentence case: "Effects Volume" reads "Effects volume", "Game
+	 * Length (min)" reads "Game length" (the value shows the unit). Short capitals (X, PMC) and words in brackets stay.
+	 */
+	FString GameLabel(const TCHAR* Section, const TCHAR* Key, const TCHAR* Fallback);
+
 	/** One entry of a GUI.int list ("(\"Spy\",\"Mercenary\")"), or Fallback. */
 	FString GameTextItem(const TCHAR* Section, const TCHAR* Key, int32 Index, const TCHAR* Fallback);
 

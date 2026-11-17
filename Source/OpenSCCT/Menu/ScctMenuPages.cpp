@@ -24,6 +24,31 @@ namespace ScctUi
 		return Menu != nullptr ? Menu->Text(Section, Key, Fallback) : FString(Fallback);
 	}
 
+	FString GameLabel(const TCHAR* Section, const TCHAR* Key, const TCHAR* Fallback)
+	{
+		FString Label = GameText(Section, Key, Fallback).TrimStartAndEnd();
+		for (const TCHAR* UnitSuffix : { TEXT(" (min)"), TEXT(" (sec)") })
+		{
+			Label.RemoveFromEnd(UnitSuffix, ESearchCase::IgnoreCase);
+		}
+		TArray<FString> Words;
+		Label.ParseIntoArray(Words, TEXT(" "));
+		bool bInBrackets = false;
+		for (int32 Index = 0; Index < Words.Num(); ++Index)
+		{
+			FString& Word = Words[Index];
+			bInBrackets |= Word.StartsWith(TEXT("("));
+			// "Volume" becomes "volume"; "X", "PMC" and "(Spy)" are left as they are.
+			const bool bCapitalised = Word.Len() > 1 && FChar::IsUpper(Word[0]) && FChar::IsLower(Word[1]);
+			if (Index > 0 && !bInBrackets && bCapitalised)
+			{
+				Word[0] = FChar::ToLower(Word[0]);
+			}
+			bInBrackets &= !Word.EndsWith(TEXT(")"));
+		}
+		return FString::Join(Words, TEXT(" "));
+	}
+
 	FString GameTextItem(const TCHAR* Section, const TCHAR* Key, int32 Index, const TCHAR* Fallback)
 	{
 		// ("Spy","Mercenary"): the original's list syntax.

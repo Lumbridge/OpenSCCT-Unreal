@@ -257,6 +257,14 @@ void SScctFrontEnd::Open(const FString& Name)
 
 void SScctFrontEnd::Push(const TSharedRef<SScctMenuPage>& Page)
 {
+	// The control that opened the page gets the focus back when it closes.
+	if (Stack.Num() > 0)
+	{
+		CoveredFocus.SetNum(Stack.Num());
+		const TSharedPtr<SWidget> Focused = FSlateApplication::Get().GetKeyboardFocusedWidget();
+		CoveredFocus.Last() = Focused.IsValid() && Stack.Last()->HasFocusedDescendants() ? Focused : TSharedPtr<SWidget>();
+	}
+	ReturnFocus.Reset();
 	Stack.Add(Page);
 	if (Stack.Num() > 1)
 	{
@@ -274,6 +282,8 @@ void SScctFrontEnd::GoBack()
 	}
 	Stack.Last()->OnClosing();
 	Stack.Pop();
+	ReturnFocus = CoveredFocus.IsValidIndex(Stack.Num() - 1) ? CoveredFocus[Stack.Num() - 1] : TWeakPtr<SWidget>();
+	CoveredFocus.SetNum(Stack.Num() - 1);
 	ScctUi::Play(EScctUiSound::Back);
 	Present();
 }
@@ -333,6 +343,8 @@ void SScctFrontEnd::ShowPageNamed(const FString& Name)
 		Stack.Last()->OnClosing();
 		Stack.Pop();
 	}
+	CoveredFocus.Reset();
+	ReturnFocus.Reset();
 	if (Stack.IsEmpty())
 	{
 		Open(TEXT("home"));
@@ -426,7 +438,12 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 	if (bFocusPending && !Dialogs->IsOpen())
 	{
 		const TSharedPtr<SScctMenuPage> Page = GetTopPage();
-		const TSharedPtr<SWidget> Focus = Page.IsValid() ? Page->GetDefaultFocus() : nullptr;
+		TSharedPtr<SWidget> Focus = ReturnFocus.Pin();
+		ReturnFocus.Reset();
+		if (!Focus.IsValid() || !Focus->GetVisibility().IsVisible() || !Focus->IsEnabled())
+		{
+			Focus = Page.IsValid() ? Page->GetDefaultFocus() : nullptr;
+		}
 		if (Focus.IsValid())
 		{
 			FSlateApplication::Get().SetKeyboardFocus(Focus, EFocusCause::SetDirectly);
