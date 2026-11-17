@@ -339,7 +339,7 @@ public static unsafe class Exports
         {
             EndCurrent();
             ClearFailure();
-            return Adopt(BridgeSession.StartLocal(Test.LessonLaunch.Apply(match))).Id;
+            return Adopt(BridgeSession.StartLocal(Test.NetLinkLaunch.Apply(Test.LessonLaunch.Apply(match)))).Id;
         }
         catch (Exception e)
         {

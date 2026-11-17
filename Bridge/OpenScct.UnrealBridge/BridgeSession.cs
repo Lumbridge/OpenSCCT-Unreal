@@ -55,6 +55,21 @@ public sealed record LocalMatch
 
     /// <summary>The server ticks on the caller's thread just before the client (the drills read it between ticks).</summary>
     public bool InlineHost { get; init; }
+
+    /// <summary>
+    /// The server and the client talk over a simulated link with these latency, jitter and loss figures instead of
+    /// loopback (the netcode checks, Test/NetLinkLaunch.cs); the server then ticks inline. Null for loopback.
+    /// </summary>
+    public SimLinkProfile? SimLink { get; init; }
+
+    /// <summary>The server's network behaviour: OpenSCCT's tuned rates (Enhanced) or the original's (Stock).</summary>
+    public NetProfile NetworkProfile { get; init; } = NetProfile.Enhanced;
+
+    /// <summary>
+    /// Builds the play session itself from the settings and clock instead of the usual local host (a check's
+    /// dedicated server on a simulated link), or null.
+    /// </summary>
+    public Func<PlaySettings, IClock, PlaySession>? CreateSession { get; init; }
 }
 
 /// <summary>
@@ -144,9 +159,12 @@ public sealed class BridgeSession : IDisposable
             UnlimitedGear = match.OfflineRules,
             StartAt = match.StartAt,
             Rules = match.PlayLevel ? PlayRules.PlayLevel : PlayRules.MapSettings,
-            HostMode = match.InlineHost ? PlayHostMode.Inline : PlayHostMode.Thread,
+            HostMode = match.InlineHost || match.SimLink is not null ? PlayHostMode.Inline : PlayHostMode.Thread,
+            SimLink = match.SimLink,
+            NetworkProfile = match.NetworkProfile,
         }.ForLocalLaunch();
-        return Wrap(new PlaySession(settings, new StopwatchClock()));
+        var clock = new StopwatchClock();
+        return Wrap(match.CreateSession?.Invoke(settings, clock) ?? new PlaySession(settings, clock));
     }
 
     /// <summary>

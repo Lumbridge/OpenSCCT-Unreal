@@ -82,3 +82,114 @@ public static class BridgeTestPawnFlags
     public const int OnServer = 4;
     public const int Bot = 8;
 }
+
+/// <summary>What <c>TestExports.GetNetStats</c> writes: the link and netcode figures of a netcode check's match.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct BridgeNetStats
+{
+    public int SessionId;
+
+    /// <summary><see cref="BridgeNetFlags"/>.</summary>
+    public int Flags;
+
+    /// <summary>The link profile's round trip, jitter (ms) and loss (% of datagrams each way).</summary>
+    public int LatencyMs;
+
+    public int JitterMs;
+
+    public float LossPercent;
+
+    /// <summary>The local client's smoothed round trip to the server as its connection measures it (ms), 0 before one.</summary>
+    public float RttMs;
+
+    public float MinRttMs;
+
+    /// <summary>The scenario's stage (grab or co-op), 0 for the walk.</summary>
+    public int Stage;
+
+    public long ClientTicks;
+
+    /// <summary>The server's ticks (the dedicated server's or the inline listen host's).</summary>
+    public long ServerTicks;
+
+    /// <summary>The client tick the local player first had a pawn on; -1 before.</summary>
+    public long JoinedTick;
+
+    /// <summary>Server corrections the local client applied to its own pawn.</summary>
+    public long CorrectionsApplied;
+
+    public long CorrectionsReceived;
+
+    /// <summary>Reinitialisations the server sent the local player.</summary>
+    public long ServerReinits;
+
+    /// <summary>Resets of any pawn the client saw since the join (reinitialisations, placements).</summary>
+    public long ClientResets;
+
+    /// <summary>The simulated network's datagrams: sent, lost (including queue drops) and delivered.</summary>
+    public long LinkSent;
+
+    public long LinkLost;
+
+    public long LinkDelivered;
+
+    /// <summary>Bot clients joined, and those that left or resynchronised their moves (dedicated only).</summary>
+    public int BotsJoined;
+
+    public int BotProblems;
+
+    /// <summary>The grab scenario's merc health lost so far.</summary>
+    public int HealthDrop;
+
+    /// <summary>The server actor id the scenario is about (the grabbed merc, the climber), or 0.</summary>
+    public int SubjectActorId;
+}
+
+public static class BridgeNetFlags
+{
+    /// <summary>The session runs over a simulated link set by SetNextMatchLink.</summary>
+    public const int Linked = 1;
+
+    public const int Dedicated = 2;
+
+    /// <summary>The original's net profile (Stock), not OpenSCCT's tuned one.</summary>
+    public const int Stock = 4;
+
+    public const int ScenarioDone = 8;
+
+    public const int ScenarioFailed = 16;
+}
+
+/// <summary>One pawn of a netcode check's match: the server's location now and the client's, as drawn.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct BridgeNetPawn
+{
+    public int ServerActorId;
+
+    /// <summary>The client's actor id (the proxies' id); 0 when the client does not have the pawn.</summary>
+    public int ClientActorId;
+
+    /// <summary><see cref="BridgeNetPawnFlags"/>.</summary>
+    public int Flags;
+
+    /// <summary>Resets the client has seen of this pawn (a drawn body may jump only on one).</summary>
+    public int Resets;
+
+    public float ServerX, ServerY, ServerZ;
+
+    public float ClientX, ClientY, ClientZ;
+
+    /// <summary>
+    /// The distance from the client's location to the nearest place the server had the pawn over the last 1.5 s
+    /// (a remote pawn is drawn behind the server); -1 when not known.
+    /// </summary>
+    public float Drift;
+}
+
+public static class BridgeNetPawnFlags
+{
+    public const int Local = 1;
+    public const int OnClient = 2;
+    public const int OnServer = 4;
+    public const int Bot = 8;
+}

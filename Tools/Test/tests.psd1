@@ -25,4 +25,23 @@
     'smooth'        = @{ Map = 'AquaE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
     'play-hitch'    = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
     'first-use'     = @{ Map = 'AquaE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
+    # The netcode checks (Test/ScctNetcodeTests.cpp): SteeE over a simulated 100/200 ms link with jitter, loss,
+    # duplication and reordering; listen or dedicated server, tuned or stock net profile, walk, grab or co-op.
+    # -Extra '-ScctTestFrames=10' saves a 10 fps picture sequence to Saved/ScctTestFrames/<test>/. The 300 ms ones are
+    # the Stress300 link, run by hand (only the link is judged there).
+    'play-net-listen100'          = @{ Map = 'SteeE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
+    'play-net-listen200'          = @{ Map = 'SteeE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
+    'play-net-listen100-stock'    = @{ Map = 'SteeE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
+    'play-net-listen200-stock'    = @{ Map = 'SteeE'; Timeout = 240; Tags = @('needs-content', 'needs-maps') }
+    'play-net-dedicated100'       = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'play-net-dedicated200'       = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'play-net-dedicated100-stock' = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'play-net-dedicated200-stock' = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'play-net-grab100'            = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'play-net-grab200'            = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'play-net-grab100-stock'      = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'play-net-coop100'            = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'play-net-coop200'            = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'play-net-listen300'          = @{ Map = 'SteeE'; Timeout = 240; Tags = @('needs-content', 'needs-maps', 'helper') }
+    'play-net-dedicated300'       = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps', 'helper') }
 }

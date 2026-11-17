@@ -10,7 +10,7 @@
 //
 // Fetch the table through ScctFeature<FScctTestApi>() (Runtime/ScctFeatures.h). Call it on the game thread.
 
-constexpr int32 ScctTestApiVersion = 1;
+constexpr int32 ScctTestApiVersion = 2;
 
 namespace EScctTestFlags
 {
@@ -55,6 +55,66 @@ struct FScctTestPawn
 };
 static_assert(sizeof(FScctTestPawn) == 52, "FScctTestPawn must match BridgeTestPawn");
 
+// ---- version 2: the netcode checks (Test/ScctNetcodeTests.cpp; Bridge/.../Test/NetLinkLaunch.cs) ----
+
+namespace EScctNetFlags
+{
+	constexpr int32 Linked = 1;         // the session runs over the simulated link SetNextMatchLink set
+	constexpr int32 Dedicated = 2;      // an isolated server with bot clients of its own; the session is a round on it
+	constexpr int32 Stock = 4;          // the original's net profile, not OpenSCCT's tuned one
+	constexpr int32 ScenarioDone = 8;   // the grab or co-op scenario finished
+	constexpr int32 ScenarioFailed = 16; // it stopped; GetNetDetail says why
+}
+
+namespace EScctNetPawnFlags
+{
+	constexpr int32 Local = 1;
+	constexpr int32 OnClient = 2;
+	constexpr int32 OnServer = 4;
+	constexpr int32 Bot = 8;
+}
+
+/** The link and netcode figures of a netcode check's match. */
+struct FScctNetStats
+{
+	int32 SessionId;
+	int32 Flags; // EScctNetFlags
+	int32 LatencyMs; // the link profile's round trip
+	int32 JitterMs;
+	float LossPercent;
+	float RttMs;    // the local client's smoothed round trip as its connection measures it; 0 before one
+	float MinRttMs;
+	int32 Stage;    // the scenario's stage, 0 for the walk
+	int64 ClientTicks;
+	int64 ServerTicks;
+	int64 JoinedTick; // the client tick the local player first had a pawn on; -1 before
+	int64 CorrectionsApplied;
+	int64 CorrectionsReceived;
+	int64 ServerReinits; // reinitialisations the server sent the local player
+	int64 ClientResets;  // resets of any pawn the client saw since the join
+	int64 LinkSent;
+	int64 LinkLost;
+	int64 LinkDelivered;
+	int32 BotsJoined;
+	int32 BotProblems; // bot clients that left or resynchronised their moves
+	int32 HealthDrop;  // the grab scenario's merc health lost so far
+	int32 SubjectActorId; // the server actor the scenario is about (grabbed merc, climber), or 0
+};
+static_assert(sizeof(FScctNetStats) == 128, "FScctNetStats must match BridgeNetStats");
+
+/** One pawn of a netcode check's match: the server's location now and the client's, as drawn. */
+struct FScctNetPawn
+{
+	int32 ServerActorId;
+	int32 ClientActorId; // the proxies' id; 0 when the client lacks the pawn
+	int32 Flags;         // EScctNetPawnFlags
+	int32 Resets;        // resets the client saw of this pawn: a drawn body may jump only on one
+	float ServerX, ServerY, ServerZ;
+	float ClientX, ClientY, ClientZ;
+	float Drift; // distance to the nearest place the server had the pawn over the last 1.5 s; -1 unknown
+};
+static_assert(sizeof(FScctNetPawn) == 44, "FScctNetPawn must match BridgeNetPawn");
+
 struct FScctTestApi
 {
 	int32 Version;
@@ -73,5 +133,23 @@ struct FScctTestApi
 
 	/** Copies the last failure's text. Returns its length. */
 	int32 (__cdecl* LastError)(TCHAR* Buffer, int32 Capacity);
+
+	// Version 2.
+
+	/**
+	 * Sets the link of the next local start: Profile A, B, C, D, 100, 150, 200 or 300 (OpenScct.Net.SimLinkProfile),
+	 * the original's net profile when bStock, a dedicated server with bot clients of its own when bDedicated, and the
+	 * Scenario (walk; grab or coop need a dedicated server). The next start uses it up. 1, or 0 with LastError.
+	 */
+	int32 (__cdecl* SetNextMatchLink)(const TCHAR* Profile, int32 bStock, int32 bDedicated, const TCHAR* Scenario);
+
+	/** Writes the linked match's figures. Returns its session id, 0 when no linked match runs. */
+	int32 (__cdecl* GetNetStats)(FScctNetStats* Stats);
+
+	/** Writes the linked match's pawns. Returns the count written. */
+	int32 (__cdecl* GetNetPawns)(FScctNetPawn* Pawns, int32 Capacity);
+
+	/** Copies the scenario's state or its failure. Returns its length. */
+	int32 (__cdecl* GetNetDetail)(TCHAR* Buffer, int32 Capacity);
 };
-static_assert(sizeof(FScctTestApi) == 48, "FScctTestApi must match TestApi");
+static_assert(sizeof(FScctTestApi) == 80, "FScctTestApi must match TestApi");

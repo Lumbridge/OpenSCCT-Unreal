@@ -47,11 +47,30 @@ public unsafe struct TestApi
 
     /// <summary>Copies the last failure's text. Returns its length.</summary>
     public delegate* unmanaged[Cdecl]<char*, int, int> LastError;
+
+    // ---- version 2: the netcode checks (Test/NetLinkLaunch.cs) ----
+
+    /// <summary>
+    /// Sets the link of the next local start (<c>profile</c>: A, B, C, D, 100, 150, 200 or 300, as
+    /// OpenScct.Net.SimLinkProfile.Get), the original's net profile when <c>stock</c> is not 0, a dedicated server
+    /// with bot clients of its own when <c>dedicated</c> is not 0, and its <c>scenario</c> (walk, or grab or coop on a
+    /// dedicated server). The next start uses it up. Returns 1, or 0 with the reason in LastError.
+    /// </summary>
+    public delegate* unmanaged[Cdecl]<char*, int, int, char*, int> SetNextMatchLink;
+
+    /// <summary>Writes the linked match's figures (<see cref="BridgeNetStats"/>). Returns its session id, 0 when none runs.</summary>
+    public delegate* unmanaged[Cdecl]<BridgeNetStats*, int> GetNetStats;
+
+    /// <summary>Writes the linked match's pawns (<see cref="BridgeNetPawn"/>). Returns the count written.</summary>
+    public delegate* unmanaged[Cdecl]<BridgeNetPawn*, int, int> GetNetPawns;
+
+    /// <summary>Copies the scenario's state or its failure as text. Returns its length.</summary>
+    public delegate* unmanaged[Cdecl]<char*, int, int> GetNetDetail;
 }
 
 public static unsafe class TestExports
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     private static readonly string[] SimulationAssemblies =
         ["OpenScct.Provenance", "OpenScct.Core", "OpenScct.Physics", "OpenScct.Game", "OpenScct.Net", "OpenScct.Content", "OpenScct.Server"];
@@ -74,6 +93,8 @@ public static unsafe class TestExports
         {
             s_tracking = true;
             Exports.SessionStarted += session => TestPawnTrack.Of(session);
+            Exports.SessionStarted += NetLinkLaunch.OnSessionStarted;
+            Exports.SessionEnded += NetLinkLaunch.OnSessionEnded;
         }
 
         api->Version = ApiVersion;
@@ -82,6 +103,10 @@ public static unsafe class TestExports
         api->StopServer = &StopServer;
         api->StepWorld = &StepWorld;
         api->LastError = &LastError;
+        api->SetNextMatchLink = &SetNextMatchLink;
+        api->GetNetStats = &GetNetStats;
+        api->GetNetPawns = &GetNetPawns;
+        api->GetNetDetail = &GetNetDetail;
         return ApiVersion;
     }
 
@@ -204,6 +229,147 @@ public static unsafe class TestExports
             s_lastError = e.ToString();
             return -1;
         }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int SetNextMatchLink(char* profile, int stock, int dedicated, char* scenario)
+    {
+        try
+        {
+            if (NetLinkLaunch.Set(profile != null ? new string(profile) : "", stock != 0, dedicated != 0,
+                scenario != null ? new string(scenario) : "", out string error))
+            {
+                return 1;
+            }
+
+            s_lastError = error;
+            return 0;
+        }
+        catch (Exception e)
+        {
+            s_lastError = e.ToString();
+            return 0;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetNetStats(BridgeNetStats* stats)
+    {
+        if (stats == null)
+        {
+            return 0;
+        }
+
+        try
+        {
+            *stats = default;
+            if (Exports.Current is not { IsDisposed: false } session || NetLinkLaunch.Current is not { } run ||
+                !ReferenceEquals(run.Session, session))
+            {
+                return 0;
+            }
+
+            PlaySession play = session.Session;
+            NetLinkTrack track = NetLinkTrack.Of(session);
+            stats->SessionId = session.Id;
+            stats->Flags = BridgeNetFlags.Linked | (run.Dedicated ? BridgeNetFlags.Dedicated : 0) |
+                (run.Profile == OpenScct.Net.NetProfile.Stock ? BridgeNetFlags.Stock : 0) |
+                (run.Script is { Done: true } ? BridgeNetFlags.ScenarioDone : 0) |
+                (run.Script is { Failure.Length: > 0 } ? BridgeNetFlags.ScenarioFailed : 0);
+            stats->LatencyMs = run.Link.LatencyMs;
+            stats->JitterMs = run.Link.JitterMs;
+            stats->LossPercent = run.Link.LossPercent;
+            stats->RttMs = track.RttMs;
+            stats->MinRttMs = track.MinRttMs;
+            stats->Stage = run.Script?.Stage ?? 0;
+            stats->ClientTicks = session.Ticks;
+            stats->JoinedTick = track.JoinedTick;
+            stats->ClientResets = track.ClientResets;
+            if (play.LocalController is { } controller && play.Client.Movement.EndpointOf(controller)?.Client is { } moves)
+            {
+                stats->CorrectionsApplied = moves.CorrectionsApplied;
+                stats->CorrectionsReceived = moves.AuthoritativeCorrectionsReceived;
+            }
+
+            if (run.Server is { } server)
+            {
+                stats->ServerTicks = server.World.TickCount;
+                if (run.ServerPlayer is { } player && server.Movement.EndpointOf(player)?.Server is { } serverMoves)
+                {
+                    stats->ServerReinits = serverMoves.Sent.Reinits;
+                }
+            }
+
+            if (run.Network is { } network)
+            {
+                stats->LinkSent = network.Sent;
+                stats->LinkLost = network.Lost;
+                stats->LinkDelivered = network.Delivered;
+            }
+
+            stats->BotProblems = run.BotProblems(out int joined);
+            stats->BotsJoined = joined;
+            stats->HealthDrop = (run.Script as GrabScenario)?.HealthDrop ?? 0;
+            stats->SubjectActorId = run.Script?.SubjectActorId ?? 0;
+            return session.Id;
+        }
+        catch (Exception e)
+        {
+            s_lastError = e.ToString();
+            return 0;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetNetPawns(BridgeNetPawn* pawns, int capacity)
+    {
+        if (pawns == null || capacity <= 0 || Exports.Current is not { IsDisposed: false } session ||
+            NetLinkLaunch.Current is not { } run || !ReferenceEquals(run.Session, session))
+        {
+            return 0;
+        }
+
+        try
+        {
+            return NetLinkTrack.Of(session).Read(run, new Span<BridgeNetPawn>(pawns, capacity));
+        }
+        catch (Exception e)
+        {
+            s_lastError = e.ToString();
+            return 0;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetNetDetail(char* buffer, int capacity)
+    {
+        string text;
+        try
+        {
+            NetLinkRun? run = NetLinkLaunch.Current;
+            string connection = run?.Describe() ?? "";
+            text = run?.Script is { } script
+                ? (script.Failure.Length > 0 ? script.Failure : script.Detail) + "; " + connection
+                : connection;
+        }
+        catch (Exception e)
+        {
+            text = e.Message;
+        }
+
+        return Copy(text, buffer, capacity);
+    }
+
+    private static int Copy(string text, char* buffer, int capacity)
+    {
+        if (buffer != null && capacity > 0)
+        {
+            int length = Math.Min(text.Length, capacity - 1);
+            text.AsSpan(0, length).CopyTo(new Span<char>(buffer, length));
+            buffer[length] = '\0';
+        }
+
+        return text.Length;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
