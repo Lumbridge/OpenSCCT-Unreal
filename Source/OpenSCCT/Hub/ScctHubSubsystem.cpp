@@ -5,6 +5,7 @@
 #include "Engine/GameViewportClient.h"
 #include "Hub/SScctHubLoadingScreen.h"
 #include "Hub/ScctHubHud.h"
+#include "Hub/ScctHubPads.h"
 #include "Engine/World.h"
 #include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
@@ -52,7 +53,7 @@ namespace
 
 	const TCHAR* StateName(EScctHubState State)
 	{
-		static const TCHAR* const Names[] = { TEXT("Idle"), TEXT("Connecting"), TEXT("Loading"), TEXT("InHub"), TEXT("Failed") };
+		static const TCHAR* const Names[] = { TEXT("Idle"), TEXT("Connecting"), TEXT("Loading"), TEXT("InHub"), TEXT("Failed"), TEXT("InMatch") };
 		const int32 Index = static_cast<int32>(State);
 		return Index >= 0 && Index < UE_ARRAY_COUNT(Names) ? Names[Index] : TEXT("?");
 	}
@@ -100,7 +101,26 @@ void UScctHubSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	FParse::Value(CommandLine, TEXT("ScctHubCoverHold="), CoverHoldSeconds);
 	FParse::Value(CommandLine, TEXT("ScctHubBots="), AutoBots);
+	FString PadRun;
+	if (FParse::Value(CommandLine, TEXT("ScctHubPad="), PadRun))
+	{
+		FString Number, PadSide;
+		if (!PadRun.Split(TEXT(":"), &Number, &PadSide))
+		{
+			Number = PadRun;
+		}
+		AutoPad = FCString::Atoi(*Number);
+		AutoPadSide = PadSide.Equals(TEXT("merc"), ESearchCase::IgnoreCase) ? 1 : 0;
+		if (Side.IsEmpty())
+		{
+			// He enters the hub on the side he queues for.
+			AutoTeam = AutoPadSide;
+		}
+		AutoPadOptions = TEXT("?TimeLimit=1?SvmBots=2");
+		FParse::Value(CommandLine, TEXT("ScctHubPadOptions="), AutoPadOptions);
+	}
 	Hud = MakeShared<FScctHubHud>(this);
+	Pads = MakeShared<FScctHubPads>(this);
 
 	FScctSettingDesc Listed;
 	Listed.Key = HubListedSetting;
@@ -128,6 +148,11 @@ void UScctHubSubsystem::Deinitialize()
 	{
 		Hud->Stop();
 		Hud.Reset();
+	}
+	if (Pads.IsValid())
+	{
+		Pads->Stop();
+		Pads.Reset();
 	}
 	CloseCover();
 	if (Api != nullptr && GetState() != EScctHubState::Idle)
@@ -164,6 +189,12 @@ const FScctHubApi* UScctHubSubsystem::Connect()
 		FPaths::DirectoryExists(HubMaps / TEXT("Hub")) ? TEXT("") : TEXT(" (missing: run Tools/Import/Import-HubMap.ps1)"));
 	ConfigureMaster();
 	DrainLog();
+
+	// A pad's match is an online visit the bridge starts: the online subsystem must be up to follow it.
+	if (UScctOnlineSubsystem* Online = GetGameInstance()->GetSubsystem<UScctOnlineSubsystem>(); Online == nullptr || !Online->EnsureReady())
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHub: the online subsystem is not up: the pads' matches cannot be followed"));
+	}
 	return Api;
 }
 
@@ -387,6 +418,10 @@ void UScctHubSubsystem::HandleFrame(float DeltaSeconds)
 	{
 		Hud->Tick(World, DeltaSeconds, LogEvery > 0.0f);
 	}
+	if (Pads.IsValid() && World != nullptr && GetState() == EScctHubState::InHub)
+	{
+		Pads->Tick(World, DeltaSeconds, LogEvery > 0.0f);
+	}
 }
 
 float UScctHubSubsystem::GetVoiceVolume(const FString& PlayerName) const
@@ -448,6 +483,10 @@ void UScctHubSubsystem::TickVisit()
 	if (Hud.IsValid() && Hud->IsRunning() && (!PresentedWorld.IsValid() || GetState() != EScctHubState::InHub))
 	{
 		Hud->Stop();
+	}
+	if (Pads.IsValid() && (!PresentedWorld.IsValid() || GetState() != EScctHubState::InHub))
+	{
+		Pads->Stop();
 	}
 
 	const double Now = FPlatformTime::Seconds();
@@ -522,6 +561,23 @@ void UScctHubSubsystem::HandleStateChange(EScctHubState Old, EScctHubState New)
 			Notice = TEXT("The connection to the hub was lost.");
 		}
 		UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHub: the visit failed: %s"), *Notice);
+	}
+	if (New == EScctHubState::InMatch)
+	{
+		// The online subsystem opens the match's level; this level is left without leaving the hub.
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: away at a pad's match: the online visit plays it"));
+	}
+	if (Old == EScctHubState::InMatch && IsUnderWay(New))
+	{
+		// Back from the match: the hub level is opened now, before the online subsystem's way back to the front end,
+		// and presents the visit again once the hub has welcomed the player.
+		bWasPresented = false;
+		ReportedSessionId = 0;
+		PresentedWorld.Reset();
+		if (FPackageName::DoesPackageExist(HubLevel))
+		{
+			OpenLevel(FString::Printf(TEXT("%s?%s=1"), HubLevel, HubOption));
+		}
 	}
 	Touch();
 }
@@ -645,6 +701,12 @@ void UScctHubSubsystem::RunUnattended()
 		if (HostAndJoin(AutoHostPort, AutoTeam, bAutoHostLoopback))
 		{
 			StartBots();
+			if (AutoPad > 0 && Pads.IsValid())
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("ScctHub: -ScctHubPad: queueing on pad %d as a %s, the laptop taking '%s'"), AutoPad, AutoPadSide == 1 ? TEXT("merc") : TEXT("spy"), *AutoPadOptions);
+				Pads->QueueOnPad(AutoPad, AutoPadSide, AutoPadOptions);
+				DrainLog();
+			}
 		}
 	}
 	else

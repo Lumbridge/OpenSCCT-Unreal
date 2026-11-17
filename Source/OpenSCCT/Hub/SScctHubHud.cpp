@@ -664,11 +664,25 @@ int32 SScctHubHud::PaintTexts(const FGeometry& Geometry, FSlateWindowElementList
 		Painter.SetOpacity(1.0f);
 	}
 
-	// The pad queue line, top middle, under the keys.
+	// The pad panel, top middle, under the keys: the queue line on glass in its pad's state colour (white idle, yellow
+	// waiting, green counting down, cyan starting), with a bar of that colour along its top (HubHud's pad panel).
+	float PanelBottom = FMath::Max(84.0f, HelpHeight + 8.0f);
 	if (!Model->Queue.IsEmpty())
 	{
-		Painter.Text(FVector2f(Size.X * 0.5f, FMath::Max(84.0f, HelpHeight + 8.0f)), Model->Queue, ScctHudStyle::Font(EWeight::Regular, 18.0f), ScctHudStyle::Text(),
-			FScctHudPainter::EAlign::Centre);
+		const FSlateFontInfo Font = ScctHudStyle::Font(EWeight::Regular, 18.0f);
+		const float Top = PanelBottom;
+		const float HalfWidth = FMath::Min(Size.X * 0.4f, FMath::Max(260.0f, Model->Queue.Len() * 5.2f + 28.0f));
+		const FBox2f Panel(FVector2f(Size.X * 0.5f - HalfWidth, Top - 8.0f), FVector2f(Size.X * 0.5f + HalfWidth, Top + 34.0f));
+		Painter.Glass(Panel, ScctHudStyle::Corner);
+		Painter.Fill(FBox2f(Panel.Min + FVector2f(ScctHudStyle::Corner, 0.0f), FVector2f(Panel.Max.X - ScctHudStyle::Corner, Panel.Min.Y + 3.0f)), Model->QueueColour);
+		Painter.Text(FVector2f(Size.X * 0.5f, Top), Model->Queue, Font, Model->QueueColour, FScctHudPainter::EAlign::Centre);
+		PanelBottom = Panel.Max.Y + 10.0f;
+	}
+	if (!Model->Note.IsEmpty())
+	{
+		Painter.SetOpacity(0.9f);
+		Painter.Text(FVector2f(Size.X * 0.5f, PanelBottom), Model->Note, ScctHudStyle::Font(EWeight::Regular, 13.5f), ScctHudStyle::Text(), FScctHudPainter::EAlign::Centre);
+		Painter.SetOpacity(1.0f);
 	}
 
 	// What U does here, bottom middle.

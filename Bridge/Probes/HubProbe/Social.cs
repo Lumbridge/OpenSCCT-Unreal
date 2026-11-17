@@ -28,6 +28,14 @@ internal static unsafe partial class Probe
             return false;
         }
 
+        Console.WriteLine($"pads table: {sizeof(HubPadsApi)} bytes; state {sizeof(HubPadsState)}, pad {sizeof(HubPadRow)}, laptop row {sizeof(HubLaptopRow)}, laptop map {sizeof(HubLaptopMap)} bytes");
+        if (sizeof(HubPadsApi) != 8 + 12 * sizeof(nint) || sizeof(HubPadsState) != 32 || sizeof(HubPadRow) != 928 || sizeof(HubLaptopRow) != 220
+            || sizeof(HubLaptopMap) != 780)
+        {
+            Console.WriteLine("FAIL: the layout does not match Runtime/ScctHubPadsApi.h");
+            return false;
+        }
+
         // The default bindings carry the hub's keys, in the action editor's "Hub" category too.
         KeyLayout keys = ControlBindings.DefaultKeys();
         string hints = string.Join(", ", new[] { "HubSpy", "HubMerc", "HubPlaza", "HubPlayers", "HubEmotes", "HubEmote1" }.Select(c => c + "=" + HubBindings.Hint(keys, c)));
@@ -140,6 +148,10 @@ internal static unsafe partial class Probe
         Console.WriteLine($"{signCount} signs within reach, {visible} in sight; help '{SocialText(HubSocialText.Help)}'");
         string prompt = Prompt(ex, ey, ez);
         Console.WriteLine($"prompt here: '{prompt}'");
+        if (!Pads())
+        {
+            return false;
+        }
 
         // Chat: one line to everyone, one to the side; both come back from the hub.
         fixed (char* hello = "hello from the probe", side = "spies only")
