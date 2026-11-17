@@ -31,9 +31,15 @@ if (-not $SkipImport) {
     $script = "$(Fwd "$PSScriptRoot\import_merc_rifle.py") $(Fwd $source)"
     & $editor (Fwd "$project\OpenSCCTUnreal.uproject") -run=pythonscript "-script=$script" -unattended -nosplash -nullrhi "-abslog=$log" *> $null
     $code = $LASTEXITCODE
-    Select-String -Path $log -CaseSensitive -Pattern 'SCCT-IMPORT|Traceback|LogPython: Error' |
-        ForEach-Object { $_.Line -replace '^\[[^\]]+\]\[[^\]]+\]', '' } | Select-Object -Unique
-    "import exit code $code (log: $log)"
+    # The script's own lines, once each (the log repeats them at exit), and any Python error that names it. The
+    # engine's toolset plugins also log Python errors at start-up in a commandlet; those are not ours, and they
+    # are why the exit code is 1 even when the import worked: "merc rifle imported" is the sign of success.
+    $lines = Select-String -Path $log -CaseSensitive -Pattern 'SCCT-IMPORT |File ".*import_merc_rifle\.py"' |
+        Where-Object { $_.Line -notmatch 'LogInit: Display' } |
+        ForEach-Object { $_.Line -replace '^.*?(SCCT-IMPORT |LogPython: Error: )', '' } | Select-Object -Unique
+    $lines
+    if ($lines -notcontains 'merc rifle imported') { throw "The import did not finish (exit code $code): see $log" }
+    "imported (log: $log)"
 }
 
 if ($Look) {
@@ -43,9 +49,9 @@ if ($Look) {
     $shots = Fwd (Join-Path $project 'Saved\ScctShots')
     $log = Fwd (Join-Path $project 'Saved\Logs\look-MercRifle.log')
     & $editor "$project\OpenSCCTUnreal.uproject" '/Game/OpenSCCT/Weapons/MercRifle/L_RifleLook' `
-        -game -RenderOffscreen -ResX=1920 -ResY=1080 -unattended -nosplash -nosound `
+        -game -RenderOffscreen -ResX=1920 -ResY=1080 -ForceRes -unattended -nosplash -nosound `
         '-ScctShots=5' '-ScctShotEvery=5' "-ScctShotDir=$shots" "-ScctCams=$cams" "-abslog=$log" *> $null
     "look exit code $LASTEXITCODE (shots: $shots\L_RifleLook_NN.png, log: $log)"
-    Select-String -Path $log -Pattern 'LogOpenSCCT|Error:' |
+    Select-String -Path $log -Pattern 'LogOpenSCCT' |
         ForEach-Object { $_.Line -replace '^\[[^\]]+\]\[[^\]]+\]', '' } | Select-Object -First 20
 }

@@ -273,18 +273,18 @@ def build_look_level(mesh):
         transform = unreal.Transform(unreal.Vector(*location), unreal.Rotator(roll=rotation[0], pitch=rotation[1], yaw=rotation[2]), unreal.Vector(*scale))
         return unreal.ScctImportLibrary.spawn_actor_in_world(world, cls, transform)
 
-    # A plain dark, slightly glossy floor to stand them over.
+    # A plain dark backdrop to stand them over. Matt enough that the panel lights do not show in it as bright
+    # blobs behind the rifles. Rebuilt every import, so a change here is never hidden by an old asset.
     floor_path = DEST + "/M_RifleLookFloor"
     if editor_assets.does_asset_exist(floor_path):
-        floor_material = unreal.load_asset(floor_path)
-    else:
-        floor_material = asset_tools.create_asset("M_RifleLookFloor", DEST, unreal.Material, unreal.MaterialFactoryNew())
-        for value, target in ((0.03, unreal.MaterialProperty.MP_BASE_COLOR), (0.3, unreal.MaterialProperty.MP_ROUGHNESS)):
-            constant = materials_lib.create_material_expression(floor_material, unreal.MaterialExpressionConstant, -300, 0)
-            constant.set_editor_property("r", value)
-            materials_lib.connect_material_property(constant, "", target)
-        materials_lib.recompile_material(floor_material)
-        editor_assets.save_asset(floor_path)
+        editor_assets.delete_asset(floor_path)
+    floor_material = asset_tools.create_asset("M_RifleLookFloor", DEST, unreal.Material, unreal.MaterialFactoryNew())
+    for value, target in ((0.03, unreal.MaterialProperty.MP_BASE_COLOR), (0.7, unreal.MaterialProperty.MP_ROUGHNESS)):
+        constant = materials_lib.create_material_expression(floor_material, unreal.MaterialExpressionConstant, -300, 0)
+        constant.set_editor_property("r", value)
+        materials_lib.connect_material_property(constant, "", target)
+    materials_lib.recompile_material(floor_material)
+    editor_assets.save_asset(floor_path)
     for location, rotation, scale in (((0, 0, 0), (0, 0, 0), (12, 12, 1)), ((300, 0, 300), (0, 90, 0), (8, 12, 1))):
         floor = spawn(unreal.StaticMeshActor, location, rotation, scale)
         floor.static_mesh_component.set_static_mesh(unreal.load_asset("/Engine/BasicShapes/Plane"))
@@ -314,11 +314,12 @@ def build_look_level(mesh):
         else:
             component.set_source_radius(10.0)
 
-    # Panel lights, as in a photo studio: metal needs something broad to reflect. They are kept as dim as a lit
-    # room in one of the maps, so the glowing parts (reticle, display, lenses) look as they will in a match.
-    light(unreal.RectLight, (-170, 0, 280), (0, -45, 0), 800, (1.0, 0.95, 0.88), 1200, (320, 120))     # key, warm white
-    light(unreal.RectLight, (0, 0, 340), (0, -90, 0), 450, (1.0, 1.0, 1.0), 1000, (60, 420))           # strip overhead
-    light(unreal.RectLight, (170, 170, 210), (0, -22, -135), 450, (0.55, 0.75, 1.0), 1000, (200, 80))  # rim, cool
+    # Panel lights, as in a photo studio: metal needs something broad to reflect. They are about as bright as a
+    # well lit room in one of the maps, so the glowing parts (reticle, display, lenses) look as they will in a
+    # match while the dark furniture still shows its form.
+    light(unreal.RectLight, (-170, 0, 280), (0, -45, 0), 1700, (1.0, 0.95, 0.88), 1200, (320, 120))    # key, warm white
+    light(unreal.RectLight, (0, 0, 340), (0, -90, 0), 900, (1.0, 1.0, 1.0), 1000, (60, 420))           # strip overhead
+    light(unreal.RectLight, (170, 170, 210), (0, -22, -135), 900, (0.55, 0.75, 1.0), 1000, (200, 80))  # rim, cool
     light(unreal.PointLight, (-60, 200, 70), (0, 0, 0), 60, (1.0, 0.45, 0.15), 600)                    # accent, amber
     light(unreal.PointLight, (-60, -220, 60), (0, 0, 0), 60, (0.1, 0.8, 0.75), 600)                    # accent, teal
 

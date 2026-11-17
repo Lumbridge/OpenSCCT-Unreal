@@ -170,10 +170,12 @@ big = fbm(P, 70.0, 3, seed=1)          # slow drift in tone
 medium = fbm(P, 9.0, 3, seed=2)        # blotches: handling marks, uneven finish
 fine = fbm(P, 1.4, 2, seed=3)          # grain
 
-# Uneven finish: nothing on a used rifle is one flat colour or one flat gloss.
-albedo *= (1.0 + (big - 0.5) * 0.30 + (medium - 0.5) * 0.14)[:, None]
-# Gloss varies less on metal, where every change shows as a dark or bright cloud in the reflection.
-rough += ((big - 0.5) * 0.10 + (medium - 0.5) * 0.12) * lerp(1.0, 0.45, metal) + (fine - 0.5) * 0.05
+# Uneven finish: nothing on a used rifle is one flat colour or one flat gloss. Anodised metal varies least: on
+# the receiver's big flats a strong drift reads as smudges, not as use.
+calm = lerp(1.0, 0.4, metal)
+albedo *= (1.0 + ((big - 0.5) * 0.30 + (medium - 0.5) * 0.14) * calm)[:, None]
+# Gloss varies less on metal too, where every change shows as a dark or bright cloud in the reflection.
+rough += ((big - 0.5) * 0.10 + (medium - 0.5) * 0.12) * lerp(1.0, 0.3, metal) + (fine - 0.5) * 0.05
 
 # Greasy handling marks on the metal: patches a little glossier.
 smear = smoothstep(0.55, 0.75, fbm(P, 22.0, 3, seed=5)) * is_kind("metal", "steel_dark", "suppressor")
@@ -208,16 +210,31 @@ def crosshatch(a, b, pitch):
 
 # Grip surfaces: diamond stippling, laid out in whichever plane the face lies in.
 grip = is_kind("grip")
+on_pistol_grip = grip & (P[:, 0] < 60.0)
+on_fore_grip = grip & ~on_pistol_grip
 side_on = np.abs(N[:, 1]) > 0.6
 front_on = (np.abs(N[:, 0]) >= np.abs(N[:, 2])) & ~side_on
 studs = np.where(side_on, crosshatch(P[:, 0], P[:, 2], 2.4),
                  np.where(front_on, crosshatch(P[:, 1], P[:, 2], 2.4), crosshatch(P[:, 0], P[:, 1], 2.4)))
-# The pistol grip keeps a smooth border, as a moulded panel would.
-border = np.ones(COUNT, dtype=np.float32)
-on_pistol_grip = grip & (P[:, 0] < 60.0)
-border[on_pistol_grip] = smoothstep(-152.0, -146.0, P[on_pistol_grip, 2]) * smoothstep(-44.0, -52.0, P[on_pistol_grip, 2])
-height += studs * 0.30 * grip * border
-rough += studs * 0.06 * grip
+height += studs * 0.30 * on_fore_grip
+rough += studs * 0.06 * on_fore_grip
+
+# The pistol grip is rounded, so one stud pattern cannot wrap it without a seam. As on a moulded grip, each side
+# has a stippled panel with a smooth border, and the front and back straps carry horizontal ribs instead.
+gz = P[:, 2]
+lean = P[:, 0] + 48.5 - 0.34 * (gz + 95.0)   # distance along the rifle from the grip's leaning centre line
+panel = smoothstep(0.80, 0.93, np.abs(N[:, 1])) * smoothstep(-150.0, -143.0, gz) * smoothstep(-52.0, -60.0, gz)
+panel *= smoothstep(21.0, 16.0, np.abs(lean)) * on_pistol_grip
+height += crosshatch(P[:, 0], gz, 2.2) * 0.28 * panel
+rough += (0.04 + crosshatch(P[:, 0], gz, 2.2) * 0.06) * panel
+# A fine line pressed in round each panel.
+rim = np.clip(1.0 - np.abs(panel - 0.5) * 4.0, 0.0, 1.0) * on_pistol_grip
+height -= rim * 0.12
+straps = smoothstep(0.80, 0.95, np.abs(N[:, 0])) * smoothstep(-148.0, -140.0, gz) * on_pistol_grip
+straps *= np.where(N[:, 0] > 0, smoothstep(-92.0, -100.0, gz), smoothstep(-66.0, -74.0, gz))   # below the finger shelf / beavertail
+ribs = np.clip(np.sin(2.0 * math.pi * gz / 4.2) * 1.6 + 0.3, 0.0, 1.0)
+height += ribs * 0.32 * straps
+rough += ribs * 0.05 * straps
 
 # Butt pad: horizontal ribs on the face that meets the shoulder.
 pad = is_kind("rubber") & (P[:, 0] < -340.0) & (N[:, 0] < -0.5)
@@ -495,7 +512,7 @@ for placing, side in ((LEFT, 1), (RIGHT, -1)):
     badge = Canvas(18, 18)
     badge.circle(9, 9, 8.6, (0, 0, 0, 90))            # a smooth disc for the mark to stand on
     badge.logo(9, 9, 6.2, (40, 40, 42, 255))
-    stamp(badge, (-58, side * 15.5, -124), surfaces=["grip"], opacity=0.0, relief=0.25, flatten=True, depth=3.0, **placing)
+    stamp(badge, (-58.5, side * 15.5, -124), surfaces=["grip"], opacity=0.0, relief=0.25, flatten=True, depth=3.5, **placing)
 label = Canvas(92, 4)
 label.text(46, 2, 2.2, "HALVARD S68 SUPPRESSOR   6.8 MM   CLEAN EVERY 2000 RDS", ETCH, anchor="mm", spacing=0.15)
 stamp(label, (305, 0, 20), (-1, 0, 0), (0, -1, 0), surfaces=["suppressor"], roughness=0.5, metallic=1.0, relief=-0.02, depth=2.5)

@@ -222,6 +222,44 @@ def g_lathe(bm, profile, centre, axis="X", segments=24, cap_start=True, cap_end=
         bm.faces.new(rings[-1])
 
 
+def g_loft(bm, rings, xform=None):
+    """A skin over a stack of outlines with the same number of points each (design-frame points), capped at both
+    ends. Used for the parts a hand wraps round, which must not look cut from plate."""
+    loops = [[_vert(bm, co, xform) for co in ring] for ring in rings]
+    for lower, upper in zip(loops, loops[1:]):
+        count = len(lower)
+        for i in range(count):
+            bm.faces.new((lower[i], lower[(i + 1) % count], upper[(i + 1) % count], upper[i]))
+    bm.faces.new(loops[0])
+    bm.faces.new(loops[-1])
+
+
+def fillet(points, radius, steps=4):
+    """The outline with every corner rounded off to a radius (less where an edge is too short for it)."""
+    result = []
+    count = len(points)
+    for i in range(count):
+        corner = Vector(points[i])
+        to_previous, to_next = Vector(points[i - 1]) - corner, Vector(points[(i + 1) % count]) - corner
+        reach = min(radius, to_previous.length * 0.45, to_next.length * 0.45)
+        start, end = corner + to_previous.normalized() * reach, corner + to_next.normalized() * reach
+        for step in range(steps + 1):
+            t = step / steps
+            # A quadratic curve from one edge to the next, pulled towards the corner.
+            result.append(tuple((1 - t) * (1 - t) * start + 2 * t * (1 - t) * corner + t * t * end))
+    return result
+
+
+def curve(keys, at):
+    """Reads a (position, value) table at the given positions: straight between the keys, then eased, so a
+    lofted part has no kinks where the keys are."""
+    xs, ys = zip(*sorted(keys))
+    values = np.interp(at, xs, ys)
+    for _ in range(2):
+        values[1:-1] = 0.25 * values[:-2] + 0.5 * values[1:-1] + 0.25 * values[2:]
+    return values
+
+
 def add(name, bm, surface, bone="Root", bevel=0.8, segments_bevel=2, cutter=False, round_part=False):
     """Turns a bmesh into an object. bevel is the width in millimetres of the rounding every hard edge gets, in
     segments_bevel steps; a round part (turned on the lathe) keeps smooth normals round its curve."""
@@ -259,6 +297,12 @@ def side_slab(name, points, side, inner, outer, surface, chamfer=0.0, **options)
 def lathe(name, profile, centre, surface, axis="X", segments=24, cap_start=True, cap_end=True, **options):
     bm = bmesh.new()
     g_lathe(bm, profile, centre, axis, segments, cap_start, cap_end)
+    return add(name, bm, surface, round_part=True, **options)
+
+
+def loft(name, rings, surface, **options):
+    bm = bmesh.new()
+    g_loft(bm, rings)
     return add(name, bm, surface, round_part=True, **options)
 
 
@@ -334,12 +378,14 @@ def build_rifle():
                  -23.5, 23.5, "polymer", chamfer=5, bevel=1.2)
     # The stock below the action is hollow: an open frame is lighter and gives the rifle its outline.
     cut(lower, [cutter(lambda bm: g_slab(bm, [(-326, -96), (-282, -96), (-266, -64), (-266, -40), (-326, -40)], -40, 40), "polymer")])
-    slab("Grip", [(-8, -38), (-12, -62), (-17, -74), (-19, -90), (-27, -112), (-36, -134), (-44, -156), (-90, -156), (-94, -150), (-86, -128),
-                  (-76, -104), (-67, -78), (-63, -60), (-66, -46), (-72, -40), (-68, -35)],
-         -15.5, 15.5, "grip", chamfer=6, bevel=2.0, segments_bevel=3)
-    slab("TriggerGuard", [(86, -40), (86, -64), (68, -92), (-26, -92), (-26, -86), (64, -86), (79, -63), (79, -40)], -9, 9, "polymer", chamfer=2.5, bevel=0.8)
-    slab("Trigger", [(5, -40), (15, -40), (14, -52), (10, -63), (9, -74), (5, -75), (4, -64), (7, -52)], -3.5, 3.5, "steel_dark",
-         chamfer=1.2, bone="Trigger", bevel=0.4, segments_bevel=1)
+    build_pistol_grip()
+    # The guard is a thick moulded loop with eased corners, not a bent strip.
+    slab("TriggerGuard", fillet([(89, -40), (89, -63), (72, -95), (-24, -95), (-24, -86), (65, -86), (79, -61), (79, -40)], 7.0),
+         -9, 9, "polymer", chamfer=3.0, bevel=0.8)
+    # A curved blade: hollow on the front face where the finger lies, the tip curling forward.
+    slab("Trigger", [(4.5, -40), (4.6, -50), (3.6, -58), (3.2, -66), (4.4, -73), (7.6, -78.6), (11.6, -79.6), (11.2, -76.5), (9.2, -72),
+                     (8.2, -66), (8.6, -58), (10.6, -50), (14.2, -43), (15, -40)],
+         -4, 4, "steel_dark", chamfer=1.6, bone="Trigger", bevel=0.4, segments_bevel=1)
     bm = bmesh.new()
     g_ring(bm, rrect(84, 51, 6, cx=-206), rrect(60, 28, 3, cx=-206), -71, -63, "XY")
     add("MagWellLip", bm, "polymer_grey", bevel=1.0)
@@ -480,9 +526,56 @@ def build_rifle():
         screw(24, 84, side, 21, bone="Optic", radius=2.1)
 
     # ---- folded back-up iron sights on the rail ----------------------------------------------------------------------
-    for x0 in (150, -296):
-        slab("IronSight", [(x0, 50.5), (x0 + 46, 50.5), (x0 + 46, 56), (x0 + 40, 59.5), (x0 + 6, 59.5), (x0, 56)], -11, 11, "polymer", chamfer=2, bevel=0.6)
-        lathe("IronSightPin", [(-12, 2.2), (12, 2.2)], (x0 + 7, 54), "steel_dark", axis="Y", segments=12, bevel=0.3, segments_bevel=1)
+    build_iron_sights()
+
+
+def build_pistol_grip():
+    """The pistol grip, lofted from rounded sections: a beavertail under the receiver, a shelf for the middle
+    finger below the trigger guard, a palm swell on the back strap and a flared base. Leans 17 degrees."""
+    # (height, x) of the front and back straps and (height, half width), in the design frame.
+    front = [(-34, -6), (-44, -9), (-58, -12.5), (-68, -17), (-76, -20.5), (-88, -21.5), (-98, -23.5), (-112, -28), (-128, -33.5), (-144, -39.5), (-156, -43)]
+    back = [(-34, -70), (-40, -75), (-46, -73), (-54, -67), (-62, -64.5), (-74, -66.5), (-90, -72), (-110, -80.5), (-130, -88), (-146, -92.5), (-156, -93)]
+    width = [(-34, 13.0), (-50, 13.2), (-70, 14.2), (-100, 15.8), (-125, 16.0), (-145, 15.4), (-156, 15.9)]
+
+    def section(z, x_front, x_back, half_width):
+        ring = []
+        centre, half_length = (x_front + x_back) / 2.0, (x_front - x_back) / 2.0
+        for step in range(36):
+            angle = 2.0 * math.pi * step / 36
+            # A squared-off oval, narrower at the front strap than at the back, as a hand closes round it.
+            ux = math.copysign(abs(math.cos(angle)) ** 0.74, math.cos(angle))
+            uy = math.copysign(abs(math.sin(angle)) ** 0.74, math.sin(angle))
+            narrow = 1.0 - (0.24 if ux > 0 else 0.10) * ux * ux
+            ring.append((centre + half_length * ux, half_width * narrow * uy, z))
+        return ring
+
+    heights = np.linspace(-34.0, -156.0, 32)
+    fronts, backs, widths = curve(front, heights), curve(back, heights), curve(width, heights)
+    loft("Grip", [section(z, f, b, w) for z, f, b, w in zip(heights, fronts, backs, widths)], "grip", bevel=1.6, segments_bevel=3)
+    # A base plate a little proud of the grip, its lower rim eased.
+    f, b, w = fronts[-1] + 1.4, backs[-1] - 1.4, widths[-1] + 1.2
+    loft("GripCap", [section(-154.5, f, b, w), section(-160.0, f, b, w), section(-162.0, f - 2.0, b + 2.0, w - 2.0)], "polymer_grey",
+         bevel=0.6, segments_bevel=2)
+
+
+def build_iron_sights():
+    """Folded back-up sights on the rail: a clamped steel base, the leaf lying flat on it with its aperture
+    upwards, the hinge and (on the rear one) a windage knob. The rear one is the nearest thing to the merc's eye."""
+    for x0, rear in ((150, False), (-296, True)):
+        slab("IronSightBase", [(x0 + 2, 50.5), (x0 + 44, 50.5), (x0 + 44, 53.4), (x0 + 41.5, 55), (x0 + 4.5, 55), (x0 + 2, 53.4)],
+             -10.5, 10.5, "steel_dark", chamfer=1.5, bevel=0.5)
+        box("IronSightClamp", (x0 + 8, x0 + 38), (10.5, 13.6), (46.6, 54), "steel_dark", bevel=0.5, segments_bevel=1)
+        for x in (x0 + 14, x0 + 32):
+            screw(x, 50.4, 1, 13.6, radius=1.8)
+        slab("IronSightLeaf", [(x0 + 10, 55), (x0 + 43, 55), (x0 + 43, 57.6), (x0 + 40.5, 60), (x0 + 30, 60), (x0 + 27, 58.4), (x0 + 16, 58.4), (x0 + 13.5, 60), (x0 + 10, 60)],
+             -7.5, 7.5, "polymer", chamfer=1.6, bevel=0.5)
+        lathe("IronSightHinge", [(-10.5, 3.3), (10.5, 3.3)], (x0 + 8, 57.2), "steel_dark", axis="Y", segments=16, bevel=0.4, segments_bevel=1)
+        # The aperture, seen from above while the sight is folded.
+        lathe("IronSightAperture", [(59.6, 5.0), (61.4, 5.0), (61.4, 2.4), (60.2, 2.4)], (x0 + 35.2, 0), "steel_dark", axis="Z",
+              segments=20, bevel=0.3, segments_bevel=1)
+        if rear:
+            lathe("WindageKnob", [(7.5, 3.4), (11.5, 3.4), (12.2, 2.6)], (x0 + 21.5, 56.6), "steel_dark", axis="Y", segments=16,
+                  bevel=0.3, segments_bevel=1)
 
 
 def finish_parts():
