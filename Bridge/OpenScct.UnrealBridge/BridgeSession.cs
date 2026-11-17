@@ -37,7 +37,12 @@ public sealed class BridgeSession : IDisposable
     private BridgeSession(PlaySession session)
     {
         _session = session;
-        _session.AfterClientTick = (_, _) => Snapshot();
+        _session.BeforeClientTick = (_, _) => BeforeTick?.Invoke();
+        _session.AfterClientTick = (_, _) =>
+        {
+            Snapshot();
+            Ticked?.Invoke();
+        };
         // The character files are read while the map load is still blocking, not on the first drawn frame.
         Character(0);
         Character(1);
@@ -64,6 +69,33 @@ public sealed class BridgeSession : IDisposable
     }
 
     public PlaySession Session => _session;
+
+    /// <summary>
+    /// Raised on Unreal's game thread just before each client simulation tick (network calls that arrived since the
+    /// last tick are still readable here, e.g. <c>World.Events.Late</c>).
+    /// </summary>
+    public event Action? BeforeTick;
+
+    /// <summary>Raised on Unreal's game thread after each client simulation tick, once the pawns are snapshotted.</summary>
+    public event Action? Ticked;
+
+    private readonly Dictionary<Type, object> _features = new();
+
+    /// <summary>
+    /// The per-session state of a bridge feature (events, HUD, devices...), made on first use. Features live in
+    /// their own files and keep their state here, so it ends with the session.
+    /// </summary>
+    public T Feature<T>(Func<BridgeSession, T> create)
+        where T : class
+    {
+        if (!_features.TryGetValue(typeof(T), out object? feature))
+        {
+            feature = create(this);
+            _features[typeof(T)] = feature;
+        }
+
+        return (T)feature;
+    }
 
     /// <summary>Runs the simulation ticks that are due. Returns how many ran.</summary>
     public int Update() => _session.Update();
