@@ -128,6 +128,12 @@ namespace ScctHudElements
 	/** Above the status block: the player's own state lines, zones and console lines (chat has its own panel). */
 	void PaintLog(FScctHudPainter& Painter, const FScctHudModel& Model);
 
+	/**
+	 * Lower centre: the tutorial message (a tutorial map's hint, an offline session's zone tip) in its box for as long as
+	 * the game keeps it up; the briefings wait meanwhile. ScctHudElementsTutorial.cpp.
+	 */
+	void PaintTutorial(FScctHudPainter& Painter, const FScctHudModel& Model);
+
 	/** Bottom centre while dead or visiting: who is watched, the wait for the respawn and the team's tip. */
 	void PaintSpectator(FScctHudPainter& Painter, const FScctHudModel& Model);
 
@@ -149,6 +155,16 @@ namespace ScctHudElements
 
 	/** Seconds as m:ss. */
 	FString ClockText(int32 Seconds);
+
+	/**
+	 * The kill feed's icon for one line, drawn as vector shapes in a square of Extent units around Centre: the cause's
+	 * family (firearms, headshot, explosives, mines, fire, electricity, melee, falls, gas, hazards) for a combat line, the
+	 * outcome (death, sleep, knock-out, join, leave, last life, match) otherwise. ScctHudActivityIcons.cpp.
+	 */
+	void PaintActivityIcon(FScctHudPainter& Painter, const FVector2f& Centre, float Extent, const FScctHudLine& Line, const FLinearColor& Colour);
+
+	/** The kill feed's cause line: how it happened ("Rifle headshot") and who set it off ("Shot by ..."); empty when nothing is known. */
+	FString ActivityCauseText(const FScctHudLine& Line);
 
 	/**
 	 * True when the player's own HUD blocks are to be drawn (a live pawn, not hidden by the game, not looking through
