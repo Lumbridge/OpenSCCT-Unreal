@@ -4,7 +4,6 @@
 #include "Components/PoseableMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
-#include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -22,16 +21,8 @@ namespace
 	// crack of light and not a glow. Its light outlasts it by a little, as the eye's impression does.
 	constexpr float FlashSeconds = 0.05f;
 	constexpr float FlashLightSeconds = 0.085f;
-	// In a moderately lit room; scaled by the picture's exposure when it fires (Play/ScctExposure.h), so the
-	// flash does not white out the screen when the eye is open for the dark. At 26 cd a shot lit nothing: in
-	// a lamp-lit room of the maps the exposure is at its dark end and the scale at its least (0.04), which left
-	// one candela. Looked at with the flash held in such a room (AquaE's Pirates' Room): 500 still shows nothing,
-	// 800 warms the floor, the posts and the ceiling beams around the gun, 1250 is a strong glare and 3000 burns
-	// the floor white.
-	constexpr float FlashLightCandelas = 800.0f;
-
-	TAutoConsoleVariable<float> CVarFlashCandelas(TEXT("scct.Flash.Candelas"), FlashLightCandelas,
-		TEXT("Candelas of the light of the local player's muzzle flash in a moderately lit room (it is scaled by the picture's exposure)."));
+	// The light's strength is every muzzle flash's (FScctExposure::MuzzleFlashCandelas), scaled by the picture's
+	// exposure when it fires, so the flash does not white out the screen when the eye is open for the dark.
 
 	struct FFlashShape
 	{
@@ -347,7 +338,7 @@ void AScctFirstPersonView::PlayMuzzleFlash()
 	++FlashesPlayed;
 	UE_LOG(LogOpenSCCT, Log, TEXT("First person: muzzle flash %d at (%.0f %.0f %.0f), %.1f cm from the eye, its light %.0f cd (exposure scale %.2f)"), FlashesPlayed,
 		Muzzle.GetLocation().X, Muzzle.GetLocation().Y, Muzzle.GetLocation().Z, FVector::Dist(Muzzle.GetLocation(), LastCamera.GetLocation()),
-		CVarFlashCandelas.GetValueOnGameThread() * FlashExposureScale, FlashExposureScale);
+		FScctExposure::MuzzleFlashCandelas() * FlashExposureScale, FlashExposureScale);
 	TickFlash(0.0f);
 }
 
@@ -390,7 +381,7 @@ void AScctFirstPersonView::TickFlash(float DeltaSeconds)
 	}
 
 	const float LightFade = bGunShown ? 1.0f - FMath::Clamp(Age / FlashLightSeconds, 0.0f, 1.0f) : 0.0f;
-	FlashLight->SetIntensity(CVarFlashCandelas.GetValueOnGameThread() * FlashExposureScale * LightFade);
+	FlashLight->SetIntensity(FScctExposure::MuzzleFlashCandelas() * FlashExposureScale * LightFade);
 	if (LightFade <= 0.0f)
 	{
 		FlashLight->SetVisibility(false);

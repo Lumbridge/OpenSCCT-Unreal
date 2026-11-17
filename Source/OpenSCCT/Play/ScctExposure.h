@@ -39,6 +39,13 @@ namespace FScctExposure
 	 */
 	OPENSCCT_API float FlashScale();
 
+	/**
+	 * Candelas of a rifle's muzzle flash in a moderately lit room, before FlashScale (scct.Flash.Candelas). One
+	 * value for every muzzle flash light, the local player's view model and every flash seen from outside, so a
+	 * shot lights the room the same whoever fires it and from wherever it is seen.
+	 */
+	OPENSCCT_API float MuzzleFlashCandelas();
+
 	/** The same factor with the caller's own bounds, for a light that must keep up over the whole exposure range. */
 	OPENSCCT_API float PictureScale(float Least, float Most);
 }

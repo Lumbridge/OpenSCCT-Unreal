@@ -1108,9 +1108,10 @@ void UScctEffectsSubsystem::SpawnMuzzleFlash(const FVector& At, const FVector& D
 
 	const FLinearColor LightTint = bSticky ? FLinearColor(0.3f, 0.55f, 1.0f) : FLinearColor(1.0f, 0.68f, 0.36f);
 	// The light sits a little way down the line of fire, so it lights the room and not just the shooter's hands.
-	// As strong as the view model's own flash (45 cd here, times an exposure scale that is 0.04 in a lamp-lit
-	// room, lit nothing: a spy's or a bot's shot left the room as it was).
-	AcquireLight(At + Direction * 35.0, LightTint, FScctExposure::MuzzleFlashCandelas() * Level, 900.0f, 0.9f /*SCRATCH*/, true);
+	// As strong and as short as the view model's own flash (at 45 cd times an exposure scale of 0.04 in a lamp-lit
+	// room a spy's or a bot's shot left the room as it was). It lives as long as the view model's flash light: a
+	// rifle fires about ten rounds a second and the pool holds 16 lights.
+	AcquireLight(At + Direction * 35.0, LightTint, FScctExposure::MuzzleFlashCandelas() * Level, 900.0f, 0.085f, true);
 }
 
 void UScctEffectsSubsystem::SpawnSparks(const FVector& At, const FVector& Normal, int32 Count, const FLinearColor& Color, float Speed)
