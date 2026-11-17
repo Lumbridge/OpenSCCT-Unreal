@@ -46,6 +46,8 @@ public class OpenSCCT : ModuleRules
 			"StaticMeshDescription",
 			// Cosmetic camo textures are loose PNGs read at run time (Play/ScctPawnLookSubsystem).
 			"ImageCore",
+			// The cooked map packs of OpenSCCT-Unreal-Content are downloaded at run time (Online/ScctMapPacks).
+			"HTTP",
 			"Json",
 			// The map's soft bodies are meshes whose vertices are rewritten each frame (Play/ScctLevelStateSoftBodies).
 			"ProceduralMeshComponent",
@@ -67,6 +69,8 @@ public class OpenSCCT : ModuleRules
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PublicSystemLibraries.Add("crypt32.lib");
+			// The downloaded map packs are checked with SHA-256 from CNG (Online/ScctMapPacks).
+			PublicSystemLibraries.Add("bcrypt.lib");
 		}
 
 		// FSoundQualityInfo, which the engine's audio decoders fill.
