@@ -195,6 +195,8 @@ private:
 		FVector ScaleRatio = FVector::OneVector;
 		FVector FirstLocation = FVector::ZeroVector;
 		FQuat FirstQuat = FQuat::Identity;
+		/** Where the importer put the actor against the table's first place, in the prop's own unscaled frame. */
+		FVector LocalOffset = FVector::ZeroVector;
 		TWeakObjectPtr<class UAnimationAsset> OriginalAnimation;
 		bool bOriginalPlaying = false;
 		bool bOriginalLooping = false;
@@ -202,6 +204,8 @@ private:
 		// What is applied now.
 		int32 SequenceId = -1;
 		TWeakObjectPtr<class UAnimSequenceBase> Sequence;
+		/** The table's frame last set (negative: none), so a prop that stands on one frame is not set again. */
+		float AppliedFrame = -1.0f;
 		bool bMoved = false;
 		bool bDriven = false;
 	};
@@ -279,6 +283,15 @@ private:
 
 	UPROPERTY(Transient)
 	TMap<FString, TObjectPtr<UMaterialInterface>> LoadedMaterials;
+
+	/**
+	 * The skeletal props' sequences loaded so far and what each prop played as imported, held so the garbage
+	 * collector keeps them: PropSequences and FPropState only point at them weakly, and a sequence nothing else
+	 * held was gone by the time the simulation asked for it (a prop that changes sequence, or the match's end
+	 * putting back what the importer gave it).
+	 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UObject>> PropAssets;
 
 	const FScctWorldApi* World = nullptr;
 	const FScctWorldDebugApi* Debug = nullptr;

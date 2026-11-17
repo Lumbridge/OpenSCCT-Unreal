@@ -1227,7 +1227,8 @@ void UScctLevelStateSubsystem::UpdateProps()
 		if (State.bMoved || !Location.Equals(State.FirstLocation, 1.0) || Turn.AngularDistance(State.FirstQuat) > FMath::DegreesToRadians(0.5))
 		{
 			State.bMoved = true;
-			const FTransform Wanted(Turn * State.OriginQuat, Location, State.ScaleRatio * FVector(Record.ScaleX, Record.ScaleY, Record.ScaleZ));
+			const FVector TableScale(Record.ScaleX, Record.ScaleY, Record.ScaleZ);
+			const FTransform Wanted(Turn * State.OriginQuat, Location + Turn.RotateVector(State.LocalOffset * TableScale), State.ScaleRatio * TableScale);
 			if (!Wanted.Equals(Actor->GetActorTransform(), 0.005))
 			{
 				Actor->SetActorTransform(Wanted);
@@ -1256,6 +1257,7 @@ void UScctLevelStateSubsystem::UpdateProps()
 					Component->SetAnimationMode(EAnimationMode::AnimationSingleNode);
 				}
 				Component->SetAnimation(State.Sequence.Get());
+				State.AppliedFrame = -1.0f;
 				if (!State.bDriven)
 				{
 					State.bDriven = true;
@@ -1284,7 +1286,12 @@ void UScctLevelStateSubsystem::UpdateProps()
 			{
 				Component->Stop();
 			}
-			Component->SetPosition(FMath::Clamp(Record.Frame, 0.0f, 1.0f) * Sequence->GetPlayLength(), false);
+			const float Frame = FMath::Clamp(Record.Frame, 0.0f, 1.0f);
+			if (Frame != State.AppliedFrame)
+			{
+				State.AppliedFrame = Frame;
+				Component->SetPosition(Frame * Sequence->GetPlayLength(), false);
+			}
 		}
 	}
 }
@@ -1311,7 +1318,22 @@ void UScctLevelStateSubsystem::BindProp(FPropState& State, const FScctWorldAnima
 		FMath::Abs(Scale.X) > UE_SMALL_NUMBER ? Imported.X / Scale.X : 1.0,
 		FMath::Abs(Scale.Y) > UE_SMALL_NUMBER ? Imported.Y / Scale.Y : 1.0,
 		FMath::Abs(Scale.Z) > UE_SMALL_NUMBER ? Imported.Z / Scale.Z : 1.0);
+	// Any shift the importer gave the actor from the table's place (a pivot) goes with the prop when it moves,
+	// turned and scaled with it.
+	const FVector Shift = State.FirstQuat.UnrotateVector(Actor->GetActorLocation() - State.FirstLocation);
+	State.LocalOffset = FVector(
+		FMath::Abs(Scale.X) > UE_SMALL_NUMBER ? Shift.X / Scale.X : Shift.X,
+		FMath::Abs(Scale.Y) > UE_SMALL_NUMBER ? Shift.Y / Scale.Y : Shift.Y,
+		FMath::Abs(Scale.Z) > UE_SMALL_NUMBER ? Shift.Z / Scale.Z : Shift.Z);
+	if (Shift.Size() > 1.0)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: skeletal prop '%s' was imported %.1f cm from the table's place; the shift goes with it"), *Name, Shift.Size());
+	}
 	State.OriginalAnimation = Component->AnimationData.AnimToPlay;
+	if (UAnimationAsset* Original = Component->AnimationData.AnimToPlay)
+	{
+		PropAssets.AddUnique(Original);
+	}
 	State.bOriginalPlaying = Component->AnimationData.bSavedPlaying;
 	State.bOriginalLooping = Component->AnimationData.bSavedLooping;
 	++NumPropsBound;
@@ -1339,6 +1361,7 @@ UAnimSequenceBase* UScctLevelStateSubsystem::FindPropSequence(const ASkeletalMes
 			if (UAnimSequenceBase* Loaded = Cast<UAnimSequenceBase>(Asset.GetAsset()))
 			{
 				Found->Add(Loaded);
+				PropAssets.Add(Loaded);
 			}
 		}
 	}
