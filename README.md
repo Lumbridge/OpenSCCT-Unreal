@@ -37,6 +37,27 @@ Build the bridge too, before the first run and after any C# change (output lands
 dotnet build -c Release Bridge\OpenScct.UnrealBridge -p:OpenScctRoot=<OpenSCCT checkout>\
 ```
 
+## Assets after a fresh checkout
+
+Build the C++ first (the weapon table and the front end level name classes of the game module). Then, in this
+order, with `$c` the converted content folder. Every script runs headless (no window), prints its own log lines
+and ends with exit code 0 only when its editor script really finished:
+
+```powershell
+Tools\Import\Import-Characters.ps1 -Content $c     # bodies, weapons, view models, goggle lenses -> Content\Imported\Chars
+Tools\Effects\Build-EffectAssets.ps1 -Content $c   # the game's effect meshes -> Content\Imported\Fx
+Tools\Import\Import-Map.ps1 -Map AquaE -Content $c # once per map -> Content\Imported\Maps\<Map>
+```
+
+Everything else is committed and only needs its script after a change to that script: the surface, glass, water
+and sky materials (`Tools\Import\Import-Assets.ps1 -MaterialsOnly`; without the switch it also downloads the CC0
+sets again), the map effect materials (`Tools\Import\Import-Effects.ps1`), the merc rifle
+(`Tools\Import\Import-MercRifle.ps1`), the marker materials (`Tools\Level\Build-LevelAssets.ps1`), the goggles
+(`Tools\Materials\Build-VisionMaterials.ps1`) and the front end level (`Tools\Menu\Build-FrontEnd.ps1`). They
+come before the map imports when they are run. A rebuilt asset is a new binary file even when nothing changed.
+The weapon table `DA_ScctWeapons` is made once: delete it and run `Import-Characters.ps1` to get the script's
+values back.
+
 ## Playing a level
 
 An imported level starts a local match with bots when it opens. Game URL options (all optional, see
