@@ -144,7 +144,7 @@ protected:
 class SScctButton : public SButton, public IScctDriven
 {
 public:
-	SLATE_BEGIN_ARGS(SScctButton) : _Look(EScctButtonLook::Secondary), _Selected(false), _Colour(ScctUi::Accent()), _MinWidth(0.0f), _FillWidth(false) {}
+	SLATE_BEGIN_ARGS(SScctButton) : _Look(EScctButtonLook::Secondary), _Selected(false), _Colour(ScctUi::Accent()), _MinWidth(0.0f), _FillWidth(false), _Compact(false) {}
 		SLATE_ATTRIBUTE(FText, Text)
 		/** A second, smaller line under the caption (Menu look). */
 		SLATE_ATTRIBUTE(FText, SubText)
@@ -153,6 +153,8 @@ public:
 		SLATE_ARGUMENT(FLinearColor, Colour)
 		SLATE_ARGUMENT(float, MinWidth)
 		SLATE_ARGUMENT(bool, FillWidth)
+		/** Less space above and below the caption (Menu look), for a long column of entries such as the main menu's. */
+		SLATE_ARGUMENT(bool, Compact)
 		/** What the page's help pane says while the button has the focus. */
 		SLATE_ARGUMENT(FText, Description)
 		SLATE_EVENT(FSimpleDelegate, OnPressed)
