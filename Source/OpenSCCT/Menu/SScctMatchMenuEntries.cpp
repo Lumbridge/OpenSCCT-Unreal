@@ -255,8 +255,8 @@ FString SScctMatchMenu::EntryCaption(int32 Entry) const
 	case EScctMatchMenuButton::ReturnToLobby: return ScctUi::GameText(TEXT("Start_Menu"), TEXT("Returntolobby.Caption"), TEXT("Return to lobby"));
 	case EScctMatchMenuButton::QuitSession:
 		return bOnlineLevel ? (Context.IAmServer != 0 && bContextKnown ? TEXT("End session") : TEXT("Leave the server"))
-			: ScctUi::GameText(TEXT("Start_Menu"), TEXT("Quit.Caption"), TEXT("Main menu"));
-	case MatchMenuQuitGameEntry: return TEXT("Quit game");
+			: ScctUi::GameText(TEXT("Start_Menu"), TEXT("Quit.Caption"), TEXT("Quit Session"));
+	case MatchMenuQuitGameEntry: return ScctUi::GameText(TEXT("GUIYesNoQuitPage"), TEXT("QuitGame.Caption"), TEXT("Quit Game"));
 	case MatchMenuChangeSideEntry: return ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Button2"), TEXT("Switch Team"));
 	case MatchMenuRestartEntry: return TEXT("Restart");
 	case MatchMenuHudEditEntry: return TEXT("Edit HUD layout");
@@ -420,11 +420,12 @@ void SScctMatchMenu::Act(int32 Entry)
 			!bOnlineLevel ? TEXT("End the match and go back to the main menu?")
 				: Context.IAmServer != 0 && bContextKnown ? TEXT("Leaving the game now will end this session. Are you sure?")
 				: TEXT("Leave the server and go back to the menus? The match goes on without you."),
-			bOnlineLevel ? TEXT("Leave") : TEXT("Quit match"), [this] { OnLeave.ExecuteIfBound(); });
+			bOnlineLevel && Context.IAmServer == 0 ? TEXT("Leave") : ScctUi::GameText(TEXT("GUIYesNoQuitPage"), TEXT("sBT_Yes"), TEXT("End Session")),
+			[this] { OnLeave.ExecuteIfBound(); });
 		break;
 	case MatchMenuQuitGameEntry:
 		// GUIYesNoQuitPage.QuitButtonClick: leaves the session (telling the server), then the program quits.
-		Ask(Entry, TEXT("Quit game"), TEXT("Quit OpenSCCT? You will leave the match and the game closes."), TEXT("Quit"), [this]
+		Ask(Entry, EntryCaption(Entry), TEXT("Quit OpenSCCT? You will leave the match and the game closes."), EntryCaption(Entry), [this]
 		{
 			UE_LOG(LogOpenSCCT, Log, TEXT("ScctMatchMenu: Quit Game: leaving the session, then quitting"));
 			if (bOnlineLevel)
