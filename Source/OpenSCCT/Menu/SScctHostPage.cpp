@@ -471,6 +471,10 @@ void SScctHostPage::ApplyPreset(const FString& Preset)
 		else if (Key == TEXT("Tab") && Value.Equals(TEXT("alternate"), ESearchCase::IgnoreCase)) { Tab = ETab::Rules; bAlternateOpen = true; }
 		else if (Key == TEXT("Tab")) { Tab = Value.Equals(TEXT("rules"), ESearchCase::IgnoreCase) ? ETab::Rules : Value.Equals(TEXT("hosting"), ESearchCase::IgnoreCase) ? ETab::Hosting : ETab::Game; }
 		else if (Key == TEXT("Filter")) { if (Picker.IsValid()) { Picker->SetModeFilter(Value); } }
+		// The map list's group, search text and view, shown without saving them as the player's choice.
+		else if (Key == TEXT("Group")) { if (Picker.IsValid()) { Picker->SetGroup(Value, false); } }
+		else if (Key == TEXT("Search")) { if (Picker.IsValid()) { Picker->SetSearch(Value); } }
+		else if (Key == TEXT("MapView")) { if (Picker.IsValid()) { Picker->SetView(Value.Equals(TEXT("list"), ESearchCase::IgnoreCase) ? EScctMapView::List : Value.Equals(TEXT("thumbnails"), ESearchCase::IgnoreCase) ? EScctMapView::ThumbnailList : EScctMapView::PictureGrid, false); } }
 		else if (Key == TEXT("Random")) { bRandomMap = IsYes(Value); }
 		else { Line = WithOption(Line, Key, Value); }
 	}

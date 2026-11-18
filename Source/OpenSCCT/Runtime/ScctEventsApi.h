@@ -289,8 +289,8 @@ namespace EScctAmbientFlags
 /**
  * One actor whose AmbientSound plays now. Match between frames by Key. The original's rules: a Positional source
  * plays within 100 * Radius; a Zone source plays (2D) only while ListenerInZone, and several zones naming one
- * sound share one voice; any other 2D source plays at Volume inside Radius and Volume / (1 + 0.5 * (d - R) / R)
- * beyond it, silent below 0.05.
+ * sound share one voice; any other 2D source holds a voice of its own (the voices of several speakers of one sound
+ * add up) at Volume inside Radius and Volume / (1 + 0.5 * (d - R) / R) beyond it, silent below 0.05.
  */
 struct FScctAmbientSound
 {

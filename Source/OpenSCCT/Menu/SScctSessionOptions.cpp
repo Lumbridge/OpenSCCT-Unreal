@@ -362,9 +362,17 @@ void SScctSessionOptions::RandomMap()
 	{
 		return;
 	}
+
+	// Within the map lists' group when it holds one of them (the Godot client's RandomMapDialog opens on the saved group).
+	const FScctMapGroup Group = ScctMapBrowser::ActiveGroupEntry();
+	const TArray<FString> InGroup = Candidates.FilterByPredicate([&Group](const FString& Id) { return Group.Holds(Id); });
+	if (!InGroup.IsEmpty())
+	{
+		Candidates = InGroup;
+	}
 	static FRandomStream Stream(FPlatformTime::Cycles());
 	const FString Drawn = Candidates[Stream.RandRange(0, Candidates.Num() - 1)];
-	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby RANDOM MAP drew %s of %d map(s) offering %s"), *Drawn, Candidates.Num(), *ModeKey);
+	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby RANDOM MAP drew %s of %d map(s) offering %s in the group \"%s\""), *Drawn, Candidates.Num(), *ModeKey, *Group.Name);
 	Visit->SetMatch(Drawn, -1);
 }
 

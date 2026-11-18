@@ -3,6 +3,7 @@
 #include "Hud/ScctCrosshairShape.h"
 #include "Hud/ScctHudStyle.h"
 #include "OpenSCCT.h"
+#include "Hud/ScctPoisonOverlay.h"
 #include "Hud/ScctVisorEffects.h"
 
 // The blocks about the player: status, equipment, prompt, crosshair, scope and the washes over the picture.
@@ -145,6 +146,9 @@ void ScctHudElements::PaintScreenEffects(FScctHudPainter& Painter, const FScctHu
 			break;
 		}
 	}
+
+	// The poison's wash over the view, either side's (the brightening half of it is in the picture already).
+	ScctPoisonOverlay::Paint(Painter, Model);
 
 	// The merc's visor: EMP shutdown, perturbation, foam, droplets, the sticky shocker's arcs.
 	ScctVisorEffects::Paint(Painter, Model);

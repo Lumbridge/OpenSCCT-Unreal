@@ -4,6 +4,7 @@
 #include "Hud/ScctHudModel.h"
 #include "Hud/ScctHudPainter.h"
 #include "Hud/ScctHudStyle.h"
+#include "Hud/ScctPoisonOverlay.h"
 #include "Math/RandomStream.h"
 #include "Misc/CommandLine.h"
 #include "OpenSCCT.h"
@@ -20,6 +21,10 @@ namespace
 
 	/** The faked rain stops this long after it starts, so the droplets' run-out can be seen too. */
 	constexpr float ForcedWetSeconds = 12.0f;
+
+	/** The faked poison lasts the first of these and is cured for the second, over and over, so the cure and a new infection can be seen. */
+	constexpr float ForcedPoisonSeconds = 10.0f;
+	constexpr float ForcedCureSeconds = 2.0f;
 
 	/** The faked gas mask goes on this long after it is selected, so the frame alone can be seen first. */
 	constexpr float ForcedMaskOnSeconds = 2.0f;
@@ -394,9 +399,9 @@ void ScctVisorEffects::ParseCommandLine(FScctVisorState& Visor)
 		Visor.ForceDelay = FMath::Max(FCString::Atof(*Delay), 0.0f);
 	}
 	What = What.ToLower();
-	if (What != TEXT("shutdown") && What != TEXT("perturb") && What != TEXT("foam") && What != TEXT("shock") && What != TEXT("wet") && What != TEXT("mask"))
+	if (What != TEXT("shutdown") && What != TEXT("perturb") && What != TEXT("foam") && What != TEXT("shock") && What != TEXT("wet") && What != TEXT("mask") && What != TEXT("poison"))
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Visor: -ScctVisorFx=%s is not one of shutdown, perturb, foam, shock, wet, mask"), *Value);
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Visor: -ScctVisorFx=%s is not one of shutdown, perturb, foam, shock, wet, mask, poison"), *Value);
 		return;
 	}
 	Visor.Forced = What;
@@ -490,6 +495,10 @@ namespace
 			{
 				State.EffectFlags |= EScctHudEffectFlags::GasMaskWorn;
 			}
+		}
+		else if (Visor.Forced == TEXT("poison") && FMath::Fmod(Age, ForcedPoisonSeconds + ForcedCureSeconds) < ForcedPoisonSeconds)
+		{
+			State.Flags |= EScctHudFlags::Poisoned;
 		}
 	}
 }
@@ -595,6 +604,7 @@ void ScctVisorEffects::Update(FScctVisorState& Visor, FScctHudModel& Model, floa
 	Visor.bShocked = bShocked;
 
 	ScctGasMaskOverlay::Update(Visor, State);
+	ScctPoisonOverlay::Update(Visor, State);
 }
 
 bool ScctVisorEffects::IsHudShutDown(const FScctHudModel& Model)
