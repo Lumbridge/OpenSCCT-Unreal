@@ -14,7 +14,7 @@
 
 namespace
 {
-	const TCHAR* const Slots[] = { TEXT("baseColor"), TEXT("normal"), TEXT("height"), TEXT("roughness"),
+	const TCHAR* const AuthoredSurfaceSlots[] = { TEXT("baseColor"), TEXT("normal"), TEXT("height"), TEXT("roughness"),
 		TEXT("metallic"), TEXT("specular"), TEXT("emission"), TEXT("ao"), TEXT("opacity"), TEXT("detailColor"),
 		TEXT("detailNormal"), TEXT("environment") };
 
@@ -165,7 +165,7 @@ namespace
 			for (const auto& Entry : Textures.Json->Values)
 			{
 				const FString Slot(*Entry.Key);
-				if (!Algo::AnyOf(Slots, [&](const TCHAR* Known) { return Slot.Equals(Known, ESearchCase::CaseSensitive); }))
+				if (!Algo::AnyOf(AuthoredSurfaceSlots, [&](const TCHAR* Known) { return Slot.Equals(Known, ESearchCase::CaseSensitive); }))
 				{
 					D.Invalid(*Slot);
 					continue;
