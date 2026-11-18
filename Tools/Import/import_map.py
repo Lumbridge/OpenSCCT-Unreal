@@ -45,6 +45,16 @@ LIGHT_SATURATION = 0.55
 # none of the room and none of the characters. Nothing of ours carries that mark, so such a light is kept on a
 # lighting channel nothing receives: placed (the level state can still switch it) but lighting no one.
 SPECIAL_LIT_CHANNEL = 2
+# A lamp the original baked its lightmaps from (apply_static) is already in the baked fill (BAKED_FILL below).
+# Measured in BankP's guard room, where 103 of 108 lights are such lamps: the fill alone gives a scene luminance of
+# 0.010 and the lamps another 0.070, twice what the whole baked light stood for. They keep this share, for the
+# shadows, the shine and the characters. (ScctRuntimeMapActor.cpp has the same two numbers.)
+STATIC_LIGHT_SHARE = 0.4
+# A light the original put on characters only (apply_ingame without apply_static) stands at a real fixture in the
+# maps whose baking lamps are gone from the file, and is the best record of the room's light there. In a map that
+# still has its baking lamps (more than half of its lights) it is a fill for the characters and lit no wall:
+# BankP's roof, dark in its lightmaps, was flooded pale grey by one hung 5 m over it. There it keeps this share.
+CHARACTER_FILL_SHARE = 0.25
 # A light with a small radius (many maps hang one of radius 25 or 75 at each lamp, to light the lamp's own housing
 # and whoever walks under it) puts all its light on the patch of wall beside it. The original could not draw
 # that patch brighter than twice its texture; here it is a white hole with a ruled rim once the eye has opened for
@@ -93,7 +103,7 @@ DETAIL_MAX_GAIN = 5.0
 BAKED_FILL = 0.5
 # The least light a lit surface gives off, of its own colour, in the units of the lights above (M_ScctSurface, "the
 # least light"): what the original's zone ambient did. A room with no surviving lamp is dim shapes once the eye
-# has opened for it (the exposure reaches down to -4 EV, where this is about a quarter of middle grey), not black.
+# has opened as far as it goes (Source/OpenSCCT/Play/ScctExposure.cpp sets that range for every map), not black.
 AMBIENT_FLOOR = 0.012
 # Water the original drew at full brightness (a pool in a night club): how much of its colour it gives off, in the
 # picture. And the same for the haze sheets it hung in deep water.
@@ -738,6 +748,11 @@ def main():
     # the lights its lightmaps were baked from are mostly not in the map file, and the character lights sit at the
     # real fixtures, so together they are the best record of how each room was lit.
     count = 0
+    placed = [light for light in lighting["lights"] if not light.get("hidden")]
+    baking = sum(1 for light in placed if light.get("apply_static"))
+    fill_share = CHARACTER_FILL_SHARE if baking * 2 > len(placed) else 1.0
+    log("lights: %d of %d are lamps the lightmaps were baked from (share %.2f); characters-only lights keep %.2f" % (
+        baking, len(placed), STATIC_LIGHT_SHARE, fill_share))
     for light in lighting["lights"]:
         if light.get("hidden"):
             continue
@@ -754,7 +769,8 @@ def main():
         component.set_editor_property("use_inverse_squared_falloff", False)
         small = min(radius / SMALL_LIGHT_RADIUS, 1.0)
         component.set_editor_property("light_falloff_exponent", LIGHT_FALLOFF + (SMALL_LIGHT_FALLOFF - LIGHT_FALLOFF) * (1.0 - small))
-        component.set_intensity(light["brightness"] * LIGHT_PER_BRIGHTNESS * small)
+        share = STATIC_LIGHT_SHARE if light.get("apply_static") else fill_share if light.get("apply_ingame") else 1.0
+        component.set_intensity(light["brightness"] * LIGHT_PER_BRIGHTNESS * small * share)
         # The map's colours come from hue and saturation, in display (gamma) space.
         colour = [channel ** 2.2 for channel in light["color"]]
         grey = 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2]
@@ -879,11 +895,12 @@ def main():
     settings = post.get_editor_property("settings")
     for name, value in [
         ("auto_exposure_method", unreal.AutoExposureMethod.AEM_HISTOGRAM),
-        # In EV100 (the project extends the luminance range). The eye adapts well into the dark, so shadows
-        # stay readable when you stand in them, but not far up, so bright rooms do not grey out.
-        ("auto_exposure_min_brightness", -4.0),
+        # In EV100 (the project extends the luminance range). The game sets these three over this volume for
+        # every map, from its own settings (Source/OpenSCCT/Play/ScctExposure.cpp, scct.Exposure.*): the eye opens
+        # no further than a dim lamp-lit room needs, so a dark place stays dark, as it was in the original.
+        ("auto_exposure_min_brightness", -3.0),
         ("auto_exposure_max_brightness", 4.0),
-        ("auto_exposure_bias", 0.0),
+        ("auto_exposure_bias", -0.75),
         # The eye is quick: a match starts on the right exposure within a second, and walking out of a dark
         # corridor does not leave the yard white for long.
         ("auto_exposure_speed_up", 5.0),

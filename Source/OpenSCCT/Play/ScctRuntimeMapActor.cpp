@@ -14,6 +14,7 @@
 #include "GLTFMesh.h"
 #include "GLTFMeshFactory.h"
 #include "GLTFReader.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
@@ -36,13 +37,35 @@ namespace
 	constexpr float RadiusUnits = 25.0f;              // world radius = 25 * (LightRadius + 1), as the original engine
 	constexpr float LightFalloff = 1.6f;              // light = (1 - (d / R)^2) ^ this
 	constexpr float LightPerBrightness = 5.0f / 255.0f;
-	constexpr float LightSaturation = 0.7f;
+	constexpr float LightSaturation = 0.55f;
+	constexpr float SmallLightRadius = 300.0f;        // below this reach a light is weakened and its edge softened
+	constexpr float SmallLightFalloff = 3.0f;
+	constexpr float AmbientFloor = 0.012f;            // the least light of a lit surface (the original's zone ambient)
+	// A lamp the original baked its lightmaps from (apply_static) is already in the baked fill below. Measured in
+	// BankP's guard room (103 of its 108 lights are such lamps): the fill alone gives a scene luminance of 0.010,
+	// the lamps another 0.070, twice what the whole baked light stood for. They keep this share, for the shadows,
+	// the shine and the characters.
+	constexpr float StaticLightShare = 0.4f;
+	// A light the original put on characters only (apply_ingame without apply_static) stands at a real fixture in
+	// the maps whose baking lamps are gone from the file, and is the best record of the room's light there. In a
+	// map that still has its baking lamps (more than half of its lights) it is a fill for the characters and lit
+	// no wall: BankP's roof, dark in its lightmaps, was flooded pale grey by one hung 5 m over it. There it keeps
+	// this share.
+	constexpr float CharacterFillShare = 0.25f;
 	constexpr float EmissiveUnlit = 0.9f;             // screens, lamps and signs that were unlit in the original
 	constexpr float EmissiveAdditive = 0.35f;         // flare and glow sprites, holograms
 	constexpr float EmissiveSelfIllum = 2.0f;         // the self-lit part of a lit surface
 	constexpr float GlowCardBrightness = 0.2f;        // beam and flare cards modelled into the level
 	constexpr float EmissiveCaustics = 0.08f;         // additive sheets drawing light under water
 	constexpr float BakedFill = 0.5f;                 // the share of the original's baked light given back
+
+	// Look experiments (read when the map is built; set them before, e.g. -dpcvars=scct.RuntimeMap.StaticLights=0).
+	TAutoConsoleVariable<float> CVarRuntimeStaticLights(TEXT("scct.RuntimeMap.StaticLights"), StaticLightShare,
+		TEXT("Share of its strength a lamp the original baked its lightmaps from (apply_static) keeps in a map built at run time: 1 all, 0 none."));
+	TAutoConsoleVariable<float> CVarRuntimeCharacterFills(TEXT("scct.RuntimeMap.CharacterFills"), CharacterFillShare,
+		TEXT("Share of its strength a characters-only light keeps in a map built at run time that still has its baking lamps: 1 all, 0 none."));
+	TAutoConsoleVariable<float> CVarRuntimeBakedFill(TEXT("scct.RuntimeMap.BakedFill"), BakedFill,
+		TEXT("The share of the original's baked light (lightmaps, vertex colours) a map built at run time gives back as a glow."));
 
 	// Custom primitive data slots of the surface material (Tools/Import/scct_materials.py).
 	constexpr int32 LocalDetailSlot = 0;
@@ -710,7 +733,8 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 
 			// The original's baked light as a faint fill: its lightmap page on the level surfaces (second UV set),
 			// and the baked vertex colours of placed meshes (custom primitive data slot 1 on their components).
-			Instance->SetScalarParameterValue(TEXT("BakedFill"), BakedFill);
+			Instance->SetScalarParameterValue(TEXT("BakedFill"), FMath::Max(CVarRuntimeBakedFill.GetValueOnGameThread(), 0.0f));
+			Instance->SetScalarParameterValue(TEXT("AmbientFloor"), AmbientFloor);
 			if (const FString* Page = LightmapOf.Find(Key(Name)))
 			{
 				if (UTexture2D* Lightmap = TextureFor(*Page))
@@ -738,7 +762,25 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 void AScctRuntimeMapActor::PlaceLights(const TSharedPtr<FJsonObject>& Lighting)
 {
 	// Every light of the map, as import_map.py places them: the original's falloff kept (a little tighter), its
-	// brightness in the units the post-process exposure was set for, its colour partly given up toward white.
+	// brightness in the units the post-process exposure was set for, its colour partly given up toward white, a
+	// light of small reach weakened and softened, and the lights the baked fill already stands for held back.
+	int32 NumToPlace = 0;
+	int32 NumBaking = 0;
+	for (const TSharedPtr<FJsonValue>& Value : ArrayOf(Lighting, TEXT("lights")))
+	{
+		const TSharedPtr<FJsonObject> Light = Value->AsObject();
+		if (Light.IsValid() && !BoolOf(Light, TEXT("hidden")))
+		{
+			++NumToPlace;
+			NumBaking += BoolOf(Light, TEXT("apply_static")) ? 1 : 0;
+		}
+	}
+	const bool bBakingLampsKept = NumBaking * 2 > NumToPlace;
+	const float StaticShare = FMath::Max(CVarRuntimeStaticLights.GetValueOnGameThread(), 0.0f);
+	const float FillShare = bBakingLampsKept ? FMath::Max(CVarRuntimeCharacterFills.GetValueOnGameThread(), 0.0f) : 1.0f;
+	UE_LOG(LogOpenSCCT, Log, TEXT("Runtime map: %d of %d lights are lamps the lightmaps were baked from (share %.2f); characters-only lights keep %.2f"),
+		NumBaking, NumToPlace, StaticShare, FillShare);
+
 	for (const TSharedPtr<FJsonValue>& Value : ArrayOf(Lighting, TEXT("lights")))
 	{
 		const TSharedPtr<FJsonObject> Light = Value->AsObject();
@@ -776,14 +818,17 @@ void AScctRuntimeMapActor::PlaceLights(const TSharedPtr<FJsonObject>& Lighting)
 		}
 		Component->SetMobility(EComponentMobility::Movable);
 		Component->SetUseInverseSquaredFalloff(false);
-		Component->SetLightFalloffExponent(LightFalloff);
-		Component->SetIntensity(NumberOf(Light, TEXT("brightness")) * LightPerBrightness);
+		const float Radius = RadiusUnits * (NumberOf(Light, TEXT("radius")) + 1.0);
+		const float Small = FMath::Min(Radius / SmallLightRadius, 1.0f);
+		Component->SetLightFalloffExponent(LightFalloff + (SmallLightFalloff - LightFalloff) * (1.0f - Small));
+		const float Share = BoolOf(Light, TEXT("apply_static")) ? StaticShare : BoolOf(Light, TEXT("apply_ingame")) ? FillShare : 1.0f;
+		Component->SetIntensity(NumberOf(Light, TEXT("brightness")) * LightPerBrightness * Small * Share);
 		FVector Colour = VectorOf(Light, TEXT("color"), FVector::OneVector);
 		Colour = FVector(FMath::Pow(Colour.X, 2.2), FMath::Pow(Colour.Y, 2.2), FMath::Pow(Colour.Z, 2.2));
 		const double Grey = 0.2126 * Colour.X + 0.7152 * Colour.Y + 0.0722 * Colour.Z;
 		Colour = FVector(Grey) + (Colour - FVector(Grey)) * LightSaturation;
 		Component->SetLightColor(FLinearColor(Colour.X, Colour.Y, Colour.Z));
-		Component->SetAttenuationRadius(RadiusUnits * (NumberOf(Light, TEXT("radius")) + 1.0));
+		Component->SetAttenuationRadius(Radius);
 		Component->SetSourceRadius(6.0f);
 		Component->SetSoftSourceRadius(12.0f);
 		Component->SetCastShadows(true);

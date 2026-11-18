@@ -35,7 +35,6 @@ namespace
 	// of a lit room, not a white screen), more as the picture gets darker than the exposure can follow, by the
 	// power NightGainSlope of how much darker, between the bounds; NightGainRate per second is how fast it moves.
 	constexpr int32 NightIndex = 0;
-	constexpr float SettledPictureLevel = 0.18f;
 	constexpr float NightGainSettled = 1.25f;
 	constexpr float NightGainSlope = 0.5f;
 	constexpr float NightGainLeast = 0.9f;
@@ -175,7 +174,7 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 		{
 			const float Level = FScctExposure::PictureLevel();
 			const float Wanted = Level > 0.0f
-				? FMath::Clamp(NightGainSettled * FMath::Pow(SettledPictureLevel / FMath::Max(Level, 0.002f), NightGainSlope), NightGainLeast, NightGainMost)
+				? FMath::Clamp(NightGainSettled * FMath::Pow(FScctExposure::SettledPictureLevel() / FMath::Max(Level, 0.002f), NightGainSlope), NightGainLeast, NightGainMost)
 				: NightGainSettled;
 			// In the logarithm: the tube opens as fast as it closes.
 			NightGain = NightGain > 0.0f
