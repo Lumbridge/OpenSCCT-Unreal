@@ -11,6 +11,8 @@
 #include "Widgets/SViewport.h"
 #if PLATFORM_WINDOWS
 #include "Windows/WindowsHWrapper.h"
+// Keep WinUser's LoadImageW alias out of FImageUtils declarations in unity builds.
+#undef LoadImage
 #endif
 
 namespace

@@ -9,6 +9,7 @@
 #include "ImageUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/FileHelper.h"
+#include "OpenSCCT.h"
 #include "Online/ScctMapFolders.h"
 #include "Play/ScctLevelStateSubsystem.h"
 #include "Play/ScctSessionSubsystem.h"
@@ -191,6 +192,8 @@ void UScctMapLightSprites::Load()
 
 	const auto* Level = World->GetSubsystem<UScctLevelStateSubsystem>();
 	const FVector SkyEye = Location(Child(Lighting, TEXT("sky")));
+	const FString SharedRender = FPaths::ConvertRelativePathToFull(FOpenSCCTModule::FindContentRoot() / TEXT("shared/render"));
+	TOptional<TMap<FName, FString>> SharedTextures;
 	TMap<FString, UTexture2D*> Textures;
 	TMap<FString, UMaterialInstanceDynamic*> Materials;
 	TMap<FString, FBatch> Batches;
@@ -215,20 +218,39 @@ void UScctMapLightSprites::Load()
 		}
 
 		const FObject Props = Child(Light, TEXT("props"));
+		const FString Source = String(Child(Props, TEXT("Texture")), TEXT("$asset"));
 		if (String(Light, TEXT("class")) != TEXT("Light") || Light->HasField(TEXT("corona")) ||
 			Flag(Props, TEXT("bCorona")) || Flag(Props, TEXT("bHidden"), true) ||
-			Number(Props, TEXT("DrawType"), 1) != 1 || String(Child(Props, TEXT("Texture")), TEXT("$asset")).IsEmpty()) continue;
+			Number(Props, TEXT("DrawType"), 1) != 1 || Source.IsEmpty()) continue;
 		const FObject Sprite = Child(Light, TEXT("sprite"));
-		const FString Uri = String(Sprite, TEXT("texture_uri"));
+		FString Uri = String(Sprite, TEXT("texture_uri"));
+		const FString* TextureRoot = &Render;
+		if (Uri.IsEmpty())
+		{
+			// Older maps reference the shared texture by package and object name.
+			if (!SharedTextures.IsSet())
+			{
+				SharedTextures.Emplace();
+				const FObject Table = Child(Document(SharedRender / TEXT("render.json")), TEXT("textures"));
+				if (Table)
+					for (const auto& Entry : Table->Values)
+						if (Entry.Value->Type == EJson::String) SharedTextures->Add(FName(*FString(Entry.Key)), Entry.Value->AsString());
+			}
+			Uri = SharedTextures->FindRef(FName(*Source));
+			int32 FirstDot, LastDot;
+			if (Uri.IsEmpty() && Source.FindChar('.', FirstDot) && Source.FindLastChar('.', LastDot) && LastDot > FirstDot)
+				Uri = SharedTextures->FindRef(FName(*(Source.Left(FirstDot) + Source.Mid(LastDot))));
+			TextureRoot = &SharedRender;
+		}
 		if (Uri.IsEmpty() || !FPaths::IsRelative(Uri)) continue;
-		FString File = FPaths::ConvertRelativePathToFull(Render / Uri);
-		if (!FPaths::CollapseRelativeDirectories(File) || !FPaths::IsUnderDirectory(File, Render)) continue;
-		UTexture2D** Found = Textures.Find(Uri);
-		UTexture2D* Texture = Found ? *Found : Textures.Add(Uri, FImageUtils::ImportFileAsTexture2D(File));
+		FString File = FPaths::ConvertRelativePathToFull(*TextureRoot / Uri);
+		if (!FPaths::CollapseRelativeDirectories(File) || !FPaths::IsUnderDirectory(File, *TextureRoot)) continue;
+		UTexture2D** Found = Textures.Find(File);
+		UTexture2D* Texture = Found ? *Found : Textures.Add(File, FImageUtils::ImportFileAsTexture2D(File));
 		if (!Texture) continue;
 
 		const FString Suffix = Blend(Props, Sprite);
-		const FString Key = Suffix + TEXT(":") + Uri;
+		const FString Key = Suffix + TEXT(":") + File;
 		auto*& Material = Materials.FindOrAdd(Key);
 		if (!Material)
 		{
