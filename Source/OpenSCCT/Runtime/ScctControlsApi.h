@@ -193,7 +193,7 @@ struct FScctControlSettings
 {
 	int32 InvertY;          // up and down look the other way round (default 0)
 	int32 InvertXSpy;       // the spy's free look turns the other way left and right (default 0)
-	int32 SpyRollFreeLook;  // the spy's camera may turn during a roll (default 0)
+	int32 SpyRollFreeLook;  // the spy's camera may turn during a roll (default 1)
 	int32 AutoHackComms;    // hack enemy communications without holding the key (default 0)
 	int32 MouseWheelSpeed;  // 0 the wheel changes gadgets (default), 1 it sets walk and run
 	int32 Widescreen;       // 1 keeps the 4:3 vertical view and adds width (default), 0 stretches the 4:3 picture

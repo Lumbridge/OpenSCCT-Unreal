@@ -268,7 +268,7 @@ public sealed class ControlSettings
 
     /// <summary>The spy's camera may turn during a roll while the roll keeps its starting direction.</summary>
     [JsonPropertyName("spy_roll_free_look")]
-    public bool SpyRollFreeLook { get; set; }
+    public bool SpyRollFreeLook { get; set; } = true;
 
     /// <summary>The mouse wheel: "Gadget" (changes gadgets) or "Speed" (walk and run).</summary>
     [JsonPropertyName("mouse_wheel")]

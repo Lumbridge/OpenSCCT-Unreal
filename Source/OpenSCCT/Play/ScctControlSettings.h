@@ -224,7 +224,7 @@ public:
 
 	/** The spy's camera may turn during a roll. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Look")
-	bool bSpyRollFreeLook = false;
+	bool bSpyRollFreeLook = true;
 
 	/** A multiplier over every mouse count; 1 is the original's turn per count. For mice whose counts differ. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Look")
