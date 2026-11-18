@@ -34,7 +34,7 @@ struct FScctWeaponPresentation
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Weapon", meta = (AllowedClasses = "/Script/Engine.SkeletalMesh"))
 	FSoftObjectPath Mesh;
 
-	/** A model drawn in place of the original gun, when the asset exists. */
+	/** A model drawn in place of the original gun, when the asset exists and scct.Weapons.Replacements is 1 (it is 0 unless set: the original guns are drawn). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Replacement", meta = (AllowedClasses = "/Script/Engine.SkeletalMesh"))
 	FSoftObjectPath ReplacementMesh;
 

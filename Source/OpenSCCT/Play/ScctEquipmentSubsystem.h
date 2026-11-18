@@ -42,8 +42,8 @@ class UStaticMeshComponent;
  *   -ScctNoViewModel         do not draw the first-person view model (to compare a view with and without it)
  *
  * Console variables for tuning with the game running: scct.Torch.CandelasPerBrightness, scct.Torch.FogScattering,
- * scct.FirstPerson.Scale, and scct.Weapons.Replacements (0: the original models even where the weapon table
- * names a replacement that exists; read when a weapon is next shown).
+ * scct.FirstPerson.Scale, and scct.Weapons.Replacements (0, the default: the original models; 1: the weapon
+ * table's replacement models where their assets exist; read when a weapon is next shown).
  */
 UCLASS()
 class OPENSCCT_API UScctEquipmentSubsystem : public UWorldSubsystem
