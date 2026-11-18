@@ -25,7 +25,7 @@ class UTexture2D;
  * torch beam takes the same turn. A slot another feature changes (the camo suit, a vision skin, the rate-of-fire
  * display) is left to it and looked at again once it is back.
  *
- * Options (Display page, Cosmetics): "Hide my cosmetics", "Hide others' cosmetics".
+ * Options (Online page, Cosmetics; also chips on the Armoury page): "Hide my cosmetics", "Hide others' cosmetics".
  *
  * Unattended switches (off by default):
  *   -ScctLook=<look>      once the player has a pawn, puts the look on his player info on the local server
@@ -82,6 +82,8 @@ private:
 		int32 HeadSlot = 0;
 		/** Arms of a first-person view: the outfit's body texture goes only on the spy's own arms layout. */
 		bool bFirstPerson = false;
+		/** A first-person mesh's arms in the map outfit (the bridge's made texture, full path); empty for none. */
+		FString ArmsPath;
 	};
 
 	void OnMatchStarted();
@@ -102,6 +104,9 @@ private:
 	void LogLook(const FScctPawnLookApi& Api, const FScctPawnLook& Look, int32 Dressed) const;
 	void Forget();
 
+	/** The outfit arms texture of a first-person mesh for a team (FScctOutfitArmsApi), asked once per mesh asset. */
+	FString OutfitArmsFor(const UMeshComponent& Mesh, int32 Kind);
+
 	TWeakObjectPtr<UScctSessionSubsystem> Session;
 	FDelegateHandle StartedHandle;
 	FDelegateHandle ChangedHandle;
@@ -116,6 +121,7 @@ private:
 	FScctKindOutfit Outfits[2] = {};
 	mutable TMap<int32, FString> NameCache;
 	TSet<FString> FailedTextures;
+	TMap<FString, FString> OutfitArms;
 
 	UPROPERTY(Transient)
 	TMap<FString, TObjectPtr<UTexture2D>> Textures;

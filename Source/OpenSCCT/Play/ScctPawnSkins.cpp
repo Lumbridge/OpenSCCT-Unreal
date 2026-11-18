@@ -405,6 +405,9 @@ void UScctPawnSkinsSubsystem::OnFrame(float DeltaSeconds)
 				(bForceWet || bWetFlag) ? *FString::Printf(TEXT(" (%s, heat %.2f)"), Says(bWetFlag, bForceWet), Row != nullptr ? Row->HeatIntensity : 1.0f) : TEXT(""));
 		}
 
+		// The simulation's own shock spark carries the blinking light (the effects draw it, blinked by the bridge);
+		// only a skin forced by the switch, with no spark, gets one here.
+		bOwnShockLight = bSticky && !bStickyFlag;
 		Apply(*Proxy, Skin, bSticky, bImmune, bWet, Coverage, Row != nullptr ? Row->Cloak : 0.0f, DeltaSeconds);
 		Skin.bWet = bForceWet || bWetFlag;
 		Sticky += bSticky ? 1 : 0;
@@ -476,7 +479,7 @@ void UScctPawnSkinsSubsystem::Apply(AScctPawnProxy& Proxy, FPawnSkin& Skin, bool
 	}
 
 	UpdateEdge(Proxy, *Body, Skin, bDrawn && bImmune, Coverage, DeltaSeconds);
-	UpdateLight(Proxy, Skin, bSticky && Proxy.IsShown());
+	UpdateLight(Proxy, Skin, bSticky && bOwnShockLight && Proxy.IsShown());
 }
 
 void UScctPawnSkinsSubsystem::UpdateEdge(AScctPawnProxy& Proxy, UPoseableMeshComponent& Body, FPawnSkin& Skin, bool bShown, float Coverage, float DeltaSeconds)

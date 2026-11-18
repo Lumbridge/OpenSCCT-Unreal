@@ -48,6 +48,19 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
+	/** For the named checks (Test/Features): the beams of the last frame, as listed by the bridge and as drawn. */
+	struct FBeamCheck
+	{
+		int32 Listed = 0;         // beams the bridge listed
+		int32 VisionOnly = 0;     // of those, flagged to show in thermal and EMF only
+		int32 Streaks = 0;        // drawn as a streak in the picture
+		int32 Goggle = 0;         // drawn for the goggles (custom depth only)
+		int32 VisibleCores = 0;   // streak components that are in use and visible
+		int32 StencilOnly = 0;    // goggle components in use, visible, out of the main pass and in the custom depth
+		int32 Mode = 0;           // the vision mode they were drawn for
+	};
+	FBeamCheck GetBeamCheck() const;
+
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 
@@ -167,4 +180,7 @@ private:
 	/** What the log last said about the beams drawn for the goggles: their count and the mode. */
 	int32 LoggedGoggleBeams = 0;
 	int32 LoggedGoggleMode = 0;
+
+	/** The last frame's counts for GetBeamCheck. */
+	FBeamCheck LastBeams;
 };

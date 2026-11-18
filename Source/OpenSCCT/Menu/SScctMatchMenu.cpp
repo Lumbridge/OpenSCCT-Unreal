@@ -5,6 +5,7 @@
 #include "Hud/ScctHudModel.h"
 #include "Hud/ScctHudSubsystem.h"
 #include "Kismet/GameplayStatics.h"
+#include "Menu/SScctHelpFeedbackPage.h"
 #include "Menu/SScctSettingsPanel.h"
 #include "Menu/ScctMenuDriver.h"
 #include "Menu/ScctMenuKit.h"
@@ -192,8 +193,15 @@ void SScctMatchMenu::Show(EView NewView, const FString& Sub)
 		break;
 	case EView::Settings:
 	{
-		const TSharedRef<SScctSettingsPanel> Panel = SNew(SScctSettingsPanel, Host).InitialTab(FMath::Max(SScctSettingsPanel::FindTab(Sub), 0));
+		const TSharedRef<SScctMenuPage> Panel = bFeedbackView ? ScctHelpFeedback::MakePage(Host)
+			: StaticCastSharedRef<SScctMenuPage>(SNew(SScctSettingsPanel, Host).InitialTab(FMath::Max(SScctSettingsPanel::FindTab(Sub), 0)));
 		Settings = Panel;
+		const TSharedRef<SHorizontalBox> Hints = SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 22.0f, 0.0f)[ ScctUi::KeyHint(TEXT("ESC"), TEXT("B"), TEXT("Back")) ];
+		if (Panel->HasTabs())
+		{
+			Hints->AddSlot().AutoWidth()[ ScctUi::KeyHint(TEXT("Q / E"), TEXT("LB / RB"), TEXT("Change tab")) ];
+		}
 		Body->SetContent(
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Label(Panel->GetKicker().ToUpper(), ScctUi::Accent(), 12.0f) ]
@@ -202,12 +210,7 @@ void SScctMatchMenu::Show(EView NewView, const FString& Sub)
 				SNew(STextBlock).Font(ScctUi::H1()).ColorAndOpacity(ScctHudStyle::Text()).Text(FText::FromString(Panel->GetTitle().ToUpper()))
 			]
 			+ SVerticalBox::Slot().FillHeight(1.0f)[ Panel ]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 0.0f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 22.0f, 0.0f)[ ScctUi::KeyHint(TEXT("ESC"), TEXT("B"), TEXT("Back")) ]
-				+ SHorizontalBox::Slot().AutoWidth()[ ScctUi::KeyHint(TEXT("Q / E"), TEXT("LB / RB"), TEXT("Change tab")) ]
-			]);
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 0.0f)[ Hints ]);
 		if (!Sub.IsEmpty())
 		{
 			Panel->ShowSub(Sub);
@@ -226,8 +229,14 @@ void SScctMatchMenu::ShowNamed(const FString& Name)
 {
 	FString Page = Name, Sub;
 	Name.Split(TEXT("/"), &Page, &Sub);
-	if (Page.Equals(TEXT("settings"), ESearchCase::IgnoreCase))
+	if (Page.Equals(TEXT("settings"), ESearchCase::IgnoreCase) || Page.Equals(TEXT("feedback"), ESearchCase::IgnoreCase))
 	{
+		// The settings view is shown afresh: from one of its two pages to the other, the page closes first.
+		if (View == EView::Settings)
+		{
+			Show(EView::Pause);
+		}
+		bFeedbackView = Page.Equals(TEXT("feedback"), ESearchCase::IgnoreCase);
 		Show(EView::Settings, Sub);
 	}
 	else if (Page.Equals(TEXT("results"), ESearchCase::IgnoreCase))
@@ -520,9 +529,11 @@ void SScctMatchMenu::RunResultsUnattended()
 		UE_LOG(LogOpenSCCT, Log, TEXT("-ScctEndMatch: running the local match's clock out on its server: %s"), Queued != 0 ? TEXT("queued") : TEXT("refused (no local match, or no round table)"));
 	}
 
-	// Once a run: a rematch opens the level again, which would end and rematch again for ever.
+	// Offline once a run: a rematch opens the level again, which would end and rematch again for ever. Online the
+	// button is pressed on each results screen (each game of a revenge pair or series has one), and the series ends
+	// in the lobby by itself.
 	static bool bPressedThisRun = false;
-	if (ResultsAction.IsEmpty() || bResultsActionDone || bPressedThisRun || !bResultsReady || ResultsShownFor < ResultsActionAfter)
+	if (ResultsAction.IsEmpty() || bResultsActionDone || (bPressedThisRun && !bOnlineLevel) || !bResultsReady || ResultsShownFor < ResultsActionAfter)
 	{
 		return;
 	}
@@ -718,6 +729,8 @@ TSharedRef<SWidget> SScctMatchMenu::BuildPause()
 		case 100: Sub = TEXT("Close OpenSCCT"); Description = TEXT("Leave the match and close the game."); break;
 		case 101: Sub = FString::Printf(TEXT("Play this map as a %s"), *Other.ToLower()); Description = TEXT("Start this match again on the other side, with the same map, mode, bots and rules."); break;
 		case 102: Sub = TEXT("The same match from the start"); Description = TEXT("Start this match again with the same side, map, mode, bots and rules."); break;
+		case 103: Sub = TEXT("Move, size and fade the HUD"); Description = TEXT("Arrange the HUD of the side you play over the match: drag a part to move it, the wheel sizes it. Esc saves."); break;
+		case 104: Sub = TEXT("Report a bug, suggest a feature"); Description = TEXT("Report a bug with this match's details filled in and a screenshot of it if you want one, suggest a feature, and the project's guides. The match goes on."); break;
 		default: break;
 		}
 		const TSharedRef<SScctButton> Made = Entry(EntryCaption(Id), Sub, Description, [this, Id] { Act(Id); });
@@ -725,7 +738,8 @@ TSharedRef<SWidget> SScctMatchMenu::BuildPause()
 		{
 			DefaultFocus = Made;
 		}
-		if (Id == EScctMatchMenuButton::Options)
+		// The focus comes back to the entry that opened the settings view (Options, or Help & feedback).
+		if (Id == (bFeedbackView ? 104 : EScctMatchMenuButton::Options))
 		{
 			OptionsEntry = Made;
 		}

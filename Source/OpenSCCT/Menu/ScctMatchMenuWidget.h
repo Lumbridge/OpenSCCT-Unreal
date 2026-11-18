@@ -39,6 +39,9 @@ public:
 	/** The round's strategic map, the same way (the DisplayStrategicMap binding). */
 	bool ShowStrategicMap();
 
+	/** The Armoury, the same way (the hub's Armoury key, Hub/ScctHubHud.cpp): closing it goes back to the hub. */
+	bool ShowArmoury();
+
 	TSharedPtr<class SScctGearPage> GetGearPage() const;
 	TSharedPtr<class SScctStrategicMapPage> GetStrategicMapPage() const;
 

@@ -56,6 +56,8 @@ namespace
 			const FString Folder = Map.IsEmpty() ? FString() : ContentDownloadText(*Api, EScctContentText::InstalledFolder, Map);
 			UE_LOG(LogOpenSCCT, Log, TEXT("Content: a map or pack was installed or removed (generation %d)%s"), Generation,
 				Folder.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(": %s in %s; it plays through %s"), *Map, *Folder, *UScctOnlineSubsystem::LevelOf(Map)));
+			// The menus' own map list is read again, so the lobby names and pictures a map that came in here.
+			ScctContentCatalogue::RefreshMenuMaps();
 			if (!Folder.IsEmpty())
 			{
 				ScctContentDownloads::OnMapInstalled().Broadcast(Map, Folder);

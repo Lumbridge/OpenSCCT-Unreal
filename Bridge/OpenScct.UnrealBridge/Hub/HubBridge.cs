@@ -105,7 +105,7 @@ public sealed partial class HubBridge : IDisposable
             if (Client is null)
             {
                 return _trip is not null ? HubState.InMatch
-                    : _pendingJoin is not null ? HubState.Connecting : _error is null ? HubState.Idle : HubState.Failed;
+                    : _pendingJoin is not null || Preparing ? HubState.Connecting : _error is null ? HubState.Idle : HubState.Failed;
             }
 
             return Round is not null ? HubState.InHub : Client.Welcomed ? HubState.Loading : HubState.Connecting;
@@ -208,13 +208,50 @@ public sealed partial class HubBridge : IDisposable
         return true;
     }
 
-    private void Connect(string target, string? name, int team)
+    /// <summary>The visit waits for the account's appearance before it connects (a moment at most): no client yet, the state reads Connecting.</summary>
+    public bool Preparing { get; private set; }
+
+    private int _prepareSerial;
+
+    /// <summary>
+    /// Connects to the hub at <paramref name="target"/>. <paramref name="prepare"/>: the account's look is asked for
+    /// first (AccountService.PrepareAppearance: a signed-in player on a master that keeps it waits a moment, anyone
+    /// else connects inside this call).
+    /// </summary>
+    private void Connect(string target, string? name, int team, bool prepare = true)
     {
         _error = null;
         _name = string.IsNullOrWhiteSpace(name) ? "Player" : name.Trim();
         _team = team == 1 ? 1 : 0;
         _target = target;
         _offerTaken = null;
+        if (!prepare || Social.SocialBridge.Existing?.Account is not { } account)
+        {
+            ConnectNow(target);
+            return;
+        }
+
+        int serial = ++_prepareSerial;
+        Preparing = true;
+        account.PrepareAppearance(() =>
+        {
+            if (serial != _prepareSerial || !Preparing)
+            {
+                return;
+            }
+
+            Preparing = false;
+            ConnectNow(target);
+        });
+        if (Preparing)
+        {
+            _status = $"Checking your appearance before connecting to {target}...";
+            Touch();
+        }
+    }
+
+    private void ConnectNow(string target)
+    {
         // A hub on this machine is reached through a socket on the loopback addresses only: a socket on every
         // interface makes Windows ask the player about the firewall, for nothing.
         var transport = LiteNetLibTransport.CreateClient(loopbackOnly: IsThisMachine(target));
@@ -231,20 +268,24 @@ public sealed partial class HubBridge : IDisposable
             InstallGameplayServices = false,
             // The hub places the player once Unreal says its level is up (ReportLoaded).
             AutoReportReady = false,
-            // Proximity voice has no microphone or speaker here yet: the hub sends this visit no voice.
-            Voice = false,
+            // Proximity voice rides on the visit's transport (Voice/VoiceBridge.Hub.cs).
+            Voice = true,
             InstallId = OnlineBridge.Existing?.InstallId ?? string.Empty,
             HostKey = Host?.HostKey,
             // The master's ticket is for the listed hub it was asked about only (a hosted or typed-in hub gets none).
             Ticket = _masterId is not null ? _ticket : null,
             // Back from a pad's match: the hub puts the player beside that pad.
             ReturnPad = _returnPad,
+            // The Armoury's look; a change while in the hub is sent by the account service.
+            SpyLook = Social.ArmouryLook.Shared(OpenScct.Net.Cosmetics.CosmeticSide.Spy),
+            MercLook = Social.ArmouryLook.Shared(OpenScct.Net.Cosmetics.CosmeticSide.Merc),
         }, ownsTransport: true);
         client.Play.Clock = () => _clock.NowMicroseconds / 1_000_000.0;
         client.LaptopOpened += OnLaptopOpened;
         Client = client;
         _status = $"Connecting to {target}...";
         Log($"connecting to {target} as '{_name}' ({(_team == 1 ? "merc" : "spy")})" + (_returnPad is null ? string.Empty : $", back from the match of {_returnPad}"));
+        Social.ArmouryLook.LogSent("with the hub visit");
         Touch();
     }
 
@@ -271,7 +312,7 @@ public sealed partial class HubBridge : IDisposable
     /// <summary>Leaves the hub (it hears so), closes the hub this PC hosts and clears a failure: the state is Idle afterwards.</summary>
     public void Leave()
     {
-        bool had = Client is not null || Host is not null || _error is not null;
+        bool had = Client is not null || Host is not null || _error is not null || Preparing;
         EndVisit();
         _error = null;
         _status = string.Empty;
@@ -297,11 +338,15 @@ public sealed partial class HubBridge : IDisposable
     {
         EndTrip();
         _pendingJoin = null;
+        // A connection still waiting for the account's appearance is given up.
+        Preparing = false;
+        _prepareSerial++;
         _attempts.Clear();
         StopRound();
         if (Client is { } client)
         {
             Client = null;
+            Voice.VoiceBridge.Existing?.EndHub();
             try
             {
                 client.Session.Disconnect();
@@ -410,6 +455,7 @@ public sealed partial class HubBridge : IDisposable
         }
 
         PumpPadRun(client);
+        WatchDownloads(client);
 
         if (Round is { } drawn)
         {
@@ -466,6 +512,11 @@ public sealed partial class HubBridge : IDisposable
         if (Round is { IsStopped: false } round)
         {
             round.Update();
+        }
+
+        if (Client is { Error: null } talking)
+        {
+            Voice.VoiceBridge.Instance.AfterHubTick(talking);
         }
 
         LogState();

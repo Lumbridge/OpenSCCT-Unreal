@@ -23,7 +23,8 @@
 //                                 the lobby (default 4)
 //   -ScctLobbyApplyWhen=N         how many players that is (default 1: the host alone)
 //   -ScctLobbyShow=<what>[,...]   open a lobby dialog unattended: scoreboard (each new last-round scoreboard, once it is
-//                                 in), briefing (once per run), plan (the briefing on its second page)
+//                                 in), briefing (once per run), plan (the briefing on its second page), armoury (the
+//                                 COSMETICS button, pressed five seconds after the lobby is reached)
 //   -ScctLobbyRecord=1|0          set "Record my matches" once the lobby is reached, as the switch would
 //
 // Extras for every player (Menu/SScctLobbyExtras.h, the Godot lobby's LobbyRoomScreen.Scoreboard, BriefingPanel and
@@ -32,10 +33,12 @@
 // player's side, the level picture and the plan); a rank badge in its emblem colour on each ranked player's row, its
 // words in a tooltip; and the personal "Record my matches" switch with the server's answer under it (the same option
 // as the Online tab's "Record online matches", which applies from the next round). The loadout summary and the
-// strategic map are the row above (Menu/ScctOverlayPages.h). Godot's Cosmetics button opens the Armoury, which this
-// client does not have, so it is not offered.
+// strategic map are the row above (Menu/ScctOverlayPages.h). COSMETICS, beside Switch Team, opens the Armoury over
+// the lobby (Menu/SScctArmouryOverlay.h, Godot's Cosmetics button): a look picked there is saved and the bridge
+// sends it to the server, worn from the next round; closing it is back in the lobby.
 
 #include "Menu/ScctMenuPage.h"
+#include "Menu/SScctArmouryOverlay.h"
 #include "Menu/ScctOverlayPages.h"
 
 #include "Framework/Application/SlateApplication.h"
@@ -293,6 +296,13 @@ namespace
 									if (UScctOnlineSubsystem* V = Weak.Get()) { V->SetTeam(V->GetStatus().LocalTeam == 0 ? 1 : 0); }
 								}))
 							]
+							+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
+							[
+								SAssignNew(CosmeticsButton, SScctButton)
+								.Text(FText::FromString(TEXT("COSMETICS")))
+								.Description(FText::FromString(TEXT("Open the Armoury over the lobby: pick the camo, tint and light colour of each side. Your look is sent to this server and worn from the next round.")))
+								.OnPressed(FSimpleDelegate::CreateLambda([this] { OpenArmoury(); }))
+							]
 							+ SHorizontalBox::Slot().FillWidth(1.0f)
 							[
 								SAssignNew(ReadyButton, SScctButton)
@@ -388,7 +398,7 @@ namespace
 		virtual bool HandleBack() override
 		{
 			// A dialog or a page over the lobby goes back first.
-			if (ScctLobbyPanels::Back(ExtrasLayer) || ScctOverlayPages::Back(PageLayer))
+			if (ScctLobbyPanels::Back(ExtrasLayer) || SScctArmouryOverlay::Back(PageLayer) || ScctOverlayPages::Back(PageLayer))
 			{
 				return true;
 			}
@@ -465,6 +475,27 @@ namespace
 	private:
 		void OpenGear() { ScctOverlayPages::OpenGear(PageLayer, Host); }
 		void OpenStrategicMap() { ScctOverlayPages::OpenStrategicMap(PageLayer); }
+
+		/** The Armoury over the lobby (Godot's LobbyRoomScreen.OpenArmoury); closing it gives the Cosmetics button the focus back. */
+		void OpenArmoury()
+		{
+			if (!PageLayer.IsValid())
+			{
+				return;
+			}
+			const TWeakPtr<SScctButton> Button = CosmeticsButton;
+			SScctArmouryOverlay::Open(PageLayer.ToSharedRef(), Host, TEXT("the lobby"), FSimpleDelegate::CreateLambda([Button]
+			{
+				if (const TSharedPtr<SScctButton> Pinned = Button.Pin())
+				{
+					FSlateApplication::Get().SetKeyboardFocus(Pinned, EFocusCause::SetDirectly);
+				}
+			}));
+		}
+		TSharedPtr<SScctButton> CosmeticsButton;
+		/** -ScctLobbyShow=armoury, and when its press is due. */
+		bool bShowArmoury = false;
+		double ShowArmouryAt = 0.0;
 
 		/** The Equipment page and the strategic map, over the lobby. */
 		TSharedPtr<SOverlay> PageLayer;
@@ -850,6 +881,7 @@ namespace
 					LobbyShowScoreboard() |= Part.Equals(TEXT("scoreboard"), ESearchCase::IgnoreCase);
 					LobbyShowBriefing() |= Part.Equals(TEXT("briefing"), ESearchCase::IgnoreCase) || Part.Equals(TEXT("plan"), ESearchCase::IgnoreCase);
 					LobbyShowPlan() |= Part.Equals(TEXT("plan"), ESearchCase::IgnoreCase);
+					bShowArmoury |= Part.Equals(TEXT("armoury"), ESearchCase::IgnoreCase);
 				}
 			}
 			FString Record;
@@ -899,6 +931,25 @@ namespace
 						{
 							Flip->DrivenPress();
 						}
+					}
+				}
+			}
+			// -ScctLobbyShow=armoury: the COSMETICS button is pressed five seconds after the lobby is reached, once.
+			if (bShowArmoury && Visit->GetStatus().LocalId >= 0)
+			{
+				const double Now = FPlatformTime::Seconds();
+				if (ShowArmouryAt <= 0.0)
+				{
+					ShowArmouryAt = Now + 5.0;
+				}
+				else if (Now >= ShowArmouryAt)
+				{
+					bShowArmoury = false;
+					IScctDriven* Button = IScctDriven::Find(TEXT("COSMETICS"));
+					UE_LOG(LogOpenSCCT, Log, TEXT("Menu: -ScctLobbyShow presses COSMETICS%s"), Button != nullptr ? TEXT("") : TEXT(": the lobby has no such button"));
+					if (Button != nullptr)
+					{
+						Button->DrivenPress();
 					}
 				}
 			}

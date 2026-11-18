@@ -193,7 +193,7 @@ public static unsafe class HubPadsExports
         HubClient? client = bridge.Client;
         return kind switch
         {
-            HubPadsText.Queue => client?.Queue.PadId is not null ? client.Queue.Text : string.Empty,
+            HubPadsText.Queue => client is not null ? bridge.QueueTextOf(client) : string.Empty,
             HubPadsText.QueuePad => client?.Queue.PadId ?? string.Empty,
             HubPadsText.Note => bridge.Note,
             HubPadsText.MatchStatus => bridge.MatchStatus,
@@ -264,7 +264,23 @@ public static unsafe class HubPadsExports
             }
         }
 
-        return all.Count;
+        // Then the maps of OpenSCCT-Content the player lacks: picking one downloads it (HubBridge.Downloads.cs).
+        IReadOnlyList<OpenScct.Maps.ContentMap> lacking = bridge.LaptopDownloads();
+        for (int i = 0; i < lacking.Count && all.Count + i < span.Length; i++)
+        {
+            OpenScct.Maps.ContentMap m = lacking[i];
+            ref HubLaptopMap row = ref span[all.Count + i];
+            row = default;
+            row.Flags = HubPadsFlags.Downloadable;
+            fixed (char* id = row.Id, name = row.Name, modes = row.Modes)
+            {
+                OnlineTextCopy.Fixed(id, 32, m.Code);
+                OnlineTextCopy.Fixed(name, 64, HubBridge.DownloadTitle(m));
+                OnlineTextCopy.Fixed(modes, 32, "pick to download");
+            }
+        }
+
+        return all.Count + lacking.Count;
     });
 
     private static string ShortMode(OpenScct.Core.EGameMode mode) => mode switch

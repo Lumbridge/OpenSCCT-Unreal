@@ -132,8 +132,10 @@ bool UScctPawnLookSubsystem::DoesSupportWorldType(const EWorldType::Type WorldTy
 
 void UScctPawnLookSubsystem::RegisterSettings()
 {
+	// The two switches are on the Online page (what other players see of the player, and the player of them). Their
+	// keys keep the "Display." they were first saved under, so a choice made before the move is still the player's.
 	FScctSettingDesc Desc;
-	Desc.Page = TEXT("Display");
+	Desc.Page = TEXT("Online");
 	Desc.Group = NSLOCTEXT("OpenSCCT", "CosmeticsGroup", "Cosmetics");
 	Desc.Type = EScctSettingType::Bool;
 	Desc.Default = TEXT("false");
@@ -142,18 +144,20 @@ void UScctPawnLookSubsystem::RegisterSettings()
 	Desc.Label = NSLOCTEXT("OpenSCCT", "HideMyCosmetics", "Hide my cosmetics");
 	Desc.Tooltip = NSLOCTEXT("OpenSCCT", "HideMyCosmeticsTip",
 		"Your camo, tint and light colour are shown on your own screen only: other players see you in the retail look.");
-	Desc.Order = 80;
+	Desc.Order = 700;
 	FScctSettings::Register(Desc);
 
 	Desc.Key = HideOthersSetting;
 	Desc.Label = NSLOCTEXT("OpenSCCT", "HideOthersCosmetics", "Hide others' cosmetics");
 	Desc.Tooltip = NSLOCTEXT("OpenSCCT", "HideOthersCosmeticsTip",
 		"Every other player is drawn in the retail look, whatever camo, tint or light colour they wear. A map's outfits still show.");
-	Desc.Order = 81;
+	Desc.Order = 701;
 	FScctSettings::Register(Desc);
 
 	// The look shown on the player's own pawn while "Hide my cosmetics" keeps it off the servers (the Armoury's
-	// choice, as names "woodland+blue" or "hex:..."): set by code, not shown on the page.
+	// choice, as names "woodland+blue" or "hex:..."): set by code, not shown on the page, and this PC's own (the
+	// Display page is not sent to the account; the chosen cosmetics follow it by their own sync).
+	Desc.Page = TEXT("Display");
 	Desc.Key = OwnLookSetting;
 	Desc.Label = NSLOCTEXT("OpenSCCT", "OwnCosmeticLook", "Own cosmetic look");
 	Desc.Tooltip = FText::GetEmpty();
@@ -209,6 +213,7 @@ void UScctPawnLookSubsystem::Forget()
 	Looked.Reset();
 	Turned.Reset();
 	NameCache.Reset();
+	OutfitArms.Reset();
 	Outfits[0] = {};
 	Outfits[1] = {};
 	bForced = false;
@@ -403,6 +408,12 @@ UTexture2D* UScctPawnLookSubsystem::LoadTexture(const FString& Path)
 FString UScctPawnLookSubsystem::TextureFor(const FScctPawnLookApi& Api, const FString& Retail, const FString& Package, const FDress& Look) const
 {
 	const FString Key = KeyOf(Retail);
+	// The arms of the eye view in the map outfit: the merc's sleeves and gloves, and the arms of a spy who wears a
+	// model of the map's own, redrawn from the dressed body by the bridge.
+	if (Look.bFirstPerson && !Look.ArmsPath.IsEmpty() && Key.EndsWith(Look.Kind == 1 ? TEXT("sweapontex1def01") : TEXT("shadwagent")))
+	{
+		return Look.ArmsPath;
+	}
 	// A map outfit's slot textures are laid out on the stock UVs and replace the stock slot's texture. In the eye
 	// view only the spy's arms share the suit's layout (ATT_01_fp draws Shadw_agent).
 	if (Look.BodySlot != 0 && IsBodySlot(Key) && (!Look.bFirstPerson || Key.EndsWith(TEXT("shadwagent"))))
@@ -467,7 +478,7 @@ int32 UScctPawnLookSubsystem::Dress(UMeshComponent& Mesh, const FDress& Look)
 		}
 
 		const uint32 Key = HashCombine(HashCombine(GetTypeHash(Source), HashCombine(GetTypeHash(Look.BodyPattern), GetTypeHash(Look.GunPattern))),
-			HashCombine(HashCombine(GetTypeHash(Look.BodySlot), GetTypeHash(Look.HeadSlot)), HashCombine(GetTypeHash(Look.Kind), GetTypeHash(Look.bFirstPerson))));
+			HashCombine(HashCombine(GetTypeHash(Look.BodySlot), GetTypeHash(Look.HeadSlot)), HashCombine(GetTypeHash(Look.Kind), HashCombine(GetTypeHash(Look.bFirstPerson), GetTypeHash(Look.ArmsPath)))));
 		if (Key != State.Key)
 		{
 			State.Key = Key;
@@ -497,6 +508,42 @@ int32 UScctPawnLookSubsystem::Dress(UMeshComponent& Mesh, const FDress& Look)
 		Dressed += State.Mine.IsValid() ? 1 : 0;
 	}
 	return Dressed;
+}
+
+FString UScctPawnLookSubsystem::OutfitArmsFor(const UMeshComponent& Mesh, int32 Kind)
+{
+	const USkinnedMeshComponent* Skinned = Cast<USkinnedMeshComponent>(&Mesh);
+	const USkinnedAsset* Asset = Skinned != nullptr ? Skinned->GetSkinnedAsset() : nullptr;
+	if (Asset == nullptr || Outfits[Kind].Dressed == 0)
+	{
+		return FString();
+	}
+
+	// /Game/Imported/Chars/<Package>/<Mesh>/SkeletalMeshes/<Mesh>: the bridge reads shared/chars/<Package>/<Mesh>.glb.
+	const FString AssetPath = Asset->GetPathName();
+	const FString CacheKey = FString::Printf(TEXT("%d|%s"), Kind, *AssetPath);
+	if (const FString* Found = OutfitArms.Find(CacheKey))
+	{
+		return *Found;
+	}
+
+	FString Made;
+	TArray<FString> Parts;
+	AssetPath.ParseIntoArray(Parts, TEXT("/"));
+	const int32 Chars = Parts.IndexOfByKey(FString(TEXT("Chars")));
+	const FScctOutfitArmsApi* Api = ScctFeature<FScctOutfitArmsApi>();
+	if (Api != nullptr && Chars != INDEX_NONE && Chars + 2 < Parts.Num())
+	{
+		const FString& Package = Parts[Chars + 1];
+		const FString& Model = Parts[Chars + 2];
+		TCHAR Buffer[1024];
+		const int32 Length = FMath::Clamp(Api->ArmsTexture(Kind, *Package, Package.Len(), *Model, Model.Len(), Buffer, UE_ARRAY_COUNT(Buffer)),
+			0, static_cast<int32>(UE_ARRAY_COUNT(Buffer)));
+		Made = FString::ConstructFromPtrSize(Buffer, Length);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Look: first-person arms of %s.%s for the %s in the map outfit: %s"), *Package, *Model,
+			Kind == 1 ? TEXT("mercs") : TEXT("spies"), Made.IsEmpty() ? TEXT("kept as they are") : *Made);
+	}
+	return OutfitArms.Add(CacheKey, Made);
 }
 
 void UScctPawnLookSubsystem::TurnGoggles(UMeshComponent& Mesh, float HueTurn, bool bTurn)
@@ -699,8 +746,8 @@ void UScctPawnLookSubsystem::OnFrame(float DeltaSeconds)
 		Arms.BodyPattern = Mine->BodyPattern;
 		Arms.GunPattern = Mine->GunPattern;
 		Arms.bFirstPerson = true;
-		// The spy's eye-view arms are laid out as his suit: an outfit's body texture fits them, but not an outfit
-		// model's (the Godot client moves that one onto the arms surface by surface, which is not done here).
+		// The spy's eye-view arms are laid out as the suit: an outfit's body texture fits them, but not an outfit
+		// model's, which the bridge moves onto the arms surface by surface (OutfitArmsFor), as it does the merc's.
 		Arms.BodySlot = Outfits[Kind].Model == 0 ? Outfits[Kind].BodyTexture : 0;
 		int32 Dressed = 0;
 		TArray<UMeshComponent*> Meshes;
@@ -709,6 +756,7 @@ void UScctPawnLookSubsystem::OnFrame(float DeltaSeconds)
 		{
 			if (!Mesh->IsA<UStaticMeshComponent>())
 			{
+				Arms.ArmsPath = OutfitArmsFor(*Mesh, Kind);
 				Dressed += Dress(*Mesh, Arms);
 			}
 		}

@@ -59,6 +59,9 @@ public sealed class HubVoiceHook
             return 0;
         }
 
+        // The same ear for the voices that are played (Voice/VoiceBridge.Hub.cs).
+        Voice.VoiceBridge.Existing?.SetHubEar(ear);
+
         _talkers.Clear();
         int me = client.LocalPlayer?.PlayerReplicationInfo?.PlayerID ?? -1;
         foreach (Pawn pawn in client.Session.World.Level.DynamicActors<Pawn>())

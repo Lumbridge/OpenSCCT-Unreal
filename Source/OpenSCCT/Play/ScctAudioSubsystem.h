@@ -103,6 +103,9 @@ public:
 	int32 GetNumStarted() const { return NumStarted; }
 	int32 GetNumFailedFiles() const { return NumFailedFiles; }
 
+	/** Voices started since the match began in one volume category (EScctAudioCategory as a number). */
+	int32 GetNumStartedIn(int32 Category) const { return Category >= 0 && Category < UE_ARRAY_COUNT(NumStartedByCategory) ? NumStartedByCategory[Category] : 0; }
+
 	/** The original's gain of a 3D source at Distance: 1 inside MinDistance, falling with distance beyond it (Radius is not used: there is no cut-off). */
 	static float DistanceGain(float Distance, float MinDistance, float Radius);
 
@@ -536,6 +539,7 @@ private:
 
 	// Counters for the summary line (since the match started).
 	int32 NumStarted = 0;
+	int32 NumStartedByCategory[8] = {};
 	int32 NumStopped = 0;
 	int32 NumOutOfReach = 0;
 	int32 NumRefused = 0;

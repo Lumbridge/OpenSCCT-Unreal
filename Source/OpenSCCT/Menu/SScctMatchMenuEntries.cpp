@@ -4,7 +4,10 @@
 
 #include "Menu/SScctMatchMenu.h"
 
+#include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Hud/ScctHudEdit.h"
+#include "Menu/SScctArmouryOverlay.h"
 #include "Menu/SScctGearPage.h"
 #include "Menu/SScctHelpPage.h"
 #include "Menu/SScctStrategicMapPage.h"
@@ -25,6 +28,11 @@ namespace
 	/** Change side and Restart of a local match (the level again), OpenSCCT's own entries. */
 	constexpr int32 MatchMenuChangeSideEntry = 101;
 	constexpr int32 MatchMenuRestartEntry = 102;
+
+	/** Edit HUD layout: the HUD's edit mode over the match (Hud/ScctHudEdit.h), OpenSCCT's own entry beside Help. */
+	constexpr int32 MatchMenuHudEditEntry = 103;
+	/** Help & feedback (Menu/SScctHelpFeedbackPage.h), OpenSCCT's own entry after Help. */
+	constexpr int32 MatchMenuFeedbackEntry = 104;
 
 	/** GUI.SSMenu_LANMainPage s_Init: Sleep(0.5), then keys count (InGameMenuK.KeyIgnoreSeconds). */
 	constexpr float MatchMenuKeyHoldSeconds = 0.5f;
@@ -61,6 +69,17 @@ TSharedPtr<SScctGearPage> SScctMatchMenu::ShowGear(int32 Side, bool bOnly)
 	if (Page.IsValid())
 	{
 		Page->SetDialogs(Dialogs);
+		// GearMenu.CanSwitchTeam: the picker changes side where the menu itself offers Switch Team (practice).
+		FScctMatchMenuContext GearRound = {};
+		const FScctMatchMenuApi* GearRoundApi = ScctFeature<FScctMatchMenuApi>();
+		if (GearRoundApi != nullptr && GearRoundApi->GetContext(&GearRound) != 0 && GearRound.CanSwitchTeam != 0)
+		{
+			Page->SetTeamSwitch([]
+			{
+				const FScctMatchMenuApi* Table = ScctFeature<FScctMatchMenuApi>();
+				return Table != nullptr && Table->SwitchTeam() != 0;
+			});
+		}
 	}
 	else
 	{
@@ -95,6 +114,22 @@ TSharedPtr<SScctStrategicMapPage> SScctMatchMenu::GetStrategicMap() const
 	return PageLayer.IsValid() ? SScctStrategicMapPage::FindOpen(PageLayer.ToSharedRef()) : nullptr;
 }
 
+bool SScctMatchMenu::ShowArmoury(bool bOnly)
+{
+	if (!PageLayer.IsValid())
+	{
+		return false;
+	}
+	if (SScctArmouryOverlay::FindOpen(PageLayer.ToSharedRef()).IsValid())
+	{
+		return true;
+	}
+	bPageOnly = bOnly;
+	SScctArmouryOverlay::Open(PageLayer.ToSharedRef(), Host, TEXT("the hub"),
+		FSimpleDelegate::CreateLambda([this] { if (bPageOnly && bOpen) { OnResume.ExecuteIfBound(); } bPageOnly = false; FocusDefault(); }));
+	return true;
+}
+
 void SScctMatchMenu::ShowHelp()
 {
 	if (PageLayer.IsValid())
@@ -116,6 +151,10 @@ bool SScctMatchMenu::BackFromOverlayPage()
 	if (const TSharedPtr<SScctHelpPage> Help = SScctHelpPage::FindOpen(PageLayer.ToSharedRef()))
 	{
 		Help->Close();
+		return true;
+	}
+	if (SScctArmouryOverlay::Back(PageLayer))
+	{
 		return true;
 	}
 	if (const TSharedPtr<SScctGearPage> Gear = GetGear())
@@ -142,6 +181,10 @@ void SScctMatchMenu::CloseOverlayPages()
 	if (const TSharedPtr<SScctHelpPage> Help = SScctHelpPage::FindOpen(PageLayer.ToSharedRef()))
 	{
 		Help->Close();
+	}
+	if (const TSharedPtr<SScctArmouryOverlay> Armoury = SScctArmouryOverlay::FindOpen(PageLayer.ToSharedRef()))
+	{
+		Armoury->Close();
 	}
 	if (const TSharedPtr<SScctGearPage> Gear = GetGear())
 	{
@@ -175,11 +218,15 @@ TArray<int32> SScctMatchMenu::GetEntries() const
 		const int32 OptionsAt = Entries.IndexOfByKey(EScctMatchMenuButton::Options);
 		Entries.Insert(EScctMatchMenuButton::Help, OptionsAt == INDEX_NONE ? Entries.Num() : OptionsAt + 1);
 	}
+	// The HUD layout's edit mode beside Help (the Godot client's HUD editor is in its options).
+	Entries.Insert(MatchMenuHudEditEntry, Entries.IndexOfByKey(EScctMatchMenuButton::Help) + 1);
+	// Help & feedback right after Help (the Godot client opens it over any screen).
+	Entries.Insert(MatchMenuFeedbackEntry, Entries.IndexOfByKey(EScctMatchMenuButton::Help) + 1);
 	// A local match outside practice starts again on the other side or as it was (practice changes side in the round).
 	if (CanChangeSide() && !Entries.Contains(EScctMatchMenuButton::SwitchTeam) && Context.Tutorial == 0)
 	{
-		const int32 HelpAt = Entries.IndexOfByKey(EScctMatchMenuButton::Help);
-		Entries.Insert({ MatchMenuChangeSideEntry, MatchMenuRestartEntry }, HelpAt + 1);
+		const int32 HudEditAt = Entries.IndexOfByKey(MatchMenuHudEditEntry);
+		Entries.Insert({ MatchMenuChangeSideEntry, MatchMenuRestartEntry }, HudEditAt + 1);
 	}
 	// The player who controls the server may bring everyone back, as the server list's own host flag says.
 	const UScctOnlineSubsystem* Visit = Online.Get();
@@ -212,6 +259,8 @@ FString SScctMatchMenu::EntryCaption(int32 Entry) const
 	case MatchMenuQuitGameEntry: return TEXT("Quit game");
 	case MatchMenuChangeSideEntry: return ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Button2"), TEXT("Switch Team"));
 	case MatchMenuRestartEntry: return TEXT("Restart");
+	case MatchMenuHudEditEntry: return TEXT("Edit HUD layout");
+	case MatchMenuFeedbackEntry: return TEXT("Help & feedback");
 	default: return FString();
 	}
 }
@@ -294,11 +343,27 @@ void SScctMatchMenu::Act(int32 Entry)
 		ShowStrategicMap(false);
 		break;
 	case EScctMatchMenuButton::Options:
+		bFeedbackView = false;
+		Show(EView::Settings);
+		break;
+	case MatchMenuFeedbackEntry:
+		bFeedbackView = true;
 		Show(EView::Settings);
 		break;
 	case EScctMatchMenuButton::Help:
 		ShowHelp();
 		break;
+	case MatchMenuHudEditEntry:
+	{
+		// The menu closes first (the game has the keys again), then the edit mode takes them over the live HUD.
+		OnResume.ExecuteIfBound();
+		UScctHudEditSubsystem* Edit = World.IsValid() ? World->GetSubsystem<UScctHudEditSubsystem>() : nullptr;
+		if (Edit == nullptr || !Edit->Start())
+		{
+			UE_LOG(LogOpenSCCT, Warning, TEXT("ScctMatchMenu: the HUD layout's edit mode could not open"));
+		}
+		break;
+	}
 	case EScctMatchMenuButton::SwitchTeam:
 		// InGameMenuModel.Click(SwitchTeam): the menu closes and the side changes behind it.
 		if (Api != nullptr && Api->SwitchTeam() != 0)
@@ -406,7 +471,7 @@ void SScctMatchMenu::TickUnattended(float DeltaSeconds)
 			{ TEXT("Options"), EScctMatchMenuButton::Options }, { TEXT("Help"), EScctMatchMenuButton::Help }, { TEXT("Resign"), EScctMatchMenuButton::Resign },
 			{ TEXT("Lobby"), EScctMatchMenuButton::ReturnToLobby }, { TEXT("ReturnToLobby"), EScctMatchMenuButton::ReturnToLobby },
 			{ TEXT("Leave"), EScctMatchMenuButton::QuitSession }, { TEXT("QuitSession"), EScctMatchMenuButton::QuitSession }, { TEXT("Quit"), MatchMenuQuitGameEntry },
-			{ TEXT("ChangeSide"), MatchMenuChangeSideEntry }, { TEXT("Restart"), MatchMenuRestartEntry },
+			{ TEXT("ChangeSide"), MatchMenuChangeSideEntry }, { TEXT("Restart"), MatchMenuRestartEntry }, { TEXT("HudEdit"), MatchMenuHudEditEntry }, { TEXT("Feedback"), MatchMenuFeedbackEntry },
 		};
 		const int32* Entry = Names.Find(Name);
 		if (Entry == nullptr)

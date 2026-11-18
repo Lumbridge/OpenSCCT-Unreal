@@ -91,6 +91,9 @@ public:
 	/** The mesh actor that stands for a simulation actor's name: the level's own (by the importer's tag) or the one spawned here; or null. */
 	AActor* FindLevelActor(const FString& Name) const;
 
+	/** The drawn meshes of the map's panes of glass (SVitre) known so far, broken or not; for the effects warm-up. ScctLevelStateGlass.cpp. */
+	void GatherPaneMeshes(TArray<UStaticMeshComponent*>& Out);
+
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 

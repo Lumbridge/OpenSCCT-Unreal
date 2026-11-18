@@ -37,6 +37,7 @@ namespace
 				.Account(ScctSocialPageSubsystem<UScctAccountSubsystem>(Host))
 				.Online(Host.Online)
 				.OnBack(FSimpleDelegate::CreateLambda([Copy] { if (Copy.Back) { Copy.Back(); } }))
+				.OnOpen([Copy](const FString& Page) { if (Copy.Open) { Copy.Open(Page); } })
 			];
 		}
 

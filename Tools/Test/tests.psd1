@@ -47,6 +47,30 @@
     'play-net-grab100-stock'      = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
     'play-net-coop100'            = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
     'play-net-coop200'            = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    # The per-feature gameplay checks (Test/Features): each stages one feature and asserts what Unreal draws or the HUD
+    # shows. -Extra '-ScctFeatureBreak' leaves out the staged step (each must then fail with its reason, run them with
+    # -ExpectedFailures); -Extra '-ScctFeatureShots' saves a picture at each stage to Saved/ScctShots/<test>/.
+    'combat-autofire' = @{ Map = 'AquaE'; Timeout = 400; Tags = @('needs-content', 'needs-maps') }
+    'gadgets'         = @{ Map = 'AquaE'; Timeout = 400; Tags = @('needs-content', 'needs-maps') }
+    'doors'           = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'lights'          = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'emitters'        = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'bots'            = @{ Map = 'AquaE'; Timeout = 320; Tags = @('needs-content', 'needs-maps') }
+    'traversal'       = @{ Map = 'TestRange'; Timeout = 480; Tags = @('needs-content', 'needs-maps') }
+    'modes'           = @{ Map = 'AquaE'; Timeout = 400; Tags = @('needs-content', 'needs-maps') }
+    # The presentation checks (Test/Features/ScctPresentationFeatureTests.cpp). voice plays no map: the microphone test
+    # fed by a tone instead of a device. Screenshots: -Extra '-ScctFeatureShots' (a failing check saves one then).
+    'hud-spy'         = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'hud-merc'        = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'audio'           = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'voice'           = @{ Timeout = 120; Extra = '-ScctVoiceTone=440'; Tags = @('needs-content') }
+    'cloak'           = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'lasers'          = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'vision'          = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'fog'             = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    # One map of the all-maps sweep (Test/ScctMapShotsTest.cpp): load time, missing assets and the black and magenta
+    # share of eight views. Tools/Test/Run-MapSweep.ps1 runs it for every imported map and mode; -All leaves it out.
+    'map-shots'       = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps', 'helper') }
     'play-net-listen300'          = @{ Map = 'SteeE'; Timeout = 240; Tags = @('needs-content', 'needs-maps', 'helper') }
     'play-net-dedicated300'       = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps', 'helper') }
 }

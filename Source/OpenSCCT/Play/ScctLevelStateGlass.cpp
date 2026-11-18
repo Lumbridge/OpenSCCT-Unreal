@@ -21,6 +21,18 @@ void UScctLevelStateSubsystem::BreakPaneShards(const FScctWorldEvent& Event)
 		bHitKnown ? FVector(Event.DX, Event.DY, Event.DZ) : FVector::ZeroVector, bHitKnown ? Event.B : 0);
 }
 
+void UScctLevelStateSubsystem::GatherPaneMeshes(TArray<UStaticMeshComponent*>& Out)
+{
+	for (int32 NameId = 0; NameId < ActorStates.Num(); ++NameId)
+	{
+		const FActorState& State = ActorStates[NameId];
+		if (State.Mesh.IsValid() && GetName(State.Info.ClassId) == TEXT("SVitre"))
+		{
+			Out.Add(State.Mesh.Get());
+		}
+	}
+}
+
 int32 UScctLevelStateSubsystem::BreakEveryPane(const FVector& Eye)
 {
 	FString Error;

@@ -168,6 +168,7 @@ void UScctAudioSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	ReleaseRoomFields();
 	ProbeCalls.Reset();
 	bLastListenerSet = false;
+	FMemory::Memzero(NumStartedByCategory);
 	NumStarted =NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
 	NumHrtfStarted = NumPannedStarted = 0;
 	bOutputModeHrtf = UScctAudioOutputSubsystem::UseHrtf();
@@ -847,6 +848,7 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 	Voice.AppliedVolume = HeardVolumeOf(Voice);
 	Voice.AppliedPitch = Voice.Pitch * Voice.DopplerPitch;
 	++NumStarted;
+	++NumStartedByCategory[Voice.Category & 7];
 
 	if (bHasDevice)
 	{

@@ -84,6 +84,9 @@ public:
 	/** The actor drawing the view model, or null before a match has shown one. */
 	AScctFirstPersonView* GetFirstPersonView() const { return FirstPersonView; }
 
+	/** For the named checks (Test/Features): holds the camo suit's amount as -ScctForceCloak does; negative gives the simulation's back. */
+	void ForceCloakForCheck(float Amount) { ForcedCloak = Amount; }
+
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 

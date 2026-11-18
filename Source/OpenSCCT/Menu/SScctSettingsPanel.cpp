@@ -6,6 +6,7 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "Menu/SScctBrightnessPage.h"
 #include "Menu/SScctPadPanel.h"
+#include "Menu/ScctEnhancedImport.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctUserSettings.h"
 #include "Misc/App.h"
@@ -240,6 +241,14 @@ void SScctSettingsPanel::Construct(const FArguments& InArgs, const FScctMenuHost
 					+ SVerticalBox::Slot().FillHeight(1.0f)
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 16.0f, 0.0f, 0.0f)
 					[
+						SNew(SScctButton)
+						.FillWidth(true)
+						.Text(FText::FromString(TEXT("IMPORT FROM ENHANCED SCCT VERSUS")))
+						.Description(FText::FromString(TEXT("Take over your settings from an Enhanced SCCT Versus (Reloaded) install: sensitivities, the controller, display, graphics, HUD, voice, volumes, gear and both key layouts. Choose the install's folder, or use the profile kept on this PC.")))
+						.OnPressed(FSimpleDelegate::CreateSP(this, &SScctSettingsPanel::AskImportEnhanced))
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)
+					[
 						SNew(SHorizontalBox)
 						+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 10.0f, 0.0f)
 						[
@@ -378,6 +387,60 @@ void SScctSettingsPanel::ResetTab()
 		Toast(TEXT("Defaults restored."));
 		Rebuild();
 	});
+}
+
+void SScctSettingsPanel::AskImportEnhanced()
+{
+	const FString Usual = ScctEnhancedImport::UsualProfileFolder();
+	FScctDialog Dialog;
+	Dialog.Title = TEXT("Import from Enhanced SCCT Versus");
+	Dialog.Body = FString::Printf(TEXT("Type or browse to the folder of your Enhanced SCCT Versus install (the one with its System folder; any folder inside it will do), or take the profile kept on this PC%s.\n\nYour sensitivities, controller, display, graphics, HUD, voice, volumes, gear and both key layouts replace the ones here; your name is kept."),
+		Usual.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" (%s: profile, volumes, gear and keys, without the install's own settings)"), *Usual));
+	Dialog.bTextField = true;
+	Dialog.TextHint = TEXT("Install folder, as C:\\Games\\SCCT Versus Reloaded");
+	Dialog.Buttons.Add({ TEXT("Cancel"), EScctButtonLook::Secondary, nullptr });
+	Dialog.Buttons.Add({ TEXT("This PC's profile"), EScctButtonLook::Secondary, [this](const FString&) { RunImportEnhanced(FString(), true); } });
+	Dialog.Buttons.Add({ TEXT("Browse..."), EScctButtonLook::Secondary, [this](const FString&)
+	{
+		FString Folder;
+		if (ScctEnhancedImport::PickFolder(TEXT("The Enhanced SCCT Versus install folder"), Folder))
+		{
+			RunImportEnhanced(Folder, false);
+		}
+	} });
+	Dialog.Buttons.Add({ TEXT("Import"), EScctButtonLook::Primary, [this](const FString& Typed)
+	{
+		const FString Folder = Typed.TrimStartAndEnd().TrimQuotes();
+		if (Folder.IsEmpty())
+		{
+			Toast(TEXT("Type the install's folder, or choose Browse or This PC's profile."), true);
+			return;
+		}
+		RunImportEnhanced(Folder, false);
+	} });
+	Dialog.FocusButton = 3;
+	Dialog.CancelButton = 0;
+	if (Host.Dialogs.IsValid())
+	{
+		Host.Dialogs->Show(Dialog);
+	}
+}
+
+void SScctSettingsPanel::RunImportEnhanced(const FString& Folder, bool bWithoutInstall)
+{
+	const FScctEnhancedImportResult Result = ScctEnhancedImport::Import(Folder, bWithoutInstall);
+	// The controls and bindings files were written by the import itself: nothing is left for Commit to write.
+	bControlsDirty = false;
+	bBindingsDirty = false;
+	Rebuild();
+	FScctDialog Dialog;
+	Dialog.Title = Result.bOk ? TEXT("Imported from Enhanced SCCT Versus") : TEXT("Nothing was imported");
+	Dialog.Body = ScctEnhancedImport::Summary(Result);
+	Dialog.Buttons.Add({ TEXT("OK"), EScctButtonLook::Primary, nullptr });
+	if (Host.Dialogs.IsValid())
+	{
+		Host.Dialogs->Show(Dialog);
+	}
 }
 
 void SScctSettingsPanel::Commit()

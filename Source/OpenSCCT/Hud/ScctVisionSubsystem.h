@@ -55,6 +55,12 @@ public:
 	/** Plain sight at once: the match is over. */
 	void Clear();
 
+	/**
+	 * For the effects warm-up behind the loading page (Play/ScctEffectsWarmup.h): shows Mode whatever the HUD says, so
+	 * its post-process and marks are drawn once before play; INDEX_NONE gives the picture back at once (plain sight).
+	 */
+	void HoldModeForWarmup(int32 Mode);
+
 	/** The mode the goggles show now (34 night, 36 thermal, 37 motion, 38 EMF, 0 plain sight), forced or the HUD's. */
 	int32 GetVisionMode() const { return ShownMode; }
 
@@ -73,6 +79,20 @@ public:
 	/** The simulation's per-actor vision values of this frame (heat, EMF, motion, shock protection), refreshed by Present. */
 	const FScctVisionData& GetData() const { return Data; }
 	FScctVisionData& GetData() { return Data; }
+
+	/** For the named checks (Test/Features): holds Mode as -ScctForceVision does; INDEX_NONE gives the HUD's mode back. */
+	void ForceModeForCheck(int32 Mode) { ForcedMode = Mode; }
+
+	/** For the named checks: one mode's post-process as it is now (Index 0 night, 1 thermal, 2 motion, 3 EMF). */
+	struct FModeCheck
+	{
+		int32 Mode = 0;
+		bool bMaterial = false;      // the mode's material instance exists and is the volume's blendable
+		float Amount = 0.0f;         // how far the picture is into the mode
+		float MaterialAmount = 0.0f; // the material's Amount parameter
+		float BlendWeight = 0.0f;    // the volume's weight for it
+	};
+	FModeCheck GetModeCheck(int32 Index) const;
 
 	/** The goggles of a world, or null. */
 	static const UScctVisionSubsystem* Find(const UWorld* World);
@@ -147,6 +167,9 @@ private:
 
 	/** -ScctForceVision: the mode held whatever the HUD says, INDEX_NONE when not forced. */
 	int32 ForcedMode = INDEX_NONE;
+
+	/** HoldModeForWarmup: the mode the warm-up holds, INDEX_NONE when none. */
+	int32 WarmupMode = INDEX_NONE;
 
 	/** -ScctVisionHeatOpacity / -ScctVisionEmfOpacity: every pawn's opacity in that mode, negative when not held. */
 	float HeatOpacityOverride = -1.0f;

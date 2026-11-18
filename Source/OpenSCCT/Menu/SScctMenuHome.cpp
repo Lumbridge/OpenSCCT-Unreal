@@ -125,6 +125,9 @@ namespace
 			Entry(TEXT("Maps & Content"), TEXT("Download maps and shared content"),
 				TEXT("The maps of OpenSCCT-Content with what this PC has: download, update or remove a map, follow each download, and open the downloads folder."),
 				[this] { Host.Open(TEXT("content")); });
+			Entry(TEXT("Armoury"), TEXT("Cosmetics for both sides"),
+				TEXT("The camo, tint and light colour of the spy and the mercenary by slot: see what your account unlocked, equip a look, and choose whose cosmetics are shown."),
+				[this] { Host.Open(TEXT("armoury")); });
 			Entry(TEXT("Account"), TEXT("Your name, rank and career"),
 				TEXT("Sign in or out, claim or change the name the servers show, see your rank, experience and career, prestige, and choose an emblem and a title."),
 				[this] { Host.Open(TEXT("account")); });
@@ -134,6 +137,9 @@ namespace
 			Entry(ScctUi::GameText(TEXT("All_Settings"), TEXT("TitlePage"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
 				TEXT("Everything you can set: the picture, the sound, the mouse and the controller, every key of both sides, and your name."),
 				[this] { Host.Open(TEXT("settings")); });
+			Entry(TEXT("Help & feedback"), TEXT("Report a bug, suggest a feature, the guides"),
+				TEXT("Report a bug with the game's details filled in and a screenshot if you want one, suggest a feature, browse the reported issues, and the documentation and contribution guides."),
+				[this] { Host.Open(TEXT("feedback")); });
 			Entry(TEXT("Credits"), TEXT("The people and the licences"),
 				TEXT("Who made OpenSCCT and this Unreal presentation, and the licences of the assets it uses."),
 				[this] { Host.Open(TEXT("credits")); });
