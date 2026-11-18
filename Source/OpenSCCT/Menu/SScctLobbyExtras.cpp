@@ -3,7 +3,7 @@
 #include "Fonts/FontMeasure.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Menu/ScctMenuPage.h"
-#include "Menu/SScctRankIcon.h"
+#include "Menu/ScctRankIcons.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Online/ScctLobbyExtras.h"
 #include "OpenSCCT.h"
@@ -275,11 +275,12 @@ namespace
 						SNew(SHorizontalBox)
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, Badge.IsEmpty() ? 0.0f : 5.0f, 0.0f)
 						[
-							SNew(SScctRankIcon).Size(18.0f).Rank(FScctRankEmblem::OfPacked(Row.Rank))
+							ScctRankIcons::Icon(ScctRankIcons::ForPacked(Row.Rank, 18.0f), 18.0f)
 						]
 						+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
 						[
-							Cell(Badge.IsEmpty() ? FString(TEXT("—")) : Badge, RankWidth - 23.0f, Badge.IsEmpty() ? ScctHudStyle::TextDim() : ScctLobbyExtras::RankColour(Row.Rank), false, ScctUi::Small())
+							SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(Badge.IsEmpty() ? ScctHudStyle::TextDim() : ScctLobbyExtras::RankColour(Row.Rank))
+							.OverflowPolicy(ETextOverflowPolicy::Ellipsis).Text(FText::FromString(Badge.IsEmpty() ? FString(TEXT("—")) : Badge))
 						]
 					]
 				];

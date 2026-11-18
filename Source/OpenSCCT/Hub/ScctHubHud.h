@@ -14,6 +14,7 @@ struct FScctHubHudTag
 	FVector World = FVector::ZeroVector;
 	float Distance = 0.0f;
 	int32 Team = 0;
+	int32 Rank = 0; // packed, without the title; 0 for a guest
 	FString Name;
 	FString Caption;
 	FString Bubble;

@@ -162,6 +162,12 @@ public:
 	FString BinocularUseKey;
 
 	/**
+	 * The merc's rifle scope (State.BinocularMode 2): the content's P_BinocularsDEF page evaluated for this moment
+	 * (ScctHudBinoculars.cpp), empty when the content or the bridge has no such page.
+	 */
+	TArray<FScctHudPageLayer> ScopeLayers;
+
+	/**
 	 * The merc's motion tracking for this frame's view (ScctHudMotion.cpp): the goggles' lock boxes around moving targets
 	 * and the laser target's bracket with its friend marks, as rows in the full-screen layer's units, and what the draw
 	 * counted. Empty when nothing is tracked or the bridge lacks the table.

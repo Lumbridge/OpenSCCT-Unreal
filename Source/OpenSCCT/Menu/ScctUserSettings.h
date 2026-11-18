@@ -77,6 +77,12 @@ public:
 
 	bool bMotionBlur = true;
 
+	/**
+	 * A match played by bots shows behind the main menu, on a map that changes every few minutes
+	 * (Menu/ScctMenuBackdrop.h). Off: the still view of one map, as before.
+	 */
+	bool bLiveMenuBackground = true;
+
 	/** The display gamma: 2.2 is the engine's own, higher is brighter. */
 	float Gamma = 2.2f;
 

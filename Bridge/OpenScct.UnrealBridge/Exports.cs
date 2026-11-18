@@ -96,9 +96,32 @@ public static unsafe class Exports
     /// </summary>
     internal static BridgeSession AdoptRemote(PlaySession round)
     {
+        // The menu's backdrop gives way: its match being made ready is dropped before the round takes the slot.
+        Backdrop.BackdropMatch.Quiesce();
         EndCurrent();
         ClearFailure();
         return Adopt(BridgeSession.FromRemote(round));
+    }
+
+    /// <summary>
+    /// Puts a local match that was started ahead of time on a worker (the menu's backdrop, Backdrop/BackdropMatch.cs)
+    /// in the main slot, on Unreal's game thread. A session already there is ended first. Returns the session's id,
+    /// 0 when it could not be adopted (the session is stopped then; nothing is reported as a failure of play, the
+    /// backdrop is not a match the player asked for). Not recorded as a demo and not seen by the test launches.
+    /// </summary>
+    internal static int AdoptPrepared(BridgeSession session)
+    {
+        try
+        {
+            EndCurrent();
+            ClearFailure();
+            return Adopt(session).Id;
+        }
+        catch (Exception e)
+        {
+            s_lastError = e.ToString();
+            return 0;
+        }
     }
 
     /// <summary>
@@ -344,6 +367,8 @@ public static unsafe class Exports
     {
         try
         {
+            // The menu's backdrop gives way: its match being made ready is dropped before this one loads.
+            Backdrop.BackdropMatch.Quiesce();
             EndCurrent();
             ClearFailure();
             // The player's demo-saving choice records the match (Demo/DemoSaving.cs).
@@ -423,7 +448,8 @@ public static unsafe class Exports
                 if (session is not null)
                 {
                     info->Id = session.Id;
-                    info->Flags = (session.IsRemote ? BridgeSessionFlags.Remote : 0) | (session.LocalMerc ? BridgeSessionFlags.Merc : 0);
+                    info->Flags = (session.IsRemote ? BridgeSessionFlags.Remote : 0) | (session.LocalMerc ? BridgeSessionFlags.Merc : 0) |
+                        (session.IsBackdrop ? BridgeSessionFlags.Backdrop : 0);
                     info->Ticks = (int)Math.Min(session.Ticks, int.MaxValue);
                     string map = session.Map;
                     int length = Math.Min(map.Length, BridgeSessionInfo.MapCapacity - 1);

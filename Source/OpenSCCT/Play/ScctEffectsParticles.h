@@ -6,11 +6,12 @@ class UInstancedStaticMeshComponent;
 class UMaterialInterface;
 class UStaticMesh;
 
-/** Which of the two sprite materials a particle is drawn with. */
+/** Which of the sprite materials a particle is drawn with. */
 enum class EScctFxLayer : uint8
 {
 	Glow,  // added light, unlit: fire, sparks, flashes, tracers
 	Smoke, // soft and lit by the scene: smoke, dust, mist
+	Cloud, // a cell of the smoke grenade's own picture, lit by the scene: the spy's smoke cloud
 	Count,
 };
 
@@ -35,6 +36,17 @@ struct FScctFxParticle
 	float Rotation = 0.0f;   // radians about the view axis
 	float Spin = 0.0f;       // radians per second
 	float FadeIn = 0.05f;    // fraction of the life over which it appears; it fades out over the rest
+	/** 0 or more: the fraction of the life at which it starts to fade out, at full strength until then (an original emitter's FadeOutStartTime). */
+	float FadeOutStart = -1.0f;
+	/**
+	 * An original emitter's VelocityLossRange, 1 / s per world axis: each frame, after the move, every axis of the
+	 * velocity loses a pick between the two times itself times the frame's seconds. Used instead of Drag when LossMax
+	 * is not zero.
+	 */
+	FVector LossMin = FVector::ZeroVector;
+	FVector LossMax = FVector::ZeroVector;
+	/** Cloud layer: which cell of the picture's grid it shows, counted along the rows. */
+	float Cell = 0.0f;
 };
 
 /**
@@ -50,8 +62,11 @@ struct FScctFxParticle
 class FScctFxSprites
 {
 public:
-	/** Creates the two instanced components on Host. A missing material or mesh leaves that layer undrawn. */
-	void Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* GlowMaterial, UMaterialInterface* SmokeMaterial);
+	/** Creates the instanced components on Host. A missing material or mesh leaves that layer undrawn. */
+	void Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* GlowMaterial, UMaterialInterface* SmokeMaterial, UMaterialInterface* CloudMaterial);
+
+	/** How much of its opacity a layer's sprites are drawn with from the next Tick on (1 as spawned, 0 not at all): what a vision mode lets through. */
+	void SetLayerOpacity(EScctFxLayer Layer, float Opacity);
 
 	/** A new particle to fill in. The reference is valid until the next Spawn. */
 	FScctFxParticle& Spawn(EScctFxLayer Layer);
@@ -85,6 +100,7 @@ private:
 		TWeakObjectPtr<UInstancedStaticMeshComponent> Component; // owned by the host actor, which may go first
 		int32 Next = 0;
 		int32 Live = 0;
+		float Opacity = 1.0f;
 		bool bDrawnEmpty = false; // the instance buffers already show nothing
 	};
 

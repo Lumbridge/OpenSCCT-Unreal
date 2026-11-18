@@ -391,7 +391,8 @@ void UScctSocialSubsystem::SendPresence()
 			P.Flags |= EScctSocialPresenceFlags::HubArrived;
 		}
 	}
-	else if (Session != nullptr && Session->IsPlaying() && !Session->IsRemoteSession())
+	// The match behind the main menu is not one the player is in: friends see the menu.
+	else if (Session != nullptr && Session->IsPlaying() && !Session->IsRemoteSession() && !Session->IsBackdrop())
 	{
 		const FScctBridgeSessionInfo& Info = Session->GetSessionInfo();
 		P.Activity = static_cast<int32>(EScctSocialActivity::Offline);

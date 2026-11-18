@@ -1,5 +1,6 @@
 #include "Hud/ScctHudElements.h"
 
+#include "Menu/ScctRankIcons.h"
 #include "Hud/ScctHudStyle.h"
 #include "Hud/ScctVisorEffects.h"
 
@@ -160,9 +161,9 @@ void ScctHudElements::PaintRound(FScctHudPainter& Painter, const FScctHudModel& 
 
 void ScctHudElements::PaintObjectives(FScctHudPainter& Painter, const FScctHudModel& Model)
 {
-	// Not over the spy binocular page, which replaces the player page this panel belongs to.
+	// Not over a binocular page (the spy's binoculars, the merc's rifle scope), which replaces the player page this panel belongs to.
 	if (!Model.bHasRound || !Model.bHasState || (Model.State.Flags & EScctHudFlags::HideHud) != 0 || Model.ObjectiveLines.Num() == 0
-		|| Model.State.BinocularMode == 1
+		|| Model.State.BinocularMode != 0
 		|| ScctVisorEffects::IsHudShutDown(Model)) // the merc page's objectives go down with an EMP
 	{
 		return;
@@ -648,11 +649,18 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 			}
 
 			const FLinearColor NameColour = bOut ? TextFaint() : (bLocal ? Text() : Fade(Text(), 0.86f));
-			const FVector2f NameSize = Painter.Text(FVector2f(Left + 6.0f, RowY + 6.0f), Model.Text(Row->NameId), Font(bLocal ? EWeight::Bold : EWeight::Regular, 11.5f), NameColour);
+			// The rank's emblem before the name (Menu/ScctRankIcons); a guest and a bot have none and leave no gap.
+			float NameLeft = Left + 6.0f;
+			if (const FSlateBrush* RankBrush = ScctRankIcons::ForPacked(Row->Rank, 18.0f))
+			{
+				Painter.Image(HudBox(NameLeft, RowY + 5.0f, 18.0f, 18.0f), *RankBrush, FBox2f(FVector2f::ZeroVector, FVector2f::UnitVector), bOut ? Fade(FLinearColor::White, 0.45f) : FLinearColor::White);
+				NameLeft += 24.0f;
+			}
+			const FVector2f NameSize = Painter.Text(FVector2f(NameLeft, RowY + 6.0f), Model.Text(Row->NameId), Font(bLocal ? EWeight::Bold : EWeight::Regular, 11.5f), NameColour);
 			if ((Row->Flags & EScctHudScoreFlags::HasFlag) != 0)
 			{
 				// Carrying the disk.
-				const FVector2f Disk(Left + 6.0f + NameSize.X + 14.0f, RowY + 14.0f);
+				const FVector2f Disk(NameLeft + NameSize.X + 14.0f, RowY + 14.0f);
 				Painter.Polyline({ Disk + FVector2f(0.0f, -4.0f), Disk + FVector2f(4.0f, 0.0f), Disk + FVector2f(0.0f, 4.0f), Disk + FVector2f(-4.0f, 0.0f), Disk + FVector2f(0.0f, -4.0f) }, Colour, 1.5f);
 			}
 

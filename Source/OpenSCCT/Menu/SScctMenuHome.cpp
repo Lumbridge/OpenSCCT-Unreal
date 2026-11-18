@@ -46,22 +46,6 @@ namespace
 
 			const TSharedRef<SVerticalBox> Entries = SNew(SVerticalBox);
 			EntriesBox = Entries;
-			const auto Entry = [this, &Entries](const FString& Caption, const FString& Sub, const FString& Description, TFunction<void()> OnPressed) -> TSharedRef<SScctButton>
-			{
-				TSharedPtr<SScctButton> Made;
-				Entries->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 0.0f)
-				[
-					SAssignNew(Made, SScctButton)
-					.Look(EScctButtonLook::Menu)
-					.Compact(true)
-					.Text(FText::FromString(Caption.ToUpper()))
-					.SubText(FText::FromString(Sub))
-					.SubTextVisibility(this, &SScctMenuHome::GetSubTextVisibility)
-					.Description(FText::FromString(Description))
-					.OnPressed(FSimpleDelegate::CreateLambda([OnPressed] { OnPressed(); }))
-				];
-				return Made.ToSharedRef();
-			};
 
 			// A round this game dropped out of that is still being played: shown once the master or the server confirmed
 			// it (Online/ScctRejoinSubsystem.h), with a question the first time it is offered.
@@ -76,10 +60,11 @@ namespace
 				Entries->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
 				[
 					SNew(SBox)
-					.Visibility(TAttribute<EVisibility>::CreateLambda([WeakRejoin]
+					.Visibility(TAttribute<EVisibility>::CreateLambda([this, WeakRejoin]
 					{
+						// With the top level only: an open group has the column to itself.
 						FScctRejoinChoice Choice;
-						return WeakRejoin.IsValid() && WeakRejoin->GetOffer(Choice) ? EVisibility::Visible : EVisibility::Collapsed;
+						return OpenGroup == INDEX_NONE && WeakRejoin.IsValid() && WeakRejoin->GetOffer(Choice) ? EVisibility::Visible : EVisibility::Collapsed;
 					}))
 					[
 						SNew(SScctButton)
@@ -99,53 +84,85 @@ namespace
 				RegisterActiveTimer(0.25f, FWidgetActiveTimerDelegate::CreateSP(this, &SScctMenuHome::WatchRejoin));
 			}
 
-			const TSharedRef<SScctButton> First = Entry(TEXT("Play offline"), TEXT("A match against bots on any map installed here"),
+			Entries->AddSlot().AutoHeight()[ SAssignNew(ListBox, SVerticalBox) ];
+
+			// The top level is short: what starts a game, what belongs to the player and the rest are groups that open
+			// in this column (ShowLevel), one step down.
+			const auto Add = [](TArray<FHomeEntry>& To, const FString& Caption, const FString& Sub, const FString& Description, TFunction<void()> Action)
+			{
+				FHomeEntry& Made = To.AddDefaulted_GetRef();
+				Made.Caption = Caption;
+				Made.Sub = Sub;
+				Made.Description = Description;
+				Made.Action = MoveTemp(Action);
+			};
+			const auto AddGroup = [this, &Add](const FString& Name, const FString& Sub, const FString& Description) -> int32
+			{
+				const int32 Index = Groups.AddDefaulted();
+				Groups[Index].Name = Name;
+				Groups[Index].TopIndex = Top.Num();
+				Add(Top, Name, Sub, Description, [this, Index] { ShowLevel(Index, 0, true); });
+				return Index;
+			};
+
+			const int32 Play = AddGroup(TEXT("Play"), TEXT("Offline, practice, online, host, hub, tutorials"),
+				TEXT("Everything that starts or joins a game: a match against bots, quick practice as either side, the servers online, hosting a session, the hubs and the tutorials."));
+			Add(Groups[Play].Entries, TEXT("Play offline"), TEXT("A match against bots on any map installed here"),
 				TEXT("Pick a map, a mode and a side, set the bots and the rules, and play at once. Nothing is sent over the network."),
 				[this] { Host.Open(TEXT("play")); });
-			DefaultFocus = First;
 			// Quick practice with three bots, as the Godot dashboard's PRACTICE AS A SPY / A MERCENARY (Menu/ScctDashboardCards.h).
-			Entry(TEXT("Practice as a spy"), ScctDashboard::PracticeLine(false),
+			Add(Groups[Play].Entries, TEXT("Practice as a spy"), ScctDashboard::PracticeLine(false),
 				TEXT("Straight into an offline match as a spy against three bots, on the map you last played offline, with the practice rules."),
 				[this] { ScctDashboard::StartPractice(Host, false); });
-			Entry(TEXT("Practice as a mercenary"), ScctDashboard::PracticeLine(true),
+			Add(Groups[Play].Entries, TEXT("Practice as a mercenary"), ScctDashboard::PracticeLine(true),
 				TEXT("Straight into an offline match as a mercenary against three bots, on the map you last played offline, with the practice rules."),
 				[this] { ScctDashboard::StartPractice(Host, true); });
-			Entry(TEXT("Play online"), TEXT("Find a session the master lists, or join by address"),
+			Add(Groups[Play].Entries, TEXT("Play online"), TEXT("Find a session the master lists, or join by address"),
 				TEXT("The servers the master lists, with their maps, modes and players, and joining a server by its address."),
 				[this] { Host.Open(TEXT("online")); });
-			Entry(TEXT("Host game"), TEXT("Create a session on this PC for others to join"),
+			Add(Groups[Play].Entries, TEXT("Host game"), TEXT("Create a session on this PC for others to join"),
 				TEXT("Pick a map and the rules, choose how the server is reached and listed, and start a listen server that you play on."),
 				[this] { Host.Open(TEXT("host")); });
-			Entry(TEXT("Hub"), TEXT("Meet other players between matches"),
+			Add(Groups[Play].Entries, TEXT("Hub"), TEXT("Meet other players between matches"),
 				TEXT("The hubs the master lists, joining one by its address, or hosting a hub on this PC."),
 				[this] { Host.Open(TEXT("hub")); });
-			Entry(ScctUi::GameText(TEXT("Tutorials_Page"), TEXT("TitlePage"), TEXT("Tutorials")), TEXT("The HUD, tips, gadgets and the tutorial maps"),
+			Add(Groups[Play].Entries, ScctUi::GameText(TEXT("Tutorials_Page"), TEXT("TitlePage"), TEXT("Tutorials")), TEXT("The HUD, tips, gadgets and the tutorial maps"),
 				TEXT("The HUD and keyboard pictures, every tip and gadget of both sides, the spy and mercenary tutorial maps with your progress, and visiting a map alone with its help paths."),
 				[this] { Host.Open(TEXT("tutorials")); });
-			Entry(TEXT("Maps & Content"), TEXT("Download maps and shared content"),
-				TEXT("The maps of OpenSCCT-Content with what this PC has: download, update or remove a map, follow each download, and open the downloads folder."),
-				[this] { Host.Open(TEXT("content")); });
-			Entry(TEXT("Armoury"), TEXT("Cosmetics for both sides"),
-				TEXT("The camo, tint and light colour of the spy and the mercenary by slot: see what your account unlocked, equip a look, and choose whose cosmetics are shown."),
-				[this] { Host.Open(TEXT("armoury")); });
-			Entry(TEXT("Account"), TEXT("Your name, rank and career"),
+
+			const int32 Profile = AddGroup(TEXT("Profile"), TEXT("Account, armoury, demos"),
+				TEXT("What belongs to the player: the account with its name, rank and career, the cosmetics of both sides, and the recorded matches."));
+			Add(Groups[Profile].Entries, TEXT("Account"), TEXT("Your name, rank and career"),
 				TEXT("Sign in or out, claim or change the name the servers show, see your rank, experience and career, prestige, and choose an emblem and a title."),
 				[this] { Host.Open(TEXT("account")); });
-			Entry(TEXT("Demos"), TEXT("Watch recorded matches"),
+			Add(Groups[Profile].Entries, TEXT("Armoury"), TEXT("Cosmetics for both sides"),
+				TEXT("The camo, tint and light colour of the spy and the mercenary by slot: see what your account unlocked, equip a look, and choose whose cosmetics are shown."),
+				[this] { Host.Open(TEXT("armoury")); });
+			Add(Groups[Profile].Entries, TEXT("Demos"), TEXT("Watch recorded matches"),
 				TEXT("The demos recorded on this PC and the master's recent online demos: watch one with the playback bar, keep a download, delete one, or see a match's final scoreboard."),
 				[this] { Host.Open(TEXT("demos")); });
-			Entry(ScctUi::GameText(TEXT("All_Settings"), TEXT("TitlePage"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
+
+			Add(Top, TEXT("Maps & Content"), TEXT("Download maps and shared content"),
+				TEXT("The maps of OpenSCCT-Content with what this PC has: download, update or remove a map, follow each download, and open the downloads folder."),
+				[this] { Host.Open(TEXT("content")); });
+			Add(Top, ScctUi::GameText(TEXT("All_Settings"), TEXT("TitlePage"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
 				TEXT("Everything you can set: the picture, the sound, the mouse and the controller, every key of both sides, and your name."),
 				[this] { Host.Open(TEXT("settings")); });
-			Entry(TEXT("Help & feedback"), TEXT("Report a bug, suggest a feature, the guides"),
+
+			const int32 More = AddGroup(TEXT("More"), TEXT("Help & feedback, credits"),
+				TEXT("Reporting a bug or suggesting a feature, the guides, and who made OpenSCCT."));
+			Add(Groups[More].Entries, TEXT("Help & feedback"), TEXT("Report a bug, suggest a feature, the guides"),
 				TEXT("Report a bug with the game's details filled in and a screenshot if you want one, suggest a feature, browse the reported issues, and the documentation and contribution guides."),
 				[this] { Host.Open(TEXT("feedback")); });
-			Entry(TEXT("Credits"), TEXT("The people and the licences"),
+			Add(Groups[More].Entries, TEXT("Credits"), TEXT("The people and the licences"),
 				TEXT("Who made OpenSCCT and this Unreal presentation, and the licences of the assets it uses."),
 				[this] { Host.Open(TEXT("credits")); });
-			Entry(ScctUi::GameText(TEXT("Menu_Multi"), TEXT("MainPage_Quit.Caption"), TEXT("Quit")), TEXT("Back to the desktop"),
+
+			Add(Top, ScctUi::GameText(TEXT("Menu_Multi"), TEXT("MainPage_Quit.Caption"), TEXT("Quit")), TEXT("Back to the desktop"),
 				TEXT("Close the game."),
 				[this] { Host.Back(); });
+
+			ShowLevel(INDEX_NONE, 0, false);
 
 			const FString Tagline = ScctUi::GameText(TEXT("Menu_Multi"), TEXT("TitlePage"), TEXT("Spies versus Mercenaries"));
 			const FString Trivia = ScctSplashTrivia::Pick();
@@ -245,6 +262,12 @@ namespace
 			SScctMenuPage::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
 			// The master is polled for the dashboard only while this page is drawn.
 			ScctDashboard::NoteShown();
+			// The focus asked for by ShowLevel, once the new entries are in the page.
+			if (const TSharedPtr<SWidget> Focus = PendingFocus.Pin())
+			{
+				PendingFocus.Reset();
+				FSlateApplication::Get().SetKeyboardFocus(Focus, EFocusCause::SetDirectly);
+			}
 			if (!EntriesScroll.IsValid() || !EntriesBox.IsValid())
 			{
 				return;
@@ -267,7 +290,102 @@ namespace
 			}
 		}
 
+		/** Escape or the pad's back in an open group: to the top level, on the group's entry. */
+		virtual bool HandleBack() override
+		{
+			if (!Groups.IsValidIndex(OpenGroup))
+			{
+				return false;
+			}
+			ScctUi::Play(EScctUiSound::Back);
+			ShowLevel(INDEX_NONE, Groups[OpenGroup].TopIndex, true);
+			return true;
+		}
+
 	private:
+		/** One line of the column: what it says and what pressing it does. */
+		struct FHomeEntry
+		{
+			FString Caption;
+			FString Sub;
+			FString Description;
+			TFunction<void()> Action;
+		};
+
+		/** A top-level entry that opens its own entries in the column; TopIndex is that entry's place in the top level. */
+		struct FHomeGroup
+		{
+			FString Name;
+			int32 TopIndex = 0;
+			TArray<FHomeEntry> Entries;
+		};
+
+		TSharedRef<SScctButton> MakeEntry(const FHomeEntry& Entry)
+		{
+			TSharedPtr<SScctButton> Made;
+			const TFunction<void()> Action = Entry.Action;
+			ListBox->AddSlot().AutoHeight()
+			[
+				SAssignNew(Made, SScctButton)
+				.Look(EScctButtonLook::Menu)
+				.Compact(true)
+				.Text(FText::FromString(Entry.Caption.ToUpper()))
+				.SubText(FText::FromString(Entry.Sub))
+				.SubTextVisibility(this, &SScctMenuHome::GetSubTextVisibility)
+				.Description(FText::FromString(Entry.Description))
+				.OnPressed(FSimpleDelegate::CreateLambda([Action] { Action(); }))
+			];
+			return Made.ToSharedRef();
+		}
+
+		/**
+		 * Fills the column with the top level (INDEX_NONE) or with a group's entries under the group's name and above
+		 * BACK. FocusIndex is the entry the focus starts on, taken on the next frame when bFocus (the page is being
+		 * used). The entry pressed to get here is gone when this returns: the caller uses nothing of it afterwards.
+		 */
+		void ShowLevel(int32 Group, int32 FocusIndex, bool bFocus)
+		{
+			OpenGroup = Groups.IsValidIndex(Group) ? Group : INDEX_NONE;
+			// A copy: the action of one of the entries being replaced may be what is running now.
+			const TArray<FHomeEntry> Shown = OpenGroup != INDEX_NONE ? Groups[OpenGroup].Entries : Top;
+			ListBox->ClearChildren();
+			if (OpenGroup != INDEX_NONE)
+			{
+				ListBox->AddSlot().AutoHeight().Padding(24.0f, 0.0f, 0.0f, 8.0f)
+				[
+					ScctUi::Label(Groups[OpenGroup].Name.ToUpper(), ScctUi::Accent(), 13.0f)
+				];
+			}
+			TSharedPtr<SWidget> Focus;
+			for (int32 Index = 0; Index < Shown.Num(); ++Index)
+			{
+				const TSharedRef<SScctButton> Made = MakeEntry(Shown[Index]);
+				if (Index == FocusIndex || !Focus.IsValid())
+				{
+					Focus = Made;
+				}
+			}
+			if (OpenGroup != INDEX_NONE)
+			{
+				FHomeEntry Back;
+				Back.Caption = TEXT("Back");
+				Back.Sub = TEXT("To the main menu");
+				Back.Description = TEXT("Back to the first list of the main menu.");
+				Back.Action = [this] { HandleBack(); };
+				MakeEntry(Back);
+			}
+			DefaultFocus = Focus;
+			PendingFocus = bFocus ? Focus : nullptr;
+			// The new entries are measured afresh for whether their second lines fit (Tick).
+			bTight = false;
+			FullHeight = 0.0f;
+			if (EntriesScroll.IsValid())
+			{
+				EntriesScroll->ScrollToStart();
+			}
+			UE_LOG(LogOpenSCCT, Log, TEXT("Main menu: showing %s"), OpenGroup != INDEX_NONE ? *Groups[OpenGroup].Name : TEXT("the top level"));
+		}
+
 		EVisibility GetSubTextVisibility() const { return bTight ? EVisibility::Collapsed : EVisibility::Visible; }
 
 		/** Whole sentences from the start of a text, as many as fit in about MaxChars (at least one): never a sentence cut off. */
@@ -355,6 +473,13 @@ namespace
 		FString FeaturedMap;
 		TSharedPtr<SScrollBox> EntriesScroll;
 		TSharedPtr<SVerticalBox> EntriesBox;
+		/** The entries of the level shown, inside EntriesBox under REJOIN. */
+		TSharedPtr<SVerticalBox> ListBox;
+		TArray<FHomeEntry> Top;
+		TArray<FHomeGroup> Groups;
+		/** The group whose entries fill the column, or INDEX_NONE at the top level. */
+		int32 OpenGroup = INDEX_NONE;
+		TWeakPtr<SWidget> PendingFocus;
 		/** The entries would not fit with their second lines, which are hidden; FullHeight is the height they need with them. */
 		bool bTight = false;
 		float FullHeight = 0.0f;

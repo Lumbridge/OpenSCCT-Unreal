@@ -40,12 +40,12 @@
 #include "Menu/ScctMenuPage.h"
 #include "Menu/SScctArmouryOverlay.h"
 #include "Menu/ScctOverlayPages.h"
+#include "Menu/ScctRankIcons.h"
 
 #include "Framework/Application/SlateApplication.h"
 #include "Demo/ScctDemoSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Menu/SScctLobbyExtras.h"
-#include "Menu/SScctRankIcon.h"
 #include "Menu/SScctSessionOptions.h"
 #include "Online/ScctLobbyExtras.h"
 #include "Settings/ScctSettings.h"
@@ -1109,15 +1109,15 @@ namespace
 					// The rank, when the player has one (a guest and a bot have none, and leave no gap).
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, Rank.IsEmpty() ? 0.0f : 10.0f, 0.0f)
 					[
-						// RankIcons' emblem (Menu/SScctRankIcon.h) and the rank beside it in the emblem's colour; the rank's
-						// words in the tooltip.
+						// RankIcons' badge: the emblem (Menu/ScctRankIcons) and the level beside it in the emblem's
+						// colour; the rank's words in the tooltip.
 						SNew(SBox).Visibility(Rank.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
 						.ToolTipText(FText::FromString(ScctLobbyExtras::RankWords(Player.Rank)))
 						[
 							SNew(SHorizontalBox)
-							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 6.0f, 0.0f)
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 5.0f, 0.0f)
 							[
-								SNew(SScctRankIcon).Size(22.0f).Rank(FScctRankEmblem::OfPacked(Player.Rank))
+								ScctRankIcons::Icon(ScctRankIcons::ForPacked(Player.Rank, 22.0f), 22.0f)
 							]
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 							[

@@ -104,7 +104,7 @@ private:
 	TSharedRef<SWidget> BuildResults();
 	TSharedRef<SWidget> BuildMatchCard();
 
-	bool ReadResults(int32& OutWinner, FString& OutReason, TArray<TArray<FString>>& OutRows, TArray<int32>& OutTeams, TArray<bool>& OutLocal) const;
+	bool ReadResults(int32& OutWinner, FString& OutReason, TArray<TArray<FString>>& OutRows, TArray<int32>& OutTeams, TArray<bool>& OutLocal, TArray<int32>* OutRanks = nullptr) const;
 	void Restart(bool bSwapSide);
 	int32 GetResultsLocalTeam() const;
 	void LogResults() const;

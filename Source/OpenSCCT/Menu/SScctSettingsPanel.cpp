@@ -609,6 +609,11 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 		.Description(FText::FromString(TEXT("Blur of fast movement, as a camera sees it.")))
 		.Get([Settings] { return Settings->bMotionBlur; })
 		.Set([Settings](bool bValue) { Settings->bMotionBlur = bValue; Settings->ApplyAll(); }));
+	Add(SNew(SScctToggle)
+		.Label(FText::FromString(TEXT("Live menu background")))
+		.Description(FText::FromString(TEXT("A match played by bots shows behind the main menu, on a map that changes every few minutes. Off shows a still view of one map.")))
+		.Get([Settings] { return Settings->bLiveMenuBackground; })
+		.Set([Settings](bool bValue) { Settings->bLiveMenuBackground = bValue; Settings->ApplyAll(); }));
 	Add(SNew(SScctSlider)
 		.Label(FText::FromString(TEXT("Brightness")))
 		.Description(FText::FromString(TEXT("The display gamma. Raise it until the darkest corners of a room are just visible, no further: the spies need their shadows.")))
@@ -830,7 +835,7 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildControls()
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Mercenary")) ];
 	Speed(TEXT("Look"), TEXT("The mercenary's look."), &Controls->MercMouse.Look, 0.05f, 10.0f, 0.05f);
 	Speed(TEXT("Sniper scope"), TEXT("The look through the scope, times the look."), &Controls->MercMouse.Scope, 0.05f, 10.0f, 0.05f);
-	Speed(TEXT("Scope vertical"), TEXT("The scope's up and down speed against its sideways speed."), &Controls->MercMouse.ScopeVertical, 0.1f, 5.0f, 0.05f);
+	Speed(TEXT("Scope vertical"), TEXT("The scope's up and down speed: 1 is the original's, 2.45 turns up and down as fast as sideways."), &Controls->MercMouse.ScopeVertical, 0.05f, 10.0f, 0.05f);
 	Speed(TEXT("Camera network"), TEXT("The look of the camera network."), &Controls->MercMouse.Cam, 0.05f, 10.0f, 0.05f);
 	HoldToggle(TEXT("Walk key "), TEXT("Walk while the key is held, or switch walking on and off."), &FScctLookOptions::bWalkHold, true);
 	HoldToggle(TEXT("Scope key"), TEXT("Look through the scope while the key is held, or switch."), &FScctLookOptions::bScopeHold, true);

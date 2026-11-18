@@ -5,25 +5,50 @@
 class UWorld;
 
 /**
- * The developer console's OpenSCCT commands (the Godot client's UI/DevConsole.cs and Options/SettingsConsole.cs), in
- * the menus and in play alike; the console opens on the key left of 1 in development builds:
+ * The developer console's OpenSCCT commands (the Godot client's UI/DevConsole.cs, UI/ConsoleCommands.cs and
+ * Options/SettingsConsole.cs), in the menus and in play alike; the console opens on the key left of 1 in development
+ * builds.
  *
- *   Get <key>                  a setting's value ("Get Performance.MaxFps")
- *   Set <key> <value>          sets it, puts it in force and saves it ("Set Audio.Music 40", "Set Hud.FpsMode Simple")
- *   Settings [page]            the pages and their sizes, or every key of a page with its value and what it takes
- *   AdminLogin <password>      logs in as an admin of the dedicated server played on (the password is never logged)
- *   Admin <command>            an admin command to that server (or the player's own server's console when hosting)
- *   Scct.ImportEnhanced [folder]  imports an Enhanced SCCT Versus install's settings (no folder: this PC's profile)
+ * Every word the Godot console knows is typed the same here, with the same arguments, usage lines and rules, because
+ * the line is run by that console's own parser in the bridge (Runtime/ScctConsoleApi.h):
  *
- * Keys and values are those of Settings/ScctSettingsConsole.h. Get and Set are also registered as Scct.Get and
- * Scct.Set; the plain names reach these commands through UScctLocalPlayer (Play/ScctLocalPlayer.h), because the
- * engine's own GET and SET (class default properties) would otherwise take them first.
+ *   help [command|bots]                              the commands, or one command's help
+ *   login <password> | cmd <server command> | say <text>          the server played on
+ *   resign | pings | map <name> [mode] | rmap_next | rmap_prev    sent as the matching chat command
+ *   practice [on|off] | heal | regen | tank | kill | ammo         a practice server's commands
+ *   infinite [on|off|toggle] (also: resources)       infinite ammo, gadget charges and mask air of a practice round,
+ *                                                    online or in an offline match started with ?Practice=1
+ *   addbot | kickbot | placebot | botstop | botresume | bothealth | botweapon | botteam   practice bots
+ *   whereami [copy]                                  the map, position and view of the local player
+ *
+ * The answers of a server arrive a moment later and are printed as they come. The words Unreal runs itself:
+ *
+ *   get <key> | set <key> <value> | current | <key> [value]   the settings, by the keys of Settings/ScctSettingsConsole.h
+ *                                                    ("Performance.MaxFps 144"); the Godot settings file's keys are not known
+ *   Settings [page]                                  the pages and their sizes, or every key of a page with what it takes
+ *   grabarea [on|off]                                the practice grab-area overlay (Test/ScctGrabAreaSubsystem.h)
+ *   quit | exit                                      the engine's own
+ *   AdminLogin <password>, Admin <command>           the names login and cmd had here first; they stay (Admin is not
+ *                                                    the Godot console's alias of login)
+ *   Scct.ImportEnhanced [folder]                     imports an Enhanced SCCT Versus install's settings
+ *   Scct.After <seconds> <command>                   runs a console line later (unattended runs: -ExecCmds runs before a match is up)
+ *
+ * A line nothing knows, the engine included, is answered as the Godot console does: unknown command 'x' (type help).
+ * The words reach these commands through UScctLocalPlayer (Play/ScctLocalPlayer.h), before the engine's own words of
+ * the same name (GET, SET, HELP, SAY); they are also registered with the console manager, which is what the console's
+ * auto-complete lists.
  */
 namespace ScctConsoleCommands
 {
 	/**
-	 * Runs "Get ..." or "Set ..." when the key is a setting; false for anything else (the engine's own GET and SET of a
-	 * class property still work).
+	 * Runs "Get ..." or "Set ..." when it is about a setting; false for the engine's own GET and SET of a class
+	 * property ("GET <class> <property>", "SET <class> <property> <value>").
 	 */
 	bool ExecSettingCommand(const TCHAR* Cmd, UWorld* World, FOutputDevice& Ar);
+
+	/** Runs a line that is one of the Godot console's words (or a settings key typed alone); false for anything else. */
+	bool ExecGameCommand(const TCHAR* Cmd, UWorld* World, FOutputDevice& Ar);
+
+	/** The answer to a line nothing knew. */
+	void SayUnknown(const TCHAR* Cmd, FOutputDevice& Ar);
 }

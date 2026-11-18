@@ -448,6 +448,11 @@ bool UScctTeamPingSubsystem::RunCommand(const FString& Name, int32 Argument)
 
 void UScctTeamPingSubsystem::HandleFrame(float DeltaSeconds)
 {
+	if (const UScctSessionSubsystem* BackdropSession = GetWorld()->GetSubsystem<UScctSessionSubsystem>(); BackdropSession != nullptr && BackdropSession->IsBackdrop())
+	{
+		// The match behind the main menu: nobody at this machine plays it.
+		return;
+	}
 	Clock += DeltaSeconds;
 	Attach(Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController()));
 	const FScctTeamPingApi* Api = ScctFeature<FScctTeamPingApi>();

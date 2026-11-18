@@ -35,6 +35,7 @@ namespace EScctHubSocialFlags
 	constexpr int32 Me = 1;
 	constexpr int32 SignedIn = 2;  // signed in on the master, else a guest
 	constexpr int32 ChatMuted = 4; // this player's chat lines are hidden for the visit
+	constexpr int32 TagRankShift = 16; // FScctHubSocialTag::Flags only: the packed rank without its title (level, then prestige) sits above this bit
 	constexpr int32 Talking = 8;   // heard on voice now (never set yet: the hub's voice is not carried)
 	constexpr int32 Placed = 16;   // his pawn is in the drawn hub: X, Y, Z are where it stands
 

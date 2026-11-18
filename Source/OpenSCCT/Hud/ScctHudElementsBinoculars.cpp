@@ -6,6 +6,10 @@
 // The spy's binocular page: the content's P_BinocularsATT as the bridge evaluates it for this moment, and the
 // objective targets over it as SHud.DrawObjectivesBinocularsAtt draws them (spec/hud/binoculars.md rules 12 to 17).
 // Both are laid out on the original's 640 x 480 canvas stretched over the whole screen, texts included.
+//
+// The merc's rifle scope: the content's P_BinocularsDEF the same way, but kept round: the page is as high as the
+// screen and sits in its middle, and the pictures that reach the page's sides (the tint beside the rings, the
+// horizontal axis) are drawn out to the screen's sides, as the Godot client's renderer lays it out.
 
 using namespace ScctHudStyle;
 using EAlign = FScctHudPainter::EAlign;
@@ -72,8 +76,8 @@ namespace
 		return Marker.bInFront && P.X > EdgeMargin.X && P.X < PageWidth - EdgeMargin.X && P.Y > EdgeMargin.Y && P.Y < PageHeight - EdgeMargin.Y;
 	}
 
-	/** Draws one layer of the page; K is screen units per page unit. */
-	void PaintLayer(FScctHudPainter& Painter, const FScctHudPageLayer& Layer, const FVector2f& K)
+	/** Draws one layer of the page; K is screen units per page unit and Origin where the page's corner is on the screen. */
+	void PaintLayer(FScctHudPainter& Painter, const FScctHudPageLayer& Layer, const FVector2f& K, const FVector2f& Origin = FVector2f::ZeroVector)
 	{
 		const FLinearColor Colour = BinocularContentColour(Layer.Red, Layer.Green, Layer.Blue, Layer.Alpha);
 		if (Layer.Kind == 1)
@@ -83,7 +87,7 @@ namespace
 			const FSlateFontInfo LayerFont = Font(EWeight::Regular, Height * FontPerHeight, FMath::RoundToInt32(Layer.Tracking));
 			const EAlign Align = Layer.Align == 1 ? EAlign::Centre : (Layer.Align == 2 ? EAlign::Right : EAlign::Left);
 			const float X = Layer.Align == 1 ? (Layer.L + Layer.R) * 0.5f * K.X : (Layer.Align == 2 ? Layer.R * K.X : Layer.L * K.X);
-			const FVector2f At(X, Layer.T * K.Y);
+			const FVector2f At = Origin + FVector2f(X, Layer.T * K.Y);
 			if (Layer.ShadowAlpha > 0.0f)
 			{
 				Painter.Text(At + FVector2f(Layer.ShadowX * K.X, Layer.ShadowY * K.Y), Words, LayerFont,
@@ -99,7 +103,7 @@ namespace
 			return;
 		}
 		const FBox2f UV = Texture->Region(Layer.U0, Layer.V0, Layer.U1, Layer.V1);
-		const FBox2f Box(FVector2f(Layer.L, Layer.T) * K, FVector2f(Layer.R, Layer.B) * K);
+		const FBox2f Box(Origin + FVector2f(Layer.L, Layer.T) * K, Origin + FVector2f(Layer.R, Layer.B) * K);
 		const float Turn = FMath::Fmod(Layer.Rotation, 360.0f);
 		if (FMath::IsNearlyZero(Turn))
 		{
@@ -114,6 +118,71 @@ namespace
 		const bool bQuarter = FMath::IsNearlyEqual(FMath::Abs(FMath::Fmod(Turn, 180.0f)), 90.0f, 0.5f);
 		const FVector2f Drawn = bQuarter ? FVector2f(PageSize.X * K.Y, PageSize.Y * K.X) : PageSize * K;
 		Painter.RotatedImage(FBox2f(Centre - Drawn * 0.5f, Centre + Drawn * 0.5f), Texture->Brush, UV, Colour, Turn);
+	}
+}
+
+void ScctHudElements::PaintScopePage(FScctHudPainter& Painter, const FScctHudModel& Model)
+{
+	// MagmaRenderer's centre anchor: s = height / 480, the page's middle on the screen's.
+	const FVector2f Size = Painter.Size();
+	const float S = Size.Y / PageHeight;
+	const FVector2f K(S, S);
+	const FVector2f Origin((Size.X - PageWidth * S) * 0.5f, 0.0f);
+
+	// Page units from the page's side within which a picture's edge still reaches the screen's (PageEdgeSlack).
+	constexpr float EdgeSlack = 2.0f;
+
+	// The mask the last mask layer set (the breath gauge's sweeping box), in screen units; a plain layer ends it.
+	bool bMask = false;
+	FVector2f MaskCentre = FVector2f::ZeroVector, MaskHalf = FVector2f::ZeroVector;
+	float MaskTurn = 0.0f;
+
+	for (const FScctHudPageLayer& Layer : Model.ScopeLayers)
+	{
+		const FBox2f Box(Origin + FVector2f(Layer.L, Layer.T) * K, Origin + FVector2f(Layer.R, Layer.B) * K);
+		const float Turn = FMath::Fmod(Layer.Rotation, 360.0f);
+		if (Layer.Kind == 2)
+		{
+			bMask = true;
+			MaskCentre = Box.GetCenter();
+			MaskHalf = Box.GetSize() * 0.5f;
+			MaskTurn = Turn;
+			continue;
+		}
+		if (Layer.Kind == 3 && bMask)
+		{
+			if (const UScctHudTextures::FEntry* Texture = UScctHudTextures::Find(Layer.Package, Layer.Texture))
+			{
+				Painter.ImageOutside(Box, Texture->Brush, Texture->Region(Layer.U0, Layer.V0, Layer.U1, Layer.V1),
+					BinocularContentColour(Layer.Red, Layer.Green, Layer.Blue, Layer.Alpha), MaskCentre, MaskHalf, MaskTurn);
+			}
+			continue;
+		}
+		if (Layer.Kind != 3)
+		{
+			bMask = false;
+		}
+
+		// An upright picture's edge at or past a side of the page is drawn at or past that side of the screen.
+		const auto Reaches = [](float PageX) { return PageX <= EdgeSlack || PageX >= PageWidth - EdgeSlack; };
+		if (Layer.Kind != 1 && FMath::IsNearlyZero(Turn) && (Reaches(Layer.L) || Reaches(Layer.R)) && Origin.X > 0.0f)
+		{
+			const auto Reach = [&Size](float PageX, float ScreenX)
+			{
+				return PageX <= EdgeSlack ? FMath::Min(ScreenX, 0.0f) : (PageX >= PageWidth - EdgeSlack ? FMath::Max(ScreenX, Size.X) : ScreenX);
+			};
+			FBox2f Wide = Box;
+			Wide.Min.X = Reach(Layer.L, Box.Min.X);
+			Wide.Max.X = Reach(Layer.R, Box.Max.X);
+			const UScctHudTextures::FEntry* Texture = UScctHudTextures::Find(Layer.Package, Layer.Texture);
+			if (Texture != nullptr && Wide.Max.X > Wide.Min.X)
+			{
+				Painter.Image(Wide, Texture->Brush, Texture->Region(Layer.U0, Layer.V0, Layer.U1, Layer.V1),
+					BinocularContentColour(Layer.Red, Layer.Green, Layer.Blue, Layer.Alpha));
+			}
+			continue;
+		}
+		PaintLayer(Painter, Layer, K, Origin);
 	}
 }
 

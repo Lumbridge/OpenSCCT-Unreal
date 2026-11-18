@@ -56,7 +56,7 @@ if (args.Length > 5 && args[5].Equals("backpack", StringComparison.OrdinalIgnore
     return BackpackRun(content, map, mode, merc, seconds);
 }
 
-Console.WriteLine($"sizes: HudPageLayer {Unsafe.SizeOf<HudPageLayer>()}, HudBinocularPageInput {Unsafe.SizeOf<HudBinocularPageInput>()}, HudBinocularApi {Unsafe.SizeOf<HudBinocularApi>()}");
+Console.WriteLine($"sizes: HudPageLayer {Unsafe.SizeOf<HudPageLayer>()}, HudBinocularPageInput {Unsafe.SizeOf<HudBinocularPageInput>()}, HudScopePageInput {Unsafe.SizeOf<HudScopePageInput>()}, HudBinocularApi {Unsafe.SizeOf<HudBinocularApi>()}");
 
 if (args.Length > 5 && args[5].Equals("binoculars", StringComparison.OrdinalIgnoreCase))
 {
@@ -885,6 +885,37 @@ static unsafe int BinocularsRun(string content, string map, string mode, bool me
 
     var speak = HudBinocularExports.ReadSpyPage(1f, 0.3f, 3, "", "", "Hack");
     Console.WriteLine("   speak box: " + string.Join(" | ", speak.Where(l => l.Widget is "_TextSpeakATT" or "Element4").Select(l => $"{l.Widget}='{l.Text}' at ({l.L:F0},{l.T:F0})")));
+
+    // The merc's scope page: at rest, through the rings' clip of a step in, with the breath half used, the sights moved
+    // to an aim point and held on the centre, a hit, the reticle message and the speak and alert boxes.
+    HudMagmaPage? scope = HudBinocularExports.MercPage(out string? scopeError);
+    Console.WriteLine(scope is null ? $"scope page: missing ({scopeError})" : $"scope page {scope.Name}: instances {string.Join(", ", scope.Instances)}");
+    if (scope is not null)
+    {
+        string Box(HudMagmaPage.Layer l) => $"{l.Widget}[{l.Mask}] ({l.L:F0},{l.T:F0})-({l.R:F0},{l.B:F0}) r{l.Rotation:F0} a{l.Alpha:F2}";
+        var rest = HudBinocularExports.ReadMercPage(3f, 2f, 2, 3, 320f, 240f, false, false, 5f, 1234f, 0.01f, -1f, -1f, "Mouse Wheel Up / Mouse Wheel Down", "B", "Right Mouse Button", "", "");
+        Console.WriteLine($"   at rest: {rest.Count} layers, {rest.Count(l => !l.IsText)} images; texts " +
+            string.Join(" | ", rest.Where(l => l.IsText).Select(l => $"{l.Widget}='{l.Text}' at ({l.L:F0},{l.T:F0}) h {l.Height:F0}")));
+        Console.WriteLine("   at rest, pictures: " + string.Join(" ", rest.Where(l => !l.IsText).Select(l => l.Widget + "@" + l.Texture).Distinct()));
+        foreach ((int clip, float at) in new[] { (1, 0f), (1, 0.1f), (1, 0.3f), (1, 0.95f), (2, 0.1f), (2, 0.2f) })
+        {
+            var layers = HudBinocularExports.ReadMercPage(3f, at, clip, 2, 320f, 240f, false, false, 5f, 0f, 0.01f, -1f, -1f, "", "", "", "", "");
+            Console.WriteLine($"   rings' clip {clip} at {at:F2} s: " + string.Join(" ", layers.Where(l => l.Widget is "border22" or "green_back" or "border").Select(Box)));
+        }
+
+        foreach (float breath in new[] { 5f, 2.5f, 0f })
+        {
+            var layers = HudBinocularExports.ReadMercPage(3f, -1f, 0, 3, 320f, 240f, false, false, breath, 0f, 0.01f, -1f, -1f, "", "", "", "", "");
+            Console.WriteLine($"   breath {breath:F1} s: " + string.Join(" ", layers.Where(l => l.Mask != 0).Select(Box)));
+        }
+
+        var moved = HudBinocularExports.ReadMercPage(3f, -1f, 0, 3, 300.7f, 250.2f, false, true, 5f, 0f, 0.01f, 0.2f, 0.5f, "", "", "", "Hack", "Reloading");
+        Console.WriteLine("   aim (300.7, 250.2), a hit, speak and alert: " + string.Join(" ", moved.Where(l => l.Widget is "sights" or "verticalAxis" or "horizontalAxis" or "sight3").Select(l => Box(l) + $" rgb {l.Red:F2},{l.Green:F2},{l.Blue:F2}")) +
+            " | " + string.Join(" | ", moved.Where(l => l.IsText && l.Widget is "messageReticule" or "_TextSpeakDEF" or "messageAlert").Select(l => $"{l.Widget}='{l.Text}' at ({l.L:F0},{l.T:F0})")) +
+            $" | {moved.Count} layers");
+        var held = HudBinocularExports.ReadMercPage(3f, -1f, 0, 3, 300.7f, 250.2f, true, false, 5f, 0f, 0.01f, -1f, -1f, "", "", "", "", "");
+        Console.WriteLine("   breath held: " + string.Join(" ", held.Where(l => l.Widget is "sights" or "verticalAxis" or "horizontalAxis").Select(Box)));
+    }
 
     using BridgeSession session = BridgeSession.StartLocal(map, mode, merc, bots: 3);
     HudFeature hud = HudFeature.Of(session);

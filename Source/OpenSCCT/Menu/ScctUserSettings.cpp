@@ -46,6 +46,7 @@ void UScctUserSettings::Load()
 	GConfig->GetInt(Section, TEXT("HubJukeboxVolume"), HubJukeboxVolume, Ini);
 	GConfig->GetInt(Section, TEXT("HubChimesVolume"), HubChimesVolume, Ini);
 	GConfig->GetBool(Section, TEXT("MotionBlur"), bMotionBlur, Ini);
+	GConfig->GetBool(Section, TEXT("LiveMenuBackground"), bLiveMenuBackground, Ini);
 	GConfig->GetFloat(Section, TEXT("Gamma"), Gamma, Ini);
 	GConfig->GetInt(Section, TEXT("RenderScale"), RenderScale, Ini);
 	GConfig->GetBool(Section, TEXT("DistanceInFeet"), bDistanceInFeet, Ini);
@@ -78,6 +79,7 @@ void UScctUserSettings::Save()
 	GConfig->SetInt(Section, TEXT("HubJukeboxVolume"), HubJukeboxVolume, Ini);
 	GConfig->SetInt(Section, TEXT("HubChimesVolume"), HubChimesVolume, Ini);
 	GConfig->SetBool(Section, TEXT("MotionBlur"), bMotionBlur, Ini);
+	GConfig->SetBool(Section, TEXT("LiveMenuBackground"), bLiveMenuBackground, Ini);
 	GConfig->SetFloat(Section, TEXT("Gamma"), Gamma, Ini);
 	GConfig->SetInt(Section, TEXT("RenderScale"), RenderScale, Ini);
 	GConfig->SetBool(Section, TEXT("DistanceInFeet"), bDistanceInFeet, Ini);
@@ -112,6 +114,7 @@ void UScctUserSettings::ApplyAll()
 void UScctUserSettings::ResetVideo()
 {
 	bMotionBlur = true;
+	bLiveMenuBackground = true;
 	Gamma = 2.2f;
 	RenderScale = 100;
 	if (UGameUserSettings* Engine = GEngine != nullptr ? GEngine->GetGameUserSettings() : nullptr)

@@ -176,6 +176,23 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 	return true;
 }
 
+bool UScctSessionSubsystem::PresentBackdrop(int32 NewSessionId)
+{
+	if (NewSessionId == 0 || !ConnectBridge())
+	{
+		return false;
+	}
+	FScctBridgeSessionInfo Info = {};
+	if (Api->GetSession(&Info) != NewSessionId)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Menu backdrop: session %d is not the one the bridge holds (%d); not presented"), NewSessionId, Info.Id);
+		return false;
+	}
+	RestartTimer = -1.0f;
+	ChangeSession(Info, true);
+	return SessionId == NewSessionId;
+}
+
 void UScctSessionSubsystem::StopMatch()
 {
 	if (Api != nullptr && SessionId != 0)
@@ -244,7 +261,7 @@ void UScctSessionSubsystem::ChangeSession(const FScctBridgeSessionInfo& NewInfo,
 
 	UE_LOG(LogOpenSCCT, Log, TEXT("Session %d plays: map %s, %s, local player is a %s"), SessionId, SessionInfo.Map,
 		(SessionInfo.Flags & EScctSessionFlags::Remote) != 0 ? TEXT("round on a remote server") : TEXT("local match"),
-		(SessionInfo.Flags & EScctSessionFlags::Merc) != 0 ? TEXT("merc") : TEXT("spy"));
+		IsBackdrop() ? TEXT("watcher only (the menu's backdrop)") : (SessionInfo.Flags & EScctSessionFlags::Merc) != 0 ? TEXT("merc") : TEXT("spy"));
 	if (FParse::Param(FCommandLine::Get(), TEXT("ScctCheckFeatures")))
 	{
 		LogFeatureTables();
@@ -267,7 +284,14 @@ void UScctSessionSubsystem::CheckSession()
 
 	if (SessionId != 0)
 	{
-		if (Info.Id == 0 && Info.State == static_cast<int32>(EScctBridgeState::Failed))
+		if (Info.Id == 0 && Info.State == static_cast<int32>(EScctBridgeState::Failed) && IsBackdrop())
+		{
+			// Nobody asked for the match behind the menu: its failure is a line in the log, not an error page.
+			UE_LOG(LogOpenSCCT, Log, TEXT("Menu backdrop: session %d stopped on an error: %s"), SessionId, *FOpenSCCTModule::Get().GetBridgeError());
+			Api->StopSession(SessionId);
+			Info.State = static_cast<int32>(EScctBridgeState::Idle);
+		}
+		else if (Info.Id == 0 && Info.State == static_cast<int32>(EScctBridgeState::Failed))
 		{
 			// The bridge has already stopped the failed session; this shows why, once, and clears the failure
 			// (StopSession does that for the session that failed and for no other).

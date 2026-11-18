@@ -131,6 +131,7 @@ void UScctEquipmentSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		ForcedCloak = FMath::Clamp(ForcedCloak, 0.0f, 1.0f);
 	}
 	bNoViewModel = FParse::Param(FCommandLine::Get(), TEXT("ScctNoViewModel"));
+	bLaserProbe = FParse::Param(FCommandLine::Get(), TEXT("ScctLaserProbe"));
 }
 
 void UScctEquipmentSubsystem::Deinitialize()
@@ -171,8 +172,13 @@ void UScctEquipmentSubsystem::OnMatchStarted()
 		UE_LOG(LogOpenSCCT, Warning, TEXT("Equipment: no /Game/OpenSCCT/Weapons/Materials/M_ScctGlow (Tools/Import/Import-Characters.ps1 builds it); laser beams are not drawn"));
 	}
 
-	// Every mesh now, so the first shot or the first drawn pistol does not hitch on a load.
-	Models.LoadCatalog(*Api);
+	// Every mesh now, so the first shot or the first drawn pistol does not hitch on a load. Not for the match behind
+	// the main menu: most of the catalog is first-person models nobody sees there, and loading it all would hold
+	// the menu for most of a second; what the bots carry is loaded as it is first drawn.
+	if (const UScctSessionSubsystem* StartedSession = GetWorld()->GetSubsystem<UScctSessionSubsystem>(); StartedSession == nullptr || !StartedSession->IsBackdrop())
+	{
+		Models.LoadCatalog(*Api);
+	}
 
 	// The view model shadows itself from every light, the torch and the muzzle flash included.
 	SetIntCVar(TEXT("r.FirstPerson.SelfShadow"), 1);
@@ -628,14 +634,16 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 	FVector Start(Pawn.LaserStartX, Pawn.LaserStartY, Pawn.LaserStartZ);
 	if (bBeam)
 	{
-		// The bridge's start is where the body stood at the last tick. What is drawn this frame is better where
-		// there is something drawn: the view model's muzzle or laser socket, else the muzzle of the gun in hand.
+		// The bridge's end is laid for this frame (the local player's from the view drawn this frame, another
+		// merc's between the last two ticks like his body). Its start is worked out from its own pose of the gun;
+		// what is drawn this frame is better where there is something drawn: the view model's muzzle or laser
+		// socket, else the muzzle of the gun in hand (a merc's rifle, the local spy's pistol seen from behind).
 		FTransform Source;
 		if (bFromViewModel && FirstPersonView->FindLaserStart(Source))
 		{
 			Start = Source.GetLocation();
 		}
-		else if (!bFromViewModel && (Pawn.Flags & EScctEquipmentFlags::Merc) != 0 && (Pawn.Flags & EScctEquipmentFlags::WeaponInHand) != 0
+		else if (!bFromViewModel && (Pawn.Flags & EScctEquipmentFlags::WeaponInHand) != 0
 			&& Found.Slots[EScctAttachmentSlot::Weapon].View.FindMuzzle(Source))
 		{
 			Start = Source.GetLocation();
@@ -645,6 +653,11 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 	const FVector Along = End - Start;
 	const double Length = Along.Size();
 	const FVector Direction = Length > UE_KINDA_SMALL_NUMBER ? Along / Length : FVector::ForwardVector;
+
+	if (bLaserProbe && bBeam && &Proxy == Session->FindLocalProxy())
+	{
+		ProbeLaser(Start, End);
+	}
 
 	if (bBeam && !Found.Beam.IsValid())
 	{
@@ -706,6 +719,39 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		{
 			Light->SetVisibility(bDot);
 		}
+	}
+}
+
+void UScctEquipmentSubsystem::ProbeLaser(const FVector& Start, const FVector& End)
+{
+	// Where the beam ends as the camera sees it: a unit vector in the camera's own frame. A beam laid for this
+	// frame's view keeps that vector while the view turns; one laid for the last tick's swings against the turn.
+	const FTransform Camera = GetCamera();
+	const FVector Seen = Camera.InverseTransformPositionNoScale(End).GetSafeNormal();
+	const float Yaw = Camera.Rotator().Yaw;
+	const float OffCentre = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(static_cast<float>(Seen.X), -1.0f, 1.0f)));
+	if (bLaserProbeHasLast)
+	{
+		const float Step = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(static_cast<float>(FVector::DotProduct(Seen, LaserProbeLast)), -1.0f, 1.0f)));
+		LaserProbeLargestStep = FMath::Max(LaserProbeLargestStep, Step);
+		LaserProbeTurned += FMath::Abs(FMath::FindDeltaAngleDegrees(LaserProbeLastYaw, Yaw));
+	}
+	LaserProbeLargestOffCentre = FMath::Max(LaserProbeLargestOffCentre, OffCentre);
+	LaserProbeLast = Seen;
+	LaserProbeLastYaw = Yaw;
+	bLaserProbeHasLast = true;
+	++LaserProbeFrames;
+	LaserProbeSeconds += FrameSeconds;
+	if (LaserProbeSeconds >= 1.0f)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Laser probe: %d frames in %.2f s, the view turned %.1f degrees; the local beam's end was at most %.2f degrees off the centre of the view and moved at most %.2f degrees across the view between two frames; now %.0f cm long from (%.0f %.0f %.0f)"),
+			LaserProbeFrames, LaserProbeSeconds, LaserProbeTurned, LaserProbeLargestOffCentre, LaserProbeLargestStep,
+			FVector::Dist(Start, End), Start.X, Start.Y, Start.Z);
+		LaserProbeSeconds = 0.0f;
+		LaserProbeLargestStep = 0.0f;
+		LaserProbeLargestOffCentre = 0.0f;
+		LaserProbeTurned = 0.0f;
+		LaserProbeFrames = 0;
 	}
 }
 
