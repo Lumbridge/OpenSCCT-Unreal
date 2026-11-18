@@ -8,6 +8,7 @@
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Play/ScctExposure.h"
+#include "Play/ScctLightPlan.h"
 #include "Social/ScctLaunchOptions.h"
 
 DEFINE_LOG_CATEGORY(LogOpenSCCT);
@@ -49,6 +50,7 @@ void FOpenSCCTModule::StartupModule()
 {
 	FDefaultGameModuleImpl::StartupModule();
 	ScctLaunchOptions::Apply();
+	FScctLightPlan::Start();
 
 	// The game module is loaded before the engine object exists.
 	if (GEngine != nullptr)

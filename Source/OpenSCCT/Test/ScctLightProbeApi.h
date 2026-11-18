@@ -10,7 +10,8 @@
 // Fetch the table through ScctFeature<FScctLightProbeApi>() (Runtime/ScctFeatures.h), on the game thread, while a
 // match plays. Simulation units are Unreal centimetres, in Unreal's axes.
 
-constexpr int32 ScctLightProbeApiVersion = 1;
+// Version 2: FindSpots takes the floor rule and says what it sampled; PredictSphere and FindSwitchSpots added.
+constexpr int32 ScctLightProbeApiVersion = 2;
 
 namespace EScctLightSpotKind
 {
@@ -56,6 +57,40 @@ struct FScctLightSpot
 
 static_assert(sizeof(FScctLightSpot) == 20, "FScctLightSpot must match BridgeLightSpot");
 
+/** What the last FindSpots sampled. */
+struct FScctLightFloor
+{
+	/** Walkable nodes of the grid, those on a connected floor a map light hangs over, and those sampled. */
+	int32 FloorNodes, LitFloorNodes, PlayNodes;
+	/** Starts, objectives, flag zones and switches the play floor was grown from. */
+	int32 Anchors;
+	/** 1 when the play floor was sampled, 0 when any connected floor under a map light was. */
+	int32 PlayRule;
+};
+
+static_assert(sizeof(FScctLightFloor) == 20, "FScctLightFloor must match BridgeLightFloor");
+
+/** A switched light of the map (an STriggerLight) and the two spots of the switch test. */
+struct FScctLightSwitch
+{
+	/** The light's name in lighting.json (its actor id), zero terminated. */
+	char Name[48];
+	float LightX, LightY, LightZ;
+	/** How far the light reaches (cm) and its LightBrightness. */
+	float Radius, Brightness;
+	/** The floor point where a standing pawn's level changes most, its level now and with every switched light toggled. */
+	float NearX, NearY, NearZ, NearLevel, NearToggled;
+	/** A floor point beyond the radius where the level does not change (only when HasFar is 1), and its level. */
+	float FarX, FarY, FarZ, FarLevel;
+	int32 HasFar;
+	/** 1 when the light is on now. */
+	int32 On;
+	/** The light's LightEffect (22 a projector). */
+	int32 Effect;
+};
+
+static_assert(sizeof(FScctLightSwitch) == 116, "FScctLightSwitch must match BridgeLightSwitch");
+
 struct FScctLightProbeApi
 {
 	int32 Version;
@@ -68,10 +103,23 @@ struct FScctLightProbeApi
 
 	/**
 	 * Chooses the sample spots: PerKind dark, bright and spread, and PerKind more in pairs across steps. Returns how
-	 * many were written. Samples the map's floor first, which takes some seconds.
+	 * many were written. Samples the map's floor first, which takes some seconds. Only the play floor is sampled (what
+	 * can be walked or dropped to from a start, an objective, a flag zone or a switch) unless AllFloor is not 0 (any
+	 * connected floor a map light hangs over, the first version's rule). OutFloor, when given, says what was sampled.
 	 */
-	int32 (__cdecl* FindSpots)(int32 PerKind, FScctLightSpot* OutSpots, int32 Capacity);
+	int32 (__cdecl* FindSpots)(int32 PerKind, int32 AllFloor, FScctLightSpot* OutSpots, int32 Capacity, FScctLightFloor* OutFloor);
 
 	/** Stands the local player's pawn with its centre at the point on the server's next step (a local match); 1 when queued. */
 	int32 (__cdecl* PlacePlayer)(float X, float Y, float Z);
+	/**
+	 * The display colour (0 to 1, three floats) the original's pawn lighting gives the middle of a matte sphere
+	 * centred at (X, Y, Z) and seen from the viewer: a texture of display value AlbedoDisplay under the simulation's
+	 * term per pixel (zone ambient, the four strongest lights by N.L, projectors, capped at 2), over the disc within
+	 * DiscShare of the sphere's radius. The picture the lighting plan gives a body-class surface. 1 when written.
+	 */
+	int32 (__cdecl* PredictSphere)(float X, float Y, float Z, float Radius, float ViewerX, float ViewerY, float ViewerZ, float AlbedoDisplay,
+		float DiscShare, float* OutRgb);
+
+	/** The switched lights of the map with the spots of the switch test, on the floor the last FindSpots sampled; how many were written. */
+	int32 (__cdecl* FindSwitchSpots)(FScctLightSwitch* OutSwitches, int32 Capacity);
 };

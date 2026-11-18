@@ -21,6 +21,7 @@
 #include "Misc/Paths.h"
 #include "OpenSCCT.h"
 #include "Play/ScctExposure.h"
+#include "Play/ScctLightPlan.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
@@ -49,7 +50,15 @@ namespace
 
 	constexpr double LightMatchSeconds = 5.0;
 	constexpr double LightReadSeconds = 20.0;
+
+	// After the switched lights were fired: a light going out flickers for half a second, and the picture follows.
+	constexpr double LightFireSeconds = 3.0;
 	constexpr int32 LightMaxSpots = 256;
+
+	// The sphere's albedo as a display value (a texture the original would draw at 0.46 of full white under a light
+	// term of 1), and the share of its radius that is measured: what PredictSphere is asked for.
+	constexpr float LightSphereDisplay = 0.46f;
+	constexpr float LightSphereDisc = 0.6f;
 
 	const TCHAR* LightKindName(int32 Kind)
 	{
@@ -137,6 +146,10 @@ bool UScctLightParitySubsystem::Begin()
 	}
 	FParse::Value(FCommandLine::Get(), TEXT("ScctLightSettle="), SettleSeconds);
 	bMeasureBody = !FParse::Param(FCommandLine::Get(), TEXT("ScctLightNoBody"));
+	bAllFloor = FParse::Param(FCommandLine::Get(), TEXT("ScctLightAllFloor"));
+	bSwitchTest = !FParse::Param(FCommandLine::Get(), TEXT("ScctLightNoSwitch"));
+	bTone = !FParse::Param(FCommandLine::Get(), TEXT("ScctLightNoTone"));
+	FParse::Value(FCommandLine::Get(), TEXT("ScctLightToneMax="), ToneMax);
 	bSaveCapture = FParse::Param(FCommandLine::Get(), TEXT("ScctLightSaveScene"));
 	Name = World->GetMapName();
 	FParse::Value(FCommandLine::Get(), TEXT("ScctLightName="), Name);
@@ -157,9 +170,11 @@ bool UScctLightParitySubsystem::Begin()
 	TArray<FScctLightSpot> Found;
 	Found.SetNumZeroed(LightMaxSpots);
 	const double Before = FPlatformTime::Seconds();
-	Found.SetNum(FMath::Max(Api->FindSpots(PerKind, Found.GetData(), Found.Num()), 0));
-	UE_LOG(LogOpenSCCT, Log, TEXT("LightParity: %s, %d lights in the simulation's field, %d spots chosen in %.1f s (%d of each kind asked)."),
-		*Name, Lights, Found.Num(), FPlatformTime::Seconds() - Before, PerKind);
+	Found.SetNum(FMath::Max(Api->FindSpots(PerKind, bAllFloor ? 1 : 0, Found.GetData(), Found.Num(), &Floor), 0));
+	UE_LOG(LogOpenSCCT, Log, TEXT("LightParity: %s, scct.Light.Plan %d, %d lights in the simulation's field, %d spots chosen in %.1f s (%d of each kind asked)."),
+		*Name, FScctLightPlan::Active(), Lights, Found.Num(), FPlatformTime::Seconds() - Before, PerKind);
+	UE_LOG(LogOpenSCCT, Log, TEXT("LightParity: floor sampled: %s, %d of %d walkable nodes (%d on connected floor under a map light), grown from %d starts, objectives and switches."),
+		Floor.PlayRule != 0 ? TEXT("the play floor") : TEXT("any connected floor under a map light"), Floor.PlayNodes, Floor.FloorNodes, Floor.LitFloorNodes, Floor.Anchors);
 	if (Found.Num() == 0)
 	{
 		return false;
@@ -169,27 +184,12 @@ bool UScctLightParitySubsystem::Begin()
 	{
 		FSpot& Entry = Spots.AddDefaulted_GetRef();
 		Entry.Spot = Spot;
-		Entry.Centre = FVector(Spot.X, Spot.Y, Spot.Z + LightPawnHeight + 2.0f);
-
-		// The side with the most room, looked for at chest height through the simulation's collision.
-		const FVector Chest = Entry.Centre + FVector(0.0, 0.0, 30.0);
-		float BestRoom = -1.0f;
-		FVector BestSide = FVector::ForwardVector;
-		for (int32 Side = 0; Side < LightCameraSides; ++Side)
-		{
-			const FVector Direction = FRotator(0.0, 360.0 * Side / LightCameraSides, 0.0).Vector();
-			float Room = LightCameraProbe;
-			FScctExposure::TraceLevel(Chest, Chest + Direction * LightCameraProbe, Room);
-			if (Room > BestRoom + 1.0f)
-			{
-				BestRoom = Room;
-				BestSide = Direction;
-			}
-		}
-		Entry.CameraDistance = FMath::Clamp(BestRoom - 45.0f, LightCameraNearest, LightCameraFarthest);
-		const FVector Eye = Chest + BestSide * Entry.CameraDistance + FVector(0.0, 0.0, 0.1 * Entry.CameraDistance);
-		Entry.Camera = FTransform((Entry.Centre - Eye).Rotation(), Eye);
-		Api->Read(Entry.Centre.X, Entry.Centre.Y, Entry.Centre.Z, LightPawnRadius, Eye.X, Eye.Y, Eye.Z, &Entry.Reading);
+		PrepareSpot(Entry);
+	}
+	OrdinarySpots = Spots.Num();
+	if (bSwitchTest)
+	{
+		AddSwitchSpots();
 	}
 
 	FActorSpawnParameters Parameters;
@@ -226,6 +226,121 @@ bool UScctLightParitySubsystem::Begin()
 	return true;
 }
 
+void UScctLightParitySubsystem::PrepareSpot(FSpot& Entry)
+{
+	Entry.Centre = FVector(Entry.Spot.X, Entry.Spot.Y, Entry.Spot.Z + LightPawnHeight + 2.0f);
+
+	// The side with the most room, looked for at chest height through the simulation's collision.
+	const FVector Chest = Entry.Centre + FVector(0.0, 0.0, 30.0);
+	float BestRoom = -1.0f;
+	FVector BestSide = FVector::ForwardVector;
+	for (int32 Side = 0; Side < LightCameraSides; ++Side)
+	{
+		const FVector Direction = FRotator(0.0, 360.0 * Side / LightCameraSides, 0.0).Vector();
+		float Room = LightCameraProbe;
+		FScctExposure::TraceLevel(Chest, Chest + Direction * LightCameraProbe, Room);
+		if (Room > BestRoom + 1.0f)
+		{
+			BestRoom = Room;
+			BestSide = Direction;
+		}
+	}
+	Entry.CameraDistance = FMath::Clamp(BestRoom - 45.0f, LightCameraNearest, LightCameraFarthest);
+	const FVector Eye = Chest + BestSide * Entry.CameraDistance + FVector(0.0, 0.0, 0.1 * Entry.CameraDistance);
+	Entry.Camera = FTransform((Entry.Centre - Eye).Rotation(), Eye);
+	Api->Read(Entry.Centre.X, Entry.Centre.Y, Entry.Centre.Z, LightPawnRadius, Eye.X, Eye.Y, Eye.Z, &Entry.Reading);
+	Entry.Predicted = Predict(Entry);
+}
+
+float UScctLightParitySubsystem::Predict(const FSpot& At) const
+{
+	const FVector Eye = At.Camera.GetLocation();
+	float Rgb[3] = {};
+	if (Api->PredictSphere(At.Centre.X, At.Centre.Y, At.Centre.Z, LightPawnRadius, Eye.X, Eye.Y, Eye.Z, LightSphereDisplay, LightSphereDisc, Rgb) == 0)
+	{
+		return -1.0f;
+	}
+	return 255.0f * (0.3f * Rgb[0] + 0.59f * Rgb[1] + 0.11f * Rgb[2]);
+}
+
+UScctLightParitySubsystem::FMeasure& UScctLightParitySubsystem::MeasureOf(FSpot& At)
+{
+	switch (Pass)
+	{
+	case EPass::Body: return At.Body;
+	case EPass::Switched: return At.Switched;
+	case EPass::Back: return At.Back;
+	default: return At.Sphere;
+	}
+}
+
+const TCHAR* UScctLightParitySubsystem::PassName() const
+{
+	switch (Pass)
+	{
+	case EPass::Body: return TEXT("body");
+	case EPass::Switched: return TEXT("switched");
+	case EPass::Back: return TEXT("back");
+	default: return TEXT("sphere");
+	}
+}
+
+void UScctLightParitySubsystem::StartPass(EPass Next)
+{
+	Pass = Next;
+	bBodyPass = Pass == EPass::Body;
+	Order.Reset();
+	OrderAt = 0;
+	for (int32 Spot = 0; Spot < Spots.Num(); ++Spot)
+	{
+		const bool bSwitchSpot = Spots[Spot].Switch >= 0;
+		if (Pass == EPass::Sphere || (Pass == EPass::Body ? !bSwitchSpot : bSwitchSpot))
+		{
+			Order.Add(Spot);
+		}
+	}
+	if (Order.Num() == 0 || (Pass == EPass::Body && !bMeasureBody))
+	{
+		Order.Reset();
+		NextPass();
+		return;
+	}
+	Index = Order[0];
+	if (Pass == EPass::Switched || Pass == EPass::Back)
+	{
+		// Every switched light toggles; the flicker of a light going out and the news reaching the picture take a moment.
+		bFired = FireSwitches();
+		Phase = EPhase::Fire;
+		PhaseAt = FPlatformTime::Seconds();
+		return;
+	}
+	Phase = EPhase::Aim;
+}
+
+void UScctLightParitySubsystem::NextPass()
+{
+	switch (Pass)
+	{
+	case EPass::Sphere: StartPass(EPass::Body); return;
+	case EPass::Body: StartPass(EPass::Switched); return;
+	case EPass::Switched:
+		if (Order.Num() > 0)
+		{
+			StartPass(EPass::Back);
+			return;
+		}
+		break;
+	default: break;
+	}
+	if (bTone && BeginTone())
+	{
+		Phase = EPhase::ToneSettle;
+		PhaseAt = FPlatformTime::Seconds();
+		return;
+	}
+	Finish();
+}
+
 void UScctLightParitySubsystem::AimAt(int32 Spot)
 {
 	const FSpot& At = Spots[Spot];
@@ -239,6 +354,7 @@ void UScctLightParitySubsystem::AimAt(int32 Spot)
 	{
 		Api->PlacePlayer(At.Centre.X, At.Centre.Y, At.Centre.Z);
 	}
+	Index = Spot;
 	Phase = EPhase::Settle;
 	PhaseAt = FPlatformTime::Seconds();
 }
@@ -317,6 +433,19 @@ void UScctLightParitySubsystem::MatchCaptureToView(const FSpot& At)
 			Capture->FOVAngle = Angle;
 		}
 	}
+}
+
+bool UScctLightParitySubsystem::IsReferenceSeen() const
+{
+	// What the engine drew in the player's own view after its occlusion culling (not in the HDR capture, which keeps
+	// a time of its own): a sphere wholly behind something has not been drawn for as long as the camera stood here.
+	// The body goes by the sphere's verdict, it stands where the sphere hung: its own mesh is reported as drawn even
+	// behind a closed door (tried: AquaE's spot at 5265,716,128 read the door as the body with the mesh "on screen").
+	if (bBodyPass)
+	{
+		return Spots[Index].Sphere.bSeen;
+	}
+	return GetWorld()->GetTimeSeconds() - Sphere->GetLastRenderTimeOnScreen() <= 0.5f;
 }
 
 void UScctLightParitySubsystem::FindBody(FSpot& At) const
@@ -438,7 +567,7 @@ void UScctLightParitySubsystem::ReadCapture(FMeasure& Measure, const FSpot& At) 
 		}
 		TArray64<uint8> Png;
 		FImageUtils::PNGCompressImageArray(LightCaptureWidth, LightCaptureHeight, TArrayView64<const FColor>(Shown.GetData(), Shown.Num()), Png);
-		FFileHelper::SaveArrayToFile(Png, *(Directory / FString::Printf(TEXT("%s_%02d_%s_scene.png"), *Name, Index, bBodyPass ? TEXT("body") : TEXT("sphere"))));
+		FFileHelper::SaveArrayToFile(Png, *(Directory / FString::Printf(TEXT("%s_%02d_%s_scene.png"), *Name, Index, PassName())));
 	}
 	const FVector Local = At.Camera.InverseTransformPosition(At.Centre);
 	if (Local.X <= 1.0)
@@ -468,12 +597,18 @@ void UScctLightParitySubsystem::ReadCapture(FMeasure& Measure, const FSpot& At) 
 
 void UScctLightParitySubsystem::OnCaptured(int32 Width, int32 Height, const TArray<FColor>& Bitmap)
 {
+	if (Phase == EPhase::ToneRead && !bCaptured && Width > 0 && Height > 0 && Bitmap.Num() >= Width * Height)
+	{
+		MeasureTone(Width, Height, Bitmap);
+		bCaptured = true;
+		return;
+	}
 	if (Phase != EPhase::Read || bCaptured || Width <= 0 || Height <= 0 || Bitmap.Num() < Width * Height || !Spots.IsValidIndex(Index))
 	{
 		return;
 	}
 	FSpot& At = Spots[Index];
-	FMeasure& Measure = bBodyPass ? At.Body : At.Sphere;
+	FMeasure& Measure = MeasureOf(At);
 
 	// Where the reference is in the picture, by the player's own view (whatever its field of view and framing).
 	APlayerController* Player = GetWorld()->GetFirstPlayerController();
@@ -513,7 +648,7 @@ void UScctLightParitySubsystem::OnCaptured(int32 Width, int32 Height, const TArr
 	}
 	TArray64<uint8> Png;
 	FImageUtils::PNGCompressImageArray(Width, Height, TArrayView64<const FColor>(Opaque.GetData(), Opaque.Num()), Png);
-	FFileHelper::SaveArrayToFile(Png, *(Directory / FString::Printf(TEXT("%s_%02d_%s.png"), *Name, Index, bBodyPass ? TEXT("body") : TEXT("sphere"))));
+	FFileHelper::SaveArrayToFile(Png, *(Directory / FString::Printf(TEXT("%s_%02d_%s.png"), *Name, Index, PassName())));
 	bCaptured = true;
 }
 
@@ -545,8 +680,7 @@ void UScctLightParitySubsystem::Tick(float DeltaTime)
 		{
 			if (Begin())
 			{
-				Index = 0;
-				Phase = EPhase::Aim;
+				StartPass(EPass::Sphere);
 			}
 			else
 			{
@@ -557,7 +691,36 @@ void UScctLightParitySubsystem::Tick(float DeltaTime)
 		break;
 
 	case EPhase::Aim:
-		AimAt(Index);
+		AimAt(Order[OrderAt]);
+		break;
+
+	case EPhase::Fire:
+		if (Now - PhaseAt >= LightFireSeconds)
+		{
+			Phase = EPhase::Aim;
+		}
+		break;
+
+	case EPhase::ToneSettle:
+		if (Now - PhaseAt >= SettleSeconds + 1.0)
+		{
+			ToneExposure = FScctExposure::Get();
+			bCaptured = false;
+			FScreenshotRequest::RequestScreenshot(false);
+			Phase = EPhase::ToneRead;
+			PhaseAt = Now;
+		}
+		break;
+
+	case EPhase::ToneRead:
+		if (bCaptured || Now - PhaseAt >= LightReadSeconds)
+		{
+			if (!bCaptured)
+			{
+				UE_LOG(LogOpenSCCT, Warning, TEXT("LightParity: the picture of the tone ramp could not be read back."));
+			}
+			Finish();
+		}
 		break;
 
 	case EPhase::Settle:
@@ -565,7 +728,15 @@ void UScctLightParitySubsystem::Tick(float DeltaTime)
 		if (Now - PhaseAt >= SettleSeconds)
 		{
 			FSpot& At = Spots[Index];
-			FMeasure& Measure = bBodyPass ? At.Body : At.Sphere;
+			FMeasure& Measure = MeasureOf(At);
+			if (Pass == EPass::Switched || Pass == EPass::Back)
+			{
+				// What the simulation says of the spot now the lights have been fired.
+				const FVector Eye = At.Camera.GetLocation();
+				Api->Read(At.Centre.X, At.Centre.Y, At.Centre.Z, LightPawnRadius, Eye.X, Eye.Y, Eye.Z, Pass == EPass::Switched ? &At.ReadingSwitched : &At.ReadingBack);
+				(Pass == EPass::Switched ? At.PredictedSwitched : At.PredictedBack) = Predict(At);
+			}
+			Measure.bSeen = IsReferenceSeen();
 			Measure.Exposure = FScctExposure::Get();
 			Measure.SceneLuminance = FScctExposure::PictureLevel() / Measure.Exposure;
 			if (bBodyPass)
@@ -589,18 +760,10 @@ void UScctLightParitySubsystem::Tick(float DeltaTime)
 		{
 			UE_LOG(LogOpenSCCT, Warning, TEXT("LightParity: the picture of spot %d could not be read back."), Index);
 		}
-		if (++Index >= Spots.Num())
+		if (++OrderAt >= Order.Num())
 		{
-			if (bMeasureBody && !bBodyPass)
-			{
-				bBodyPass = true;
-				Index = 0;
-			}
-			else
-			{
-				Finish();
-				break;
-			}
+			NextPass();
+			break;
 		}
 		Phase = EPhase::Aim;
 		break;
@@ -614,27 +777,30 @@ void UScctLightParitySubsystem::Finish()
 {
 	Phase = EPhase::Done;
 	FString Table = TEXT("name,index,kind,x,y,z,camera_cm,zone,sim,sim_facing,ambient,has_baked,baked,baked_r,baked_g,baked_b,")
-		TEXT("sphere_raw,ground_raw,sphere_pic,ground_pic,sphere_exposure,sphere_scene,body_raw,behind_raw,body_pic,behind_pic,body_exposure,body_scene\n");
-	for (int32 Spot = 0; Spot < Spots.Num(); ++Spot)
+		TEXT("sphere_raw,ground_raw,sphere_pic,ground_pic,sphere_exposure,sphere_scene,body_raw,behind_raw,body_pic,behind_pic,body_exposure,body_scene,pred,plan,play_floor,sphere_seen,body_seen\n");
+	const int32 Plan = FScctLightPlan::Active();
+	for (int32 Spot = 0; Spot < OrdinarySpots; ++Spot)
 	{
 		const FSpot& At = Spots[Spot];
 		const FScctLightReading& R = At.Reading;
 		const float Exposure = At.Sphere.Exposure;
-		UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT %s %02d kind=%s at=%.0f,%.0f,%.0f sim=%.3f facing=%.3f baked=%s sphere=%.5f/%.1f ground=%.5f/%.1f body=%.5f/%.1f behind=%.5f/%.1f exposure=%.3f ev=%.2f"),
-			*Name, Spot, LightKindName(At.Spot.Kind), At.Spot.X, At.Spot.Y, At.Spot.Z, R.Level, R.LevelFacing,
+		UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT %s %02d kind=%s at=%.0f,%.0f,%.0f sim=%.3f facing=%.3f pred=%.1f baked=%s sphere=%.5f/%.1f ground=%.5f/%.1f body=%.5f/%.1f behind=%.5f/%.1f exposure=%.3f ev=%.2f seen=%d%d"),
+			*Name, Spot, LightKindName(At.Spot.Kind), At.Spot.X, At.Spot.Y, At.Spot.Z, R.Level, R.LevelFacing, At.Predicted,
 			R.HasBaked != 0 ? *FString::Printf(TEXT("%.3f"), R.Baked) : TEXT("-"),
 			At.Sphere.Raw, At.Sphere.Picture, At.Sphere.RawAround, At.Sphere.PictureAround,
 			At.Body.Raw, At.Body.Picture, At.Body.RawAround, At.Body.PictureAround,
-			Exposure, Exposure > 0.0f ? FMath::Log2(1.0f / (1.2f * Exposure)) : 0.0f);
-		Table += FString::Printf(TEXT("%s,%d,%s,%.1f,%.1f,%.1f,%.0f,%d,%.4f,%.4f,%.4f,%d,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.2f,%.2f,%.4f,%.6f,%.6f,%.6f,%.2f,%.2f,%.4f,%.6f\n"),
+			Exposure, Exposure > 0.0f ? FMath::Log2(1.0f / (1.2f * Exposure)) : 0.0f, At.Sphere.bSeen ? 1 : 0, At.Body.bSeen ? 1 : 0);
+		Table += FString::Printf(TEXT("%s,%d,%s,%.1f,%.1f,%.1f,%.0f,%d,%.4f,%.4f,%.4f,%d,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.2f,%.2f,%.4f,%.6f,%.6f,%.6f,%.2f,%.2f,%.4f,%.6f,%.2f,%d,%d,%d,%d\n"),
 			*Name, Spot, LightKindName(At.Spot.Kind), At.Spot.X, At.Spot.Y, At.Spot.Z, At.CameraDistance, R.Zone, R.Level, R.LevelFacing, R.Ambient,
 			R.HasBaked, R.Baked, R.BakedR, R.BakedG, R.BakedB,
 			At.Sphere.Raw, At.Sphere.RawAround, At.Sphere.Picture, At.Sphere.PictureAround, At.Sphere.Exposure, At.Sphere.SceneLuminance,
-			At.Body.Raw, At.Body.RawAround, At.Body.Picture, At.Body.PictureAround, At.Body.Exposure, At.Body.SceneLuminance);
+			At.Body.Raw, At.Body.RawAround, At.Body.Picture, At.Body.PictureAround, At.Body.Exposure, At.Body.SceneLuminance,
+			At.Predicted, Plan, Floor.PlayRule, At.Sphere.bSeen ? 1 : 0, At.Body.bSeen ? 1 : 0);
 	}
+	WriteSwitches();
 	const FString File = Directory / (Name + TEXT(".csv"));
 	FFileHelper::SaveStringToFile(Table, *File);
-	UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT_DONE %s %d spots, table %s"), *Name, Spots.Num(), *File);
+	UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT_DONE %s %d spots, scct.Light.Plan %d, table %s"), *Name, OrdinarySpots, Plan, *File);
 	if (UScctSessionSubsystem* Session = GetWorld()->GetSubsystem<UScctSessionSubsystem>())
 	{
 		Session->ClearCheckCamera();

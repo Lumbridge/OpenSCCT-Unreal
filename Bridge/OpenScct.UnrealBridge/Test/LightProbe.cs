@@ -46,9 +46,10 @@ public readonly record struct LightProbeSpot(FVector Floor, float Level, int Kin
 /// baked light under a point, read from the level geometry of render/world.glb and its lightmap pages. It also picks
 /// the sample spots: walkable floor found by a <see cref="NavGrid"/> over the box of the map's lights, the darkest and
 /// brightest by the field, a spread between and pairs of spots on either side of the sharpest steps in the level.
-/// It reads the client world and never writes it.
+/// It reads the client world and never writes it. The play floor, the predicted picture of the grey sphere and the
+/// spots of the switch test are in LightProbeChecks.cs.
 /// </summary>
-public sealed class LightProbe
+public sealed partial class LightProbe
 {
     /// <summary>Height of a standing pawn's centre above the floor, and its radius (AiK).</summary>
     public const float CentreHeight = AiK.StandingHeight;
@@ -136,9 +137,11 @@ public sealed class LightProbe
     /// <summary>
     /// The sample spots: <paramref name="perKind"/> of the darkest, of the brightest and of the spread between, and
     /// <paramref name="perKind"/> more in pairs across the sharpest steps of the level, each at least a few metres from
-    /// the others of its kind. Empty without collision or lights.
+    /// the others of its kind. Empty without collision or lights. Only the play floor is sampled (what can be walked
+    /// or dropped to from a start, an objective, a flag zone or a switch: <see cref="PlayFloor"/>), unless
+    /// <paramref name="allFloor"/> asks for the first version's rule: any connected floor a map light hangs over.
     /// </summary>
-    public List<LightProbeSpot> FindSpots(int perKind)
+    public List<LightProbeSpot> FindSpots(int perKind, bool allFloor = false)
     {
         var spots = new List<LightProbeSpot>();
         if (_collision is null || _lightPlaces.Count == 0 || perKind <= 0)
@@ -203,11 +206,15 @@ public sealed class LightProbe
             }
         }
 
+        bool[]? play = allFloor ? null : PlayFloor(grid, component, componentCount);
         var use = new List<int>();
         var level = new float[nodes.Count];
+        int litFloor = 0;
         for (int i = 0; i < nodes.Count; i++)
         {
-            if (!lit[component[i]] || size[component[i]] < 200)
+            bool underLight = lit[component[i]] && size[component[i]] >= 200;
+            litFloor += underLight ? 1 : 0;
+            if (play is not null ? !play[i] : !underLight)
             {
                 continue;
             }
@@ -216,6 +223,12 @@ public sealed class LightProbe
             level[i] = _field.LevelAround(nodes[i] + new FVector(0f, 0f, CentreHeight), PawnRadius);
         }
 
+        _grid = grid;
+        _playNodes = use;
+        FloorNodes = nodes.Count;
+        LitFloorNodes = litFloor;
+        PlayNodes = use.Count;
+        PlayRule = play is not null;
         if (use.Count == 0)
         {
             return spots;
