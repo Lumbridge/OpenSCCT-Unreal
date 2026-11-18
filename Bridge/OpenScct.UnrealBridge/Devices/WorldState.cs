@@ -105,6 +105,8 @@ public sealed class WorldState
         return string.Empty;
     }
 
+    internal Actor? PlacementActor(string id) => _slotById.GetValueOrDefault(id)?.Actor;
+
     /// <summary>The render part's names (for the probe's cross-check).</summary>
     public MapRenderIndex Render => _render;
 
