@@ -1,10 +1,13 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Menu/ScctMapBrowser.h"
 #include "Online/ScctHostSetup.h"
 #include "UObject/StrongObjectPtr.h"
 #include "Widgets/SCompoundWidget.h"
 
+class SBox;
+class SEditableTextBox;
 class SScrollBox;
 class SWrapBox;
 class UTexture2D;
@@ -13,11 +16,14 @@ struct FSlateBrush;
 DECLARE_DELEGATE_OneParam(FOnScctMapPicked, const FString& /*Map*/);
 
 /**
- * A map list with pictures, for Create Session and the lobby (the Godot client's MapPickerView and MapBrowserGrid):
- * every hostable map with an imported level as a tile of its menu picture and its name, a mode filter above (All, then
- * each mode some map offers: a map shows under a mode when it offers it) and RANDOM MAP, which draws one of the maps
- * the filter shows (not the selected one; RandomMapDialog's draw without its reel). A click picks a map; the selected
- * map is lit. The pictures are read from the content folder once per picker.
+ * A map list for Create Session and the lobby (the Godot client's MapPickerView and MapBrowserGrid): every hostable
+ * map with an imported level. Above the list: a search box (a map's name, its code, its authors or tags), the map
+ * group (All installed maps, Enhanced, Stock, Community, 3v3 optimised: the catalog's own groups, the choice saved
+ * for every map list), how the list is drawn (picture grid, list or thumbnail list, saved too), a mode filter (a map
+ * shows under a mode when it offers it; not in the Godot client) and RANDOM MAP, which draws one of the maps the
+ * filters show (not the selected one; RandomMapDialog's draw without its reel). Under them the number of maps shown
+ * and RESET FILTERS. A click picks a map; the selected map is lit and scrolled into view. A picture is read from
+ * the content folder when the list first draws it.
  */
 class SScctMapPicker : public SCompoundWidget
 {
@@ -40,11 +46,30 @@ public:
 	/** Draws a random map among those shown (never the selected one when there is another) and picks it. Returns it, or empty. */
 	FString PickRandom();
 
+	/** Shows a group by its name or the start of it ("Stock"); unknown names show every map. Saved as the player's choice unless bSave is false (unattended runs). */
+	void SetGroup(const FString& Name, bool bSave = true);
+
+	/** Puts a text in the search box. */
+	void SetSearch(const FString& Text);
+
+	/** Draws the list another way. Saved unless bSave is false. */
+	void SetView(EScctMapView NewView, bool bSave = true);
+
+	/** How many maps the filters show. */
+	int32 GetShownCount() const { return ShownCount; }
+
+	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
+
 	/** The maps that loaded a picture (for logs). */
 	int32 GetPictureCount() const { return Pictures.Num(); }
 
 private:
 	void Refill();
+	bool Shows(const FScctHostMap& Map) const;
+	bool IsFiltered() const;
+	void ResetFilters();
+	void Reveal(const FString& MapId);
+	TSharedRef<SWidget> MakeTile(const FScctHostMap& Map);
 	const FSlateBrush* PictureOf(const FScctHostMap& Map);
 
 	TArray<FScctHostMap> Maps;
@@ -52,8 +77,20 @@ private:
 	FOnScctMapPicked OnPicked;
 	float TileWidth = 132.0f;
 	FString ModeFilter;
-	TSharedPtr<SWrapBox> Tiles;
+	TArray<FString> ModeFilters;
+	TArray<FScctMapGroup> Groups;
+	int32 GroupIndex = 0;
+	TMap<FString, FScctMapDetails> Details;
+	FString Search;
+	EScctMapView View = EScctMapView::PictureGrid;
+	int32 ShownCount = 0;
+	/** The selected map that was last scrolled into view. */
+	FString Revealed;
+	TSharedPtr<SBox> ListHost;
+	TSharedPtr<SScrollBox> Scroll;
+	TSharedPtr<SEditableTextBox> SearchBox;
 	TSharedPtr<SWrapBox> FilterRow;
+	TMap<FString, TWeakPtr<SWidget>> TileOf;
 
 	/** A map's picture: its texture (kept from garbage collection while the picker lives) and the brush that draws it. */
 	struct FPicture
