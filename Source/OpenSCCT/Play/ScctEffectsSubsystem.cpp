@@ -210,6 +210,27 @@ void UScctEffectsSubsystem::ResetMatch()
 	bFireHeld = bAltFireHeld = false;
 	NumFlashes = NumFlashesLeftToViewModel = NumTracers = NumImpacts = NumActors = NumStandIns = PeakSprites = 0;
 	NumFlicSplashes = NumFlicDrips = NumFlicPuffs = 0;
+	NumExplosions = 0;
+	FMemory::Memzero(NumActorsByKind);
+	StartedByClass.Reset();
+}
+
+UScctEffectsSubsystem::FStats UScctEffectsSubsystem::GetStats() const
+{
+	FStats Stats;
+	Stats.MuzzleFlashes = NumFlashes;
+	Stats.FlashesLeftToViewModel = NumFlashesLeftToViewModel;
+	Stats.Tracers = NumTracers;
+	Stats.Impacts = NumImpacts;
+	for (const UDecalComponent* Decal : Decals)
+	{
+		Stats.DecalsShown += Decal != nullptr && Decal->IsVisible() ? 1 : 0;
+	}
+	Stats.EffectActors = NumActors;
+	FMemory::Memcpy(Stats.EffectActorsByKind, NumActorsByKind, sizeof(NumActorsByKind));
+	Stats.Explosions = NumExplosions;
+	Stats.LiveEffectActors = Actors.Num();
+	return Stats;
 }
 
 void UScctEffectsSubsystem::HandleMatchStarted()
@@ -833,6 +854,11 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 void UScctEffectsSubsystem::StartActor(FActorFx& Fx, const FScctEffectActor& Record)
 {
 	++NumActors;
+	if (Record.Kind >= 0 && Record.Kind < UE_ARRAY_COUNT(NumActorsByKind))
+	{
+		++NumActorsByKind[Record.Kind];
+	}
+	++StartedByClass.FindOrAdd(GetName(Record.ClassId));
 	Fx.ClassId = Record.ClassId;
 	Fx.Kind = Record.Kind;
 	Fx.Location = FVector(Record.X, Record.Y, Record.Z);
@@ -897,6 +923,7 @@ void UScctEffectsSubsystem::StartActor(FActorFx& Fx, const FScctEffectActor& Rec
 	switch (Fx.Style)
 	{
 	case EStyle::Explosion:
+		++NumExplosions;
 		SpawnExplosion(Fx.Location);
 		break;
 	case EStyle::FlashBang:
