@@ -23,7 +23,7 @@ class SWidget;
  *   Esc or Enter          saves the layout to the user settings file and gives the game its keys back
  * A group with nothing on screen right now (an empty kill feed, no prompt) has no outline; the help panel names them.
  *
- * It opens from the match menu's Edit HUD layout entry, the console's scct.HudEdit [on|off] (no argument: toggles), or
+ * It opens from the match menu's Edit HUD layout entry, the settings page's EDIT HUD LAYOUT button (RequestStart), the console's scct.HudEdit [on|off] (no argument: toggles), or
  * -ScctHudEdit. While open it holds the keys and the mouse as the chat composer does (the player's controller is told
  * a menu is open, so everything held is let go). It does not open while a menu or the chat has the keys.
  *
@@ -46,6 +46,14 @@ public:
 	bool Start();
 	/** Saves the layout and closes. */
 	void Stop();
+
+	/**
+	 * Opens the edit mode as soon as it can: the settings page asks while a menu still has the keys, or from the
+	 * front end before the practice match it starts exists. Process-wide, so the match's own world picks it up; tried
+	 * each frame for Seconds once a match's HUD is up, then given up (and given up three minutes after the request
+	 * whatever happened).
+	 */
+	static void RequestStart(float Seconds);
 
 	/** The side the HUD is drawn for (0 spy, 1 merc): the layout being edited. */
 	int32 GetSide() const;

@@ -2,6 +2,7 @@
 
 #include "Brushes/SlateColorBrush.h"
 #include "Menu/ScctMenuStyle.h"
+#include "Menu/SScctRankIcon.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -532,6 +533,10 @@ TSharedRef<SWidget> SScctAccountPage::BuildRank()
 	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
 	[
 		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 12.0f, 0.0f)
+		[
+			SNew(SScctRankIcon).Size(52.0f).Rank(FScctRankEmblem{ Info.Level, Info.Prestige, Subsystem->HasFlag(EScctAccountFlags::Master) })
+		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 14.0f, 0.0f)
 		[
 			AcctLine(Subsystem->GetText(EScctAccountText::RankTag), 30.0f, Colour, ScctHudStyle::EWeight::Bold)
@@ -589,25 +594,18 @@ TSharedRef<SWidget> SScctAccountPage::BuildRank()
 	// The prestige emblems: the ones reached in their colours, the others faint.
 	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ AccountUi::Label(TEXT("Prestige emblems")) ];
 	const TSharedRef<SWrapBox> Emblems = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5.0f, 5.0f));
-	static const FSlateColorBrush Chip(FLinearColor::White);
 	for (int32 P = 1; P <= AcctMaxPrestige + 1; ++P)
 	{
 		const bool bMasterEmblem = P > AcctMaxPrestige;
 		const bool bReached = bMasterEmblem ? Subsystem->HasFlag(EScctAccountFlags::Master) : Info.Prestige >= P;
-		const FLinearColor EmblemColour = ScctHudStyle::Fade(Subsystem->EmblemColour(P), bReached ? 1.0f : 0.22f);
 		Emblems->AddSlot()
 		[
-			SNew(SBox).WidthOverride(34.0f).HeightOverride(30.0f)
+			SNew(SBox).WidthOverride(34.0f).HeightOverride(34.0f)
 			.ToolTipText(AccountUi::ToText(bMasterEmblem
 				? FString::Printf(TEXT("Master Prestige%s"), bReached ? TEXT("") : *FString::Printf(TEXT(" (reach level %d at prestige %d)"), AcctMaxLevel, AcctMaxPrestige))
 				: FString::Printf(TEXT("Prestige %d%s"), P, bReached ? TEXT("") : TEXT(" (not reached yet)"))))
 			[
-				SNew(SOverlay)
-				+ SOverlay::Slot()[ SNew(SImage).Image(&Chip).ColorAndOpacity(ScctHudStyle::Fade(EmblemColour, 0.18f)) ]
-				+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
-				[
-					AccountUi::Text(AccountUi::ToText(bMasterEmblem ? FString(TEXT("M")) : FString::FromInt(P)), 12.0f, FSlateColor(EmblemColour), ScctHudStyle::EWeight::Bold)
-				]
+				SNew(SScctRankIcon).Size(34.0f).Fade(bReached ? 1.0f : 0.25f).Rank(bMasterEmblem ? FScctRankEmblem::Master() : FScctRankEmblem::OfPrestige(P))
 			]
 		];
 	}
