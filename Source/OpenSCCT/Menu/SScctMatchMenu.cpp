@@ -88,6 +88,7 @@ void SScctMatchMenu::Construct(const FArguments& InArgs)
 	Host.bInMatch = true;
 	Host.Open = [this](const FString& Name) { ShowNamed(Name); };
 	Host.Back = [this] { GoBack(); };
+	Host.Resume = [this] { OnResume.ExecuteIfBound(); };
 
 	FParse::Value(FCommandLine::Get(), TEXT("ScctResultsAction="), ResultsAction);
 	FParse::Value(FCommandLine::Get(), TEXT("ScctResultsActionAfter="), ResultsActionAfter);

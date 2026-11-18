@@ -23,6 +23,9 @@ struct FScctMenuHost
 	/** Closes this page (as Escape does). */
 	TFunction<void()> Back;
 
+	/** Over a match: closes every menu and gives the game its keys back (the pause menu's Resume). Unset elsewhere. */
+	TFunction<void()> Resume;
+
 	/** The page is shown over a match (the pause menu's settings): nothing that would leave the match is offered. */
 	bool bInMatch = false;
 };
