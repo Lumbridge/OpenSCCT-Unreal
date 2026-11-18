@@ -38,9 +38,10 @@ namespace EScctEquipmentFlags
 	                                           // (GetFirstPerson draws none in the scope or with the spy's pistol away)
 	constexpr int32 TorchCorona = 1 << 10;     // the torch shows its corona (everyone but its owner sees it)
 	constexpr int32 TorchFollowsBone = 1 << 11; // point the torch along its bone's X axis, not along Torch pitch/yaw
-	constexpr int32 LaserBeam = 1 << 12;       // draw the beam from LaserStart to LaserEnd (the local player's as the
-	                                           // simulation placed it; another merc's from his rifle's FX bone along
-	                                           // his aim to the first thing a line hits)
+	constexpr int32 LaserBeam = 1 << 12;       // draw the beam from LaserStart to LaserEnd (the local player's traced
+	                                           // for the view drawn this frame; another merc's from his rifle's FX
+	                                           // bone along his aim, between the last two ticks, to the first thing
+	                                           // a line hits)
 	constexpr int32 LaserDot = 1 << 13;        // LaserEnd holds the laser dot on the surface it hit (another spy's pistol)
 	constexpr int32 GogglesDown = 1 << 14;     // the goggles are down over the eyes
 	constexpr int32 Merc = 1 << 15;            // SPawnDefense, else a spy

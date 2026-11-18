@@ -2,10 +2,12 @@
 
 #include "Engine/Engine.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Hud/ScctHudEdit.h"
 #include "GameFramework/GameUserSettings.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Menu/SScctBrightnessPage.h"
 #include "Menu/SScctPadPanel.h"
+#include "Menu/ScctDashboardCards.h"
 #include "Menu/ScctEnhancedImport.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctUserSettings.h"
@@ -14,6 +16,7 @@
 #include "OpenSCCT.h"
 #include "Play/ScctAudioOutput.h"
 #include "Play/ScctControlSettings.h"
+#include "Play/ScctGameMode.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctFeatures.h"
 #include "Settings/ScctGraphicsSettings.h"
@@ -422,6 +425,38 @@ void SScctSettingsPanel::AskImportEnhanced()
 	Dialog.CancelButton = 0;
 	if (Host.Dialogs.IsValid())
 	{
+		Host.Dialogs->Show(Dialog);
+	}
+}
+
+void SScctSettingsPanel::AskEditHud()
+{
+	UWorld* World = Host.Online.IsValid() ? Host.Online->GetWorld() : nullptr;
+	if (World != nullptr && Cast<AScctGameMode>(World->GetAuthGameMode()) != nullptr && Host.Resume)
+	{
+		// Over a match: the settings are written, every menu closes and the edit mode takes the keys once they are free.
+		Commit();
+		UScctHudEditSubsystem::RequestStart(5.0f);
+		const TFunction<void()> Resume = Host.Resume;
+		Resume();
+		return;
+	}
+	if (Host.bInMatch)
+	{
+		Toast(TEXT("The HUD layout is edited over the HUD of a match: open this from the pause menu of one."), true);
+		return;
+	}
+	FScctDialog Dialog;
+	Dialog.Title = TEXT("Edit HUD layout");
+	Dialog.Body = TEXT("The HUD editor works on the live HUD of a match: each group of the HUD is dragged, sized, faded or hidden where it is drawn, and each side has a layout of its own.\n\nChoose a side to start a practice match with bots and open the editor over it. Escape or Enter saves the layout; the pause menu's Edit HUD layout opens it again in any match.");
+	Dialog.Buttons.Add({ TEXT("Cancel"), EScctButtonLook::Secondary, nullptr });
+	Dialog.Buttons.Add({ TEXT("Spy HUD"), EScctButtonLook::Primary, [this](const FString&) { UScctHudEditSubsystem::RequestStart(60.0f); ScctDashboard::StartPractice(Host, false); } });
+	Dialog.Buttons.Add({ TEXT("Merc HUD"), EScctButtonLook::Primary, [this](const FString&) { UScctHudEditSubsystem::RequestStart(60.0f); ScctDashboard::StartPractice(Host, true); } });
+	Dialog.FocusButton = 1;
+	Dialog.CancelButton = 0;
+	if (Host.Dialogs.IsValid())
+	{
+		Commit();
 		Host.Dialogs->Show(Dialog);
 	}
 }
@@ -1138,7 +1173,24 @@ TSharedPtr<SWidget> SScctSettingsPanel::AddRegistryRows(const TSharedRef<SVertic
 TSharedRef<SWidget> SScctSettingsPanel::BuildRegistryTab(FName Page)
 {
 	const TSharedRef<SVerticalBox> Rows = SNew(SVerticalBox);
-	DefaultFocus = AddRegistryRows(Rows, Page);
+	TSharedPtr<SWidget> EditHud;
+	if (Page == FName(TEXT("Hud")))
+	{
+		// The layout's edit mode (Hud/ScctHudEdit.h), where the Godot client's options have its HUD editor.
+		Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Layout")) ];
+		Rows->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0.0f, 4.0f, 0.0f, 8.0f)
+		[
+			SAssignNew(EditHud, SScctButton)
+			.MinWidth(320.0f)
+			.Text(FText::FromString(TEXT("EDIT HUD LAYOUT")))
+			.Description(FText::FromString(Host.bInMatch
+				? TEXT("Close the menus and arrange the HUD over the match: drag a group to move it, turn the wheel to size it, Shift and the wheel for its opacity, H to hide it, R to put it back. Escape or Enter saves the layout of the side being played.")
+				: TEXT("Arrange the HUD: move, size, fade or hide each of its groups, for each side. The editor works over the live HUD, so this starts a practice match as the side chosen and opens it there.")))
+			.OnPressed(FSimpleDelegate::CreateSP(this, &SScctSettingsPanel::AskEditHud))
+		];
+	}
+	const TSharedPtr<SWidget> FirstRow = AddRegistryRows(Rows, Page);
+	DefaultFocus = EditHud.IsValid() ? EditHud : FirstRow;
 	return Rows;
 }
 

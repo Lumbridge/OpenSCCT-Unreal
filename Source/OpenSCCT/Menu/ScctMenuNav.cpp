@@ -1,4 +1,5 @@
 #include "Menu/ScctMenuNav.h"
+#include "Widgets/SViewport.h"
 
 #include "Containers/Ticker.h"
 #include "Framework/Application/NavigationConfig.h"
@@ -38,6 +39,31 @@ namespace
 		}
 
 		virtual FString ToString() const override { return TEXT("OpenSCCT menus: ") + FNavigationConfig::ToString(); }
+
+		// While the game itself has the keys (the viewport is focused: a match with no menu open), no key moves the
+		// focus: Tab, which the game reads by itself and so leaves unhandled, took the focus off the game onto the
+		// window, and the arrow keys could do the same.
+		virtual EUINavigation GetNavigationDirectionFromKey(const FKeyEvent& InKeyEvent) const override
+		{
+			return ScctGameViewportHasKeys() ? EUINavigation::Invalid : FNavigationConfig::GetNavigationDirectionFromKey(InKeyEvent);
+		}
+
+		virtual EUINavigation GetNavigationDirectionFromAnalog(const FAnalogInputEvent& InAnalogEvent) override
+		{
+			return ScctGameViewportHasKeys() ? EUINavigation::Invalid : FNavigationConfig::GetNavigationDirectionFromAnalog(InAnalogEvent);
+		}
+
+	private:
+		static bool ScctGameViewportHasKeys()
+		{
+			if (!FSlateApplication::IsInitialized())
+			{
+				return false;
+			}
+			const TSharedPtr<SWidget> Focused = FSlateApplication::Get().GetKeyboardFocusedWidget();
+			const TSharedPtr<SViewport> Game = FSlateApplication::Get().GetGameViewport();
+			return Focused.IsValid() && Game.IsValid() && Focused.Get() == static_cast<const SWidget*>(Game.Get());
+		}
 
 	protected:
 		virtual float GetRepeatRateForPressure(float InPressure, int32 InRepeats) const override

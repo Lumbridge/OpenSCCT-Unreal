@@ -90,6 +90,10 @@ void UScctOnlineSubsystem::RegisterOnlineSettings()
 		Desc.Step = Type == EScctSettingType::Int ? 1.f : 0.f;
 		Desc.Choices = MoveTemp(Choices);
 		Desc.Order = Order++;
+		// Not on the settings page: the master, the connect mode and the saved servers are set on the online pages, and
+		// every hosting option is on Create Session (Menu/SScctHostPage.cpp), which remembers them here. The console's
+		// scct.Setting still reads and writes each one.
+		Desc.bVisible = false;
 		FScctSettings::Register(Desc);
 	};
 
@@ -136,8 +140,12 @@ void UScctOnlineSubsystem::RegisterOnlineSettings()
 
 	if (FParse::Param(FCommandLine::Get(), TEXT("ScctOnlineSettingsDump")))
 	{
-		for (const FScctSettingDesc* Desc : FScctSettings::OptionsOf(OnlinePage))
+		for (const FScctSettingDesc* Desc : FScctSettings::AllOptions())
 		{
+			if (Desc->Page != FName(OnlinePage))
+			{
+				continue;
+			}
 			UE_LOG(LogOpenSCCT, Log, TEXT("Settings: [%s / %s] %s '%s' (%s) = '%s'"), *Desc->Page.ToString(), *Desc->Group.ToString(),
 				*Desc->Key.ToString(), *Desc->Label.ToString(), TypeName(Desc->Type),
 				// The invite key is a secret of the master: its length only.
