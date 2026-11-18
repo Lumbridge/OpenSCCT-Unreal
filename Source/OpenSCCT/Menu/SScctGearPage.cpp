@@ -259,7 +259,9 @@ void SScctGearPage::Construct(const FArguments& InArgs)
 						[
 							SNew(SBox).WidthOverride(GearIntelWidth)
 							[
-								Ui::Glass(SAssignNew(IntelBox, SBox).MinDesiredHeight(440.0f), FMargin(18.0f), 0.5f)
+								// A fixed height: the intel of each item is a different length, and a panel that grew with it moved the whole
+								// centred page under the mouse as it passed over the cards. Longer intel scrolls inside.
+								Ui::Glass(SAssignNew(IntelBox, SBox).HeightOverride(470.0f), FMargin(18.0f), 0.5f)
 							]
 						]
 					]
@@ -628,7 +630,7 @@ void SScctGearPage::Refresh()
 
 void SScctGearPage::ShowIntel(const FString& Path)
 {
-	IntelBox->SetContent(BuildIntel(Path));
+	IntelBox->SetContent(SNew(SScrollBox) + SScrollBox::Slot()[ BuildIntel(Path) ]);
 }
 
 TSharedRef<SWidget> SScctGearPage::KitSlot(const FString& Caption, const FString& Name, int32 InCategory, int32 InSlot, bool bEnabled, const FString& Tooltip)
