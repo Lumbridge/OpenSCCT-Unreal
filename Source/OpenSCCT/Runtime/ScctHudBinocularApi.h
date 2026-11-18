@@ -18,7 +18,8 @@ constexpr int32 ScctHudBinocularApiVersion = 2;
 struct FScctHudPageLayer
 {
 	int32 Kind;              // 0 an image, 1 a text, 2 a mask (not drawn: it hides what the masked images after it have
-	                         // under its box), 3 a masked image (drawn only outside the mask before it)
+	                         // under its box), 3 a masked image (drawn only outside the mask before it), 4 a Dodge
+	                         // image (it brightens the picture under it and covers nothing)
 	int32 Align;             // a text's alignment in its box: 0 left, 1 centre, 2 right
 	TCHAR Package[16];       // an image's package and texture, zero ended, as UScctHudTextures::Find takes them
 	TCHAR Texture[32];

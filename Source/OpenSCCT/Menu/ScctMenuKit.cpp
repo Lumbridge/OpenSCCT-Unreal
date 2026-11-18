@@ -278,6 +278,8 @@ namespace
 
 namespace ScctUi
 {
+	TSharedPtr<SWidget> NavigationTarget(EUINavigation Type) { return NavigateFromFocus(Type); }
+
 	FNavigationReply Navigate(const FNavigationEvent& Event)
 	{
 		switch (Event.GetNavigationType())
@@ -1504,10 +1506,22 @@ void SScctDialogLayer::Show(const FScctDialog& Dialog)
 	{
 		TextField = ScctUi::TextBox(Dialog.TextHint, FString(), Dialog.bPassword, FOnTextCommitted::CreateLambda([this](const FText&, ETextCommit::Type Commit)
 		{
+			// Enter in the field presses the button the dialog opens on (its main one), never Cancel.
 			if (Commit == ETextCommit::OnEnter && bOpen)
 			{
-				Answer(0);
+				Answer(Current.FocusButton);
 			}
+		}));
+		// The field would keep Escape to itself (it only drops what was typed): the dialog's cancel hears it instead.
+		TextField->SetOnKeyDownHandler(FOnKeyDown::CreateSPLambda(this, [this](const FGeometry&, const FKeyEvent& KeyEvent)
+		{
+			if (bOpen && KeyEvent.GetKey() == EKeys::Escape)
+			{
+				ScctUi::Play(EScctUiSound::Back);
+				Answer(Current.CancelButton);
+				return FReply::Handled();
+			}
+			return FReply::Unhandled();
 		}));
 		Box->AddSlot().AutoHeight().Padding(0.0f, 18.0f, 0.0f, 0.0f)[ TextField.ToSharedRef() ];
 	}

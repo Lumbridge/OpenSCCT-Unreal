@@ -622,6 +622,7 @@ public sealed class BridgeSession : IDisposable
 
         _current.Clear();
         _order.Clear();
+        Pose.PoseCameraBones.Ensure(this, _session.Client.World.Level);
         SBasePawn? local = _session.LocalPawn;
         foreach (SBasePawn pawn in _session.Client.World.Level.AllActors<SBasePawn>())
         {

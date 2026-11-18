@@ -21,7 +21,7 @@ namespace OpenScct.UnrealBridge.Pose;
 /// (<see cref="DrawnView"/>) is handed over by Unreal each frame through Pose/PoseAimExports.cs. Not ported:
 /// replacement clips of an animation project.</para>
 /// </summary>
-public sealed class PawnPoser
+public sealed partial class PawnPoser
 {
     private readonly ChannelPose[] _channels = new ChannelPose[PawnAnimation.ChannelCount];
     private readonly TickChannel[] _prev = new TickChannel[PawnAnimation.ChannelCount];
@@ -113,6 +113,7 @@ public sealed class PawnPoser
             _networkReset = pawn.NetworkResetId;
         }
 
+        TakeOrigin(shown, pawn.PrePivot);
         _location = shown;
         _prevYaw = _placed ? _yaw : pawn.Rotation.Yaw;
         _yaw = pawn.Rotation.Yaw;

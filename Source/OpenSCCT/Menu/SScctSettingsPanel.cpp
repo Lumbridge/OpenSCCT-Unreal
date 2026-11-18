@@ -1105,9 +1105,20 @@ TSharedPtr<SWidget> SScctSettingsPanel::AddRegistryRows(const TSharedRef<SVertic
 	TSharedPtr<SWidget> First;
 	FString Group;
 	bool bFirstGroup = true;
+	// A group's settings stay together under one heading even when they were registered apart (two "Teammate names"
+	// headings on the HUD tab otherwise): the groups keep the order of their first setting, the settings their own.
+	const auto GroupOf = [Page](const FScctSettingDesc* Desc) { return Desc->Group.IsEmpty() ? Page.ToString() : Desc->Group.ToString(); };
+	TArray<FString> GroupOrder;
+	TArray<const FScctSettingDesc*> Ordered;
 	for (const FScctSettingDesc* Desc : FScctSettings::OptionsOf(Page))
 	{
-		const FString ThisGroup = Desc->Group.IsEmpty() ? Page.ToString() : Desc->Group.ToString();
+		GroupOrder.AddUnique(GroupOf(Desc));
+		Ordered.Add(Desc);
+	}
+	Ordered.StableSort([&GroupOrder, &GroupOf](const FScctSettingDesc& A, const FScctSettingDesc& B) { return GroupOrder.IndexOfByKey(GroupOf(&A)) < GroupOrder.IndexOfByKey(GroupOf(&B)); });
+	for (const FScctSettingDesc* Desc : Ordered)
+	{
+		const FString ThisGroup = GroupOf(Desc);
 		if (bFirstGroup || ThisGroup != Group)
 		{
 			Rows->AddSlot().AutoHeight()[ ScctUi::Section(ThisGroup) ];

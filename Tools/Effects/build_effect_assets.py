@@ -20,6 +20,9 @@ The materials go to /Game/OpenSCCT/Effects/ and are committed: they are ours, ma
                   field's bounds, with no depth test of its own (it stops at the scene's depth itself)
   M_ScctGoggleGlowHue  the goggle lenses with their colour turned by HueTurn radians (a player's light cosmetic);
                   parameters Lens, Intensity, Fade and HueTurn as M_ScctGoggleGlow has them
+  M_ScctFxSkin    a run-time skin of an effect mesh (the proximity mine's status light, Play/ScctEffectSkins.cpp):
+                  one cell of its Texture added to the frame, unlit; parameters Texture, Cell (the cell's size
+                  in X and Y, its corner in Z and W, in UV) and Intensity
 
 With a content root the original effect meshes (grenades, mines, gadgets, beams: shared/fx/meshes/*.glb) are
 imported to /Game/Imported/Fx/<Package>/ and the projections' textures to /Game/Imported/Fx/Textures/ (never
@@ -822,6 +825,50 @@ def build_goggle_glow_hue():
     finish(material)
 
 
+def build_skin():
+    """A run-time skin of an effect mesh, as the Godot client's EffectViews.SkinMaterial draws one: the picture
+    times its alpha added to the frame, unlit and two-sided, one cell of a flipbook sheet at a time. The game
+    hands the picture over (it is read from the content folder) and turns the cell."""
+    material = new_material("M_ScctFxSkin")
+    if not material:
+        return
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_ADDITIVE)
+    material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property("two_sided", True)
+
+    cell = lib.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -1500, 100)
+    cell.set_editor_property("parameter_name", "Cell")
+    cell.set_editor_property("default_value", unreal.LinearColor(1, 1, 0, 0))
+    size = lib.create_material_expression(material, unreal.MaterialExpressionAppendVector, -1250, 50)
+    connect(cell, "R", size, "A")
+    connect(cell, "G", size, "B")
+    corner = lib.create_material_expression(material, unreal.MaterialExpressionAppendVector, -1250, 250)
+    connect(cell, "B", corner, "A")
+    connect(cell, "A", corner, "B")
+    uv = lib.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -1250, -150)
+    scaled = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -1050, -50)
+    connect(uv, "", scaled, "A")
+    connect(size, "", scaled, "B")
+    placed = lib.create_material_expression(material, unreal.MaterialExpressionAdd, -900, 50)
+    connect(scaled, "", placed, "A")
+    connect(corner, "", placed, "B")
+
+    texture = lib.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameter2D, -700, 0)
+    texture.set_editor_property("parameter_name", "Texture")
+    connect(placed, "", texture, "UVs")
+    intensity = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -700, 300)
+    intensity.set_editor_property("parameter_name", "Intensity")
+    intensity.set_editor_property("default_value", 1.0)
+    masked = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -450, 50)
+    connect(texture, "RGB", masked, "A")
+    connect(texture, "A", masked, "B")
+    lit = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -250, 100)
+    connect(masked, "", lit, "A")
+    connect(intensity, "", lit, "B")
+    connect_output(in_the_picture(material, lit, 0, 100), "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    finish(material)
+
+
 build_glow()
 build_smoke()
 build_cloud()
@@ -830,6 +877,7 @@ build_solid()
 build_projection()
 build_smoke_volume()
 build_goggle_glow_hue()
+build_skin()
 if CONTENT_ROOT:
     import_projection_textures()
     import_meshes()

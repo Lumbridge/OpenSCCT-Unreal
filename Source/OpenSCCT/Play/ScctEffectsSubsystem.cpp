@@ -195,8 +195,8 @@ void UScctEffectsSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 {
 	if (OldId != 0)
 	{
-		UE_LOG(LogOpenSCCT, Log, TEXT("Effects summary: %d muzzle flashes, %d tracers, %d impacts, %d effect actors (%d drawn as stand-in shapes), at most %d sprites at once; rain on bodies: %d splashes, %d drips, %d puffs"),
-			NumFlashes, NumTracers, NumImpacts, NumActors, NumStandIns, PeakSprites, NumFlicSplashes, NumFlicDrips, NumFlicPuffs);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Effects summary: %d muzzle flashes, %d tracers, %d impacts, %d effect actors (%d drawn as stand-in shapes), at most %d sprites at once; rain on bodies: %d splashes, %d drips, %d puffs; run-time skins put on effect meshes: %d"),
+			NumFlashes, NumTracers, NumImpacts, NumActors, NumStandIns, PeakSprites, NumFlicSplashes, NumFlicDrips, NumFlicPuffs, EffectSkins.NumApplied);
 	}
 	// Actor ids are reused by the next match: nothing drawn may carry over.
 	ResetMatch();
@@ -237,6 +237,7 @@ void UScctEffectsSubsystem::ResetMatch()
 	ResetCasings();
 	SmokeVolumes.Reset();
 	Sprites.Clear();
+	EffectSkins.ResetMatch();
 	MatchSeconds = 0.0f;
 	bFireHeld = bAltFireHeld = false;
 	NumFlashes = NumFlashesLeftToViewModel = NumTracers = NumImpacts = NumActors = NumStandIns = PeakSprites = 0;
@@ -407,12 +408,22 @@ void UScctEffectsSubsystem::HandleBeforeTicks(float DeltaSeconds)
 void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 {
 	MatchSeconds += DeltaSeconds;
+	// -ScctKnockCheck (Runtime/ScctCameraBoneApi.h); nothing without the switch.
+	ScctRunCameraBoneCheck(MatchSeconds);
 	if (Events == nullptr || !bSceneReady || !IsValid(Host))
 	{
 		return;
 	}
 
 	++Frame;
+	if (const APlayerController* Viewer = GetWorld()->GetFirstPlayerController())
+	{
+		// -ScctMineLight (Play/ScctEffectSkins.h); nothing without the switch.
+		FVector Eye;
+		FRotator Look;
+		Viewer->GetPlayerViewPoint(Eye, Look);
+		EffectSkins.RunCheck(MatchSeconds, Eye, Look.Vector());
+	}
 	const float FxSeconds = DeltaSeconds * TimeScale;
 	DrainShots();
 	UpdateTracers(FxSeconds);
@@ -855,6 +866,10 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 				const FVector MeshScale = Fx->bStandIn ? FVector(0.09) : Scale;
 				const FVector Pivot = Fx->bStandIn ? FVector::ZeroVector : Scale * -FVector(Record.PrePivotX, Record.PrePivotY, Record.PrePivotZ);
 				Component->SetWorldTransform(FTransform(Place.GetRotation(), Place.TransformPosition(Pivot), MeshScale));
+				if (!Fx->bStandIn)
+				{
+					EffectSkins.Apply(Record.ActorId, Component, Fx->Skins, Events, bLog);
+				}
 			}
 		}
 
@@ -959,7 +974,7 @@ void UScctEffectsSubsystem::StartActor(FActorFx& Fx, const FScctEffectActor& Rec
 					Component->RegisterComponent();
 				}
 				Component->SetStaticMesh(Fx.bStandIn ? StandInMesh.Get() : Mesh);
-				Component->EmptyOverrideMaterials();
+				FScctEffectSkins::Clear(Component);
 				if (Fx.bStandIn && StandInMaterial != nullptr)
 				{
 					Component->SetMaterial(0, StandInMaterial);

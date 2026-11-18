@@ -122,6 +122,7 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	bScoreboardForced = false;
 	bScoreboardKeyHeld = false;
 	bScoreboardToggled = false;
+	bLiveBoardLogged = false;
 	for (FTimedCommand& Command : TimedCommands)
 	{
 		Command.bDone = false;
@@ -371,6 +372,7 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 		}
 	}
 	Model->Advance(DeltaSeconds);
+	ReadLiveBoard();
 	ReadIcons(DeltaSeconds);
 	ReadBinoculars(DeltaSeconds);
 	LogDetails();

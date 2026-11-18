@@ -61,6 +61,9 @@ namespace ScctUi
 	 */
 	FNavigationReply Navigate(const FNavigationEvent& Event);
 
+	/** Navigate's search by itself: the control an arrow or the pad would go to from the focused one (none: null). */
+	TSharedPtr<SWidget> NavigationTarget(EUINavigation Type);
+
 	/** The description of the control that has the focus; a page's help pane shows it. */
 	void Describe(const FText& Title, const FText& Body);
 	const FText& GetDescriptionTitle();

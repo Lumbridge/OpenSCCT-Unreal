@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A console check of the camera's bone service without Unreal: hosts a map as a mercenary, knocks the player down and compares the first-person view with the drawn head bone, with the service and without it. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\OpenScct.UnrealBridge\OpenScct.UnrealBridge.csproj" />
+  </ItemGroup>
+</Project>

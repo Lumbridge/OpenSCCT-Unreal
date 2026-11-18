@@ -285,6 +285,21 @@ void FScctHudPainter::Image(const FBox2f& Box, const FSlateBrush& Brush, const F
 	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Drawn), &Part, ESlateDrawEffect::None, Final);
 }
 
+void FScctHudPainter::ImageAdded(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint)
+{
+	// Slate's pre-multiplied blend is source + destination x (1 - source alpha): with no alpha the picture is added.
+	const float Strength = Alpha();
+	const FLinearColor Final(Tint.R * Strength, Tint.G * Strength, Tint.B * Strength, 0.0f);
+	if (Box.GetSize().GetMin() <= 0.0f || Strength <= 0.002f || Brush.GetResourceObject() == nullptr)
+	{
+		return;
+	}
+	Track(Box);
+	FSlateBrush Part = Brush;
+	Part.SetUVRegion(UV);
+	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Box), &Part, ESlateDrawEffect::PreMultipliedAlpha, Final);
+}
+
 void FScctHudPainter::ImageOutside(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint,
 	const FVector2f& MaskCentre, const FVector2f& MaskHalfSize, float MaskDegrees)
 {

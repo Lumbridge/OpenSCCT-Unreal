@@ -595,6 +595,31 @@ void UScctOnlineSubsystem::RefreshTexts()
 	Players.SetNumZeroed(MaxPlayers, EAllowShrinking::No);
 	Players.SetNum(FMath::Clamp(Api->GetPlayers(Players.GetData(), MaxPlayers), 0, MaxPlayers), EAllowShrinking::No);
 
+	// -ScctRankPreview=549,12,2615: the list's rows without a rank take these packed ranks in turn, so a lobby of
+	// guests and bots shows the rank badges for a screenshot. Nothing is sent.
+	static const TArray<int32> PreviewRanks = []
+	{
+		TArray<int32> Ranks;
+		FString Text;
+		if (FParse::Value(FCommandLine::Get(), TEXT("ScctRankPreview="), Text, false))
+		{
+			TArray<FString> Parts;
+			Text.ParseIntoArray(Parts, TEXT(","));
+			for (const FString& Part : Parts)
+			{
+				Ranks.Add(FCString::Atoi(*Part));
+			}
+		}
+		return Ranks;
+	}();
+	for (int32 Index = 0; Index < Players.Num() && Index < PreviewRanks.Num(); ++Index)
+	{
+		if (Players[Index].Rank == 0)
+		{
+			Players[Index].Rank = PreviewRanks[Index];
+		}
+	}
+
 	ServerName = ReadText(EScctOnlineText::ServerName);
 	SetupMap = ReadText(EScctOnlineText::SetupMap);
 	ModeName = ReadText(EScctOnlineText::ModeName);

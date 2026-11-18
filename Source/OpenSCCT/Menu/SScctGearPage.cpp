@@ -368,6 +368,23 @@ FNavigationReply SScctGearPage::OnNavigation(const FGeometry& MyGeometry, const 
 			return FNavigationReply::Explicit(SlotTile);
 		}
 	}
+	if (Type == EUINavigation::Up || Type == EUINavigation::Down || Type == EUINavigation::Left || Type == EUINavigation::Right)
+	{
+		// The menus' own search (ScctUi::Navigate), kept to this page: Slate's search inside a boundary found nothing
+		// from one card to the next, which left the arrows and the D-pad stuck on the first card.
+		return FNavigationReply::Custom(FNavigationDelegate::CreateSPLambda(this, [this](EUINavigation Direction) -> TSharedPtr<SWidget>
+		{
+			const TSharedPtr<SWidget> Found = ScctUi::NavigationTarget(Direction);
+			for (TSharedPtr<SWidget> Widget = Found; Widget.IsValid(); Widget = Widget->GetParentWidget())
+			{
+				if (Widget.Get() == this)
+				{
+					return Found;
+				}
+			}
+			return nullptr;
+		}));
+	}
 	return FNavigationReply::Stop();
 }
 

@@ -8,6 +8,7 @@
 #include "Runtime/ScctHudMotionApi.h"
 #include "Runtime/ScctHudRadarApi.h"
 #include "Runtime/ScctHudTextureApi.h"
+#include "Hud/ScctHudLiveBoard.h"
 #include "Hud/ScctTeamPingView.h"
 #include "Hud/ScctTelemetryView.h"
 
@@ -187,6 +188,12 @@ public:
 	 */
 	FScctTelemetryView Telemetry;
 
+	/**
+	 * The running round's scoreboard with the delayed combat columns (Hud/ScctHudLiveBoard.h), read while the scoreboard or
+	 * the mission status page is up. Not valid without the bridge's table: the scoreboard then draws Scores.
+	 */
+	FScctHudLiveBoard LiveBoard;
+
 	/** The team of the player at this machine (0 spies, 1 mercs), from the scoreboard, else the side played. */
 	int32 LocalTeam = 0;
 
@@ -211,8 +218,14 @@ public:
 	bool IsTutorialUp() const { return bHasState && State.TutorialId != 0; }
 
 	// --- Text ---------------------------------------------------------------------------------------------
-	/** The text behind one of the snapshot's ...Id fields. Ids belong to one session. */
+	/**
+	 * The text behind one of the snapshot's ...Id fields. Ids belong to one session. A key token in it (a backslash and
+	 * USE, SECONDARYFIRE...) is given as the key the local player's side has on that action, as the Godot client's pages do.
+	 */
 	const FString& Text(int32 Id) const;
+
+	/** Words with their key tokens (a backslash and USE, SECONDARYFIRE...) given as the local player's side's keys. */
+	FString WithKeys(const FString& Words) const;
 	const FString& Label(EScctHudLabel Which) const { return Labels[static_cast<int32>(Which)]; }
 
 	// --- Messages on screen -------------------------------------------------------------------------------
@@ -287,6 +300,15 @@ private:
 
 	const FScctHudApi* Api = nullptr;
 	mutable TMap<int32, FString> Texts;
+
+	/** A text that names keys by their tokens, with the side's keys in it; read again now and then. */
+	struct FKeyedText
+	{
+		FString Value;
+		float At = 0.0f;
+		int32 Side = INDEX_NONE;
+	};
+	mutable TMap<int32, FKeyedText> KeyedTexts;
 	FString Labels[static_cast<int32>(EScctHudLabel::Count)];
 
 	// What the last frame showed, to notice changes.

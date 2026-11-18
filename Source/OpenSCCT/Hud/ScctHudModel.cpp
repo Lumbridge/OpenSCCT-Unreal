@@ -1,6 +1,8 @@
 #include "Hud/ScctHudModel.h"
 
 #include "Hud/ScctHudStyle.h"
+#include "OpenSCCT.h"
+#include "Runtime/ScctPlayApi.h"
 
 namespace
 {
@@ -106,23 +108,62 @@ const FString& FScctHudModel::Text(int32 Id) const
 	{
 		return EmptyText;
 	}
-	if (const FString* Known = Texts.Find(Id))
+	const FString* Known = Texts.Find(Id);
+	if (Known == nullptr)
+	{
+		// GetText returns the whole length; a text longer than the first buffer is read again into one that fits.
+		TCHAR Small[256];
+		const int32 Length = Api->GetText(Id, Small, UE_ARRAY_COUNT(Small));
+		if (Length < static_cast<int32>(UE_ARRAY_COUNT(Small)))
+		{
+			Known = &Texts.Add(Id, FString(FMath::Max(Length, 0), Small));
+		}
+		else
+		{
+			TArray<TCHAR> Large;
+			Large.SetNumZeroed(Length + 1);
+			Api->GetText(Id, Large.GetData(), Large.Num());
+			Known = &Texts.Add(Id, FString(Length, Large.GetData()));
+		}
+	}
+
+	// A text that names keys by their tokens (the gas mask's hint, "Press" and a backslash token "to activate the
+	// mask.") is shown with the keys the local player's side has on them, as the Godot client's pages expand every
+	// text they draw; the keys are read again every two seconds, so a change of the bindings shows.
+	int32 Slash = INDEX_NONE;
+	if (!Known->FindChar(TEXT('\\'), Slash))
 	{
 		return *Known;
 	}
-
-	// GetText returns the whole length; a text longer than the first buffer is read again into one that fits.
-	TCHAR Small[256];
-	const int32 Length = Api->GetText(Id, Small, UE_ARRAY_COUNT(Small));
-	if (Length < static_cast<int32>(UE_ARRAY_COUNT(Small)))
+	const int32 KeySide = bHasState && State.Side == 1 ? 1 : 0;
+	FKeyedText& Keyed = KeyedTexts.FindOrAdd(Id);
+	if (Keyed.Side != KeySide || Clock - Keyed.At > 2.0f || Clock < Keyed.At)
 	{
-		return Texts.Add(Id, FString(FMath::Max(Length, 0), Small));
+		Keyed.Value = WithKeys(*Known);
+		Keyed.At = Clock;
+		Keyed.Side = KeySide;
 	}
+	return Keyed.Value;
+}
 
-	TArray<TCHAR> Large;
-	Large.SetNumZeroed(Length + 1);
-	Api->GetText(Id, Large.GetData(), Large.Num());
-	return Texts.Add(Id, FString(Length, Large.GetData()));
+FString FScctHudModel::WithKeys(const FString& Words) const
+{
+	int32 Slash = INDEX_NONE;
+	const FScctPlayApi* Play = Words.FindChar(TEXT('\\'), Slash) ? ScctFeature<FScctPlayApi>() : nullptr;
+	if (Play == nullptr || Play->ExpandKeys == nullptr)
+	{
+		return Words;
+	}
+	const int32 KeySide = bHasState && State.Side == 1 ? 1 : 0;
+	TArray<TCHAR> Buffer;
+	Buffer.SetNumZeroed(Words.Len() * 2 + 256);
+	int32 Length = Play->ExpandKeys(KeySide, *Words, Buffer.GetData(), Buffer.Num());
+	if (Length >= Buffer.Num())
+	{
+		Buffer.SetNumZeroed(Length + 1);
+		Length = Play->ExpandKeys(KeySide, *Words, Buffer.GetData(), Buffer.Num());
+	}
+	return Length > 0 ? FString(Buffer.GetData()) : Words;
 }
 
 const FString& FScctHudModel::VisionName(int32 Mode) const
@@ -171,6 +212,12 @@ void FScctHudModel::AddMessage(const FScctHudMessage& Message)
 	{
 		Line.Actor = Text(Message.ActorNameId);
 		Line.ActorTeam = Message.ActorTeam;
+	}
+	else
+	{
+		// One of the game's own lines can name a key by its token (the gas mask's "Press", a backslash token, "to
+		// activate the mask."): it shows the key, as the Godot client's pages do. What a player typed is left alone.
+		Line.Text = WithKeys(Line.Text);
 	}
 
 	// A line about a place that has no name starts with the original's bare separator (" : Objectives locked").

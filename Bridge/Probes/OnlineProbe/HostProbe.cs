@@ -145,6 +145,9 @@ internal static unsafe class HostProbe
 
             ok &= replies >= 2;
 
+            // 5b. A changed setup is said in the lobby of both (SetupNoticeProbe.cs).
+            ok &= SetupNoticeProbe.Run(s_online, g, args.Length > 4 ? args[4] : "ClubE");
+
             // The host's log, as Unreal drains it.
             char* buffer = stackalloc char[512];
             int length;

@@ -97,7 +97,9 @@ DECLARE_MULTICAST_DELEGATE(FScctOnlineChanged);
  *                             empty places fill these
  *   -ScctLaunchWhen=N         the host launches once N people (bots not counted) are in the lobby and everyone is
  *                             ready (default 2); -ScctSide picks the host's own side
- *   -ScctOnlineSettingsDump   log every option of the Online settings page with its value at start
+ *   -ScctRankPreview=549,12   the player list's rows without a rank take these packed ranks in turn (the level in the
+ *                             low byte, the prestige in the next), for a screenshot of the lobby's rank badges
+ *   -ScctOnlineSettingsDump  log every option of the Online settings page with its value at start
  *   -ScctChatTeam=<text>      say this once in the lobby to the player's own side only
  *   -ScctChatWhen=N           -ScctChatTeam waits until N players are in the lobby (default 1)
  *   -ScctKickAfter=<name>,S   the host or admin kicks the player called <name> S seconds after joining the lobby;
