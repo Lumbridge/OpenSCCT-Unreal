@@ -10,6 +10,7 @@
 #include "Styling/SlateBrush.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -70,7 +71,47 @@ void SScctHubLaptopPage::Construct(const FArguments& InArgs)
 					+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, 20.0f, 0.0f)
 					[
 						SNew(SVerticalBox)
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ LaptopUi::Label(TEXT("Map")) ]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
+						[
+							// The map group and the search of the other map lists (the Godot client's MapPickerView on its laptop panel).
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 12.0f, 0.0f)[ LaptopUi::Label(TEXT("Map")) ]
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)
+							[
+								LaptopUi::Button(
+									TAttribute<FText>::CreateLambda([this] { return LaptopUi::ToText(TEXT("GROUP: ") + (MapGroups.IsValidIndex(MapGroupIndex) ? MapGroups[MapGroupIndex].Title.ToUpper() : FString(TEXT("ALL INSTALLED MAPS")))); }),
+									FOnClicked::CreateLambda([this]
+									{
+										if (MapGroups.Num() > 1)
+										{
+											MapGroupIndex = (MapGroupIndex + 1) % MapGroups.Num();
+											ScctMapBrowser::SetActiveGroup(MapGroups[MapGroupIndex].Name);
+											MapsKey.Reset();
+											RebuildMaps();
+										}
+										return FReply::Handled();
+									}),
+									TAttribute<bool>::CreateLambda([this] { return MapGroups.IsValidIndex(MapGroupIndex) && !MapGroups[MapGroupIndex].bAll; }))
+							]
+							+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)
+							[
+								LaptopUi::TextBox(TEXT("Search maps"), FString(), false, FOnTextCommitted(), FOnTextChanged::CreateLambda([this](const FText& Text)
+								{
+									const FString Typed = Text.ToString().TrimStartAndEnd();
+									if (Typed != MapSearch)
+									{
+										MapSearch = Typed;
+										MapsKey.Reset();
+										RebuildMaps();
+									}
+								}))
+							]
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+							[
+								LaptopUi::Text(TAttribute<FText>::CreateLambda([this] { return LaptopUi::ToText(MapsShown == 1 ? FString(TEXT("1 map")) : FString::Printf(TEXT("%d maps"), MapsShown)); }),
+									10.0f, FSlateColor(ScctHudStyle::TextDim()))
+							]
+						]
 						+ SVerticalBox::Slot().FillHeight(1.0f)
 						[
 							SNew(SScrollBox)
@@ -264,6 +305,14 @@ void SScctHubLaptopPage::RebuildMaps()
 	{
 		return;
 	}
+	if (MapGroups.IsEmpty())
+	{
+		// Once per page: the catalog's groups with the one picked last, and the search words.
+		MapGroups = ScctMapBrowser::Groups();
+		MapDetails = ScctMapBrowser::Details();
+		const FString Saved = ScctMapBrowser::ActiveGroup();
+		MapGroupIndex = FMath::Max(MapGroups.IndexOfByPredicate([&Saved](const FScctMapGroup& Group) { return Group.Name.Equals(Saved, ESearchCase::IgnoreCase); }), 0);
+	}
 	TArray<FScctHubLaptopMap> Maps;
 	Maps.SetNumZeroed(MaxMaps);
 	Maps.SetNum(FMath::Min(Api->GetLaptopMaps(Maps.GetData(), Maps.Num()), MaxMaps));
@@ -279,10 +328,17 @@ void SScctHubLaptopPage::RebuildMaps()
 	MapsKey = Key;
 
 	MapBox->ClearChildren();
+	MapsShown = 0;
 	for (const FScctHubLaptopMap& Map : Maps)
 	{
 		const FString Id = Fixed(Map.Id, UE_ARRAY_COUNT(Map.Id));
 		const bool bSelected = (Map.Flags & EScctHubPadsFlags::Selected) != 0;
+		if ((MapGroups.IsValidIndex(MapGroupIndex) && !MapGroups[MapGroupIndex].Holds(Id))
+			|| !ScctMapBrowser::Matches(MapSearch, Id, Fixed(Map.Name, UE_ARRAY_COUNT(Map.Name)), MapDetails.Find(Id.ToLower())))
+		{
+			continue;
+		}
+		++MapsShown;
 		// The match is played in this game's imported level of the map, or the runtime level built from its render
 		// files; without either the online visit refuses it.
 		const bool bDrawable = UScctOnlineSubsystem::IsPlayable(Id);
