@@ -51,11 +51,10 @@ Godot game (`BuildFiles` and `DeltaInstaller` in OpenSCCT's launcher):
   `"patches": [{ "from", "fromSize", "tag", "name", "size" }]`. A patch is kept only when it is under half the
   gzipped file. The script applies every patch once and checks the result's SHA-256 before it lists the patch.
   Launchers that don't know about patches ignore the field and download the blob.
-- **Why patches.** Cooked content is one 500 MB `.ucas`. When no asset changes, a recook is byte-identical and the
-  file costs nothing to update. One changed asset, though, shifts everything after it in the container, and the
-  exe changes with any code change. So per-file deltas alone would download the whole `.ucas` for any content
-  change, and 66 MB for any code change. Measured on two real builds 16 commits apart, with about 16 changed or new
-  assets and code changes:
+- **Why patches.** The enhanced maps share a cooked `.ucas` of about 1.3 GB. An asset edit can change the
+  container's hash and move many already-compressed blocks. On 0.1.2 to 0.1.3 the container's gzip download
+  was 1,230 MB. Matching its blocks produced a 9 MB patch and a 22 MB total launcher download.
+  Earlier builds with a smaller container gave the following measurements:
 
   | File | Gzipped blob | Patch |
   |---|---|---|
@@ -66,8 +65,10 @@ Godot game (`BuildFiles` and `DeltaInstaller` in OpenSCCT's launcher):
   That is about 8 MB instead of about 571 MB. Another pair, 17 commits of code changes and no content changes, came
   to 7.8 MB with patches and 68 MB without, with the `.ucas` unchanged. A patch takes about 5 minutes to make for the `.ucas` and 1.5
   minutes for the exe, up to four at a time, and about a second to apply.
-- **The patch format** is `Tools/ReleaseDelta`. It uses bsdiff's matcher on a suffix array, which finds code whose
-  addresses moved and content blocks that moved. It writes an `OSCTDIF1` container of three zlib streams (control,
+- **The patch format** is `Tools/ReleaseDelta`. For ordinary files up to 256 MiB it uses bsdiff's suffix-array
+  matcher. For larger single-partition UE 5.8 `.ucas` files, `diff-iostore` reads each version's companion
+  `.utoc` and matches compressed blocks by SHA-256. Missing or unsupported tables fall back to the file's blob.
+  Both methods write an `OSCTDIF1` container of three zlib streams (control,
   diff, extra), with both files' sizes and SHA-256 in the header. The format is described in `Program.cs`.
   `ReleaseDelta apply` is the reference implementation that the launcher's version must match: it reads the old file
   at random positions and writes the new file in order. `ReleaseDelta selftest` checks the suffix array against a

@@ -31,6 +31,10 @@ public static class Program
     {
         try
         {
+            if (args.Length == 4 && args[0] == "diff-iostore")
+            {
+                return IoStoreDelta.TryDiff(args[1], args[2], args[3]) ? 0 : 3;
+            }
             if (args.Length == 4 && args[0] == "diff")
             {
                 Delta.Diff(args[1], args[2], args[3]);
@@ -45,7 +49,7 @@ public static class Program
             {
                 return SelfTest.Run();
             }
-            Console.Error.WriteLine("usage: ReleaseDelta diff <old> <new> <patch> | apply <old> <patch> <new> | selftest");
+            Console.Error.WriteLine("usage: ReleaseDelta diff|diff-iostore <old> <new> <patch> | apply <old> <patch> <new> | selftest");
             return 2;
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
@@ -82,13 +86,20 @@ public static class Delta
             BsDiff.Run(oldData, newData, suffixes, controlZ, diffZ, extraZ);
         }
 
+        WritePatch(patchPath, oldData.LongLength, newData.LongLength, SHA256.HashData(oldData),
+            SHA256.HashData(newData), control, diff, extra);
+    }
+
+    internal static void WritePatch(string patchPath, long oldLength, long newLength, byte[] oldHash, byte[] newHash,
+        Stream control, Stream diff, Stream extra)
+    {
         using var output = File.Create(patchPath);
         Span<byte> header = stackalloc byte[HeaderSize];
         Magic.CopyTo(header);
-        BitConverter.TryWriteBytes(header[8..], (long)oldData.Length);
-        BitConverter.TryWriteBytes(header[16..], (long)newData.Length);
-        SHA256.HashData(oldData, header[24..56]);
-        SHA256.HashData(newData, header[56..88]);
+        BitConverter.TryWriteBytes(header[8..], oldLength);
+        BitConverter.TryWriteBytes(header[16..], newLength);
+        oldHash.CopyTo(header[24..56]);
+        newHash.CopyTo(header[56..88]);
         BitConverter.TryWriteBytes(header[88..], control.Length);
         BitConverter.TryWriteBytes(header[96..], diff.Length);
         BitConverter.TryWriteBytes(header[104..], extra.Length);
@@ -291,6 +302,7 @@ internal static class SelfTest
         Directory.CreateDirectory(folder);
         try
         {
+            CheckIoStoreRoundTrip(folder, random);
             for (int round = 0; round < 40; round++)
             {
                 byte[] old = new byte[random.Next(0, 200_000)];
@@ -349,6 +361,52 @@ internal static class SelfTest
         }
         Console.WriteLine("selftest passed");
         return 0;
+    }
+
+    private static void CheckIoStoreRoundTrip(string folder, Random random)
+    {
+        byte[][] blocks = new byte[4][];
+        for (int i = 0; i < blocks.Length; i++)
+        {
+            blocks[i] = new byte[4096 + i];
+            random.NextBytes(blocks[i]);
+        }
+
+        string MakeContainer(string name, int[] order)
+        {
+            string path = Path.Combine(folder, name + ".ucas");
+            using var data = File.Create(path);
+            using var toc = new BinaryWriter(File.Create(Path.ChangeExtension(path, ".utoc")));
+            var header = new byte[144];
+            "-==--==--==--==-"u8.CopyTo(header);
+            header[16] = 8;
+            BitConverter.GetBytes(144).CopyTo(header, 20);
+            BitConverter.GetBytes(order.Length).CopyTo(header, 28);
+            BitConverter.GetBytes(12).CopyTo(header, 32);
+            BitConverter.GetBytes(1).CopyTo(header, 52);
+            toc.Write(header);
+            foreach (int i in order)
+            {
+                data.WriteByte((byte)(data.Position % 251)); // padding belongs to the target
+                toc.Write((ulong)data.Position | ((ulong)blocks[i].Length << 40));
+                toc.Write((uint)blocks[i].Length);
+                data.Write(blocks[i]);
+            }
+            data.WriteByte(0xfe);
+            return path;
+        }
+
+        string old = MakeContainer("base", [0, 1, 2]);
+        string next = MakeContainer("target", [2, 3, 0, 2, 1]);
+        string patch = Path.Combine(folder, "blocks.osdiff"), made = Path.Combine(folder, "result.ucas");
+        if (!IoStoreDelta.TryDiff(old, next, patch) || new FileInfo(patch).Length >= new FileInfo(next).Length / 2)
+            throw new InvalidDataException("IoStore delta did not reuse the moved and repeated blocks");
+        Delta.Apply(old, patch, made);
+        if (!File.ReadAllBytes(made).AsSpan().SequenceEqual(File.ReadAllBytes(next)))
+            throw new InvalidDataException("IoStore delta did not reconstruct the target");
+        File.Delete(Path.ChangeExtension(old, ".utoc"));
+        if (IoStoreDelta.TryDiff(old, next, patch))
+            throw new InvalidDataException("IoStore delta accepted a missing block table");
     }
 }
 

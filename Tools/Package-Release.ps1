@@ -601,19 +601,23 @@ if (Test-Path -LiteralPath $packPath) {
 # Patches: for each file of 1 MB or more that a base release has at the same path with other contents, a binary patch
 # from that version of it, kept when it is under half the gzipped file. Named by both hashes, so the same patch is
 # never made or uploaded twice. Every patch is applied once here and checked against the file's SHA-256.
-# Files where either version is over 256 MB get no patch (the matcher's suffix array needs several GB and its pass runs
-# for tens of minutes on the cooked content's .ucas once maps are bundled); they update as whole changed files.
+# Large IoStore containers reuse compressed blocks by hash. Keep the suffix-array cap for other large files.
 $patchMin = 1MB
 $patchMax = 256MB
 $jobs = @{}
 foreach ($e in $listEntries) {
-    if ($e.size -lt $patchMin -or $e.size -gt $patchMax) { continue }
+    if ($e.size -lt $patchMin) { continue }
     foreach ($b in $bases) {
         $old = $b.Files | Where-Object path -eq $e.path | Select-Object -First 1
-        if (-not $old -or $old.sha256 -eq $e.sha256 -or $old.size -gt $patchMax) { continue }
+        if (-not $old -or $old.sha256 -eq $e.sha256) { continue }
+        $method = 'diff'
+        if ($e.size -gt $patchMax -or $old.size -gt $patchMax) {
+            if ($e.path -notlike '*.ucas') { continue }
+            $method = 'diff-iostore'
+        }
         $name = "$($old.sha256)-$($e.sha256).osdiff"
         if (-not $jobs.ContainsKey($name)) {
-            $jobs[$name] = [pscustomobject]@{ Name = $name; Path = $e.path; From = (Join-Path $b.Folder $old.path); FromSha = $old.sha256
+            $jobs[$name] = [pscustomobject]@{ Name = $name; Method = $method; Path = $e.path; From = (Join-Path $b.Folder $old.path); FromSha = $old.sha256
                 FromSize = $old.size; To = (Join-Path $folder $e.path); Patch = (Join-Path $storeDir $name) }
         }
     }
@@ -622,7 +626,11 @@ if ($jobs.Count -gt 0) {
     Write-Host "Making $($jobs.Count) patches..."
     $failures = $jobs.Values | ForEach-Object -ThrottleLimit 4 -Parallel {
         $check = "$($_.Patch).check"
-        & $using:deltaTool diff $_.From $_.To $_.Patch 2>&1 | Out-Null
+        & $using:deltaTool $_.Method $_.From $_.To $_.Patch 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 3 -and $_.Method -eq 'diff-iostore') {
+            Write-Warning "No supported IoStore block table for $($_.Path) from $($_.FromSha); using its full download."
+            return
+        }
         if ($LASTEXITCODE -ne 0) { "$($_.Path): diff failed"; return }
         & $using:deltaTool apply $_.From $_.Patch $check 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { "$($_.Path): the patch does not apply"; return }
@@ -633,6 +641,7 @@ if ($jobs.Count -gt 0) {
 $patchBytes = 0L
 foreach ($e in $listEntries) {
     $refs = @(foreach ($j in $jobs.Values | Where-Object Path -eq $e.path) {
+        if (-not (Test-Path -LiteralPath $j.Patch)) { continue }
         $size = (Get-Item -LiteralPath $j.Patch).Length
         $full = if (Test-Packed $e.blob) { $e.size } else { $e.blob.size }
         if ($size -ge $full / 2) { Remove-Item -LiteralPath $j.Patch -Force; continue }
