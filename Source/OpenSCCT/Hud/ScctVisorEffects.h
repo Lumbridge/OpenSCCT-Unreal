@@ -42,6 +42,11 @@ struct FScctVisorState
 	bool bMaskWorn = false;
 	float MaskWornAt = 0.0f;
 
+	// The poison (Hud/ScctPoisonOverlay.h): its two layers are up while the pawn is poisoned and the health gauge shows;
+	// level time they came up (their 0.9 s loop runs from it).
+	bool bPoisonShown = false;
+	float PoisonShownAt = 0.0f;
+
 	// -ScctVisorFx: which effect is faked and from when.
 	FString Forced;
 	float ForceDelay = 2.0f;
@@ -62,9 +67,10 @@ struct FScctVisorState
  * down with a trail, electric arcs. They are driven only by the snapshot: EffectFlags (Perturbed, ShutDown, FoamSplash,
  * FoamOn, StickyShocking, StickyShockHead, Wet), ShutDowns, FoamStopTime, FoamStaySeconds and TimeSeconds.
  *
- * The gas mask's frame and breathing are painted with them, under the others (Hud/ScctGasMaskOverlay.h).
+ * The gas mask's frame and breathing are painted with them, under the others (Hud/ScctGasMaskOverlay.h). The poison's
+ * layers keep their latch here too, but belong to both sides and are painted on their own (Hud/ScctPoisonOverlay.h).
  *
- * -ScctVisorFx=shutdown|perturb|foam|shock|wet|mask[@seconds] fakes that effect in the snapshot a few seconds (2 by
+ * -ScctVisorFx=shutdown|perturb|foam|shock|wet|mask|poison[@seconds] fakes that effect in the snapshot a few seconds (2 by
  * default) after the HUD opens, as the bridge would set it, so each can be shot unattended. Log lines start with "Visor:".
  */
 namespace ScctVisorEffects
