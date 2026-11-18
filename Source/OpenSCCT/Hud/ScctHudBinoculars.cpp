@@ -219,12 +219,9 @@ void UScctHudSubsystem::LogBinoculars(bool bChange)
 	Zoom = Step == 1 ? TEXT("x6") : (Step == 2 ? TEXT("x4") : TEXT("x2"));
 	if (!LastLockCandidate.IsEmpty())
 	{
-		const int32 Candidate = M.BinocularMarkers.IndexOfByPredicate([&M, this](const FScctHudMarker& Marker)
-		{
-			return (Marker.Objective.Kind == 2 ? M.Text(M.State.DropZoneTextId) : M.Text(Marker.Objective.NameId)) == LastLockCandidate;
-		});
-		const bool bMarked = M.BinocularMarkers.IsValidIndex(Candidate) && (M.BinocularMarkers[Candidate].Objective.Flags & EScctHudObjectiveFlags::Marked) != 0;
-		Hint = M.Text(bMarked ? S.LockedTextId : S.LockTextId).Replace(TEXT("\\USE"), *M.BinocularUseKey);
+		// Several objectives share a name (six 'Tech Room' bombs on AquaE), so the mark is the one ReadBinoculars found on the
+		// candidate itself, not on the first target of that name.
+		Hint = M.Text(bLastLockMarked ? S.LockedTextId : S.LockTextId).Replace(TEXT("\\USE"), *M.BinocularUseKey);
 	}
 	// The targets one by one only on a change; the line with each snapshot keeps to the counts.
 	FString Rows;

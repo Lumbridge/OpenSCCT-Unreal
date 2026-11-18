@@ -239,6 +239,9 @@ public sealed partial class HubBridge : IDisposable
             Ticket = _masterId is not null ? _ticket : null,
             // Back from a pad's match: the hub puts the player beside that pad.
             ReturnPad = _returnPad,
+            // The Armoury's look; a change while in the hub is sent by the account service.
+            SpyLook = Social.ArmouryLook.Shared(OpenScct.Net.Cosmetics.CosmeticSide.Spy),
+            MercLook = Social.ArmouryLook.Shared(OpenScct.Net.Cosmetics.CosmeticSide.Merc),
         }, ownsTransport: true);
         client.Play.Clock = () => _clock.NowMicroseconds / 1_000_000.0;
         client.LaptopOpened += OnLaptopOpened;

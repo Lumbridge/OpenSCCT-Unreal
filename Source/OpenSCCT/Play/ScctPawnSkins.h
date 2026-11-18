@@ -131,6 +131,8 @@ private:
 
 	/** -ScctForceSkin. */
 	bool bForceSticky = false;
+	/** The pawn now being dressed is shocked by the switch only: no spark of the simulation lights it. */
+	bool bOwnShockLight = false;
 	bool bForceImmune = false;
 	bool bForceWet = false;
 

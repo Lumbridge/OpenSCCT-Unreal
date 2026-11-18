@@ -289,6 +289,16 @@ void SScctGearPage::Construct(const FArguments& InArgs)
 							Ui::Button(TAttribute<FText>::CreateLambda([this] { return Ui::ToText(State.Side == 1 ? TEXT("SWITCH TO SPY") : TEXT("SWITCH TO MERC")); }),
 								FOnClicked::CreateLambda([this] { ShowSide(State.Side == 1 ? 0 : 1); return FReply::Handled(); }), false, Ui::Accent(), 170.0f)
 						]
+						+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
+						[
+							// Practice only: the side played changes, and the page goes on with that side's kit.
+							SNew(SBox)
+							.Visibility(TAttribute<EVisibility>::CreateLambda([this] { return TeamSwitch && PlayedSide >= 0 ? EVisibility::Visible : EVisibility::Collapsed; }))
+							[
+								Ui::Button(TAttribute<FText>::CreateLambda([this] { return Ui::ToText(PlayedSide == 1 ? TEXT("PLAY AS SPY") : TEXT("PLAY AS MERC")); }),
+									FOnClicked::CreateLambda([this] { SwitchPlayedTeam(); return FReply::Handled(); }), false, Ui::Accent(), 170.0f)
+							]
+						]
 						+ SHorizontalBox::Slot().AutoWidth()
 						[
 							Ui::Button(Ui::ToText(TEXT("RESET LOADOUT")), FOnClicked::CreateLambda([this] { ResetSide(); return FReply::Handled(); }), false, Ui::Accent(), 170.0f)
@@ -414,6 +424,24 @@ void SScctGearPage::ShowSide(int32 Side)
 	Hovered.Reset();
 	SetStatus(FString());
 	Refresh();
+}
+
+void SScctGearPage::SwitchPlayedTeam()
+{
+	if (!TeamSwitch || PlayedSide < 0)
+	{
+		return;
+	}
+	const int32 Wanted = PlayedSide == 1 ? 0 : 1;
+	if (!TeamSwitch())
+	{
+		SetStatus(TEXT("The side cannot be changed now."), true);
+		return;
+	}
+	PlayedSide = Wanted;
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctGear: switched team from the Equipment page, now playing as the %s"), Wanted == 1 ? TEXT("mercenary") : TEXT("spy"));
+	ShowSide(Wanted);
+	SetStatus(Wanted == 1 ? TEXT("Now playing as the mercenary. APPLY LOADOUT sends this kit.") : TEXT("Now playing as the spy. APPLY LOADOUT sends this kit."));
 }
 
 void SScctGearPage::SelectSlot(int32 InCategory, int32 InSlot)
