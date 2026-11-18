@@ -82,6 +82,15 @@ public sealed partial class AccountService
 
     private bool SignedIn => Master is { Url: not null, AccountToken: not null };
 
+    /// <summary>The signed-in account's id (as last seen, before the master answers), 0 when signed out.</summary>
+    public long SignedInAccountId => Preview ? Account?.Id ?? 0 : SignedIn ? Account?.Id ?? _state.AccountId : 0;
+
+    /// <summary>The master the sign-in belongs to (null: none set).</summary>
+    public static string? MasterUrl => Master?.Url;
+
+    /// <summary>A refresh of the account is on its way.</summary>
+    public bool Refreshing => _refresh is not null;
+
     // ---- the run --------------------------------------------------------------------------------------------------
 
     /// <summary>
@@ -123,6 +132,7 @@ public sealed partial class AccountService
         PumpRefresh();
         PumpActions();
         PumpProfile();
+        PumpAppearance();
         FollowRounds();
     }
 
@@ -704,6 +714,12 @@ internal sealed class AccountStateFile
 
     /// <summary>The account's settings record as last seen (its Godot part is sent back unchanged).</summary>
     public string? LastRecord { get; set; }
+
+    /// <summary>The appearance sync's bookkeeping (the Godot client's AccountSettings.Appearance*): whose it is, the account's copy this PC last matched, and unsent choices.</summary>
+    public long AppearanceAccountId { get; set; }
+    public string AppearanceMaster { get; set; } = string.Empty;
+    public string AppearanceBaseline { get; set; } = string.Empty;
+    public bool AppearanceDirty { get; set; }
 
     public void Remember(AccountInfo account)
     {

@@ -25,6 +25,7 @@
 // one's unity build (the strategic map's pictures).
 #ifdef LoadImage
 #undef LoadImage
+#undef DialogBox
 #endif
 #endif
 

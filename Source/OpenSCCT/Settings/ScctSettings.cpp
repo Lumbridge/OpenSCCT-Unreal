@@ -107,6 +107,16 @@ TArray<FName> FScctSettings::Pages()
 	return Result;
 }
 
+TArray<const FScctSettingDesc*> FScctSettings::AllOptions()
+{
+	TArray<const FScctSettingDesc*> Result;
+	for (const FScctSettingDesc& Desc : Registry().Options)
+	{
+		Result.Add(&Desc);
+	}
+	return Result;
+}
+
 FString FScctSettings::GetString(FName Key)
 {
 	const FScctSettingDesc* Desc = Find(Key);
