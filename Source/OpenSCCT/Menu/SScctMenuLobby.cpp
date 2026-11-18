@@ -68,6 +68,7 @@
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -277,17 +278,20 @@ namespace
 						[
 							BuildExtrasRow()
 						]
+						// The buttons wrap: a button that does not fit the column whole goes onto the next line and no
+						// caption is ever cut. The last button of a line takes what is left of it, so LAUNCH / READY,
+						// which comes last, is the widest: a line of its own when the three before it fill the first.
 						+ SVerticalBox::Slot().AutoHeight()
 						[
-							SNew(SHorizontalBox)
-							+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
+							SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.0f, 8.0f))
+							+ SWrapBox::Slot()
 							[
 								SNew(SScctButton)
 								.Text(FText::FromString(ScctUi::GameText(TEXT("Lobby_Create"), TEXT("ButtonB"), TEXT("Leave")).ToUpper()))
 								.Description(FText::FromString(TEXT("Leave the server and go back to the menus.")))
 								.OnPressed(FSimpleDelegate::CreateLambda([this] { if (Host.Back) { Host.Back(); } }))
 							]
-							+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
+							+ SWrapBox::Slot()
 							[
 								SNew(SScctButton)
 								.Text(FText::FromString(ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Button2"), TEXT("Switch Team")).ToUpper()))
@@ -297,14 +301,15 @@ namespace
 									if (UScctOnlineSubsystem* V = Weak.Get()) { V->SetTeam(V->GetStatus().LocalTeam == 0 ? 1 : 0); }
 								}))
 							]
-							+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
+							+ SWrapBox::Slot().FillEmptySpace(true)
 							[
 								SAssignNew(CosmeticsButton, SScctButton)
+								.FillWidth(true)
 								.Text(FText::FromString(TEXT("COSMETICS")))
 								.Description(FText::FromString(TEXT("Open the Armoury over the lobby: pick the camo, tint and light colour of each side. Your look is sent to this server and worn from the next round.")))
 								.OnPressed(FSimpleDelegate::CreateLambda([this] { OpenArmoury(); }))
 							]
-							+ SHorizontalBox::Slot().FillWidth(1.0f)
+							+ SWrapBox::Slot().FillEmptySpace(true)
 							[
 								SAssignNew(ReadyButton, SScctButton)
 								.Look(EScctButtonLook::Primary)
@@ -1175,7 +1180,20 @@ namespace
 			const FString ModeName = Menu != nullptr ? Menu->GetModeName(LobbyModeIndex(Status.Mode)) : Visit->GetModeName();
 			return ScctUi::Card(TEXT("Next match"),
 				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Picture(Menu != nullptr ? Menu->GetMapPicture(Map, Status.LocalTeam == 1) : nullptr, 472.0f, 130.0f) ]
+				// On a short screen (the page under 780 units high: 1280x720, 1600x900) the picture gives its room to
+				// the setup under the card, which the second line of buttons would otherwise squeeze to its heading.
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SBox)
+					.Visibility_Lambda([this]
+					{
+						const float Height = GetTickSpaceGeometry().GetLocalSize().Y;
+						return Height > 0.0f && Height < 780.0f ? EVisibility::Collapsed : EVisibility::Visible;
+					})
+					[
+						ScctUi::Picture(Menu != nullptr ? Menu->GetMapPicture(Map, Status.LocalTeam == 1) : nullptr, 472.0f, 130.0f)
+					]
+				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 2.0f)
 				[
 					SNew(STextBlock).Font(ScctUi::H2()).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true).Text(FText::FromString(Menu != nullptr ? Menu->GetMapTitle(Map) : Map))
