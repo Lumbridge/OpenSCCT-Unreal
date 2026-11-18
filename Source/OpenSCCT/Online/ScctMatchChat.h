@@ -49,9 +49,9 @@ private:
 };
 
 /**
- * Puts the chat line over the HUD in a level that presents an online round, and opens it on the player's own
- * bindings: Talk (F5 and Enter by default) for everyone, TeamTalk (F6) for the player's side. They arrive as
- * interface commands (AScctPlayerController::OnLocalCommand). The line is open only while the round is played.
+ * Puts the chat line over the HUD in a level that presents an online round. Closed, it shows the server's own lines.
+ * The Talk and TeamTalk keys are not followed here: UScctChatSubsystem (Hud/ScctChatSubsystem.h) is their one handler
+ * in every match, online rounds included. The line is open only while the round is played.
  *
  * Console: scct.OpenChat [team] opens it.
  * Unattended switches (for screenshots):
@@ -76,14 +76,10 @@ public:
 	virtual TStatId GetStatId() const override;
 
 private:
-	void HandleLocalCommand(FName Name, int32 Arg, bool bPressed);
 	bool InRound() const;
 
 	UPROPERTY()
 	TObjectPtr<UScctMatchChatWidget> Widget;
-
-	TWeakObjectPtr<AScctPlayerController> CommandSource;
-	FDelegateHandle CommandHandle;
 
 	// Unattended.
 	float OpenAfter = -1.0f;
