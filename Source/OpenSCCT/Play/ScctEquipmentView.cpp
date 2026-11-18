@@ -18,8 +18,11 @@ namespace
 {
 	// Read when a weapon's components are made (a new match, a weapon drawn for the first time), to compare a
 	// replacement model with the original it stands in for.
-	TAutoConsoleVariable<int32> CVarReplacements(TEXT("scct.Weapons.Replacements"), 1,
-		TEXT("1: draw the weapon table's replacement models where their assets exist. 0: always the original models."));
+	// Off unless asked for: the merc's assault rifle is the original game's own model (SWeaponFirst.1DEF_01 in the
+	// merc's own view, SWeaponFirst.M160 on a body), as the Godot client draws it. The weapon table's replacement
+	// (OpenSCCT's own rifle model, /Game/OpenSCCT/Weapons/MercRifle) is an experiment that is only drawn with 1.
+	TAutoConsoleVariable<int32> CVarReplacements(TEXT("scct.Weapons.Replacements"), 0,
+		TEXT("0: always the original models. 1: draw the weapon table's replacement models where their assets exist."));
 
 	void Prepare(UPrimitiveComponent& Primitive, bool bFirstPerson)
 	{

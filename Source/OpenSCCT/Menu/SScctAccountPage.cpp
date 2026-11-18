@@ -2,7 +2,7 @@
 
 #include "Brushes/SlateColorBrush.h"
 #include "Menu/ScctMenuStyle.h"
-#include "Menu/SScctRankIcon.h"
+#include "Menu/ScctRankIcons.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -535,7 +535,7 @@ TSharedRef<SWidget> SScctAccountPage::BuildRank()
 		SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 12.0f, 0.0f)
 		[
-			SNew(SScctRankIcon).Size(52.0f).Rank(FScctRankEmblem{ Info.Level, Info.Prestige, Subsystem->HasFlag(EScctAccountFlags::Master) })
+			ScctRankIcons::Icon(ScctRankIcons::For(Info.Prestige, Info.Level, 48.0f), 48.0f)
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 14.0f, 0.0f)
 		[
@@ -591,7 +591,7 @@ TSharedRef<SWidget> SScctAccountPage::BuildRank()
 		bPrestigeArmed = false;
 	}
 
-	// The prestige emblems: the ones reached in their colours, the others faint.
+	// The prestige emblems (RankIcons): the ones reached as drawn, the others faint.
 	Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)[ AccountUi::Label(TEXT("Prestige emblems")) ];
 	const TSharedRef<SWrapBox> Emblems = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5.0f, 5.0f));
 	for (int32 P = 1; P <= AcctMaxPrestige + 1; ++P)
@@ -600,12 +600,14 @@ TSharedRef<SWidget> SScctAccountPage::BuildRank()
 		const bool bReached = bMasterEmblem ? Subsystem->HasFlag(EScctAccountFlags::Master) : Info.Prestige >= P;
 		Emblems->AddSlot()
 		[
-			SNew(SBox).WidthOverride(34.0f).HeightOverride(34.0f)
+			SNew(SBox).WidthOverride(32.0f).HeightOverride(32.0f)
 			.ToolTipText(AccountUi::ToText(bMasterEmblem
 				? FString::Printf(TEXT("Master Prestige%s"), bReached ? TEXT("") : *FString::Printf(TEXT(" (reach level %d at prestige %d)"), AcctMaxLevel, AcctMaxPrestige))
 				: FString::Printf(TEXT("Prestige %d%s"), P, bReached ? TEXT("") : TEXT(" (not reached yet)"))))
 			[
-				SNew(SScctRankIcon).Size(34.0f).Fade(bReached ? 1.0f : 0.25f).Rank(bMasterEmblem ? FScctRankEmblem::Master() : FScctRankEmblem::OfPrestige(P))
+				SNew(SImage)
+				.Image(bMasterEmblem ? ScctRankIcons::Master(32.0f) : ScctRankIcons::Prestige(P, 32.0f))
+				.ColorAndOpacity(FLinearColor(1.0f, 1.0f, 1.0f, bReached ? 1.0f : 0.25f))
 			]
 		];
 	}

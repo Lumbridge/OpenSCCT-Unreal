@@ -12,6 +12,8 @@
 #include "Materials/MaterialInterface.h"
 #include "Misc/CommandLine.h"
 #include "HAL/IConsoleManager.h"
+#include "ImageUtils.h"
+#include "Misc/Paths.h"
 #include "Misc/Parse.h"
 #include "Hud/ScctVisionSubsystem.h"
 #include "Misc/ScopeExit.h"
@@ -80,7 +82,36 @@ namespace
 
 	const TCHAR* const GlowMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxGlow.M_ScctFxGlow");
 	const TCHAR* const SmokeMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxSmoke.M_ScctFxSmoke");
+	const TCHAR* const CloudMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxCloud.M_ScctFxCloud");
 	const TCHAR* const DecalMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxDecal.M_ScctFxDecal");
+
+	// The spy's smoke grenade cloud, SSmokeEmitter0's numbers (shared/fx/effects.json; spec/equipment/smoke-grenade.md):
+	// fifteen sprites let out at 200 a second, thrown out sideways at up to 2000 a second and up at 400 to 1500 and
+	// stopped within a quarter of a second by what each axis loses, so the cloud stands at once: about four metres by
+	// five across and three high. Each sprite lives the cloud's ten seconds, is there within a tenth of one and fades
+	// out over the last two, and swells from 17 to 30 times its start size (a half width of 8 to 10) the whole time.
+	// The sprites go through walls, as the original's do (no collision), and are one of the four cells of its picture.
+	constexpr int32 GrenadeCloudSprites = 15;
+	constexpr float GrenadeCloudPerSecond = 200.0f;
+	constexpr float GrenadeCloudLife = 10.0f;
+	constexpr float GrenadeCloudFadeInEnd = 0.1f;
+	constexpr float GrenadeCloudFadeOutStart = 8.0f;
+	constexpr float GrenadeCloudSpeedSide = 2000.0f;
+	constexpr float GrenadeCloudSpeedUpMin = 400.0f;
+	constexpr float GrenadeCloudSpeedUpMax = 1500.0f;
+	const FVector GrenadeCloudLossMin(10.0, 8.0, 5.0);
+	const FVector GrenadeCloudLossMax(10.0, 8.0, 9.0);
+	constexpr float GrenadeCloudRise = 2.0f;
+	constexpr float GrenadeCloudHalfSizeMin = 8.0f;
+	constexpr float GrenadeCloudHalfSizeMax = 10.0f;
+	constexpr float GrenadeCloudScaleStart = 17.0f;
+	constexpr float GrenadeCloudScaleEnd = 30.0f;
+	constexpr float GrenadeCloudSpin = 0.03f; // turns a second, either way
+	constexpr int32 GrenadeCloudCells = 4;    // the picture is two cells by two
+	// SSmokeEmitter.HeatOpacity: what thermal vision keeps of the cloud. EMF vision draws no particle at all.
+	constexpr float GrenadeCloudHeatOpacity = 0.2f;
+	// The cloud's picture (sfx.Emitter.smoke_grenade2), read from the content folder: original content, never in the project.
+	const TCHAR* const GrenadeCloudPicture = TEXT("shared/fx/textures/sfx_smoke_grenade2.png");
 	const TCHAR* const SolidMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxSolid.M_ScctFxSolid");
 	const TCHAR* const ImportedMeshFolder = TEXT("/Game/Imported/Fx");
 
@@ -271,7 +302,29 @@ bool UScctEffectsSubsystem::EnsureScene()
 	Root->RegisterComponent();
 
 	UStaticMesh* Quad = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
-	Sprites.Init(Host, Quad, LoadObject<UMaterialInterface>(nullptr, GlowMaterialPath), LoadObject<UMaterialInterface>(nullptr, SmokeMaterialPath));
+	// The smoke grenade's cloud is drawn with the game's own picture of it; without the picture or its material the
+	// cloud is the soft grey discs of the smoke layer, in the same places and sizes.
+	UMaterialInterface* SmokeMaterial = LoadObject<UMaterialInterface>(nullptr, SmokeMaterialPath);
+	UMaterialInterface* CloudMaterial = SmokeMaterial;
+	bCloudPicture = false;
+	const FString CloudPicturePath = FOpenSCCTModule::FindContentRoot() / GrenadeCloudPicture;
+	UMaterialInterface* CloudBase = LoadObject<UMaterialInterface>(nullptr, CloudMaterialPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+	UTexture2D* CloudTexture = CloudBase != nullptr && FPaths::FileExists(CloudPicturePath) ? FImageUtils::ImportFileAsTexture2D(CloudPicturePath) : nullptr;
+	if (CloudTexture != nullptr)
+	{
+		CloudTexture->AddressX = CloudTexture->AddressY = TA_Clamp;
+		CloudTexture->UpdateResource();
+		UMaterialInstanceDynamic* Cloud = UMaterialInstanceDynamic::Create(CloudBase, Host);
+		Cloud->SetTextureParameterValue(TEXT("Texture"), CloudTexture);
+		CloudMaterial = Cloud;
+		bCloudPicture = true;
+	}
+	else
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Effects: the smoke grenade's cloud is drawn as plain grey discs: %s"),
+			CloudBase == nullptr ? TEXT("M_ScctFxCloud is missing (run Tools/Effects/Build-EffectAssets.ps1)") : *FString::Printf(TEXT("its picture was not read from %s"), *CloudPicturePath));
+	}
+	Sprites.Init(Host, Quad, LoadObject<UMaterialInterface>(nullptr, GlowMaterialPath), SmokeMaterial, CloudMaterial);
 
 	DecalMaterial = LoadObject<UMaterialInterface>(nullptr, DecalMaterialPath);
 	StandInMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
@@ -372,6 +425,12 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 	UpdateLights(FxSeconds);
 	UpdateBodyFill(DeltaSeconds);
 	UpdateBodyFade();
+
+	// The smoke grenade's cloud in the goggles, as the original's particles: thermal vision keeps a fifth of it
+	// (SSmokeEmitter.HeatOpacity), EMF vision draws none of it; night vision and motion tracking see it as the eye does.
+	const UScctVisionSubsystem* Goggles = UScctVisionSubsystem::Find(GetWorld());
+	const int32 GogglesMode = Goggles != nullptr ? Goggles->GetVisionMode() : 0;
+	Sprites.SetLayerOpacity(EScctFxLayer::Cloud, GogglesMode == 38 ? 0.0f : GogglesMode == 36 ? GrenadeCloudHeatOpacity : 1.0f);
 
 	const FScctBridgeView& View = Session->GetView();
 	Sprites.Tick(FxSeconds, FVector(View.X, View.Y, View.Z), FRotator(View.Pitch, View.Yaw, View.Roll).Quaternion());
@@ -804,7 +863,15 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 			&& SmokeVolumes.CoversEmitter(Record.ActorId, GetName(Fx->ClassId).Contains(TEXT("SmokeEmitter")), Fx->Age);
 		// Rain on a pawn spreads over the drawn body (Play/ScctEffectsFlicFloc.cpp); without its table, a plain splash.
 		const bool bFlicDrawn = Fx->bFlicFloc && UpdateFlicFloc(*Fx, Record, Fx->Location, bHidden, DeltaSeconds);
-		if (!bHidden && !bVolumeSmoke && !bFlicDrawn && Fx->Style != EStyle::None && Record.Kind == EScctEffectKind::Emitter)
+		if (Fx->bGrenadeCloud)
+		{
+			// The spy's smoke grenade: the original's cloud, let out once (a cloud first seen late lets out what is left of it).
+			if (!bHidden && !bVolumeSmoke)
+			{
+				EmitGrenadeCloud(*Fx);
+			}
+		}
+		else if (!bHidden && !bVolumeSmoke && !bFlicDrawn && Fx->Style != EStyle::None && Record.Kind == EScctEffectKind::Emitter)
 		{
 			Emit(Fx->Style, Fx->Location, FVector(Record.VelX, Record.VelY, Record.VelZ), DeltaSeconds, Fx->EmitDebt);
 		}
@@ -865,6 +932,7 @@ void UScctEffectsSubsystem::StartActor(FActorFx& Fx, const FScctEffectActor& Rec
 	Fx.Style = Record.Kind == EScctEffectKind::Emitter ? FindStyle(Record.ClassId) : EStyle::None;
 	Fx.TrailStyle = Record.TrailClassId != 0 ? FindStyle(Record.TrailClassId) : EStyle::None;
 	Fx.bFlicFloc = Record.Kind == EScctEffectKind::Emitter && GetName(Record.ClassId).Contains(TEXT("FlicFloc"));
+	Fx.bGrenadeCloud = Record.Kind == EScctEffectKind::Emitter && GetName(Record.ClassId).EndsWith(TEXT("SSmokeEmitter"));
 
 	const bool bDrawsMesh = Record.Kind == EScctEffectKind::Projectile || Record.Kind == EScctEffectKind::Mine || Record.Kind == EScctEffectKind::Gadget
 		|| Record.Kind == EScctEffectKind::Beam || Record.Kind == EScctEffectKind::Decal;
@@ -970,6 +1038,53 @@ void UScctEffectsSubsystem::EndActor(FActorFx& Fx, bool bKilled)
 		Fx.Light = INDEX_NONE;
 	}
 	// Its particles are in the shared pool and die out where they are, killed or not.
+}
+
+void UScctEffectsSubsystem::EmitGrenadeCloud(FActorFx& Fx)
+{
+	// As many as the emitter's rate has let out by now, to its fifteen; none is ever let out again.
+	const int32 Due = FMath::Min(GrenadeCloudSprites, FMath::CeilToInt32(Fx.Age * GrenadeCloudPerSecond));
+	if (Fx.CloudSprites == 0 && Due > 0)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Effects: smoke grenade cloud at (%.0f, %.0f, %.0f): %d sprites of %s, %.0f s"),
+			Fx.Location.X, Fx.Location.Y, Fx.Location.Z, GrenadeCloudSprites, bCloudPicture ? TEXT("the game's picture") : TEXT("plain grey discs"), GrenadeCloudLife);
+	}
+	for (; Fx.CloudSprites < Due; ++Fx.CloudSprites)
+	{
+		// Born a little into its life when the cloud was first seen late, so every sprite ends with the cloud.
+		const float Born = FMath::Max(Fx.Age - Fx.CloudSprites / GrenadeCloudPerSecond, 0.0f);
+		if (Born >= GrenadeCloudLife)
+		{
+			continue;
+		}
+		FScctFxParticle& Particle = Sprites.Spawn(EScctFxLayer::Cloud);
+		Particle.Position = Fx.Location;
+		Particle.Velocity = FVector(Random.FRandRange(-GrenadeCloudSpeedSide, GrenadeCloudSpeedSide), Random.FRandRange(-GrenadeCloudSpeedSide, GrenadeCloudSpeedSide),
+			Random.FRandRange(GrenadeCloudSpeedUpMin, GrenadeCloudSpeedUpMax));
+		Particle.Acceleration = FVector(0.0, 0.0, GrenadeCloudRise);
+		Particle.LossMin = GrenadeCloudLossMin;
+		Particle.LossMax = GrenadeCloudLossMax;
+		// The game's picture is the smoke's own grey; the plain disc is given one.
+		Particle.Color = bCloudPicture ? FLinearColor::White : FLinearColor(0.5f, 0.5f, 0.5f, 0.85f);
+		Particle.Life = GrenadeCloudLife;
+		Particle.FadeIn = GrenadeCloudFadeInEnd / GrenadeCloudLife;
+		Particle.FadeOutStart = GrenadeCloudFadeOutStart / GrenadeCloudLife;
+		// The emitter's size is half a sprite's width.
+		const float HalfSize = Random.FRandRange(GrenadeCloudHalfSizeMin, GrenadeCloudHalfSizeMax);
+		Particle.SizeStart = 2.0f * HalfSize * GrenadeCloudScaleStart;
+		Particle.SizeEnd = 2.0f * HalfSize * GrenadeCloudScaleEnd;
+		Particle.Spin = Random.FRandRange(-GrenadeCloudSpin, GrenadeCloudSpin) * UE_TWO_PI;
+		Particle.Cell = static_cast<float>(Random.RandHelper(GrenadeCloudCells));
+		if (Born > 0.0f)
+		{
+			// What it did before it was seen: it stands where its throw has taken it, at the age it has.
+			const FVector Loss = (GrenadeCloudLossMin + GrenadeCloudLossMax) * 0.5;
+			const FVector Left(FMath::Exp(-Loss.X * Born), FMath::Exp(-Loss.Y * Born), FMath::Exp(-Loss.Z * Born));
+			Particle.Position += Particle.Velocity / Loss * (FVector::OneVector - Left);
+			Particle.Velocity *= Left;
+			Particle.Age = Born;
+		}
+	}
 }
 
 void UScctEffectsSubsystem::Emit(EStyle Style, const FVector& At, const FVector& Velocity, float DeltaSeconds, float& Debt)

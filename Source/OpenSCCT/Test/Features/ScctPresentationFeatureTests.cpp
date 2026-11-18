@@ -611,20 +611,20 @@ namespace ScctPresentationFeatureLocal
 			TArray<FString> Parts;
 			for (int32 Index = 0; Index < 4; ++Index)
 			{
-				const UScctVisionSubsystem::FModeCheck Check = Vision->GetModeCheck(Index);
-				Parts.Add(FString::Printf(TEXT("%d: amount %.2f, material %.2f, weight %.0f"), Check.Mode, Check.Amount, Check.MaterialAmount, Check.BlendWeight));
-				const bool bThis = Check.Mode == Mode;
-				if (!Check.bMaterial)
+				const UScctVisionSubsystem::FModeCheck Held = Vision->GetModeCheck(Index);
+				Parts.Add(FString::Printf(TEXT("%d: amount %.2f, material %.2f, weight %.0f"), Held.Mode, Held.Amount, Held.MaterialAmount, Held.BlendWeight));
+				const bool bThis = Held.Mode == Mode;
+				if (!Held.bMaterial)
 				{
-					Problems.Add(FString::Printf(TEXT("holding mode %d: mode %d has no post-process material in the goggles' volume"), Mode, Check.Mode));
+					Problems.Add(FString::Printf(TEXT("holding mode %d: mode %d has no post-process material in the goggles' volume"), Mode, Held.Mode));
 				}
-				else if (bThis && (Check.Amount < 0.99f || Check.MaterialAmount < 0.99f || Check.BlendWeight < 1.0f))
+				else if (bThis && (Held.Amount < 0.99f || Held.MaterialAmount < 0.99f || Held.BlendWeight < 1.0f))
 				{
-					Problems.Add(FString::Printf(TEXT("mode %d held for 1.5 s is not applied (amount %.2f, material Amount %.2f, weight %.0f)"), Mode, Check.Amount, Check.MaterialAmount, Check.BlendWeight));
+					Problems.Add(FString::Printf(TEXT("mode %d held for 1.5 s is not applied (amount %.2f, material Amount %.2f, weight %.0f)"), Mode, Held.Amount, Held.MaterialAmount, Held.BlendWeight));
 				}
-				else if (!bThis && (Check.Amount > 0.0f || Check.MaterialAmount > 0.01f || Check.BlendWeight > 0.0f))
+				else if (!bThis && (Held.Amount > 0.0f || Held.MaterialAmount > 0.01f || Held.BlendWeight > 0.0f))
 				{
-					Problems.Add(FString::Printf(TEXT("holding mode %d, mode %d is still in the picture (amount %.2f, material Amount %.2f, weight %.0f)"), Mode, Check.Mode, Check.Amount, Check.MaterialAmount, Check.BlendWeight));
+					Problems.Add(FString::Printf(TEXT("holding mode %d, mode %d is still in the picture (amount %.2f, material Amount %.2f, weight %.0f)"), Mode, Held.Mode, Held.Amount, Held.MaterialAmount, Held.BlendWeight));
 				}
 			}
 			if (Vision->GetVisionMode() != Mode)

@@ -321,7 +321,9 @@ def build_weapon_set():
 
     weapons = asset_tools.create_asset("DA_ScctWeapons", FOLDER, unreal.ScctWeaponSet, unreal.DataAssetFactory())
     weapons.set_editor_property("weapons", [
-        # The merc's rifle as he sees it (arms and gun in one model) and as others see it.
+        # The merc's rifle as the merc sees it (arms and gun in one model) and as others see it. The replacement
+        # named on these two rows is drawn only with the console variable scct.Weapons.Replacements 1; without
+        # it the game draws the original models (1DEF_01, M160).
         row("SWeaponDefense", "1DEF_01", new_rifle, True),
         row("SWeaponDefenseDummy", "M160", new_rifle),
         row("SWeaponDefense_Uzi", "1DEF_Uzi", "", True),

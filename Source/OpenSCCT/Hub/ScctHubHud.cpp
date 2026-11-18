@@ -265,6 +265,7 @@ void FScctHubHud::ReadTable(const FVector& Eye)
 		Tag.World = FVector(Row.X, Row.Y, Row.Z);
 		Tag.Distance = Row.Distance;
 		Tag.Team = Row.Team;
+		Tag.Rank = (Row.Flags >> EScctHubSocialFlags::TagRankShift) & 0xFFFF;
 		Tag.Name = Row.Name;
 		Tag.Caption = Row.Caption;
 		Tag.Bubble = Row.Bubble;
