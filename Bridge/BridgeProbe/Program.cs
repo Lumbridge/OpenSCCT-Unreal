@@ -211,7 +211,7 @@ internal static unsafe class Tables
             ("BridgeView", sizeof(BridgeView), 40),
             ("BridgeInput", sizeof(BridgeInput), 32),
             ("BridgeSessionInfo", sizeof(BridgeSessionInfo), 80),
-            ("BridgeStartOptions", sizeof(BridgeStartOptions), 244),
+            ("BridgeStartOptions", sizeof(BridgeStartOptions), 264),
             ("BridgeApi", sizeof(BridgeApi), 8 + 17 * sizeof(void*)),
         ];
         bool ok = true;

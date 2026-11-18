@@ -436,7 +436,9 @@ bool UScctAudioSubsystem::MakeRoom(const FScctSound& Record)
 	int32 EventVoices = 0;
 	for (const FVoice& Voice : Voices)
 	{
-		EventVoices += Voice.AmbientId == 0 && !Voice.bMusic && Voice.State != EVoiceState::Fading ? 1 : 0;
+		// An animation sequence's segments have players of their own (Godot's AnimationSequenceAudio): they neither count
+		// toward the event voices nor are taken by a new call, which would end their segment for good.
+		EventVoices += Voice.AmbientId == 0 && Voice.SequenceKey == 0 && !Voice.bMusic && Voice.State != EVoiceState::Fading ? 1 : 0;
 	}
 	if (EventVoices < MaxEventVoices)
 	{
@@ -451,7 +453,7 @@ bool UScctAudioSubsystem::MakeRoom(const FScctSound& Record)
 	{
 		for (FVoice& Voice : Voices)
 		{
-			if (Voice.AmbientId == 0 && !Voice.bMusic && Voice.State != EVoiceState::Fading && Voice.ActorId == Record.ActorId && Voice.Slot == Record.Slot)
+			if (Voice.AmbientId == 0 && Voice.SequenceKey == 0 && !Voice.bMusic && Voice.State != EVoiceState::Fading && Voice.ActorId == Record.ActorId && Voice.Slot == Record.Slot)
 			{
 				if ((Record.Flags & EScctSoundFlags::NoOverride) != 0)
 				{
@@ -467,7 +469,7 @@ bool UScctAudioSubsystem::MakeRoom(const FScctSound& Record)
 		float Quietest = MAX_flt;
 		for (FVoice& Voice : Voices)
 		{
-			if (Voice.AmbientId != 0 || Voice.bMusic || Voice.State == EVoiceState::Fading)
+			if (Voice.AmbientId != 0 || Voice.SequenceKey != 0 || Voice.bMusic || Voice.State == EVoiceState::Fading)
 			{
 				continue;
 			}
@@ -495,8 +497,8 @@ void UScctAudioSubsystem::Stop(const FScctSound& Record)
 	const bool bLocalPawnVoices = (Record.Flags & EScctSoundFlags::LocalPawnVoices) != 0;
 	for (FVoice& Voice : Voices)
 	{
-		// Ambient loops are state: they stop when their source leaves the ambient list.
-		if (Voice.AmbientId != 0 || Voice.State == EVoiceState::Fading)
+		// Ambient loops and sequence segments are state: they stop when their source or segment leaves its list.
+		if (Voice.AmbientId != 0 || Voice.SequenceKey != 0 || Voice.State == EVoiceState::Fading)
 		{
 			continue;
 		}

@@ -192,6 +192,10 @@ void UScctAudioSubsystem::UpdateSequenceAudio(float DeltaSeconds)
 			if (UAudioComponent* Component = Voice->Component.Get())
 			{
 				Component->Play(Record.Offset);
+				// Play makes a new engine sound, which has none of the old one's sends: the room routing
+				// (Play/ScctAudioRooms.cpp) puts this voice's field send on it again next frame.
+				Voice->AppliedRoomField = INDEX_NONE;
+				Voice->AppliedRoomSend = 0.0f;
 			}
 		}
 	}

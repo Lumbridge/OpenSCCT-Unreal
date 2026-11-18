@@ -12,7 +12,7 @@ DECLARE_DELEGATE_TwoParams(FScctMapLevelReady, bool /*bOk*/, const FString& /*Le
 /**
  * The cooked Unreal map packs of OpenSCCT-Unreal-Content (its docs/FORMAT.md is the contract): the client side.
  *
- * A packaged game ships without the imported maps (a release never cooks /Game/Imported). Their levels come as IoStore
+ * A release bundles the maps imported on the release machine (/Game/Imported/Maps); other maps' levels come as IoStore
  * containers cooked by Tools/Cook/Cook-MapPaks.ps1 and published by OpenSCCT-Unreal-Content: one shared pack of the
  * imported content every map uses and one pack per map. This subsystem reads that repository's index, downloads a
  * map's packs (the shared ones it requires first) into

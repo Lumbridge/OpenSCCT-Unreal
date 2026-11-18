@@ -1,5 +1,6 @@
 #include "Menu/ScctMenuPage.h"
 
+#include "Menu/ScctDashboardCards.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctOverlayPages.h"
 #include "Menu/SScctTutorialsPage.h"
@@ -26,6 +27,9 @@ TSharedPtr<SScctMenuPage> ScctMenuPages::Make(const FString& Name, const FScctMe
 	if (Name.Equals(TEXT("demos"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("replays"), ESearchCase::IgnoreCase)) { return MakeDemos(Host); }
 	if (Name.Equals(TEXT("content"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("maps"), ESearchCase::IgnoreCase)) { return MakeContent(Host); }
 	if (Name.Equals(TEXT("settings"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("options"), ESearchCase::IgnoreCase)) { return MakeSettings(Host); }
+	// The main menu dashboard's What's new and Announcement pages (Menu/ScctDashboardCards.h).
+	if (Name.Equals(TEXT("whatsnew"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("changelog"), ESearchCase::IgnoreCase)) { return ScctDashboard::MakeWhatsNewPage(Host); }
+	if (Name.Equals(TEXT("announcement"), ESearchCase::IgnoreCase)) { return ScctDashboard::MakeAnnouncementPage(Host); }
 	if (Name.Equals(TEXT("credits"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("about"), ESearchCase::IgnoreCase)) { return MakeCredits(Host); }
 	// The Equipment page and a map's strategic map (Menu/ScctOverlayPages.h).
 	if (Name.Equals(TEXT("gear"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("equipment"), ESearchCase::IgnoreCase)) { return MakeGear(Host); }

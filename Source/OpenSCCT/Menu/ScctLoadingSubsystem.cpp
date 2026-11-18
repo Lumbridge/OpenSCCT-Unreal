@@ -293,7 +293,29 @@ void UScctLoadingSubsystem::Deinitialize()
 		GEngine->GameViewport->RemoveViewportWidgetContent(HeldPage.ToSharedRef());
 	}
 	HeldPage.Reset();
+	EndCover();
 	Super::Deinitialize();
+}
+
+void UScctLoadingSubsystem::BeginCover()
+{
+	UGameViewportClient* Viewport = GEngine != nullptr ? GEngine->GameViewport : nullptr;
+	if (Viewport == nullptr || CoverPage.IsValid())
+	{
+		return;
+	}
+	CoverPage = MakePage(Pending);
+	// Over everything of the match (its HUD and menus), under nothing.
+	Viewport->AddViewportWidgetContent(CoverPage.ToSharedRef(), 2000);
+}
+
+void UScctLoadingSubsystem::EndCover()
+{
+	if (CoverPage.IsValid() && GEngine != nullptr && GEngine->GameViewport != nullptr)
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(CoverPage.ToSharedRef());
+	}
+	CoverPage.Reset();
 }
 
 TSharedRef<SWidget> UScctLoadingSubsystem::MakePage(const FScctLoadingPage& Page)

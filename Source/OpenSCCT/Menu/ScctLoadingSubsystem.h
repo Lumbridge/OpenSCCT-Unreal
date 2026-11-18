@@ -68,6 +68,16 @@ public:
 	 */
 	FScctLoadingPage DescribeRound(const FString& Map, int32 Side, const FString& Detail, const FString& Status);
 
+	/**
+	 * Keeps the last level load's page over the game's picture after the movie player has taken its own away, while
+	 * the level still prepares itself behind it (the effects warm-up, Play/ScctEffectsWarmup.h). Put in place before
+	 * the level has begun play, it follows the movie player's page without a frame of the level between them.
+	 */
+	void BeginCover();
+
+	/** Takes BeginCover's page away. */
+	void EndCover();
+
 private:
 	void HandlePreLoadMap(const FWorldContext& Context, const FString& MapName);
 	void HandlePrepareLoadingScreen();
@@ -85,6 +95,9 @@ private:
 	TMap<FString, TObjectPtr<UTexture2D>> Pictures;
 
 	TSharedPtr<SWidget> HeldPage;
+
+	/** BeginCover's page while it is up. */
+	TSharedPtr<SWidget> CoverPage;
 	FTSTicker::FDelegateHandle HoldTicker;
 
 	/** Notes the URL of a travel that waits for the next engine tick (FCoreDelegates::OnEndFrame). */
