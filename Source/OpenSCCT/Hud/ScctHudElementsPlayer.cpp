@@ -276,7 +276,10 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 	}
 
 	// The merc's sound arrows: a noise from that side. Left, right, top, bottom as arcs around the centre;
-	// ahead and behind as a second arc outside the top and the bottom one.
+	// ahead and behind as a second arc outside the top and the bottom one. The simulation lights the arrow times on any
+	// player's HUD (SHud.NotifyHotSound has no side test), but only the merc's page has the arrows (they are parts of its
+	// reticle, the Godot client's MercHudPage.DriveArrows): a spy gets none.
+	const bool bSoundArrows = State.Side == 1;
 	struct FArrow
 	{
 		float Angle;
@@ -285,7 +288,7 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 	static const FArrow Arrows[ScctHudArrowCount] = {
 		{ 270.0f, 96.0f }, { 90.0f, 96.0f }, { 0.0f, 96.0f }, { 180.0f, 96.0f }, { 0.0f, 108.0f }, { 180.0f, 108.0f },
 	};
-	for (int32 Index = 0; Index < ScctHudArrowCount; ++Index)
+	for (int32 Index = 0; bSoundArrows && Index < ScctHudArrowCount; ++Index)
 	{
 		const float Seconds = State.ArrowSeconds[Index];
 		if (Seconds > 0.0f)
