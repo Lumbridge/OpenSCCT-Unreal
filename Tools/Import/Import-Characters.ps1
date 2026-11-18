@@ -13,11 +13,16 @@ Tools\Import\Import-Characters.ps1 -Content C:\path\to\.content
 
 .EXAMPLE
 Tools\Import\Import-Characters.ps1 -Content C:\path\to\.content -RebuildMaterials
+
+.EXAMPLE
+Tools\Import\Import-Characters.ps1 -Content "$env:LOCALAPPDATA\OpenSCCT\packs" -RiflesOnly
 #>
 param(
     [string] $Content = $env:SVM_CONTENT,
     # Make the equipment materials again from the script (they are otherwise kept as they are).
     [switch] $RebuildMaterials,
+    # Import only the additional merc rifles with their authored materials.
+    [switch] $RiflesOnly,
     [string] $Engine = 'F:\UE_5.8'
 )
 
@@ -28,6 +33,9 @@ if (-not (Test-Path (Join-Path $Content 'shared\chars'))) { throw "No converted 
 
 . "$PSScriptRoot\..\EditorScript.ps1"
 $rebuild = if ($RebuildMaterials) { ' rebuild' } else { '' }
-Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'build-equipment' -Script "$(Fwd "$PSScriptRoot\build_equipment_assets.py")$rebuild" | Out-Null
-Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'import-characters' -Script "$(Fwd "$PSScriptRoot\import_characters.py") $(Fwd $Content)" | Out-Null
+if (-not $RiflesOnly) {
+    Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'build-equipment' -Script "$(Fwd "$PSScriptRoot\build_equipment_assets.py")$rebuild" | Out-Null
+}
+$selection = if ($RiflesOnly) { ' --rifles-only' } else { '' }
+Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'import-characters' -Script "$(Fwd "$PSScriptRoot\import_characters.py") $(Fwd $Content)$selection" | Out-Null
 Exit-ScctScripts

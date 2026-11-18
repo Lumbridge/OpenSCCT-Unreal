@@ -1607,7 +1607,7 @@ UAnimSequenceBase* UScctLevelStateSubsystem::FindPropSequence(const ASkeletalMes
 
 	// The importer brings a prop's sequences in beside its mesh (Tools/Import/scct_fx.py, prop_assets).
 	const FString Folder = FPackageName::GetLongPackagePath(Mesh->GetOutermost()->GetName());
-	TArray<TWeakObjectPtr<UAnimSequenceBase>>* Found = PropSequences.Find(Folder);
+	TArray<FSoftObjectPath>* Found = PropSequences.Find(Folder);
 	if (Found == nullptr)
 	{
 		Found = &PropSequences.Add(Folder);
@@ -1615,40 +1615,37 @@ UAnimSequenceBase* UScctLevelStateSubsystem::FindPropSequence(const ASkeletalMes
 		ScanLevelFolder(Folder, UAnimSequenceBase::StaticClass(), Assets);
 		for (const FAssetData& Asset : Assets)
 		{
-			if (UAnimSequenceBase* Loaded = Cast<UAnimSequenceBase>(Asset.GetAsset()))
-			{
-				Found->Add(Loaded);
-				PropAssets.Add(Loaded);
-			}
+			Found->Add(Asset.GetSoftObjectPath());
 		}
 	}
 
 	// By name: the same letters, or the importer's mesh name put before the sequence's.
 	const FString Wanted = LevelKey(Sequence);
-	UAnimSequenceBase* Suffixed = nullptr;
-	for (const TWeakObjectPtr<UAnimSequenceBase>& Each : *Found)
+	const FSoftObjectPath* Match = nullptr;
+	for (const FSoftObjectPath& Candidate : *Found)
 	{
-		UAnimSequenceBase* Candidate = Each.Get();
-		if (Candidate == nullptr)
-		{
-			continue;
-		}
-		const FString Key = LevelKey(Candidate->GetName());
+		const FString Key = LevelKey(Candidate.GetAssetName());
 		if (Key == Wanted)
 		{
-			return Candidate;
+			Match = &Candidate;
+			break;
 		}
-		if (Suffixed == nullptr && Key.EndsWith(Wanted))
+		if (Match == nullptr && Key.EndsWith(Wanted))
 		{
-			Suffixed = Candidate;
+			Match = &Candidate;
 		}
 	}
 	// A file with one sequence comes in under the mesh's name ("<mesh>_Anim"), whatever the sequence was called.
-	if (Suffixed == nullptr && Found->Num() == 1)
+	if (Match == nullptr && Found->Num() == 1)
 	{
-		Suffixed = (*Found)[0].Get();
+		Match = &(*Found)[0];
 	}
-	return Suffixed;
+	UAnimSequenceBase* Loaded = Match ? Cast<UAnimSequenceBase>(Match->TryLoad()) : nullptr;
+	if (Loaded)
+	{
+		PropAssets.AddUnique(Loaded);
+	}
+	return Loaded;
 }
 
 bool UScctLevelStateSubsystem::FollowBone(FLightState& State, const FScctWorldLight& Record)

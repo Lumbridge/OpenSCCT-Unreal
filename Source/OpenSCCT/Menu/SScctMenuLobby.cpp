@@ -58,7 +58,6 @@
 #include "OpenSCCT.h"
 #include "Runtime/ScctContentApi.h"
 #include "Runtime/ScctOnlineApi.h"
-#include "Engine/GameInstance.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Styling/CoreStyle.h"
 #include "Voice/SScctVoiceLobbyControls.h"
@@ -100,7 +99,6 @@ namespace
 		}
 		return 0;
 	}
-
 
 	const FScctOnlinePlayer* LobbyLocalPlayer(const UScctOnlineSubsystem& Visit)
 	{
@@ -148,10 +146,6 @@ namespace
 				PlayableMaps.Add(Map.ToLower());
 			}
 			const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Host.Online;
-			const FString Ready = ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Control2ClientReady"), TEXT("Ready"));
-			const FString NotReady = ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Control2ClientNotReady"), TEXT("Not ready"));
-
-			TSharedPtr<SScctButton> ReadyButton;
 			ChildSlot
 			[
 				SNew(SOverlay)
@@ -160,200 +154,94 @@ namespace
 				SAssignNew(Switcher, SWidgetSwitcher)
 				+ SWidgetSwitcher::Slot()
 				[
-				SNew(SHorizontalBox)
-				// The sides.
-				+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, 22.0f, 0.0f)
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().FillHeight(1.0f)
 				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, 10.0f, 0.0f)[ ScctUi::Card(TEXT("Spies"), SAssignNew(SpyList, SVerticalBox), FMargin(18.0f, 16.0f)) ]
-						+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(10.0f, 0.0f, 0.0f, 0.0f)[ ScctUi::Card(TEXT("Mercenaries"), SAssignNew(MercList, SVerticalBox), FMargin(18.0f, 16.0f)) ]
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 10.0f, 0.0f, 0.0f)
-					[
-						SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim())
-						.Text_Lambda([this] { return FText::FromString(Spectators); })
-					]
-					// The chat.
-					+ SVerticalBox::Slot().FillHeight(1.0f).Padding(0.0f, 14.0f, 0.0f, 0.0f)
-					[
-						ScctUi::Card(TEXT("Chat"),
-							SNew(SVerticalBox)
-							+ SVerticalBox::Slot().FillHeight(1.0f)
-							[
-								SAssignNew(ChatScroll, SScrollBox)
-								+ SScrollBox::Slot()[ SAssignNew(ChatLines, SVerticalBox) ]
-							]
-							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)
-							[
-								SNew(SHorizontalBox)
-								+ SHorizontalBox::Slot().FillWidth(1.0f)
-								[
-									// The menus' own field, as on the other pages (it kept Slate's default look).
-									MakeChatBox()
-								]
-								+ SHorizontalBox::Slot().AutoWidth().Padding(8.0f, 0.0f, 0.0f, 0.0f)
-								[
-									SNew(SScctButton)
-									.Look(EScctButtonLook::Chip)
-									.Text_Lambda([this] { return FText::FromString(bTeamChat ? ScctUi::GameText(TEXT("Lobby_Create"), TEXT("ChatBox.txtTeam"), TEXT("Team")).Replace(TEXT("("), TEXT("")).Replace(TEXT(")"), TEXT("")).TrimStartAndEnd().ToUpper() : FString(TEXT("ALL"))); })
-									.Description(FText::FromString(TEXT("Who reads what you write: everyone, or your side only.")))
-									.OnPressed(FSimpleDelegate::CreateLambda([this] { bTeamChat = !bTeamChat; }))
-								]
-							], FMargin(18.0f, 16.0f))
-					]
-					// The personal demo recording (the Godot lobby's PersonalRecordDemos) and what the server says of it.
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)
-					[
-						BuildRecording()
-					]
-				]
-				// The map, the setup and the buttons.
-				+ SHorizontalBox::Slot().AutoWidth()
-				[
-					SNew(SBox).WidthOverride(520.0f)
+					SNew(SHorizontalBox)
+					// The roster and chat.
+					+ SHorizontalBox::Slot().FillWidth(0.54f).Padding(0.0f, 0.0f, 18.0f, 0.0f)
 					[
 						SNew(SVerticalBox)
-						+ SVerticalBox::Slot().AutoHeight()[ SAssignNew(MapCard, SBox) ]
-						// The setup scrolls in what is left, so the buttons under it are always on screen.
-						+ SVerticalBox::Slot().FillHeight(1.0f).Padding(0.0f, 14.0f, 0.0f, 14.0f)
-						[
-							SNew(SScrollBox)
-							.ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll)
-							+ SScrollBox::Slot()[ SAssignNew(SetupCard, SBox) ]
-						]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
-						[
-							SNew(STextBlock).Font(ScctUi::H2()).ColorAndOpacity(ScctUi::Accent()).Justification(ETextJustify::Center)
-							.Visibility_Lambda([Weak] { return Weak.IsValid() && Weak->GetStatus().Countdown > 0.0f ? EVisibility::Visible : EVisibility::Collapsed; })
-							.Text_Lambda([Weak] { return FText::FromString(Weak.IsValid() ? FString::Printf(TEXT("Starting in %d"), FMath::CeilToInt32(Weak->GetStatus().Countdown)) : FString()); })
-						]
-						// Why a launch would be refused now, and a reminder of a Session Options draft not applied.
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
-						[
-							SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
-							.Visibility_Lambda([this] { return LaunchLine().IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
-							.Text_Lambda([this] { return FText::FromString(LaunchLine()); })
-						]
-						// What the match waits for (who is not ready yet), as Godot's lobby status line says it.
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
-						[
-							SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true).Justification(ETextJustify::Center)
-							.Visibility_Lambda([this, Weak] { return WaitingFor.IsEmpty() || (Weak.IsValid() && Weak->GetStatus().Countdown > 0.0f) ? EVisibility::Collapsed : EVisibility::Visible; })
-							.Text_Lambda([this] { return FText::FromString(WaitingFor); })
-						]
-						// A player of a dedicated server may ask it to start (or stop its countdown) without waiting for
-						// the start it makes on its own. The host of a listen server launches from the main button.
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
-						[
-							SNew(SScctButton)
-							.FillWidth(true)
-							.Visibility_Lambda([Weak]
-							{
-								const UScctOnlineSubsystem* V = Weak.Get();
-								return V != nullptr && V->HasFlag(EScctOnlineStatusFlags::CanLaunch) && !LobbyLocalIsHost(*V) && LobbyLocalOnSide(*V)
-									? EVisibility::Visible : EVisibility::Collapsed;
-							})
-							.Text_Lambda([Weak] { return FText::FromString(Weak.IsValid() ? LobbyLaunchCaption(*Weak.Get()) : FString()); })
-							.Description(FText::FromString(TEXT("Start the match now (or stop its countdown). The server starts it only when everyone on a side is ready, you too.")))
-							.OnPressed(FSimpleDelegate::CreateLambda([Weak]
-							{
-								UScctOnlineSubsystem* V = Weak.Get();
-								if (V == nullptr) { return; }
-								// The server wants the one launching ready as well; a press during the countdown cancels it.
-								if (V->GetStatus().Countdown <= 0.0f && !V->HasFlag(EScctOnlineStatusFlags::LocalReady)) { V->SetReady(true); }
-								V->Launch();
-							}))
-						]
-						// The kit the player takes into the round for the player's side (the spy's while spectating), the
-						// Equipment page under the lobby's rules and the lobby map's strategic map (Menu/ScctOverlayPages.cpp).
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
-						[
-							ScctOverlayPages::MakeRow(Weak, [this] { OpenGear(); }, [this] { OpenStrategicMap(); })
-						]
-						// BRIEFING and, once a round was played, VIEW SCOREBOARD (Menu/SScctLobbyExtras.h).
-						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
-						[
-							BuildExtrasRow()
-						]
-						// The buttons wrap: a button that does not fit the column whole goes onto the next line and no
-						// caption is ever cut. The last button of a line takes what is left of it, so LAUNCH / READY,
-						// which comes last, is the widest: a line of its own when the three before it fill the first.
 						+ SVerticalBox::Slot().AutoHeight()
 						[
-							SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.0f, 8.0f))
-							+ SWrapBox::Slot()
-							[
-								SNew(SScctButton)
-								.Text(FText::FromString(ScctUi::GameText(TEXT("Lobby_Create"), TEXT("ButtonB"), TEXT("Leave")).ToUpper()))
-								.Description(FText::FromString(TEXT("Leave the server and go back to the menus.")))
-								.OnPressed(FSimpleDelegate::CreateLambda([this] { if (Host.Back) { Host.Back(); } }))
-							]
-							+ SWrapBox::Slot()
-							[
-								SNew(SScctButton)
-								.Text(FText::FromString(ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Button2"), TEXT("Switch Team")).ToUpper()))
-								.Description(FText::FromString(TEXT("Play on the other side.")))
-								.OnPressed(FSimpleDelegate::CreateLambda([Weak]
-								{
-									if (UScctOnlineSubsystem* V = Weak.Get()) { V->SetTeam(V->GetStatus().LocalTeam == 0 ? 1 : 0); }
-								}))
-							]
-							+ SWrapBox::Slot().FillEmptySpace(true)
-							[
-								SAssignNew(CosmeticsButton, SScctButton)
-								.FillWidth(true)
-								.Text(FText::FromString(TEXT("COSMETICS")))
-								.Description(FText::FromString(TEXT("Open the Armoury over the lobby: pick the camo, tint and light colour of each side. Your look is sent to this server and worn from the next round.")))
-								.OnPressed(FSimpleDelegate::CreateLambda([this] { OpenArmoury(); }))
-							]
-							+ SWrapBox::Slot().FillEmptySpace(true)
-							[
-								SAssignNew(ReadyButton, SScctButton)
-								.Look(EScctButtonLook::Primary)
-								.FillWidth(true)
-								// Without the host's map (or with another version of it) the server refuses "ready".
-								.IsEnabled_Lambda([this, Weak] { return LocalHasMap() || (Weak.IsValid() && Weak->HasFlag(EScctOnlineStatusFlags::LocalReady)); })
-								.Text_Lambda([Weak, Ready, NotReady]
-								{
-									const UScctOnlineSubsystem* V = Weak.Get();
-									if (V != nullptr && LobbyLocalIsHost(*V))
-									{
-										return FText::FromString(LobbyLaunchCaption(*V));
-									}
-									// The button says what pressing it does.
-									return FText::FromString((V != nullptr && V->HasFlag(EScctOnlineStatusFlags::LocalReady) ? NotReady : Ready).ToUpper());
-								})
-								.Description(FText::FromString(TEXT("Say you are ready, or not ready any more (the host of a player-run server starts the match here instead). A match starts when everyone on a side is ready.")))
-								.OnPressed(FSimpleDelegate::CreateLambda([this, Weak]
-								{
-									UScctOnlineSubsystem* V = Weak.Get();
-									if (V == nullptr) { return; }
-									// The host launches (the server does not wait for the host's ready). Everyone else,
-									// on a dedicated server too, says ready or not ready, as Godot's lobby page does: a
-									// dedicated server starts on its own once everyone on a side is ready, and the
-									// LAUNCH button over this row asks it to start sooner.
-									if (LobbyLocalIsHost(*V))
-									{
-										// A countdown already running is cancelled at once; a game this player hosts with bots
-										// first offers the map's prebuilt bot navigation (the Godot lobby's Start).
-										if (V->GetStatus().Countdown > 0.0f || !V->IsHosting() || !HasBots(V))
-										{
-											V->Launch();
-											return;
-										}
-										const FString Map = V->GetSetupMap();
-										ScctBotNavPrompt::OfferThenLaunch(Host.Dialogs, Map,
-											[Weak, Map] { return Weak.IsValid() && Weak->GetState() == EScctOnlineState::Lobby && Weak->GetSetupMap() == Map && LobbyLocalIsHost(*Weak.Get()); },
-											[Weak] { if (UScctOnlineSubsystem* Now = Weak.Get()) { Now->Launch(); } });
-									}
-									else { V->SetReady(!V->HasFlag(EScctOnlineStatusFlags::LocalReady)); }
-								}))
-							]
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, 10.0f, 0.0f)[ ScctUi::Card(TEXT("Spies"), SAssignNew(SpyList, SVerticalBox), FMargin(18.0f, 16.0f)) ]
+							+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(10.0f, 0.0f, 0.0f, 0.0f)[ ScctUi::Card(TEXT("Mercenaries"), SAssignNew(MercList, SVerticalBox), FMargin(18.0f, 16.0f)) ]
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 10.0f, 0.0f, 0.0f)
+						[
+							SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim())
+							.Text_Lambda([this] { return FText::FromString(Spectators); })
+						]
+						// The chat.
+						+ SVerticalBox::Slot().FillHeight(1.0f).Padding(0.0f, 14.0f, 0.0f, 0.0f)
+						[
+							ScctUi::Card(TEXT("Chat"),
+								SNew(SVerticalBox)
+								+ SVerticalBox::Slot().FillHeight(1.0f)
+								[
+									SAssignNew(ChatScroll, SScrollBox)
+									+ SScrollBox::Slot()[ SAssignNew(ChatLines, SVerticalBox) ]
+								]
+								+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)
+								[
+									SNew(SHorizontalBox)
+									+ SHorizontalBox::Slot().FillWidth(1.0f)
+									[
+										// The menus' own field, as on the other pages (it kept Slate's default look).
+										MakeChatBox()
+									]
+									+ SHorizontalBox::Slot().AutoWidth().Padding(8.0f, 0.0f, 0.0f, 0.0f)
+									[
+										SNew(SScctButton)
+										.Look(EScctButtonLook::Chip)
+										.Text_Lambda([this] { return FText::FromString(bTeamChat ? ScctUi::GameText(TEXT("Lobby_Create"), TEXT("ChatBox.txtTeam"), TEXT("Team")).Replace(TEXT("("), TEXT("")).Replace(TEXT(")"), TEXT("")).TrimStartAndEnd().ToUpper() : FString(TEXT("ALL"))); })
+										.Description(FText::FromString(TEXT("Who reads what you write: everyone, or your side only.")))
+										.OnPressed(FSimpleDelegate::CreateLambda([this] { bTeamChat = !bTeamChat; }))
+									]
+								], FMargin(18.0f, 16.0f))
+						]
+						// The personal demo recording (the Godot lobby's PersonalRecordDemos) and what the server says of it.
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)
+						[
+							BuildRecording()
 						]
 					]
+					+ SHorizontalBox::Slot().FillWidth(0.46f)
+					[
+						SNew(SScrollBox)
+						.ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll)
+						+ SScrollBox::Slot()[ SAssignNew(MapCard, SBox) ]
+						+ SScrollBox::Slot().Padding(0.0f, 12.0f, 0.0f, 0.0f)[ SAssignNew(SetupCard, SBox) ]
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 0.0f)
+				[
+					ScctUi::Panel(
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().FillWidth(0.54f).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 18.0f, 0.0f)
+							[
+								ScctOverlayPages::MakeRow(Weak, [this] { OpenGear(); }, [this] { OpenStrategicMap(); })
+							]
+							+ SHorizontalBox::Slot().FillWidth(0.46f).VAlign(VAlign_Center)[ BuildExtrasRow() ]
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f)[ ScctUi::Rule() ]
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().FillWidth(0.30f).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 12.0f, 0.0f)
+							[
+								SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true)
+								.Text_Lambda([this] { return FText::FromString(StatusLine()); })
+							]
+							+ SHorizontalBox::Slot().FillWidth(0.70f).VAlign(VAlign_Center)
+							[
+								BuildMatchActions(Weak)
+							]
+						], FMargin(14.0f, 10.0f), 0.7f)
 				]
 				]
 				// Session Options, in place of the lobby while open.
@@ -370,13 +258,17 @@ namespace
 				// The match scoreboard and the briefing open over the lobby too.
 				+ SOverlay::Slot()[ SAssignNew(ExtrasLayer, SOverlay) ]
 			];
-			DefaultFocus = ReadyButton;
 			ReadUnattended();
 			Refresh();
 			if (bOpenOptionsAtStart)
 			{
 				ShowOptions(true);
 			}
+		}
+
+		virtual TSharedPtr<SWidget> GetDefaultFocus() const override
+		{
+			return bOptionsOpen && Options.IsValid() ? Options->GetInitialControl() : SScctMenuPage::GetDefaultFocus();
 		}
 
 		virtual FString GetTitle() const override
@@ -511,6 +403,106 @@ namespace
 		TSharedPtr<SOverlay> ExtrasLayer;
 
 		// ---- extras for every player ----------------------------------------------------------------------------
+
+		TSharedRef<SWidget> BuildMatchActions(TWeakObjectPtr<UScctOnlineSubsystem> Weak)
+		{
+			const FString Ready = ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Control2ClientReady"), TEXT("Ready"));
+			const FString NotReady = ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Control2ClientNotReady"), TEXT("Not ready"));
+
+			TSharedPtr<SScctButton> ReadyButton;
+			const TSharedRef<SWrapBox> Actions = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.0f, 8.0f))
+			+ SWrapBox::Slot()
+			[
+				SNew(SScctButton)
+				.Text(FText::FromString(ScctUi::GameText(TEXT("Lobby_Create"), TEXT("ButtonB"), TEXT("Leave")).ToUpper()))
+				.Description(FText::FromString(TEXT("Leave the server and go back to the menus.")))
+				.OnPressed(FSimpleDelegate::CreateLambda([this] { if (Host.Back) { Host.Back(); } }))
+			]
+			+ SWrapBox::Slot()
+			[
+				SNew(SScctButton)
+				.Text(FText::FromString(ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Button2"), TEXT("Switch Team")).ToUpper()))
+				.Description(FText::FromString(TEXT("Play on the other side.")))
+				.OnPressed(FSimpleDelegate::CreateLambda([Weak]
+				{
+					if (UScctOnlineSubsystem* V = Weak.Get()) { V->SetTeam(V->GetStatus().LocalTeam == 0 ? 1 : 0); }
+				}))
+			]
+			+ SWrapBox::Slot()
+			[
+				SAssignNew(CosmeticsButton, SScctButton)
+				.FillWidth(true)
+				.Text(FText::FromString(TEXT("COSMETICS")))
+				.Description(FText::FromString(TEXT("Open the Armoury over the lobby: pick the camo, tint and light colour of each side. Your look is sent to this server and worn from the next round.")))
+				.OnPressed(FSimpleDelegate::CreateLambda([this] { OpenArmoury(); }))
+			]
+			+ SWrapBox::Slot()
+			[
+				SNew(SScctButton)
+				.FillWidth(true)
+				.Visibility_Lambda([Weak]
+				{
+					const UScctOnlineSubsystem* V = Weak.Get();
+					return V != nullptr && V->HasFlag(EScctOnlineStatusFlags::CanLaunch) && !LobbyLocalIsHost(*V) && LobbyLocalOnSide(*V)
+						? EVisibility::Visible : EVisibility::Collapsed;
+				})
+				.Text_Lambda([Weak] { return FText::FromString(Weak.IsValid() ? LobbyLaunchCaption(*Weak.Get()) : FString()); })
+				.Description(FText::FromString(TEXT("Start the match now (or stop its countdown). Everyone playing must be ready before the match can start.")))
+				.OnPressed(FSimpleDelegate::CreateLambda([Weak]
+				{
+					UScctOnlineSubsystem* V = Weak.Get();
+					if (V == nullptr) { return; }
+					// The server wants the one launching ready as well; a press during the countdown cancels it.
+					if (V->GetStatus().Countdown <= 0.0f && !V->HasFlag(EScctOnlineStatusFlags::LocalReady)) { V->SetReady(true); }
+					V->Launch();
+				}))
+			]
+			+ SWrapBox::Slot().FillEmptySpace(true)
+			[
+				SAssignNew(ReadyButton, SScctButton)
+				.Look(EScctButtonLook::Primary)
+				.FillWidth(true)
+				// Without the host's map (or with another version of it) the server refuses "ready".
+				.IsEnabled_Lambda([this, Weak] { return LocalHasMap() || (Weak.IsValid() && Weak->HasFlag(EScctOnlineStatusFlags::LocalReady)); })
+				.Text_Lambda([Weak, Ready, NotReady]
+				{
+					const UScctOnlineSubsystem* V = Weak.Get();
+					if (V != nullptr && LobbyLocalIsHost(*V))
+					{
+						return FText::FromString(LobbyLaunchCaption(*V));
+					}
+					// The button says what pressing it does.
+					return FText::FromString((V != nullptr && V->HasFlag(EScctOnlineStatusFlags::LocalReady) ? NotReady : Ready).ToUpper());
+				})
+				.Description(FText::FromString(TEXT("Say you are ready, or not ready any more (the host of a player-run server starts the match here instead). A match starts when everyone playing is ready.")))
+				.OnPressed(FSimpleDelegate::CreateLambda([this, Weak]
+				{
+					UScctOnlineSubsystem* V = Weak.Get();
+					if (V == nullptr) { return; }
+					// The host launches (the server does not wait for the host's ready). Everyone else,
+					// on a dedicated server too, says ready or not ready, as Godot's lobby page does: a
+					// dedicated server starts on its own once everyone on a side is ready, and the
+					// LAUNCH button over this row asks it to start sooner.
+					if (LobbyLocalIsHost(*V))
+					{
+						// A countdown already running is cancelled at once; a game this player hosts with bots
+						// first offers the map's prebuilt bot navigation (the Godot lobby's Start).
+						if (V->GetStatus().Countdown > 0.0f || !V->IsHosting() || !HasBots(V))
+						{
+							V->Launch();
+							return;
+						}
+						const FString Map = V->GetSetupMap();
+						ScctBotNavPrompt::OfferThenLaunch(Host.Dialogs, Map,
+							[Weak, Map] { return Weak.IsValid() && Weak->GetState() == EScctOnlineState::Lobby && Weak->GetSetupMap() == Map && LobbyLocalIsHost(*Weak.Get()); },
+							[Weak] { if (UScctOnlineSubsystem* Now = Weak.Get()) { Now->Launch(); } });
+					}
+					else { V->SetReady(!V->HasFlag(EScctOnlineStatusFlags::LocalReady)); }
+				}))
+			];
+			DefaultFocus = ReadyButton;
+			return Actions;
+		}
 
 		/** BRIEFING, and VIEW SCOREBOARD while this visit has a last round's scoreboard. */
 		TSharedRef<SWidget> BuildExtrasRow()
@@ -647,8 +639,9 @@ namespace
 			bOptionsOpen = bOpen;
 			if (bOpen)
 			{
-				Options->Open();
 				Switcher->SetActiveWidgetIndex(1);
+				Options->Open();
+				Options->FocusInitialControl();
 				UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby shows Session Options"));
 			}
 			else
@@ -657,6 +650,10 @@ namespace
 				// The setup card is made again: the controller's steppers show the values the server now has.
 				SetupBuilt = false;
 				Refresh();
+				if (SetupButton.IsValid())
+				{
+					FSlateApplication::Get().SetAllUserFocus(SetupButton.ToSharedRef(), EFocusCause::SetDirectly);
+				}
 			}
 		}
 
@@ -785,7 +782,7 @@ namespace
 				if (Player.MapState == LobbyMapUnknown) { return FString::Printf(TEXT("%s has not finished checking %s."), Player.Name, *Map); }
 				if ((Player.Flags & (EScctOnlinePlayerFlags::Ready | EScctOnlinePlayerFlags::Host | EScctOnlinePlayerFlags::Bot)) == 0)
 				{
-					NotReady.Add(Player.Name);
+					NotReady.Add(Player.Id == Visit->GetStatus().LocalId ? TEXT("you") : Player.Name);
 				}
 			}
 			if (OnSides == 0)
@@ -799,19 +796,19 @@ namespace
 			return Visit->HasFlag(EScctOnlineStatusFlags::CanStart) ? FString() : FString(TEXT("Not everyone on a side is ready."));
 		}
 
-		/** The line above the buttons: why a launch would be refused (for the one who may launch) and an unapplied draft. */
-		FString LaunchLine() const
+		FString StatusLine() const
 		{
 			const UScctOnlineSubsystem* Visit = Host.Online.Get();
-			FString Line;
-			if (Visit != nullptr && Visit->HasFlag(EScctOnlineStatusFlags::CanLaunch) && Visit->GetStatus().Countdown <= 0.0f)
+			if (!Visit) return FString();
+			if (Visit->GetStatus().Countdown > 0.0f)
 			{
-				const FString Problem = LaunchProblem();
-				Line = Problem.IsEmpty() ? FString() : TEXT("Launch would be refused: ") + Problem;
+				return FString::Printf(TEXT("Starting in %d"), FMath::CeilToInt(Visit->GetStatus().Countdown));
 			}
+			FString Line = Visit->HasFlag(EScctOnlineStatusFlags::CanLaunch) ? LaunchProblem() : FString();
+			if (Line.IsEmpty()) Line = WaitingFor;
 			if (Options.IsValid() && Options->IsDirty())
 			{
-				Line += (Line.IsEmpty() ? TEXT("") : TEXT("  ")) + FString(TEXT("Unapplied changes: open Session options to review them."));
+				Line += (Line.IsEmpty() ? TEXT("") : TEXT("  ")) + FString(TEXT("You have unapplied changes in Session Options."));
 			}
 			return Line;
 		}
@@ -1192,8 +1189,7 @@ namespace
 			const FString ModeName = Menu != nullptr ? Menu->GetModeName(LobbyModeIndex(Status.Mode)) : Visit->GetModeName();
 			return ScctUi::Card(TEXT("Next match"),
 				SNew(SVerticalBox)
-				// On a short screen (the page under 780 units high: 1280x720, 1600x900) the picture gives its room to
-				// the setup under the card, which the second line of buttons would otherwise squeeze to its heading.
+				// Keep the quick settings in view on shorter screens.
 				+ SVerticalBox::Slot().AutoHeight()
 				[
 					SNew(SBox)
@@ -1274,7 +1270,7 @@ namespace
 			const TSharedRef<SHorizontalBox> Box = SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
 				[
-					SNew(SScctButton)
+					SAssignNew(SetupButton, SScctButton)
 					.Look(EScctButtonLook::Chip)
 					.Text(FText::FromString(bControl ? TEXT("SESSION OPTIONS") : TEXT("MATCH SETTINGS")))
 					.Description(FText::FromString(bControl ? TEXT("Every rule of the next match, the alternate rules too: change several, then apply them together.") : TEXT("Every rule of the next match, as the host set them.")))
@@ -1385,6 +1381,7 @@ namespace
 		TSharedPtr<SEditableTextBox> ChatBox;
 		TSharedPtr<SBox> MapCard;
 		TSharedPtr<SBox> SetupCard;
+		TSharedPtr<SScctButton> SetupButton;
 		FString Spectators;
 		FString WaitingFor;
 		int32 SeenRevision = -1;

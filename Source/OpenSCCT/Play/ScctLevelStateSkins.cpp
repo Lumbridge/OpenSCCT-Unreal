@@ -147,7 +147,11 @@ UMaterialInterface* UScctLevelStateSubsystem::GameplaySkin(const FString& Name)
 	}
 	if (!Base) return nullptr;
 	const TCHAR* Blend = bGhost || Flag(Flags, TEXT("translucent")) ? TEXT("Translucent") : Flag(Flags, TEXT("masked")) ? TEXT("Masked") : TEXT("Opaque");
-	const bool bUnlit = bGhost || Flag(Flags, TEXT("unlit"));
+	const FString SelfLit = TextField(Flags, TEXT("self_illum"));
+	const FString SelfLitMask = TextField(Flags, TEXT("self_illum_mask"));
+	const bool bMaskedGlow = !SelfLit.IsEmpty() && !SelfLitMask.IsEmpty();
+	const bool bPackedUnlit = Flag(Flags, TEXT("unlit"));
+	const bool bUnlit = bGhost || (bPackedUnlit && (!bMaskedGlow || MaterialName.EndsWith(TEXT("__unlit"))));
 	const FString Asset = FString::Printf(TEXT("MI_ScctRuntime_%s_%s%s"), Blend, bUnlit ? TEXT("Unlit") : TEXT("Lit"),
 		bGhost || Flag(Flags, TEXT("two_sided")) ? TEXT("_TwoSided") : TEXT(""));
 	auto* Parent = LoadObject<UMaterialInterface>(nullptr, *(TEXT("/Game/OpenSCCT/RuntimeMap/") + Asset + TEXT(".") + Asset));
@@ -155,12 +159,15 @@ UMaterialInterface* UScctLevelStateSubsystem::GameplaySkin(const FString& Name)
 	auto* Material = UMaterialInstanceDynamic::Create(Parent, this);
 	Material->SetTextureParameterValue(TEXT("BaseColor"), Base);
 	Material->SetScalarParameterValue(TEXT("Emissive"), bUnlit ? 1.f : 0.f);
-	if (UTexture2D* Glow = SkinPicture(Folder, TextField(Flags, TEXT("self_illum"))))
+	if (UTexture2D* Glow = SkinPicture(Folder, SelfLit))
 	{
-		Material->SetTextureParameterValue(TEXT("SelfIllumTexture"), Glow);
-		Material->SetScalarParameterValue(TEXT("SelfIllum"), 2.f);
-		if (auto* Mask = SkinPicture(Folder, TextField(Flags, TEXT("self_illum_mask"))))
-			Material->SetTextureParameterValue(TEXT("SelfIllumMask"), Mask);
+		UTexture2D* Mask = bMaskedGlow ? SkinPicture(Folder, SelfLitMask) : nullptr;
+		if (!bMaskedGlow || Mask)
+		{
+			Material->SetTextureParameterValue(TEXT("SelfIllumTexture"), Glow);
+			Material->SetScalarParameterValue(TEXT("SelfIllum"), bPackedUnlit && bMaskedGlow ? 0.9f : 2.f);
+			if (Mask) Material->SetTextureParameterValue(TEXT("SelfIllumMask"), Mask);
+		}
 	}
 	if (bGhost) BombGhost = Material;
 	return Material;

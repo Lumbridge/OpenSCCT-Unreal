@@ -191,6 +191,23 @@ if ($bundledMaps.Count -eq 0) {
 }
 Write-Host "Bundling $($bundledMaps.Count) enhanced maps: $($bundledMaps -join ', ')"
 
+# Each first-person file contains separate skinned arms and rifle meshes. The FAMAS and M4 also
+# have a sight mesh in both perspectives. The runtime loads these parts by path and skeleton.
+$rifleMeshes = [ordered]@{
+    ak47 = @('ak47'); ak47_first = @('ak47_first', 'ak47_parts')
+    famas = @('famas', 'FamasNativeSightParts'); famas_first = @('famas_first', 'famas_parts', 'Object_83')
+    galil = @('galil'); galil_first = @('galil_first', 'galil_parts')
+    m4a1s = @('m4a1s', 'MicroRedDot'); m4a1s_first = @('m4a1s_first', 'm4a1s_parts', 'Object_83')
+}
+$rifleFolder = 'Content/Imported/Chars/OpenScctRifles'
+$rifleAssets = @("$rifleFolder/Materials/M_RifleGltf.uasset") + @(foreach ($model in $rifleMeshes.Keys) {
+    foreach ($part in $rifleMeshes[$model]) { "$rifleFolder/$model/SkeletalMeshes/$part.uasset" }
+})
+$missingRifleAssets = @($rifleAssets | Where-Object { -not (Test-Path -LiteralPath (Join-Path $repo $_)) })
+if ($missingRifleAssets.Count) {
+    Fail "additional rifle assets missing: run Tools/Import/Import-Characters.ps1 -Content <converted packs folder> -RiflesOnly before packaging. Missing: $($missingRifleAssets -join ', ')"
+}
+
 # --- Version -------------------------------------------------------------------------------------------------------
 $gameIni = Get-Content -LiteralPath (Join-Path $repo 'Config/DefaultGame.ini') -Raw
 $projectVersion = [regex]::Match($gameIni, '(?m)^ProjectVersion=(\S+)\s*$').Groups[1].Value
@@ -309,9 +326,9 @@ Invoke-Native 'dotnet build (ReleaseDelta)' {
 Invoke-Native 'ReleaseDelta selftest' { & $deltaTool selftest | Out-Null }
 
 # --- Bridge and .NET runtime ---------------------------------------------------------------------------------------
-# Both are staged by OpenSCCT.Build.cs (RuntimeDependencies), which only stages a folder that exists when UBT runs.
-$binaries = Join-Path $repo 'Binaries'
-$dotNetFolder = Join-Path $binaries 'DotNet'
+# Keep the release runtime outside the project. Editors may be using it there, and an incremental
+# UBT build can reuse a target receipt written before Binaries/DotNet existed.
+$dotNetFolder = Join-Path $Out '.private-dotnet'
 $madeDotNet = $false
 try {
     Write-Host 'Building the bridge...'
@@ -321,7 +338,7 @@ try {
     }
 
     if (-not $NoDotNet) {
-        if (Test-Path -LiteralPath $dotNetFolder) { Fail "$dotNetFolder already exists: remove it (the script lays out the runtime itself)" }
+        if (Test-Path -LiteralPath $dotNetFolder) { Fail "private runtime staging directory already exists: $dotNetFolder" }
         # The installed runtime, laid out as an install root: host\fxr\<v>\hostfxr.dll and shared\Microsoft.NETCore.App\<v>
         # (what FScctDotNetHost::FindHostFxr looks for). The newest 10.x, as the bridge's runtimeconfig rolls forward.
         $dotnetRoot = Split-Path -Parent (Get-Command dotnet).Source
@@ -342,8 +359,7 @@ try {
 
     # --- Build ----------------------------------------------------------------------------------------------------
     # UBT is built here, not by BuildCookRun: one UBT runs at a time on the machine, and only UBT's own -WaitMutex
-    # waits for another (an editor's Live Coding, another checkout) instead of failing. -NoUBTMakefiles has the game
-    # target read OpenSCCT.Build.cs again, so the runtime folders laid out above are staged even when nothing compiles.
+    # waits for another (an editor's Live Coding, another checkout) instead of failing.
     $ubt = Join-Path $Engine 'Engine/Build/BatchFiles/Build.bat'
     Write-Host 'Building the editor (the cook runs it)...'
     Invoke-Native 'Build (editor)' { & $ubt OpenSCCTEditor Win64 Development "-project=$project" -WaitMutex *> (Join-Path $Out 'build-editor.log') }
@@ -385,15 +401,20 @@ try {
     if ($Configuration -eq 'Shipping') { $uatArgs += '-distribution' }
     & $uat @uatArgs *> (Join-Path $Out 'uat.log')
     if ($LASTEXITCODE -ne 0) { Fail "BuildCookRun failed (exit code $LASTEXITCODE; see $Out\uat.log)" }
+
+    # UAT normally adds Windows under the archive, but can archive directly when a path segment starts with Win64 or Windows.
+    $staged = Join-Path $archive 'Windows'
+    if (-not (Test-Path -LiteralPath (Join-Path $staged $starter))) { $staged = $archive }
+    if (-not (Test-Path -LiteralPath (Join-Path $staged $starter))) { Fail "the archive has no $starter (see $Out\uat.log)" }
+    if ($madeDotNet) {
+        $stagedRuntime = Join-Path $staged "$target/Binaries/DotNet"
+        # UAT may also have staged a developer's runtime through the target receipt. The package uses its selected version.
+        if (Test-Path -LiteralPath $stagedRuntime) { Remove-Item -LiteralPath $stagedRuntime -Recurse -Force }
+        Move-Item -LiteralPath $dotNetFolder -Destination $stagedRuntime
+    }
 } finally {
     if ($madeDotNet -and (Test-Path -LiteralPath $dotNetFolder)) { Remove-Item -LiteralPath $dotNetFolder -Recurse -Force }
 }
-
-$staged = Join-Path $archive 'Windows'
-# UAT archives straight into -archivedirectory, with no Windows folder, when a folder of that path starts with
-# Windows or Win64.
-if (-not (Test-Path -LiteralPath (Join-Path $staged $starter))) { $staged = $archive }
-if (-not (Test-Path -LiteralPath (Join-Path $staged $starter))) { Fail "the archive has no $starter (see $Out\uat.log)" }
 
 # Every imported map must be in the release. The cook writes into the Zen store, not loose files, so the check reads
 # staging's own list of what went into the paks (one line per file, with its staged path).
@@ -405,6 +426,8 @@ $unbundled = @($bundledMaps | Where-Object { -not $stagedFiles.Contains("$target
 if ($unbundled.Count -gt 0) {
     Fail "imported maps missing from the cook (see $ufsManifest; check DirectoriesToAlwaysCook=/Game/Imported/Maps in Config/DefaultGame.ini and $Out\uat.log): $($unbundled -join ', ')"
 }
+$unstagedRifles = @($rifleAssets | Where-Object { -not $stagedFiles.Contains("$target/$_") })
+if ($unstagedRifles.Count) { Fail "additional rifle assets missing from the cook (see ${ufsManifest}): $($unstagedRifles -join ', ')" }
 $importedCount = @($stagedFiles | Where-Object { $_ -like "$target/Content/Imported/*" }).Count
 Write-Host "Staged $($bundledMaps.Count) enhanced maps ($importedCount files from /Game/Imported)."
 # The map packs (Tools/Cook/Cook-MapPaks.ps1, docs/MAP-PAKS.md) are downloaded by the game, never shipped with it: a

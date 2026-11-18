@@ -1,4 +1,5 @@
 #include "Play/ScctRuntimeMapActor.h"
+#include "Play/ScctEquipmentModels.h"
 #include "Animation/SkeletalMeshActor.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -265,17 +266,88 @@ namespace
 		}
 	}
 
-	/** The original's texture scrolling as UV units per second (import_map.py pan_speed); only straight panners. */
-	FVector2D PanSpeed(const TSharedPtr<FJsonObject>& Animation)
+	/** Match the surface shader's UV parameters to the ones written by import_map.py for cooked maps. */
+	void ApplyUvAnimation(UMaterialInstanceDynamic& Material, const TSharedPtr<FJsonObject>& Animation, const UTexture2D* Texture,
+		const FString& Prefix = FString(), double Columns = 1.0, double Rows = 1.0)
 	{
-		if (!Animation.IsValid() || StringOf(Animation, TEXT("type")) != TEXT("panner"))
+		if (!Animation.IsValid())
 		{
-			return FVector2D::ZeroVector;
+			return;
 		}
-		const FVector Direction = VectorOf(Animation, TEXT("direction"), FVector::ZeroVector);
-		const double Yaw = Direction.Y / 65536.0 * 2.0 * PI;
-		const double Rate = NumberOf(Animation, TEXT("rate"));
-		return FVector2D(Rate * FMath::Cos(Yaw), Rate * FMath::Sin(Yaw));
+		const FString Kind = StringOf(Animation, TEXT("type"));
+		constexpr double RadiansPerUnit = 2.0 * UE_DOUBLE_PI / 65536.0;
+		FLinearColor A = FLinearColor::Transparent, B = FLinearColor::Transparent, C = FLinearColor::Transparent;
+		if (Kind == TEXT("panner") || Kind == TEXT("friendly_panner"))
+		{
+			const double Rate = NumberOf(Animation, TEXT("rate"));
+			if (Kind == TEXT("panner"))
+			{
+				const FVector Direction = VectorOf(Animation, TEXT("direction"), FVector::ZeroVector);
+				const double PlanarRate = Rate * FMath::Cos(Direction.X * RadiansPerUnit);
+				A.R = PlanarRate * FMath::Cos(Direction.Y * RadiansPerUnit);
+				A.G = PlanarRate * FMath::Sin(Direction.Y * RadiansPerUnit);
+			}
+			else
+			{
+				A.R = Rate * NumberOf(Animation, TEXT("pan_u")) / FMath::Max(1e-6, NumberOf(Animation, TEXT("scale_u"), 1.0));
+				A.G = Rate * NumberOf(Animation, TEXT("pan_v")) / FMath::Max(1e-6, NumberOf(Animation, TEXT("scale_v"), 1.0));
+			}
+			if (Prefix.IsEmpty())
+			{
+				Material.SetScalarParameterValue(TEXT("PanU"), A.R);
+				Material.SetScalarParameterValue(TEXT("PanV"), A.G);
+				return;
+			}
+			B.A = 1; // Sequence items pack their panner into AnimA/B with mode 1.
+		}
+		else if (Kind == TEXT("oscillator") || Kind == TEXT("rotator"))
+		{
+			// UE2 stores the pivot in texels of one frame, including when the texture is an AnimNext sheet.
+			const double Width = Texture ? FMath::Max(1.0, Texture->GetSizeX() / Columns) : 128.0;
+			const double Height = Texture ? FMath::Max(1.0, Texture->GetSizeY() / Rows) : 128.0;
+			if (Kind == TEXT("oscillator"))
+			{
+				A = FLinearColor(
+					NumberOf(Animation, TEXT("UOscillationAmplitude")), NumberOf(Animation, TEXT("UOscillationRate")),
+					NumberOf(Animation, TEXT("UOscillationType")), NumberOf(Animation, TEXT("UOscillationPhase")));
+				B = FLinearColor(
+					NumberOf(Animation, TEXT("VOscillationAmplitude")), NumberOf(Animation, TEXT("VOscillationRate")),
+					NumberOf(Animation, TEXT("VOscillationType")), 2);
+				C = FLinearColor(NumberOf(Animation, TEXT("VOscillationPhase")), 0,
+					NumberOf(Animation, TEXT("UOffset")) / Width, NumberOf(Animation, TEXT("VOffset")) / Height);
+			}
+			else
+			{
+				const FVector Rotation = VectorOf(Animation, TEXT("rotation"), FVector::ZeroVector);
+				A.R = Rotation.Y * RadiansPerUnit;
+				B.A = 3;
+				C.B = NumberOf(Animation, TEXT("u_offset")) / Width;
+				C.A = NumberOf(Animation, TEXT("v_offset")) / Height;
+			}
+		}
+		else
+		{
+			return;
+		}
+		Material.SetVectorParameterValue(*(Prefix + TEXT("AnimA")), A);
+		Material.SetVectorParameterValue(*(Prefix + TEXT("AnimB")), B);
+		Material.SetVectorParameterValue(*(Prefix + TEXT("AnimC")), C);
+	}
+
+	/** The opaque additive screen graphs: a fixed picture plus a panning second layer, with no separate mask. */
+	bool IsScrollingOverlay(const TSharedPtr<FJsonObject>& Combine)
+	{
+		if (NumberOf(Combine, TEXT("op"), -1) != 3 || NumberOf(Combine, TEXT("mod"), 1) != 1
+			|| NumberOf(Combine, TEXT("alpha_op")) != 0 || BoolOf(Combine, TEXT("invert_mask"))
+			|| StringOf(Combine, TEXT("tex1")).IsEmpty() || StringOf(Combine, TEXT("tex2")).IsEmpty())
+			return false;
+		for (const TCHAR* Field : {TEXT("mask"), TEXT("anim1"), TEXT("animMask"), TEXT("matrix1"), TEXT("matrix2"), TEXT("matrixMask")})
+		{
+			const auto Value = Combine->TryGetField(Field);
+			if (Value.IsValid() && !Value->IsNull()) return false;
+		}
+		const FString Type = StringOf(ObjectOf(Combine, TEXT("anim2")), TEXT("type"));
+		return Type == TEXT("panner") || Type == TEXT("friendly_panner");
 	}
 
 	/** Halves a BGRA8 picture (a box filter), for the next mip. */
@@ -564,7 +636,7 @@ void AScctRuntimeMapActor::ConfigureSky(const FString& Map)
 		if (!Base || Base->GetName() != TEXT("MI_ScctRuntimeSky")) continue;
 		if (auto* Mid = Dome->CreateDynamicMaterialInstance(0, Base))
 		{
-			if (auto* Image = LoadObject<UTexture2D>(nullptr, *Panorama)) Mid->SetTextureParameterValue(TEXT("Panorama"), Image);
+			if (auto* Image = LoadObject<UTextureCube>(nullptr, *Panorama)) Mid->SetTextureParameterValue(TEXT("Panorama"), Image);
 			Mid->SetVectorParameterValue(TEXT("Tint"), Tint);
 			Mid->SetScalarParameterValue(TEXT("Rotation"), Angle);
 			Mid->SetScalarParameterValue(TEXT("Brightness"), NumberOf(Look, TEXT("brightness")));
@@ -925,24 +997,41 @@ ASkeletalMeshActor* AScctRuntimeMapActor::SpawnAnimatedProp(const FString& MeshN
 	{
 		return nullptr;
 	}
-	const auto Document = ReadGlbJson(RenderFolder / TEXT("chars") / Package / (Name + TEXT(".glb")));
+	const FString File = FString(TEXT("chars")) / Package / (Name + TEXT(".glb"));
+	const FString MapFile = RenderFolder / File;
+	const bool bMapProp = FPaths::FileExists(MapFile);
+	const FString Source = bMapProp ? MapFile : FOpenSCCTModule::FindContentRoot() / TEXT("shared") / File;
+	const auto Document = ReadGlbJson(Source);
 	if (!Document)
 	{
 		return nullptr;
 	}
 	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
-	TArray<FString> Folders;
-	const FString Root = TEXT("/Game/Imported/Maps");
-	Registry.GetSubPaths(Root, Folders, false);
-	Folders.Sort();
-	const FString OwnFolder = Root / FPaths::GetCleanFilename(FPaths::GetPath(RenderFolder));
-	Folders.Remove(OwnFolder);
-	Folders.Insert(OwnFolder, 0);
-	const FString Suffix = FString(TEXT("Props")) / Package / Name / TEXT("SkeletalMeshes") / (Name + TEXT(".") + Name);
-	USkeletalMesh* Mesh = nullptr;
-	for (const FString& Folder : Folders)
+	TArray<FString> Candidates;
+	if (bMapProp)
 	{
-		const FAssetData Asset = Registry.GetAssetByObjectPath(FSoftObjectPath(Folder / Suffix));
+		const FString Root = TEXT("/Game/Imported/Maps");
+		TArray<FString> Folders;
+		Registry.GetSubPaths(Root, Folders, false);
+		Folders.Sort();
+		const FString OwnFolder = Root / FPaths::GetCleanFilename(FPaths::GetPath(RenderFolder));
+		Folders.Remove(OwnFolder);
+		Folders.Insert(OwnFolder, 0);
+		const FString Suffix = FString(TEXT("Props")) / Package / Name / TEXT("SkeletalMeshes") / (Name + TEXT(".") + Name);
+		for (const FString& Folder : Folders)
+		{
+			Candidates.Add(Folder / Suffix);
+		}
+	}
+	else
+	{
+		// Maps can place shared characters and equipment as ordinary animated scenery.
+		Candidates.Add(FScctEquipmentModels::AssetPathOfFile(Source));
+	}
+	USkeletalMesh* Mesh = nullptr;
+	for (const FString& Candidate : Candidates)
+	{
+		const FAssetData Asset = Registry.GetAssetByObjectPath(FSoftObjectPath(Candidate));
 		if (Asset.IsValid() && (Mesh = Cast<USkeletalMesh>(Asset.GetAsset())) != nullptr)
 		{
 			break;
@@ -1085,6 +1174,58 @@ UTexture2D* AScctRuntimeMapActor::TextureFor(const FString& RelativePath, bool b
 	return Texture;
 }
 
+void AScctRuntimeMapActor::ApplyMaterialSequence(UMaterialInstanceDynamic& Material, const TSharedPtr<FJsonObject>& Sequence)
+{
+	// scct_materials.py: nine texture slots, with their duration and fade flag packed four to a vector.
+	constexpr int32 SequenceSlots = 9;
+	constexpr int32 ClockRows = (SequenceSlots + 3) / 4;
+	FLinearColor Times[ClockRows] = {FLinearColor::Transparent, FLinearColor::Transparent, FLinearColor::Transparent};
+	FLinearColor Fades[ClockRows] = {FLinearColor::Transparent, FLinearColor::Transparent, FLinearColor::Transparent};
+	const auto& Items = ArrayOf(Sequence, TEXT("items"));
+	const int32 Count = FMath::Min(Items.Num(), SequenceSlots);
+	if (Items.Num() > Count)
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Runtime map: sequence %s has %d items, showing the first %d"),
+			*StringOf(Sequence, TEXT("source")), Items.Num(), Count);
+	}
+	float Duration = 0.0f;
+	for (int32 Slot = 0; Slot < Count; ++Slot)
+	{
+		const auto Item = Items[Slot]->AsObject();
+		const float Time = FMath::Max(0.0, NumberOf(Item, TEXT("time")));
+		Duration += Time;
+		Times[Slot / 4].Component(Slot % 4) = Time;
+		Fades[Slot / 4].Component(Slot % 4) = NumberOf(Item, TEXT("action")) == 1 ? 1.0f : 0.0f;
+
+		const auto Flipbook = ObjectOf(Item, TEXT("flipbook"));
+		UTexture2D* Picture = TextureFor(StringOf(Flipbook, TEXT("texture")));
+		FLinearColor Flip(1, 1, 1, 0);
+		if (Picture)
+		{
+			Flip = FLinearColor(FMath::Max(1.0, NumberOf(Flipbook, TEXT("cols"))), FMath::Max(1.0, NumberOf(Flipbook, TEXT("rows"))),
+				FMath::Max(1.0, NumberOf(Flipbook, TEXT("frames"))), NumberOf(Flipbook, TEXT("fps")));
+		}
+		else
+		{
+			Picture = TextureFor(StringOf(Item, TEXT("texture")));
+		}
+		if (Picture)
+		{
+			Material.SetTextureParameterValue(*FString::Printf(TEXT("SeqTex%d"), Slot), Picture);
+		}
+		const FString Prefix = FString::Printf(TEXT("Seq%d"), Slot);
+		Material.SetVectorParameterValue(*(Prefix + TEXT("Flip")), Flip);
+		ApplyUvAnimation(Material, ObjectOf(Item, TEXT("anim")), Picture, Prefix, Flip.R, Flip.G);
+	}
+	Material.SetVectorParameterValue(TEXT("SeqInfo"), FLinearColor(Count, Duration,
+		BoolOf(Sequence, TEXT("loop"), true) ? 1.0f : 0.0f, BoolOf(Sequence, TEXT("paused")) ? 1.0f : 0.0f));
+	for (int32 Row = 0; Row < ClockRows; ++Row)
+	{
+		Material.SetVectorParameterValue(*FString::Printf(TEXT("SeqTimes%d"), Row), Times[Row]);
+		Material.SetVectorParameterValue(*FString::Printf(TEXT("SeqFades%d"), Row), Fades[Row]);
+	}
+}
+
 void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, const TSharedPtr<FJsonObject>& MaterialDoc)
 {
 	const TSharedPtr<FJsonObject> Records = ObjectOf(MaterialDoc, TEXT("materials"));
@@ -1096,6 +1237,18 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 		Additive.Add(Key(StringOf(Object, TEXT("name"))));
 	}
 	Additive.Remove(FString());
+	TMap<FString, FString> Modulate;
+	for (const TSharedPtr<FJsonValue>& Entry : ArrayOf(MaterialDoc, TEXT("modulate")))
+	{
+		const TSharedPtr<FJsonObject> Object = Entry->AsObject();
+		const FString Mode = StringOf(Object, TEXT("mode"));
+		if (Mode == TEXT("darken") || Mode == TEXT("2x"))
+		{
+			Modulate.Add(Key(StringOf(Object, TEXT("key"))), Mode);
+			Modulate.Add(Key(StringOf(Object, TEXT("name"))), Mode);
+		}
+	}
+	Modulate.Remove(FString());
 	TMap<FString, FString> LightmapOf;
 	for (const TSharedPtr<FJsonValue>& Entry : ArrayOf(MaterialDoc, TEXT("lightmapped")))
 	{
@@ -1119,9 +1272,10 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 	UMaterialInterface* Surface = LoadObject<UMaterialInterface>(nullptr, SurfaceMaterial);
 	TMap<FString, UMaterialInterface*> Parents;
 	int32 NumParentsMissing = 0;
-	auto ParentOf = [&](const TCHAR* Blend, bool bUnlit, bool bTwoSided) -> UMaterialInterface*
+	auto ParentOf = [&](const TCHAR* Blend, bool bUnlit, bool bTwoSided, const TCHAR* Suffix) -> UMaterialInterface*
 	{
-		const FString Name = FString::Printf(TEXT("MI_ScctRuntime_%s_%s%s"), Blend, bUnlit ? TEXT("Unlit") : TEXT("Lit"), bTwoSided ? TEXT("_TwoSided") : TEXT(""));
+		const FString Name = FString::Printf(TEXT("MI_ScctRuntime_%s_%s%s%s"), Blend, bUnlit ? TEXT("Unlit") : TEXT("Lit"),
+			bTwoSided ? TEXT("_TwoSided") : TEXT(""), Suffix);
 		if (UMaterialInterface** Found = Parents.Find(Name))
 		{
 			return *Found;
@@ -1148,18 +1302,35 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 		const FString Source = StringOf(Record, TEXT("source")).IsEmpty() ? Name : StringOf(Record, TEXT("source"));
 
 		// import_map.py build_materials, for the surface kind (the class table of glass and water is the editor's).
+		const FString* MultiplyMode = Modulate.Find(Key(Name));
 		const bool bAdditive = Additive.Contains(Key(Name));
-		const bool bUnlit = BoolOf(Flags, TEXT("unlit")) || bAdditive;
+		const FString SelfLit = StringOf(Flags, TEXT("self_illum"));
+		const FString SelfLitMask = StringOf(Flags, TEXT("self_illum_mask"));
+		// The pack also flags shaders with a masked self-illumination layer as unlit. Their diffuse still takes light.
+		const bool bMaskedGlow = !SelfLit.IsEmpty() && !SelfLitMask.IsEmpty();
+		const bool bPackedUnlit = BoolOf(Flags, TEXT("unlit"));
+		const bool bUnlit = bAdditive || (bPackedUnlit && (!bMaskedGlow || Name.EndsWith(TEXT("__unlit"))));
 		const bool bTranslucent = BoolOf(Flags, TEXT("translucent"));
 		const bool bMasked = BoolOf(Flags, TEXT("masked"));
 		const bool bTwoSided = BoolOf(Flags, TEXT("two_sided"));
 		const TSharedPtr<FJsonObject> Flipbook = ObjectOf(Flags, TEXT("flipbook"));
 		const bool bGlowCard = bAdditive && !Flipbook.IsValid() && ContainsAny(Name, { TEXT("beam"), TEXT("rayon"), TEXT("flare"), TEXT("lenseffect"), TEXT("dca_fx") });
 		const bool bCaustics = bAdditive && Source.Contains(TEXT("caustic"), ESearchCase::IgnoreCase);
-		const TCHAR* Blend = bAdditive ? TEXT("Additive") : bTranslucent ? TEXT("Translucent") : bMasked ? TEXT("Masked") : TEXT("Opaque");
+		const TCHAR* Blend = MultiplyMode ? TEXT("Modulate") : bAdditive ? TEXT("Additive") : bTranslucent ? TEXT("Translucent") : bMasked ? TEXT("Masked") : TEXT("Opaque");
 		Counts.FindOrAdd(Blend)++;
 
-		UMaterialInterface* Parent = ParentOf(Blend, bUnlit, bTwoSided);
+		const auto Sequence = ObjectOf(ObjectOf(Flags, TEXT("sequences")), TEXT("diffuse"));
+		const bool bHasSequence = !ArrayOf(Sequence, TEXT("items")).IsEmpty();
+		const auto Combine = ObjectOf(Flags, TEXT("combine"));
+		UTexture2D* FirstLayer = nullptr;
+		UTexture2D* Overlay = nullptr;
+		if (!MultiplyMode && !bAdditive && !bTranslucent && !bMasked && !bTwoSided && !Flipbook && !bHasSequence && IsScrollingOverlay(Combine))
+		{
+			FirstLayer = TextureFor(StringOf(Combine, TEXT("tex1")));
+			Overlay = TextureFor(StringOf(Combine, TEXT("tex2")));
+		}
+		const bool bUseOverlay = FirstLayer && Overlay;
+		UMaterialInterface* Parent = ParentOf(Blend, MultiplyMode || bUnlit, bTwoSided, bHasSequence && !MultiplyMode ? TEXT("_Sequence") : bUseOverlay ? TEXT("_Overlay") : TEXT(""));
 		UMaterialInstanceDynamic* Instance = Parent != nullptr ? UMaterialInstanceDynamic::Create(Parent, this) : nullptr;
 		if (Instance == nullptr)
 		{
@@ -1167,22 +1338,40 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 			continue;
 		}
 
+		const TSharedPtr<FJsonObject> Pbr = ObjectOf(GltfMaterial, TEXT("pbrMetallicRoughness"));
 		FString TextureFile = StringOf(Flags, TEXT("texture"));
 		if (TextureFile.IsEmpty())
 		{
-			const TSharedPtr<FJsonObject> Pbr = ObjectOf(GltfMaterial, TEXT("pbrMetallicRoughness"));
 			TextureFile = ImageOfTexture(static_cast<int32>(NumberOf(ObjectOf(Pbr, TEXT("baseColorTexture")), TEXT("index"), -1.0)));
 		}
-		if (UTexture2D* Base = TextureFor(TextureFile))
+		UTexture2D* Base = bUseOverlay ? FirstLayer : TextureFor(TextureFile);
+		if (Base)
 		{
 			Instance->SetTextureParameterValue(TEXT("BaseColor"), Base);
+		}
+		else if (TextureFile.IsEmpty() && !bTranslucent && !bAdditive && !Flipbook && Pbr && Pbr->HasField(TEXT("baseColorFactor")))
+		{
+			// The converter stores an opaque ConstantColor in linear glTF RGB, without a texture.
+			const FVector RGB = VectorOf(Pbr, TEXT("baseColorFactor"), FVector::OneVector);
+			Instance->SetTextureParameterValue(TEXT("BaseColor"), LoadObject<UTexture2D>(nullptr, TEXT("/Engine/EngineResources/WhiteSquareTexture")));
+			Instance->SetVectorParameterValue(TEXT("Tint"), FLinearColor(RGB.X, RGB.Y, RGB.Z));
+		}
+		if (MultiplyMode)
+		{
+			Instance->SetScalarParameterValue(TEXT("Darken"), *MultiplyMode == TEXT("darken") ? 1.0f : 0.0f);
 		}
 		Instance->SetScalarParameterValue(TEXT("Emissive"), bGlowCard ? GlowCardBrightness : bCaustics ? EmissiveCaustics
 			: bAdditive ? EmissiveAdditive : bUnlit ? EmissiveUnlit : 0.0f);
 
-		const FVector2D Pan = PanSpeed(ObjectOf(Flags, TEXT("uv_anim")));
-		Instance->SetScalarParameterValue(TEXT("PanU"), Pan.X);
-		Instance->SetScalarParameterValue(TEXT("PanV"), Pan.Y);
+		ApplyUvAnimation(*Instance, ObjectOf(Flags, TEXT("uv_anim")), Base);
+		if (bUseOverlay)
+		{
+			Instance->SetTextureParameterValue(TEXT("OverlayTexture"), Overlay);
+			ApplyUvAnimation(*Instance, ObjectOf(Combine, TEXT("anim2")), Overlay, TEXT("Overlay"));
+			const auto SourceNode = ObjectOf(ObjectOf(MaterialDoc, TEXT("graph")), *Source);
+			if (!bUnlit && StringOf(SourceNode, TEXT("class")) == TEXT("Engine.Combiner"))
+				Instance->SetScalarParameterValue(TEXT("LightBeforeOverlay"), 1.f);
+		}
 		if (Flipbook.IsValid())
 		{
 			if (UTexture2D* Sheet = TextureFor(StringOf(Flipbook, TEXT("texture"))))
@@ -1195,24 +1384,26 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 			}
 		}
 
+		if (bHasSequence)
+		{
+			ApplyMaterialSequence(*Instance, Sequence);
+		}
+
 		if (!bUnlit)
 		{
 			// The self-lit part: lamp glass, screens, lit windows.
-			FString SelfLit;
-			if (Flags.IsValid() && Flags->TryGetStringField(TEXT("self_illum"), SelfLit))
+			if (!SelfLit.IsEmpty())
 			{
-				if (UTexture2D* Glow = TextureFor(SelfLit))
+				UTexture2D* Glow = TextureFor(SelfLit);
+				UTexture2D* MaskTexture = bMaskedGlow ? TextureFor(SelfLitMask) : nullptr;
+				if (Glow && (!bMaskedGlow || MaskTexture))
 				{
 					Instance->SetTextureParameterValue(TEXT("SelfIllumTexture"), Glow);
-					FString Mask;
-					if (Flags->TryGetStringField(TEXT("self_illum_mask"), Mask))
+					if (MaskTexture)
 					{
-						if (UTexture2D* MaskTexture = TextureFor(Mask))
-						{
-							Instance->SetTextureParameterValue(TEXT("SelfIllumMask"), MaskTexture);
-						}
+						Instance->SetTextureParameterValue(TEXT("SelfIllumMask"), MaskTexture);
 					}
-					Instance->SetScalarParameterValue(TEXT("SelfIllum"), EmissiveSelfIllum);
+					Instance->SetScalarParameterValue(TEXT("SelfIllum"), bPackedUnlit ? EmissiveUnlit : EmissiveSelfIllum);
 				}
 			}
 

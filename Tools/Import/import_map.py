@@ -212,6 +212,19 @@ def pan_speed(animation):
     return 0.0, 0.0
 
 
+def scrolling_overlay(flags):
+    """The opaque Combiner layout with one fixed picture and one scrolling additive layer."""
+    combine = flags.get("combine") or {}
+    if (combine.get("op") == 3 and combine.get("mod", 1) == 1 and not combine.get("alpha_op")
+            and combine.get("tex1") and combine.get("tex2")
+            and (combine.get("anim2") or {}).get("type") in ("panner", "friendly_panner")
+            and not any(combine.get(k) for k in ("mask", "invert_mask", "anim1", "animMask", "matrix1", "matrix2", "matrixMask"))
+            and not any(flags.get(k) for k in ("translucent", "masked", "two_sided", "flipbook"))
+            and not (flags.get("sequences") or {}).get("diffuse")):
+        return combine
+    return None
+
+
 def texture_size(texture, cells=(1, 1)):
     """A texture's (width, height) in texels, of one flipbook cell when it is a sheet of cells; (128, 128), the
     size the stock offsets assume, when the texture is not known."""
@@ -245,11 +258,14 @@ def uv_anim_vectors(animation, size, with_panner=False):
     return None
 
 
-def build_materials(material_doc):
+def build_materials(material_doc, gltf):
     """One material instance per glTF material. Returns {imported material asset name: instance}."""
     additive = {key(entry["key"]) for entry in material_doc.get("additive", []) if "key" in entry}
     additive |= {key(entry["name"]) for entry in material_doc.get("additive", []) if "name" in entry}
+    modulate = {key(entry[field]): entry["mode"] for entry in material_doc.get("modulate", [])
+                if entry.get("mode") in ("darken", "2x") for field in ("key", "name") if entry.get(field)}
     look_of, sets = load_surface_classes()
+    pbr_by_name = {m["name"]: m.get("pbrMetallicRoughness", {}) for m in gltf.get("materials", [])}
     # The level surfaces' lightmap page, by material (the converter makes one material per texture and page).
     lightmap_of = {key(entry["name"]): entry["lightmap"] for entry in material_doc.get("lightmapped", [])}
     parents = {name: unreal.load_asset(path) for name, path in
@@ -274,6 +290,12 @@ def build_materials(material_doc):
         sheet = (record["flags"].get("flipbook") or {}).get("texture")
         if sheet and os.path.exists(os.path.join(RENDER, sheet)):
             extra_files.add(os.path.join(RENDER, sheet))
+        combine = scrolling_overlay(record["flags"])
+        if combine:
+            for layer in ("tex1", "tex2"):
+                path = os.path.join(RENDER, combine[layer])
+                if os.path.exists(path):
+                    extra_files.add(path)
         # A MaterialSequence's items each have their own texture (or AnimNext sheet).
         for item in ((record["flags"].get("sequences") or {}).get("diffuse") or {}).get("items", []):
             for path in (item.get("texture"), (item.get("flipbook") or {}).get("texture")):
@@ -299,7 +321,7 @@ def build_materials(material_doc):
     # has no such animation: glow cards, glass, water).
     animated = {"rotators": 0, "oscillators": 0, "sequences": 0, "left still": 0}
 
-    def animate(instance, flags, base):
+    def animate(instance, flags, base, sequence_parent=False):
         """The material's oscillator or rotator, and its diffuse MaterialSequence. Surface master only."""
         moving = uv_anim_vectors(flags.get("uv_anim"), texture_size(base))
         if moving:
@@ -313,7 +335,8 @@ def build_materials(material_doc):
         if len(items) > scct_materials.SEQUENCE_SLOTS:
             log("sequence %s has %d items, the first %d are shown" % (sequence.get("source"), len(items), scct_materials.SEQUENCE_SLOTS))
             items = items[:scct_materials.SEQUENCE_SLOTS]
-        materials_lib.set_material_instance_static_switch_parameter_value(instance, "Sequence", True)
+        if not sequence_parent:
+            materials_lib.set_material_instance_static_switch_parameter_value(instance, "Sequence", True)
         times = [max(0.0, float(item.get("time") or 0.0)) for item in items]
         vector(instance, "SeqInfo", [len(items), sum(times), 0.0 if sequence.get("loop") is False else 1.0,
                                      1.0 if sequence.get("paused") else 0.0])
@@ -367,7 +390,11 @@ def build_materials(material_doc):
 
         class_name, look = look_of(record.get("source") or material_name)
         is_additive = key(imported) in additive
-        unlit = bool(flags.get("unlit")) or is_additive
+        self_lit = flags.get("self_illum")
+        mask = flags.get("self_illum_mask")
+        masked_glow = isinstance(self_lit, str) and bool(self_lit) and isinstance(mask, str) and bool(mask)
+        # Masked self-illumination lights its own pixels; the rest of the diffuse still takes scene lighting.
+        unlit = is_additive or (bool(flags.get("unlit")) and (not masked_glow or material_name.endswith("__unlit")))
         translucent = bool(flags.get("translucent"))
         # Glass and water get their own materials only where the original drew a see-through, lit surface.
         kind = look.get("kind", "surface")
@@ -389,7 +416,15 @@ def build_materials(material_doc):
         texture_file = flags.get("texture")
         base = texture_of(texture_file) if texture_file else None
         blend = None
-        if is_additive and not flags.get("flipbook") and GLOW_CARDS.search(material_name):
+        if key(imported) in modulate:
+            kind = "modulate"
+            parent = unreal.load_asset(scct_materials.MODULATE)
+            if not parent:
+                raise RuntimeError("missing modulate master: run Import-Assets.ps1 -MaterialsOnly")
+            materials_lib.set_material_instance_parent(instance, parent)
+            texture("BaseColor", base)
+            scalar("Darken", modulate[key(imported)] == "darken")
+        elif is_additive and not flags.get("flipbook") and GLOW_CARDS.search(material_name):
             materials_lib.set_material_instance_parent(instance, parents["card"])
             texture("BaseColor", base)
             scalar("Brightness", GLOW_CARD_BRIGHTNESS)
@@ -427,7 +462,27 @@ def build_materials(material_doc):
             scalar("SoftDepth", look.get("soft_depth", HAZE_SOFT_DEPTH))
             scalar("Emissive", look.get("emissive", HAZE_GLOW))
         else:
-            materials_lib.set_material_instance_parent(instance, parents["surface"])
+            parent = parents["surface"]
+            sequence_parent = translucent and not unlit and bool(((flags.get("sequences") or {}).get("diffuse") or {}).get("items"))
+            if sequence_parent:
+                parent = unreal.load_asset(scct_materials.TRANSLUCENT_SEQUENCE)
+                if not parent:
+                    raise RuntimeError("the translucent sequence material is missing: run Import-Assets.ps1 -MaterialsOnly")
+            combine = scrolling_overlay(flags) if not is_additive else None
+            if combine:
+                first, overlay = texture_of(combine["tex1"]), texture_of(combine["tex2"])
+                if first and overlay:
+                    parent = unreal.load_asset(scct_materials.SCROLLING_OVERLAY)
+                    if not parent:
+                        raise RuntimeError("the scrolling overlay material is missing: run Import-Assets.ps1 -MaterialsOnly")
+                    base = first
+            materials_lib.set_material_instance_parent(instance, parent)
+            if parent != parents["surface"]:
+                texture("OverlayTexture", overlay)
+                u, v = pan_speed(combine["anim2"])
+                vector(instance, "OverlayAnimA", (u, v, 0, 0))
+                source_node = material_doc.get("graph", {}).get(record.get("source"), {})
+                scalar("LightBeforeOverlay", not unlit and source_node.get("class") == "Engine.Combiner")
             texture("BaseColor", base)
             if texture_file:
                 stem = os.path.splitext(os.path.basename(texture_file))[0]
@@ -439,6 +494,12 @@ def build_materials(material_doc):
             scalar("Specular", look.get("specular", 0.5))
             scalar("MacroNormal", look.get("macro_normal", 1.0))
             tint = look.get("tint")
+            pbr = pbr_by_name.get(material_name, {})
+            if (not texture_file and "baseColorTexture" not in pbr and "baseColorFactor" in pbr
+                    and not translucent and not is_additive and not flags.get("flipbook")):
+                # glTF stores the solid colour in linear RGB. Keep it independent of the master's default picture.
+                texture("BaseColor", unreal.load_asset("/Engine/EngineResources/WhiteSquareTexture"))
+                tint = pbr["baseColorFactor"]
             if tint:
                 materials_lib.set_material_instance_vector_parameter_value(instance, "Tint", unreal.LinearColor(tint[0], tint[1], tint[2], 1.0))
 
@@ -459,12 +520,13 @@ def build_materials(material_doc):
             caustics = is_additive and CAUSTIC_SHEETS.search(record.get("source") or material_name)
             scalar("Emissive", EMISSIVE_CAUSTICS if caustics else EMISSIVE_ADDITIVE if is_additive
                    else (glow or EMISSIVE_UNLIT) if unlit else 0.0)
-            self_lit = flags.get("self_illum")
-            if isinstance(self_lit, str) and texture_of(self_lit) and not unlit:
-                texture("SelfIllumTexture", texture_of(self_lit))
-                mask = flags.get("self_illum_mask")
-                texture("SelfIllumMask", texture_of(mask) if isinstance(mask, str) else None)
-                scalar("SelfIllum", glow or EMISSIVE_SELF_ILLUM)
+            if isinstance(self_lit, str) and self_lit and not unlit:
+                glow_texture = texture_of(self_lit)
+                mask_texture = texture_of(mask) if masked_glow else None
+                if glow_texture and (not masked_glow or mask_texture):
+                    texture("SelfIllumTexture", glow_texture)
+                    texture("SelfIllumMask", mask_texture)
+                    scalar("SelfIllum", glow or (EMISSIVE_UNLIT if flags.get("unlit") else EMISSIVE_SELF_ILLUM))
 
             if not unlit:
                 scalar("AmbientFloor", AMBIENT_FLOOR)
@@ -481,7 +543,7 @@ def build_materials(material_doc):
             pan_u, pan_v = pan_speed(flags.get("uv_anim"))
             scalar("PanU", pan_u)
             scalar("PanV", pan_v)
-            animate(instance, flags, base)
+            animate(instance, flags, base, sequence_parent)
             flipbook = flags.get("flipbook")
             sheet = texture_of(flipbook["texture"]) if flipbook and flipbook.get("texture") else None
             if sheet:
@@ -549,7 +611,7 @@ def main():
             texture.set_editor_property("srgb", False)
             texture.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_NORMALMAP)
 
-    instances = build_materials(material_doc)
+    instances = build_materials(material_doc, gltf)
     log("materials: %d" % len(instances))
 
     # Every mesh gets the new materials, and Nanite for crisp shadows and cheap overdraw. Nanite draws only

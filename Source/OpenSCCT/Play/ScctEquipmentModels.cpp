@@ -133,7 +133,7 @@ const FScctEquipmentModel* FScctEquipmentModels::Find(const FScctEquipmentApi& A
 		return nullptr;
 	}
 
-	const FString& MeshName = Name(Api, MeshId);
+	const FString MeshName = Name(Api, MeshId);
 	const bool bOverride = Override != nullptr && Override->IsValid();
 	const FString Key = bOverride ? MeshName + TEXT("|") + Override->ToString() : MeshName;
 	if (const TUniquePtr<FScctEquipmentModel>* Known = Models.Find(Key))

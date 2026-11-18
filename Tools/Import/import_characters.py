@@ -6,8 +6,9 @@ Runs inside the editor's Python, with no window:
 What is imported:
   - the bodies SPerso.ATT_01 (spy) and SPerso.DEF_01 (merc), with their animations;
   - the equipment the bridge's catalog lists (Bridge/OpenScct.UnrealBridge/Equipment/EquipmentCatalog.cs): every
-    .glb of shared/chars/SWeaponFirst, SGoggle, OpenScctSidearms and OpenScctRifles, and the spy's eye-view arms
-    SPerso.ATT_01_fp. These come without their animations: the bridge computes every pose itself.
+    .glb of shared/chars/SWeaponFirst, SGoggle and OpenScctSidearms, the world and first-person models from
+    OpenScctRifles/models.json, and the spy's eye-view arms SPerso.ATT_01_fp. The bridge samples their original
+    animations directly from the converted files.
   - the goggle lens textures of shared/chars/SGoggle/textures, each with a lens material (the simulation names
     the lens colour per vision mode by texture).
 
@@ -15,6 +16,7 @@ Every file <Package>/<Mesh>.glb becomes /Game/Imported/Chars/<Package>/<Mesh>/Sk
 game looks for, whatever the mesh is called inside the file), with the original skeleton: the simulation's
 poses are computed for it. Nothing here is committed.
 """
+import json
 import os
 import re
 import sys
@@ -27,7 +29,7 @@ DEST = "/Game/Imported/Chars"
 BODIES = [("SPerso", "ATT_01"), ("SPerso", "DEF_01")]
 
 # The same rule as the bridge's catalog: these packages hold equipment, plus the spy's eye-view arms.
-EQUIPMENT_PACKAGES = ["SWeaponFirst", "SGoggle", "OpenScctSidearms", "OpenScctRifles"]
+EQUIPMENT_PACKAGES = ["SWeaponFirst", "SGoggle", "OpenScctSidearms"]
 EQUIPMENT_EXTRA = [("SPerso", "ATT_01_fp")]
 
 SURFACE_MATERIAL = "/Game/OpenSCCT/Materials/M_ScctSurface"
@@ -291,6 +293,68 @@ def use_lens_materials():
         editor_assets.save_loaded_asset(mesh, only_if_is_dirty=False)
 
 
+def import_rifles():
+    # The manifest lists the playable models. Auxiliary art (e.g. micro_red_dot.glb) is already
+    # skinned into the rifles that use it. Clips are sampled from the original GLB by the bridge.
+    package = "OpenScctRifles"
+    source = os.path.join(CHARS, package)
+    with open(os.path.join(source, "models.json"), encoding="utf-8") as manifest:
+        models = [(package, name + suffix) for name in json.load(manifest) for suffix in ("", "_first")]
+    for _, name in models:
+        if not os.path.isfile(os.path.join(source, name + ".glb")):
+            raise RuntimeError("missing rifle model %s/%s.glb" % (package, name))
+    import_models(models, pipelines_without_animations())
+
+    # Keep the authored material inputs, including the M4's transparent sight and unlit reticle.
+    # Interchange's lit glTF parent lacks the skeletal shader permutation in a cooked game.
+    # Enable it on a project-local copy and retain each instance's original texture/parameter bindings.
+    gltf = "/InterchangeAssets/gltf/Substrate/M_GLTF"
+    target = "%s/%s/Materials/M_RifleGltf" % (DEST, package)
+    if editor_assets.does_asset_exist(target):
+        parent = unreal.load_asset(target)
+    else:
+        folder, filename = target.rsplit("/", 1)
+        parent = asset_tools.duplicate_asset(filename, folder, unreal.load_object(None, gltf + ".M_GLTF"))
+    if not parent:
+        raise RuntimeError("could not create the rifle material at " + target)
+    if not parent.get_editor_property("used_with_skeletal_mesh"):
+        parent.set_editor_property("used_with_skeletal_mesh", True)
+        materials_lib.recompile_material(parent)
+    editor_assets.save_loaded_asset(parent)
+
+    for _, name in models:
+        if not name_mesh_after_file(package, name):
+            raise RuntimeError("missing imported mesh " + name)
+        meshes = skeletal_meshes_of(package, name)
+        for path in meshes:
+            mesh = unreal.load_asset(path)
+            slots = mesh.get_editor_property("materials")
+            restored = False
+            for index, slot in enumerate(slots):
+                # The original instance is named after the source material. Restore its binding on
+                # assets that an earlier import converted to generic equipment materials.
+                material_path = "%s/%s/%s/Materials/%s" % (DEST, package, name, slot.material_slot_name)
+                material = unreal.load_asset(material_path)
+                if not isinstance(material, unreal.MaterialInstanceConstant):
+                    raise RuntimeError("missing authored rifle material " + material_path)
+                if material.parent.get_path_name() == gltf + ".M_GLTF":
+                    materials_lib.set_material_instance_parent(material, parent)
+                    materials_lib.update_material_instance(material)
+                    editor_assets.save_loaded_asset(material, only_if_is_dirty=False)
+                if slot.material_interface != material:
+                    slot.material_interface = material
+                    slots[index] = slot
+                    restored = True
+            if restored:
+                mesh.set_editor_property("materials", slots)
+                editor_assets.save_loaded_asset(mesh, only_if_is_dirty=False)
+        log("rifle %s: %d skinned parts" % (name, len(meshes)))
+
+
+if "--rifles-only" in sys.argv:
+    import_rifles()
+    sys.exit(0)
+
 surface = unreal.load_asset(SURFACE_MATERIAL)
 # The surface material is a committed asset built by scct_materials.py, which gives it the skeletal mesh and
 # Nanite usage the characters need. It is never changed or saved from here.
@@ -308,6 +372,8 @@ import_models(equipment, pipelines_without_animations())
 for package, mesh_name in equipment:
     if name_mesh_after_file(package, mesh_name):
         set_materials(package, mesh_name, surface, equipment_look)
+if os.path.isdir(os.path.join(CHARS, "OpenScctRifles")):
+    import_rifles()
 
 # The lit goggle lenses (one colour per vision mode) and the rifle's rate-of-fire display (one per setting).
 glow = unreal.load_asset(GLOW_MATERIAL)

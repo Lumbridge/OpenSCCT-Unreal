@@ -52,6 +52,59 @@ def instance_at(path):
     return asset_tools.create_asset(name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
 
 
+def build_sequence_parent(surface_instance, lit_translucency=False):
+    # The Sequence switch has to be compiled before packaging. Only surfaces with a MaterialSequence use this child.
+    instance = instance_at(FOLDER + "/" + surface_instance.get_name() + "_Sequence")
+    if lit_translucency:
+        import scct_materials
+        master = unreal.load_asset(scct_materials.TRANSLUCENT_SEQUENCE)
+        if not master:
+            raise RuntimeError("the translucent sequence material is missing: run Import-Assets.ps1 -MaterialsOnly")
+        materials_lib.set_material_instance_parent(instance, master)
+        materials_lib.clear_all_material_instance_parameters(instance)
+        instance.set_editor_property("base_property_overrides", surface_instance.get_editor_property("base_property_overrides"))
+    else:
+        materials_lib.set_material_instance_parent(instance, surface_instance)
+        materials_lib.set_material_instance_static_switch_parameter_value(instance, "Sequence", True)
+    materials_lib.update_material_instance(instance)
+    editor_assets.save_loaded_asset(instance)
+
+
+def build_overlay_parents():
+    import scct_materials
+    master = unreal.load_asset(scct_materials.SCROLLING_OVERLAY)
+    if not master:
+        raise RuntimeError("the scrolling overlay material is missing: run Import-Assets.ps1 -MaterialsOnly")
+    for unlit in (False, True):
+        name = "MI_ScctRuntime_Opaque_%s_Overlay" % ("Unlit" if unlit else "Lit")
+        instance = instance_at(FOLDER + "/" + name)
+        materials_lib.set_material_instance_parent(instance, master)
+        overrides = instance.get_editor_property("base_property_overrides")
+        overrides.set_editor_property("override_shading_model", unlit)
+        overrides.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT if unlit
+                                     else unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
+        instance.set_editor_property("base_property_overrides", overrides)
+        materials_lib.update_material_instance(instance)
+        editor_assets.save_loaded_asset(instance)
+
+
+def build_modulate_parents():
+    import scct_materials
+    master = unreal.load_asset(scct_materials.MODULATE)
+    if not master:
+        raise RuntimeError("the modulate material is missing: run Import-Assets.ps1 -MaterialsOnly")
+    for two_sided in (False, True):
+        name = "MI_ScctRuntime_Modulate_Unlit" + ("_TwoSided" if two_sided else "")
+        instance = instance_at(FOLDER + "/" + name)
+        materials_lib.set_material_instance_parent(instance, master)
+        overrides = instance.get_editor_property("base_property_overrides")
+        overrides.set_editor_property("override_two_sided", two_sided)
+        overrides.set_editor_property("two_sided", two_sided)
+        instance.set_editor_property("base_property_overrides", overrides)
+        materials_lib.update_material_instance(instance)
+        editor_assets.save_loaded_asset(instance)
+
+
 def build_materials():
     surface = unreal.load_asset(SURFACE)
     if not surface:
@@ -74,8 +127,11 @@ def build_materials():
                 instance.set_editor_property("base_property_overrides", overrides)
                 materials_lib.update_material_instance(instance)
                 editor_assets.save_loaded_asset(instance)
-                made += 1
-    log("surface instances: %d" % made)
+                build_sequence_parent(instance, not unlit and blend_name in ("Additive", "Translucent"))
+                made += 2
+    build_overlay_parents()
+    build_modulate_parents()
+    log("surface instances: %d" % (made + 4))
 
 
 def build_level():
@@ -171,6 +227,7 @@ def build_level():
     log("saved %s (sky: %s)" % (level_path, sky_kind))
 
 
-build_materials()
-build_level()
-editor_assets.save_directory(FOLDER, only_if_is_dirty=True, recursive=True)
+if __name__ == "__main__":
+    build_materials()
+    build_level()
+    editor_assets.save_directory(FOLDER, only_if_is_dirty=True, recursive=True)

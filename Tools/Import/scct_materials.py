@@ -14,6 +14,9 @@ import unreal
 MATERIALS = "/Game/OpenSCCT/Materials"
 THIRD_PARTY = "/Game/OpenSCCT/ThirdParty"
 SURFACE = MATERIALS + "/M_ScctSurface"
+TRANSLUCENT_SEQUENCE = MATERIALS + "/M_ScctTranslucentSequence"
+SCROLLING_OVERLAY = MATERIALS + "/M_ScctScrollingOverlay"
+MODULATE = MATERIALS + "/M_ScctModulate"
 GLASS = MATERIALS + "/M_ScctGlass"
 WATER = MATERIALS + "/M_ScctWater"
 SKY = MATERIALS + "/M_ScctSky"
@@ -141,7 +144,7 @@ float start = 0.0;
 return picked;""" % (SEQUENCE_SLOTS, SEQUENCE_SLOTS)
 
 
-def sequence_colour(g, time):
+def sequence_colour(g, time, shared_samplers=False):
     """The colour of a MaterialSequence: each item is its own texture with its own modifier (AnimA/B/C, as
     uv_anim_code) and AnimNext flipbook (SeqFlip = columns, rows, frames, fps), sampled with the material's own
     sampling (so mip selection works on every kind of mesh), and the clock picks the two items to show and blends
@@ -160,7 +163,11 @@ def sequence_colour(g, time):
                       " return uv;", FLOAT2, UV=texcoord, T=time,
                       A=g.vector4("Seq%dAnimA" % slot, (0, 0, 0, 0)), B=g.vector4("Seq%dAnimB" % slot, (0, 0, 0, 0)),
                       C=g.vector4("Seq%dAnimC" % slot, (0, 0, 0, 0)), Flip=g.vector4("Seq%dFlip" % slot, (1, 1, 1, 0)))
-        samples["S%d" % slot] = (g.texture("SeqTex%d" % slot, "/Engine/EngineResources/WhiteSquareTexture", uvs=uv), "RGBA")
+        sample = g.texture("SeqTex%d" % slot, "/Engine/EngineResources/WhiteSquareTexture", uvs=uv)
+        if shared_samplers:
+            # Runtime frame textures all use wrap addressing. One sampler leaves room for forward translucency on SM5.
+            sample.set_editor_property("sampler_source", unreal.SamplerSourceMode.SSM_WRAP_WORLD_GROUP_SETTINGS)
+        samples["S%d" % slot] = (sample, "RGBA")
     pick = "float4 s[%d] = { %s }; int a = (int)(W.x + 0.5); int b = (int)(W.y + 0.5); return lerp(s[a], s[b], W.z);" % (
         SEQUENCE_SLOTS, ", ".join("S%d" % slot for slot in range(SEQUENCE_SLOTS)))
     return g.custom(pick, FLOAT4, W=clock, **samples)
@@ -351,8 +358,15 @@ def pawn_light(g, normal, world_position):
     return term, (inputs["Colour3"][0], "A")
 
 
-def build_surface(cosmetic=False):
-    g = Graph("/Game/OpenSCCT/Materials/M_ScctCosmeticFinish" if cosmetic else SURFACE)
+def build_surface(cosmetic=False, scrolling_overlay=False, translucent_sequence=False):
+    path = SURFACE
+    if cosmetic:
+        path = "/Game/OpenSCCT/Materials/M_ScctCosmeticFinish"
+    elif scrolling_overlay:
+        path = SCROLLING_OVERLAY
+    elif translucent_sequence:
+        path = TRANSLUCENT_SEQUENCE
+    g = Graph(path)
     material = g.material
     if not cosmetic:
         # Legacy imported and runtime lit-translucent instances inherit this setting from the opaque master.
@@ -381,7 +395,20 @@ def build_surface(cosmetic=False):
     sampled = g.texture("BaseColor", "/Engine/EngineMaterials/DefaultDiffuse", uvs=uv)
     # A MaterialSequence (screens, alarm signs, blinking lamps) replaces the texture with its timeline when the
     # instance turns "Sequence" on; every other instance compiles without it.
-    picked = g.static_switch("Sequence", sequence_colour(g, time), (sampled, "RGBA"))
+    if scrolling_overlay:
+        # UE2 adds the moving layer in the stored sRGB space. The base picture and its lettering stay fixed.
+        overlay_uv = g.custom("return UV + frac(T * Speed.xy);", FLOAT2, UV=uv, T=time,
+                              Speed=g.vector4("OverlayAnimA", (0, 0, 0, 0)))
+        overlay = g.texture("OverlayTexture", "/Engine/EngineResources/Black", uvs=overlay_uv)
+        light_first = g.scalar("LightBeforeOverlay", 0.0)
+        picked = g.custom("float3 both = sRGBToLinear(saturate(LinearToSrgb(Base.rgb) + LinearToSrgb(Layer)));"
+                          " return float4(lerp(both, Base.rgb, LightFirst), Base.a);", FLOAT4,
+                          Base=(sampled, "RGBA"), Layer=(overlay, "RGB"), LightFirst=light_first)
+        picked.set_editor_property("include_file_paths", ["/Engine/Private/GammaCorrectionCommon.ush"])
+    elif translucent_sequence:
+        picked = sequence_colour(g, time, shared_samplers=True)
+    else:
+        picked = g.static_switch("Sequence", sequence_colour(g, time), (sampled, "RGBA"))
     base_rgb = g.custom("return P.rgb;", FLOAT3, P=picked)
     base = {"RGB": base_rgb, "G": g.custom("return P.g;", FLOAT1, P=picked), "A": g.custom("return P.a;", FLOAT1, P=picked)}
     tint = g.colour("Tint", (1, 1, 1, 1))
@@ -543,6 +570,10 @@ def build_surface(cosmetic=False):
                     Painted=painted_additive, VC=vertex_colour,
                     Base=base["RGB"], Tint=tint, Whole=g.scalar("Emissive", 0.0),
                     Lit=(self_lit, "RGB"), Mask=(self_mask, "A"), Strength=g.scalar("SelfIllum", 0.0))
+    if scrolling_overlay:
+        # A bare opaque Combiner lights stage 1 before adding stage 2 (e.g. the Prison oscilloscope trace).
+        glow = g.custom("return Glow + Layer * LightFirst;", FLOAT3, Glow=glow,
+                        Layer=(overlay, "RGB"), LightFirst=light_first)
     # ---- the least light. The original never drew a lit surface black: every zone had an ambient light, and its
     # darkest rooms were dim shapes, not a black screen. Real lights and real shadows have no such floor, and a room
     # whose lamps did not survive in the map file is pitch dark however far the eye opens. So every lit surface
@@ -643,6 +674,28 @@ def forward_lit_translucent(material):
     material.set_editor_property("translucency_lighting_mode", unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
     material.set_editor_property("screen_space_reflections", True)
     material.set_editor_property("used_with_nanite", True)
+
+
+def build_modulate():
+    g = Graph(MODULATE)
+    g.material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MODULATE)
+    g.material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    # The D3D9 framebuffer blend is a multiplication. With Darken the factor is (1 - source);
+    # with Modulate it is 2 * source. UE textures and the destination framebuffer are linear.
+    base = g.texture("BaseColor", "/Engine/EngineResources/Black")
+    vertex_light = g.node(unreal.MaterialExpressionScalarParameter, parameter_name="BakedVertexLight", default_value=0.0,
+                          use_custom_primitive_data=True, primitive_data_index=BAKED_VERTEX_SLOT)
+    # The framebuffer sees the output of the texture stage, after MODULATE2X with the mesh's baked light.
+    # On the tutorial bridge its vertex colours are only a few percent: inverting the raw yellow diffuse
+    # instead of the lit source would turn the pane nearly black.
+    factor = g.custom("float3 light = UseVC > 0.5 ? 2.0 * VC : 1.0;"
+                      " float3 c = saturate(LinearToSrgb(saturate(C)) * light);"
+                      " return sRGBToLinear(Darken > 0.5 ? 1.0 - c : 2.0 * c);",
+                      FLOAT3, C=(base, "RGB"), VC=g.node(unreal.MaterialExpressionVertexColor),
+                      UseVC=vertex_light, Darken=g.scalar("Darken", 0.0))
+    factor.set_editor_property("include_file_paths", ["/Engine/Private/GammaCorrectionCommon.ush"])
+    g.output(factor, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    return g.finish()
 
 
 def build_glass():
@@ -812,6 +865,9 @@ def build_sky():
 
 def build_all():
     build_surface()
+    build_surface(scrolling_overlay=True)
+    build_surface(translucent_sequence=True)
+    build_modulate()
     build_glass()
     build_water()
     build_sky()

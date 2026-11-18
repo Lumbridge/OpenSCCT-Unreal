@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using OpenScct.Core;
+using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
 using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Equipment;
@@ -119,6 +120,25 @@ internal static unsafe class Probe
         }
 
         Console.WriteLine($"equipment mesh files the pose code could not read (not in the catalog, never drawn): {unread}");
+
+        // The world mesh and the eye-view rig must both be usable. Previously every rifle's
+        // matrix-authored ADS joint made the eye-view model disappear while the world gun worked.
+        string shared = System.IO.Path.Combine(content, "shared");
+        if (System.IO.Directory.Exists(System.IO.Path.Combine(chars, "OpenScctRifles")))
+        {
+            foreach (MercRifleDefinition rifle in MercRifles.All)
+            {
+                EquipmentModel? world = EquipmentModel.Load(rifle.Asset, shared);
+                EquipmentModel? first = EquipmentModel.Load(rifle.Asset + "_first", shared);
+                if (world is not { MuzzleBone: >= 0 } || first is not { MuzzleBone: >= 0 } ||
+                    first.Character.FindBone("ADS") < 0 || first.Character.Find("FirstDrawStEd2") is null ||
+                    first.Character.Find("FirstShooStFd2") is null || first.Character.Find("FirstReloStFd2") is null)
+                {
+                    Console.WriteLine($"FAILED: {rifle.Name} has no complete world/first-person rig: {EquipmentModel.FailureOf(rifle.Asset + "_first")}");
+                    return false;
+                }
+            }
+        }
 
         var info = new BridgeBoneInfo[128];
         char* text = stackalloc char[260];

@@ -2,8 +2,10 @@
 
 #include "Brushes/SlateColorBrush.h"
 #include "Engine/Texture2D.h"
+#include "Framework/Application/SlateApplication.h"
 #include "ImageUtils.h"
 #include "Menu/SScctMapPicker.h"
+#include "Menu/ScctMenuNav.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Menu/ScctSetupRowsView.h"
 #include "Misc/Paths.h"
@@ -23,7 +25,6 @@ namespace Ui = ScctMenuStyle;
 namespace
 {
 	constexpr float OptionsWidth = 1260.0f;
-	constexpr float OptionsHeight = 540.0f;
 
 	/** An options line as its pairs, in order. */
 	TArray<TPair<FString, FString>> Pairs(const FString& Line)
@@ -93,7 +94,7 @@ void SScctSessionOptions::Construct(const FArguments& InArgs)
 	Dialogs = InArgs._Dialogs;
 	Maps = ScctHostSetup::Maps();
 
-	ChildSlot.HAlign(HAlign_Left).VAlign(VAlign_Top)[ SAssignNew(Body, SBox) ];
+	ChildSlot.HAlign(HAlign_Left)[ SAssignNew(Body, SBox) ];
 	if (UScctOnlineSubsystem* Visit = Online.Get())
 	{
 		ChangedHandle = Visit->OnChanged.AddSP(this, &SScctSessionOptions::HandleChanged);
@@ -117,6 +118,23 @@ void SScctSessionOptions::Open()
 	bControlShown = CanControl();
 	Rebuild();
 	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby Session Options open (%s), %d hostable map(s) here"), CanControl() ? TEXT("may change the setup") : TEXT("read-only"), Maps.Num());
+}
+
+TSharedPtr<SWidget> SScctSessionOptions::GetInitialControl() const
+{
+	if (const TSharedPtr<SWidget> Active = ActiveTabButton.Pin())
+	{
+		return Active;
+	}
+	return ScctMenuNav::FindFirstFocusable(RowsBox);
+}
+
+void SScctSessionOptions::FocusInitialControl() const
+{
+	if (const TSharedPtr<SWidget> Focus = GetInitialControl())
+	{
+		FSlateApplication::Get().SetAllUserFocus(Focus, EFocusCause::SetDirectly);
+	}
 }
 
 void SScctSessionOptions::HandleChanged()
@@ -453,18 +471,15 @@ TSharedRef<SWidget> SScctSessionOptions::BuildOptions()
 	if (bControl && !Maps.IsEmpty())
 	{
 		// The controller picks from the maps this game can show; a pick loads that map's rules into the draft.
-		Left->AddSlot().AutoHeight()
+		Left->AddSlot().FillHeight(1.0f)
 		[
-			SNew(SBox).HeightOverride(OptionsHeight - 80.0f)
-			[
-				SAssignNew(Picker, SScctMapPicker)
-				.Dialogs(Dialogs)
-				.OnConfirmed(FSimpleDelegate::CreateSPLambda(this, [this] { if (IsDirty()) Apply(); else OnClose.ExecuteIfBound(); }))
-				.Maps(Maps)
-				.TileWidth(124.0f)
-				.Selected(TAttribute<FString>::CreateLambda([this] { return ShownMap(); }))
-				.OnPicked(FOnScctMapPicked::CreateLambda([this](const FString& Map) { Edit(TEXT("Map ") + Map); }))
-			]
+			SAssignNew(Picker, SScctMapPicker)
+			.Dialogs(Dialogs)
+			.OnConfirmed(FSimpleDelegate::CreateSPLambda(this, [this] { if (IsDirty()) Apply(); else OnClose.ExecuteIfBound(); }))
+			.Maps(Maps)
+			.TileWidth(124.0f)
+			.Selected(TAttribute<FString>::CreateLambda([this] { return ShownMap(); }))
+			.OnPicked(FOnScctMapPicked::CreateLambda([this](const FString& Map) { Edit(TEXT("Map ") + Map); }))
 		];
 	}
 	else
@@ -488,11 +503,11 @@ TSharedRef<SWidget> SScctSessionOptions::BuildOptions()
 				}), 11.5f, TAttribute<FSlateColor>::CreateLambda([this] { return FSlateColor(bDraftConflict ? ScctHudStyle::Danger() : ScctHudStyle::TextDim()); }),
 					ScctHudStyle::EWeight::Regular, true)
 			]
-			+ SVerticalBox::Slot().AutoHeight()
+			+ SVerticalBox::Slot().FillHeight(1.0f)
 			[
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().FillWidth(0.54f).Padding(0.0f, 0.0f, 26.0f, 0.0f)[ Left ]
-				+ SHorizontalBox::Slot().FillWidth(0.46f)[ SAssignNew(RowsBox, SBox).HeightOverride(OptionsHeight) ]
+				+ SHorizontalBox::Slot().FillWidth(0.46f)[ SAssignNew(RowsBox, SBox) ]
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 14.0f)[ Ui::Rule() ]
 			+ SVerticalBox::Slot().AutoHeight()
@@ -566,6 +581,7 @@ TSharedRef<SWidget> SScctSessionOptions::BuildRows()
 
 	if (bAlternateOpen)
 	{
+		ActiveTabButton.Reset();
 		const TSharedRef<SHorizontalBox> Buttons = SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
 			[
@@ -627,7 +643,21 @@ TSharedRef<SWidget> SScctSessionOptions::BuildRows()
 
 	const auto TabButton = [this](const TCHAR* Label, ETab Target)
 	{
-		return Ui::Button(Ui::ToText(Label), FOnClicked::CreateLambda([this, Target] { Tab = Target; RefreshOptions(); return FReply::Handled(); }), Tab == Target, Ui::Accent(), 110.0f);
+		const TSharedRef<SButton> Button = Ui::Button(Ui::ToText(Label), FOnClicked::CreateLambda([this, Target]
+		{
+			if (Tab != Target)
+			{
+				Tab = Target;
+				RefreshOptions();
+				FocusInitialControl();
+			}
+			return FReply::Handled();
+		}), Tab == Target, Ui::Accent(), 110.0f);
+		if (Tab == Target)
+		{
+			ActiveTabButton = Button;
+		}
+		return Button;
 	};
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 12.0f)

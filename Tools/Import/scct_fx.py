@@ -256,8 +256,8 @@ class MapEffects:
         self.spawn, self.texture_of, self.import_files, self.log = spawn, texture_of, import_files, log
         self.instances = {}
         self.props = {}
-        shared = os.path.join(render, "..", "..", "..", "shared", "classes.json")
-        self.classes = load(shared).get("classes", {})
+        self.shared = os.path.join(render, "..", "..", "..", "shared")
+        self.classes = load(os.path.join(self.shared, "classes.json")).get("classes", {})
         beams = load(os.path.join(render, "lightbeams.json")).get("beams", [])
         self.beams = {beam["name"]: beam for beam in beams if beam.get("lightOn", True)}
         self.beam_count = 0
@@ -737,28 +737,33 @@ class MapEffects:
     # -----------------------------------------------------------------------------------------------------------
 
     def prop_assets(self, asset):
-        """Imports a skeletal mesh of the map (render/chars/<package>/<mesh>.glb) once and returns
-        (mesh, {sequence key: animation}, rotation origin, mesh scale), or None when the file is missing."""
+        """Finds a map or shared mesh, its clip paths, rotation origin and mesh scale."""
         if asset in self.props:
             return self.props[asset]
         package, name = asset.split(".", 1)
-        source = os.path.join(self.render, "chars", package, name + ".glb")
+        relative = os.path.join("chars", package, name + ".glb")
+        source = os.path.join(self.render, relative)
+        local = os.path.isfile(source)
+        if not local:
+            source = os.path.join(self.shared, relative)
         result = None
         if os.path.exists(source):
-            folder = "%s/Props/%s" % (self.dest, package)
+            folder = "%s/Props/%s" % (self.dest, package) if local else "/Game/Imported/Chars/" + package
             base = "%s/%s" % (folder, re.sub(r"[^A-Za-z0-9_]", "_", name))
-            if not editor_assets.does_directory_exist(base):
+            if local and not editor_assets.does_directory_exist(base):
                 self.import_files([source], folder)
             mesh, sequences = None, {}
-            for path in editor_assets.list_assets(base, recursive=True):
-                loaded = unreal.load_asset(path)
-                if isinstance(loaded, unreal.SkeletalMesh):
-                    mesh = loaded
-                elif isinstance(loaded, unreal.AnimSequence):
-                    sequences[key(str(loaded.get_name()))] = loaded
+            registry = unreal.AssetRegistryHelpers.get_asset_registry()
+            for entry in registry.get_assets_by_path(base + "/SkeletalMeshes", recursive=True):
+                kind = str(entry.asset_class_path.asset_name)
+                if kind == "SkeletalMesh":
+                    mesh = entry.get_asset()
+                elif kind == "AnimSequence":
+                    sequences[key(str(entry.asset_name))] = str(entry.package_name)
             if mesh:
                 document = glb_json(source)
-                self.dress_prop(mesh, base, document)
+                if local:
+                    self.dress_prop(mesh, base, document)
                 extras = document.get("extras", {}).get("svmap", {})
                 result = (mesh, sequences, extras.get("rotOrigin", [0, 0, 0]), extras.get("meshScale", [1.0, 1.0, 1.0]))
         if not result:
@@ -855,7 +860,7 @@ class MapEffects:
                 playing = bool(props.get("bAutoStart")) or not names
                 component.set_editor_property("animation_mode", unreal.AnimationMode.ANIMATION_SINGLE_NODE)
                 data = component.get_editor_property("animation_data")
-                data.set_editor_property("anim_to_play", sequence)
+                data.set_editor_property("anim_to_play", unreal.load_asset(sequence))
                 data.set_editor_property("saved_looping", playing)
                 data.set_editor_property("saved_playing", playing)
                 data.set_editor_property("saved_position", 0.0)

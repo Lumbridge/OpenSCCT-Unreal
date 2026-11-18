@@ -38,6 +38,10 @@ public:
 	/** The page is about to be shown: the draft follows the server's setup, the rows are made again. */
 	void Open();
 
+	/** The first available control in the settings pane, for entry and controller focus recovery. */
+	TSharedPtr<SWidget> GetInitialControl() const;
+	void FocusInitialControl() const;
+
 	/** Unattended: puts an options line into the draft (see -ScctLobbyApply in Menu/SScctMenuLobby.cpp). */
 	void FillDraft(const FString& Line);
 
@@ -108,6 +112,7 @@ private:
 	TArray<FScctSetupRow> Rows;
 	FString VoiceHint, BotHint, DraftDescription;
 	TSharedPtr<SBox> RowsBox;
+	TWeakPtr<SWidget> ActiveTabButton;
 	TSharedPtr<SScctMapPicker> Picker;
 
 	TArray<FScctHostMap> Maps;

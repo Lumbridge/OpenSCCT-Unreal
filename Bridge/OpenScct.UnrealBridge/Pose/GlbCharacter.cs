@@ -297,11 +297,6 @@ public sealed class GlbCharacter
         for (int b = 0; b < count; b++)
         {
             JsonElement node = nodes[joints[b]];
-            if (node.TryGetProperty("matrix", out _))
-            {
-                throw new InvalidDataException($"{path}: bone {b} has a matrix; the pose build needs translation, rotation and scale.");
-            }
-
             BoneNames[b] = node.TryGetProperty("name", out JsonElement name) ? name.GetString() ?? "" : "";
             // Among the skin's joints a later one of the same name takes it, as before nodes outside the skin counted
             // as bones; such a node never takes a name a joint (or an earlier such node) has.
@@ -315,11 +310,7 @@ public sealed class GlbCharacter
             }
             // A bone under a node that is not a bone is a root: the converter writes the skeleton at the scene's top.
             Parents[b] = parentNode[joints[b]] >= 0 ? boneOfNode[parentNode[joints[b]]] : -1;
-            RestPosition[b] = node.TryGetProperty("translation", out JsonElement t) ? Vector3Of(t) : Vector3.Zero;
-            RestRotation[b] = node.TryGetProperty("rotation", out JsonElement r)
-                ? Quaternion.Normalize(new Quaternion(r[0].GetSingle(), r[1].GetSingle(), r[2].GetSingle(), r[3].GetSingle()))
-                : Quaternion.Identity;
-            RestScale[b] = node.TryGetProperty("scale", out JsonElement s) ? Vector3Of(s) : Vector3.One;
+            ReadNodeTrs(node, out RestPosition[b], out RestRotation[b], out RestScale[b]);
         }
 
         // The nodes above the skeleton: up from the first joint to its topmost bone, then every node over that.
@@ -431,26 +422,48 @@ public sealed class GlbCharacter
         }
     }
 
+    private static void ReadNodeTrs(JsonElement node, out Vector3 position, out Quaternion rotation, out Vector3 scale)
+    {
+        if (node.TryGetProperty("matrix", out JsonElement m))
+        {
+            // A glTF joint can store its rest transform as a matrix (e.g. a rifle's ADS socket).
+            // glTF stores columns consecutively. Each is a row in System.Numerics' row-vector convention.
+            Xform rest = ReadMatrix(m);
+            Basis3 basis = rest.Basis;
+            var matrix = new Matrix4x4(
+                basis.X.X, basis.X.Y, basis.X.Z, 0, basis.Y.X, basis.Y.Y, basis.Y.Z, 0,
+                basis.Z.X, basis.Z.Y, basis.Z.Z, 0, rest.Origin.X, rest.Origin.Y, rest.Origin.Z, 1);
+            if (!Matrix4x4.Decompose(matrix, out scale, out rotation, out position))
+            {
+                throw new InvalidDataException("The glTF node matrix cannot be decomposed into translation, rotation and scale.");
+            }
+            return;
+        }
+
+        position = node.TryGetProperty("translation", out JsonElement t) ? Vector3Of(t) : Vector3.Zero;
+        rotation = node.TryGetProperty("rotation", out JsonElement r)
+            ? Quaternion.Normalize(new Quaternion(r[0].GetSingle(), r[1].GetSingle(), r[2].GetSingle(), r[3].GetSingle()))
+            : Quaternion.Identity;
+        scale = node.TryGetProperty("scale", out JsonElement s) ? Vector3Of(s) : Vector3.One;
+    }
+
     private static Xform NodeTransform(JsonElement node)
     {
         if (node.TryGetProperty("matrix", out JsonElement m))
         {
-            // glTF matrices are column-major: three basis columns, then the translation.
-            return new Xform(
-                new Basis3(
-                    new Vector3(m[0].GetSingle(), m[1].GetSingle(), m[2].GetSingle()),
-                    new Vector3(m[4].GetSingle(), m[5].GetSingle(), m[6].GetSingle()),
-                    new Vector3(m[8].GetSingle(), m[9].GetSingle(), m[10].GetSingle())),
-                new Vector3(m[12].GetSingle(), m[13].GetSingle(), m[14].GetSingle()));
+            return ReadMatrix(m);
         }
 
-        Vector3 position = node.TryGetProperty("translation", out JsonElement t) ? Vector3Of(t) : Vector3.Zero;
-        Quaternion rotation = node.TryGetProperty("rotation", out JsonElement r)
-            ? Quaternion.Normalize(new Quaternion(r[0].GetSingle(), r[1].GetSingle(), r[2].GetSingle(), r[3].GetSingle()))
-            : Quaternion.Identity;
-        Vector3 scale = node.TryGetProperty("scale", out JsonElement s) ? Vector3Of(s) : Vector3.One;
+        ReadNodeTrs(node, out Vector3 position, out Quaternion rotation, out Vector3 scale);
         return Xform.FromTrs(position, rotation, scale);
     }
+
+    private static Xform ReadMatrix(JsonElement m) => new(
+        new Basis3(
+            new Vector3(m[0].GetSingle(), m[1].GetSingle(), m[2].GetSingle()),
+            new Vector3(m[4].GetSingle(), m[5].GetSingle(), m[6].GetSingle()),
+            new Vector3(m[8].GetSingle(), m[9].GetSingle(), m[10].GetSingle())),
+        new Vector3(m[12].GetSingle(), m[13].GetSingle(), m[14].GetSingle()));
 
     public string Path { get; }
 

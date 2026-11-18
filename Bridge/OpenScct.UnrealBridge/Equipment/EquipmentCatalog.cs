@@ -157,6 +157,12 @@ public static class EquipmentCatalog
             }
         }
 
+        foreach (MercRifleDefinition rifle in MercRifles.All)
+        {
+            map[rifle.Asset + "_first"] = rifle.Id;
+            map[rifle.Asset] = rifle.Id + "Dummy";
+        }
+
         return map;
     }
 }

@@ -48,6 +48,7 @@ public:
 private:
 	UMaterialInterface* MaterialFor(int32 GltfMaterial);
 	UTexture2D* TextureFor(const FString& RelativePath, bool bSRGB = true);
+	void ApplyMaterialSequence(UMaterialInstanceDynamic& Material, const TSharedPtr<FJsonObject>& Sequence);
 	void BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, const TSharedPtr<FJsonObject>& MaterialDoc);
 	void ConfigureSky(const FString& Map);
 	void PlaceLights(const TSharedPtr<FJsonObject>& Lighting);

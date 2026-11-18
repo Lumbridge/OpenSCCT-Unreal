@@ -339,7 +339,7 @@ private:
 
 	/**
 	 * The skeletal props' sequences loaded so far and what each prop played as imported, held so the garbage
-	 * collector keeps them: PropSequences and FPropState only point at them weakly, and a sequence nothing else
+	 * collector keeps them: FPropState only points at them weakly, and a sequence nothing else
 	 * held was gone by the time the simulation asked for it (a prop that changes sequence, or the match's end
 	 * putting back what the importer gave it).
 	 */
@@ -420,8 +420,8 @@ private:
 	TArray<FScctWorldLight> LightBuffer;
 	TMap<int32, FPropState> PropStates;
 	TArray<FScctWorldAnimated> PropBuffer;
-	/** The imported sequences by the folder of a prop's mesh, loaded once. */
-	TMap<FString, TArray<TWeakObjectPtr<class UAnimSequenceBase>>> PropSequences;
+	/** Index the clips beside each mesh. Shared characters can have hundreds; load only clips used by the map. */
+	TMap<FString, TArray<FSoftObjectPath>> PropSequences;
 	TArray<FScctWorldEvent> EventBuffer;
 	TArray<FDebugAction> DebugActions;
 	/** The bridge's attached-emitter table (Runtime/ScctWorldEmitterApi.h), the riding emitters by name id, and the read buffer. */
