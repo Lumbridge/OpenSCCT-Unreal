@@ -348,6 +348,7 @@ public sealed partial class OnlineBridge : IDisposable
         client.Dispose();
         Client = null;
         _roundRefused = null;
+        _noticedSetup = null;
         _chat.Clear();
     }
 
@@ -535,6 +536,7 @@ public sealed partial class OnlineBridge : IDisposable
         }
 
         FollowState(client);
+        FollowSetupNotice(client);
         Rejoin.Follow(client, _visitMasterId, _visitPassword);
 
         // The round is ticked here, on the same clock the visit ticked the connection on so far (a fresh clock would
