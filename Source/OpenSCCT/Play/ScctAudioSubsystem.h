@@ -148,6 +148,8 @@ private:
 
 		// Ambient voices: the key they are matched by between frames (0: not ambient) and the repeat of a one-shot.
 		int64 AmbientId = 0;
+		/** Ambient voices: the UpdateAmbient pass that made the voice (Play/ScctAudioAmbientLoops.cpp). */
+		int32 AmbientPass = 0;
 		float RepeatInterval = 0.0f;
 		float RepeatLeft = 0.0f;
 
@@ -274,6 +276,16 @@ private:
 	void Stop(const FScctSound& Record);
 	void PlayMusic(const FScctSound& Record);
 	void UpdateAmbient();
+
+	// The flat (2D) ambient loops of actors that are no zones: one voice per actor, and the voices add up
+	// (Play/ScctAudioAmbientLoops.cpp).
+	static constexpr int64 FlatZoneLoopBit = 1ll << 40;
+	static constexpr int64 FlatActorLoopBit = 1ll << 41;
+	static constexpr float FlatLoopSilence = 0.05f;
+	static constexpr float FlatLoopFadeSeconds = 0.4f;
+	int32 BeginFlatLoopPass(int32 Count);
+	bool UpdateFlatActorLoop(const FScctAmbientSound& Source, float Distance, int64& OutId, float& OutVolume);
+	bool HandFlatLoopToZone(const FScctAmbientSound& Source, int64 ZoneId);
 	void UpdateVoices(float DeltaSeconds);
 	void UpdateReverb();
 
@@ -419,6 +431,15 @@ private:
 	mutable TMap<int64, FName> DrawnBones;
 	TArray<FScctSound> SoundBuffer;
 	TArray<FScctAmbientSound> AmbientBuffer;
+	/** How many of AmbientBuffer's records are this frame's, the count of UpdateAmbient passes and the sounds the listener's zone plays. */
+	int32 AmbientCount = 0;
+	int32 AmbientPass = 0;
+	TArray<int32> ListenerZoneSounds;
+	/** For the log: the flat sources that are no zones listed in this pass and at the last line about them. */
+	int32 NumFlatActorSources = 0;
+	int32 LoggedFlatActorSources = INDEX_NONE;
+	/** -ScctAudioAmbientAfter=<seconds>: no ambient source is read before this world time (a check: all become audible in one update). */
+	float AmbientAfterSeconds = 0.0f;
 	TArray<FZone> Zones;
 	FString ContentRoot;
 
