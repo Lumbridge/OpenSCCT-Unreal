@@ -102,7 +102,33 @@ def particle_inputs(g):
     g.link(g.scalar("SoftEdge", 12.0), soft, "FadeDistance")
     # Close to the eye a sprite would fill the screen and pop as the camera passes through it.
     near = g.custom("return saturate((Depth - 8.0) / 40.0);", FLOAT1, Depth=g.node(unreal.MaterialExpressionPixelDepth))
-    return texture, colour, soft, near
+    # The original alpha test applies before blending, even on additive particles with
+    # nonzero RGB in transparent texels. A negative reference disables it.
+    passes = g.custom("return (TA * CA > Ref) ? 1.0 : 0.0;", FLOAT1,
+                      TA=(texture, "A"), CA=(colour, "A"), Ref=g.scalar("AlphaRef", 0.0))
+    return texture, colour, g.custom("return S * P;", FLOAT1, S=soft, P=passes), near
+
+
+def build_light_sprites():
+    """Depth-tested map sprites. UV1 holds signed offsets from each card's centre in world units."""
+    for suffix, blend in (("Opaque", "OPAQUE"), ("Masked", "MASKED"), ("Alpha", "TRANSLUCENT"),
+                          ("Add", "ADDITIVE"), ("Modulate", "MODULATE")):
+        g = Graph(EFFECTS + "/M_ScctLightSprite" + suffix)
+        g.material.set_editor_property("blend_mode", getattr(unreal.BlendMode, "BLEND_" + blend))
+        g.material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+        g.material.set_editor_property("two_sided", True)
+        offsets = g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1)
+        displacement = g.custom("return (ResolvedView.ViewRight - float3(0,1,0)) * D.x"
+                                " + (ResolvedView.ViewUp - float3(0,0,1)) * D.y;", FLOAT3, D=offsets)
+        g.output(displacement, unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
+        texture = g.texture("Texture", "/Engine/EngineResources/WhiteSquareTexture")
+        g.output((texture if suffix == "Modulate" else g.in_the_picture((texture, "RGB"))),
+                 unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+        if suffix == "Alpha":
+            g.output(texture, unreal.MaterialProperty.MP_OPACITY, "A")
+        elif suffix == "Masked":
+            g.output(texture, unreal.MaterialProperty.MP_OPACITY_MASK, "A")
+        g.finish()
 
 
 def build_particle_lit():
@@ -388,6 +414,7 @@ def build_wet():
 
 
 def build_all():
+    build_light_sprites()
     build_particle_lit()
     build_particle_glow()
     build_corona()

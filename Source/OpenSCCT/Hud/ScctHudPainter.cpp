@@ -320,11 +320,11 @@ void FScctHudPainter::ImageOutside(const FBox2f& Box, const FSlateBrush& Brush, 
 	const FSlateRenderTransform& ToRender = Geometry.GetAccumulatedRenderTransform();
 	for (const float* Part : Parts)
 	{
-		const auto Corner = [&](float A, float B)
+		const auto ClipCorner = [&](float A, float B)
 		{
 			return FVector2f(ToRender.TransformPoint(MaskCentre + Along * A + Across * B));
 		};
-		Elements.PushClip(FSlateClippingZone(Corner(Part[0], Part[2]), Corner(Part[1], Part[2]), Corner(Part[0], Part[3]), Corner(Part[1], Part[3])));
+		Elements.PushClip(FSlateClippingZone(ClipCorner(Part[0], Part[2]), ClipCorner(Part[1], Part[2]), ClipCorner(Part[0], Part[3]), ClipCorner(Part[1], Part[3])));
 		Image(Box, Brush, UV, Tint);
 		Elements.PopClip();
 	}

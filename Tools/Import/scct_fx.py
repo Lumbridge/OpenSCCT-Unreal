@@ -254,6 +254,8 @@ class MapEffects:
         self.rain_cover = load(os.path.join(rain_cover, "rain_cover.json")) if rain_cover else {}
         self.spawn, self.texture_of, self.import_files, self.log = spawn, texture_of, import_files, log
         self.instances = {}
+        shared = os.path.join(render, "..", "..", "..", "shared", "classes.json")
+        self.classes = load(shared).get("classes", {})
         beams = load(os.path.join(render, "lightbeams.json")).get("beams", [])
         self.beams = {beam["name"]: beam for beam in beams if beam.get("lightOn", True)}
         self.beam_count = 0
@@ -289,14 +291,16 @@ class MapEffects:
     # Emitters
     # -----------------------------------------------------------------------------------------------------------
 
-    def particle_material(self, texture_file, style, columns, rows):
+    def particle_material(self, texture_file, style, columns, rows, alpha_ref=0):
         """The material of one sprite emitter. Alpha-blended sprites (smoke, steam, spray) are lit by the room;
         the additive styles glow. The original's darkening styles are rare and drawn as lit smoke too."""
         stem = os.path.splitext(os.path.basename(texture_file))[0] if texture_file else "none"
         glow = style in (TRANSLUCENT, BRIGHTEN, ALPHA_MODULATE, REGULAR)
         name = "MI_Fx_%s_%s_%dx%d" % (re.sub(r"[^A-Za-z0-9_]", "_", stem), "glow" if glow else "lit", columns, rows)
+        if alpha_ref:
+            name += "_Alpha%s" % ("Off" if alpha_ref < 0 else str(alpha_ref))
         texture = self.texture_of(texture_file) if texture_file else None
-        scalars = {"Columns": columns, "Rows": rows}
+        scalars = {"Columns": columns, "Rows": rows, "AlphaRef": alpha_ref / 255.0}
         if glow:
             scalars["Brightness"] = GLOW_BRIGHTNESS
         else:
@@ -321,7 +325,7 @@ class MapEffects:
             for index, sub in enumerate(emitter.get("emitters", [])):
                 props = sub.get("props", {})
                 if not sub.get("class", "").endswith("SpriteEmitter") or pick(props, "MaxParticles", 10) <= 0:
-                    skipped += 1    # mesh emitters (debris): not drawn yet
+                    skipped += 1
                     continue
                 # The original turns start positions and velocities by the actor only when asked to
                 # (UseRotationFrom = actor); acceleration is always in world axes. The placed actor carries that
@@ -346,8 +350,12 @@ class MapEffects:
                 component = actor.niagara_component
                 component.set_asset(system)
                 set_parameters(component, parameters)
+                defaults = self.classes.get(sub["class"], {}).get("defaults", {})
+                alpha_test = pick(props, "AlphaTest", pick(defaults, "AlphaTest", True))
+                alpha_ref = pick(props, "AlphaRef", pick(defaults, "AlphaRef", 0))
                 material = self.particle_material(sub.get("texture"), pick(props, "DrawStyle", TRANSLUCENT),
-                                                  max(1, pick(props, "TextureUSubdivisions", 1)), max(1, pick(props, "TextureVSubdivisions", 1)))
+                                                  max(1, pick(props, "TextureUSubdivisions", 1)), max(1, pick(props, "TextureVSubdivisions", 1)),
+                                                  alpha_ref if alpha_test else -1)
                 component.set_variable_material("Material", material)
                 if not active:
                     # As a property: the component's SetAutoActivate call does nothing on a component that is
@@ -356,7 +364,7 @@ class MapEffects:
                     waiting += 1
                 else:
                     running += 1
-        self.log("emitters: %d running, %d waiting for an event, %d mesh emitters not drawn" % (running, waiting, skipped))
+        self.log("sprite emitters: %d running, %d waiting for an event, %d other or empty emitters" % (running, waiting, skipped))
 
 
     # -----------------------------------------------------------------------------------------------------------
@@ -427,8 +435,10 @@ class MapEffects:
         # it, so those lights scatter more light into the air instead. The strength follows the original's
         # rule (the square root of LightBeamInitialAlpha).
         beam = self.beams.get(light["name"])
-        if beam:
+        if beam and light.get("effect") == ECHELON_SPOT:
             scatter = BEAM_SCATTER * math.sqrt(max(beam.get("alpha", 1), 1)) * beam.get("falloffScale", 1.0)
+            if light.get("echelon_texture_uri"):
+                scatter *= 0.3   # MapLightBeams.ProjectedBeamGain
             component.set_editor_property("volumetric_scattering_intensity", min(scatter, BEAM_SCATTER_MOST))
             actor.tags = list(actor.tags) + [unreal.Name("ScctBeam")]
             self.beam_count += 1
@@ -489,12 +499,8 @@ class MapEffects:
                 count += self.corona_card(light["name"], light["location"], corona["texture_uri"], colour,
                                           corona.get("min", 0.0), max(corona.get("max", 0.0), corona.get("min", 0.0), 1.0), scale,
                                           25.0 * (radius + 1.0) if radius > 0.0 else 0.0, lit, "Effects/Coronas")
-            sprite = light.get("sprite")
-            if sprite and sprite.get("blend") == "additive" and not light.get("hidden"):
-                # One texel is one world unit times DrawScale; the card's size does not change with distance.
-                half = sprite.get("width", 64) * sprite.get("draw_scale", 1.0) * 0.5
-                count += self.corona_card(light["name"], light["location"], sprite["texture_uri"], [1.0, 1.0, 1.0],
-                                          half, half, 0.0, 0.0, lit, "Effects/Coronas")
+            # Ordinary light sprites are depth-tested and drawn from the converted map
+            # at runtime, including the sprites that belong in the map's sky zone.
         self.log("coronas: %d" % count)
 
     # -----------------------------------------------------------------------------------------------------------
