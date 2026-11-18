@@ -4,6 +4,8 @@
 #include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Dom/JsonObject.h"
+#include "Engine/Level.h"
+#include "Engine/LevelStreaming.h"
 #include "Engine/PointLight.h"
 #include "Engine/SpotLight.h"
 #include "Engine/StaticMesh.h"
@@ -30,6 +32,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "StaticMeshAttributes.h"
+#include "Streaming/LevelStreamingDelegates.h"
 
 namespace
 {
@@ -70,6 +73,7 @@ namespace
 	// Custom primitive data slots of the surface material (Tools/Import/scct_materials.py).
 	constexpr int32 LocalDetailSlot = 0;
 	constexpr int32 BakedVertexSlot = 1;
+	constexpr float AuthoredVertexColour = 2.0f;
 
 	/** Where Tools/Import/make_runtime_map.py puts the runtime level's surface materials. */
 	const TCHAR* const MaterialFolder = TEXT("/Game/OpenSCCT/RuntimeMap");
@@ -184,6 +188,65 @@ namespace
 		return Object.IsValid() && Object->TryGetArrayField(Field, Value) ? *Value : None;
 	}
 
+	TArray<FString> AuthoredMeshNames(const TSharedPtr<FJsonObject>& MaterialDoc)
+	{
+		TArray<FString> Names;
+		if (MaterialDoc.IsValid())
+		{
+			MaterialDoc->TryGetStringArrayField(TEXT("authoredColorMeshes"), Names);
+		}
+		return Names;
+	}
+
+	/** Restore the missing role on components of older imports, including cooked map packs. */
+	void MarkImportedAuthoredColours(ULevel& Level, const FString& Package)
+	{
+		const FString Map = FPackageName::GetShortName(Package);
+		if (Package != UScctOnlineSubsystem::ImportedLevelOf(Map))
+		{
+			return;
+		}
+		const FString Folder = ScctMapFolders::FolderOf(Map);
+		if (Folder.IsEmpty())
+		{
+			return;
+		}
+
+		const FString MeshFolder = FPackageName::GetLongPackagePath(Package) / TEXT("world/StaticMeshes");
+		TSet<FName> Packages;
+		for (FString Name : AuthoredMeshNames(ReadJsonFile(Folder / TEXT("render/materials.json"))))
+		{
+			// import_map.py sanitize(): retain the complete variant suffix and match only this map's mesh assets.
+			for (TCHAR& Ch : Name)
+			{
+				if (!(Ch < 128 && FChar::IsAlnum(Ch)))
+				{
+					Ch = TEXT('_');
+				}
+			}
+			Packages.Add(FName(*(MeshFolder / Name)));
+		}
+		if (Packages.IsEmpty())
+		{
+			return;
+		}
+
+		for (AActor* Actor : Level.Actors)
+		{
+			if (IsValid(Actor))
+			{
+				for (UStaticMeshComponent* Component : TInlineComponentArray<UStaticMeshComponent*>(Actor))
+				{
+					const UStaticMesh* Mesh = Component->GetStaticMesh();
+					if (Mesh && Packages.Contains(Mesh->GetPackage()->GetFName()))
+					{
+						Component->SetCustomPrimitiveDataFloat(BakedVertexSlot, AuthoredVertexColour);
+					}
+				}
+			}
+		}
+	}
+
 	/** The original's texture scrolling as UV units per second (import_map.py pan_speed); only straight panners. */
 	FVector2D PanSpeed(const TSharedPtr<FJsonObject>& Animation)
 	{
@@ -239,8 +302,20 @@ void UScctRuntimeMapSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	Super::OnWorldBeginPlay(InWorld);
 
 	const FString Package = UWorld::RemovePIEPrefix(InWorld.GetOutermost()->GetName());
+	// A streamed instance has a generated package name. Its streaming object retains the original package.
+	FLevelStreamingDelegates::OnLevelStreamingStateChanged.AddWeakLambda(this,
+		[this](UWorld* World, const ULevelStreaming* Streaming, ULevel* Level, ELevelStreamingState Previous, ELevelStreamingState Current)
+		{
+			if (World == GetWorld() && Level && (Previous == ELevelStreamingState::Loading || Previous == ELevelStreamingState::Unloaded)
+				&& (Current == ELevelStreamingState::LoadedNotVisible || Current == ELevelStreamingState::LoadedVisible))
+			{
+				const FString Source = Streaming->PackageNameToLoad.IsNone() ? Streaming->GetWorldAssetPackageName() : Streaming->PackageNameToLoad.ToString();
+				MarkImportedAuthoredColours(*Level, UWorld::RemovePIEPrefix(Source));
+			}
+		});
 	if (Package != UScctOnlineSubsystem::RuntimeLevel)
 	{
+		MarkImportedAuthoredColours(*InWorld.PersistentLevel, Package);
 		return;
 	}
 
@@ -265,6 +340,12 @@ void UScctRuntimeMapSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	{
 		Builder->Build(Map, Folder);
 	}
+}
+
+void UScctRuntimeMapSubsystem::Deinitialize()
+{
+	FLevelStreamingDelegates::OnLevelStreamingStateChanged.RemoveAll(this);
+	Super::Deinitialize();
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -323,6 +404,15 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 	{
 		VertexLit.Add(StringOf(Entry->AsObject(), TEXT("name")));
 	}
+	const TArray<FString> Authored = AuthoredMeshNames(MaterialDoc);
+	auto VertexLightKind = [&](const FString& Name, const TSharedPtr<FJsonObject>& Instance = nullptr)
+	{
+		if (BoolOf(Instance, TEXT("authoredColors")) || Authored.Contains(Name))
+		{
+			return AuthoredVertexColour;
+		}
+		return (BoolOf(Instance, TEXT("vertexLit")) || VertexLit.Contains(Name)) ? 1.0f : 0.0f;
+	};
 
 	// The library meshes by their node names (an asset path, with "#variant" for differently lit copies).
 	TMap<FString, int32> MeshOfNode;
@@ -371,6 +461,8 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 			GLTF::FMeshFactory Factory;
 			// Metres to centimetres; the reader already turned glTF's Y up into Unreal's Z up.
 			Factory.SetUniformScale(100.0f);
+			// GLTFCore expands normalized COLOR_0 per corner and linearizes RGB. The fast static-mesh build
+			// packs it back to sRGB bytes (alpha stays linear), preserving the original vertex mask.
 			Factory.FillMeshDescription(Asset.Meshes[Index], FTransform::Identity, &Description);
 			if (Description.Triangles().Num() > 0)
 			{
@@ -407,7 +499,7 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 	{
 		if (UStaticMesh* Mesh = MeshFor(Index))
 		{
-			PlaceMesh(Mesh, FString::Printf(TEXT("BSP_%s"), *Map), FTransform::Identity, false, false);
+			PlaceMesh(Mesh, FString::Printf(TEXT("BSP_%s"), *Map), FTransform::Identity, false, VertexLightKind(Asset.Meshes[Index].Name));
 		}
 	}
 
@@ -441,8 +533,7 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 		Location -= Rotator.RotateVector(Pivot * Scale);
 
 		const bool bMovable = StringOf(Instance, TEXT("kind")) == TEXT("mover") || BoolOf(Instance, TEXT("gameplay"));
-		const bool bVertexLit = BoolOf(Instance, TEXT("vertexLit")) || VertexLit.Contains(MeshName);
-		PlaceMesh(Mesh, StringOf(Instance, TEXT("actor")), FTransform(Rotator, Location, Scale), bMovable, bVertexLit);
+		PlaceMesh(Mesh, StringOf(Instance, TEXT("actor")), FTransform(Rotator, Location, Scale), bMovable, VertexLightKind(MeshName, Instance));
 	}
 
 	// A render file without placed instances (the older layout of the synthetic maps): the static meshes of the
@@ -477,7 +568,7 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 			const FVector Scale = PropVector(Props, TEXT("DrawScale3D"), FVector::OneVector) * NumberOf(Props, TEXT("DrawScale"), 1.0);
 			const FVector Location = PropVector(Props, TEXT("Location"), FVector::ZeroVector) - Rotator.RotateVector(PropVector(Props, TEXT("PrePivot"), FVector::ZeroVector) * Scale);
 			const bool bMovable = StringOf(Record, TEXT("class")).Contains(TEXT("Mover"));
-			PlaceMesh(Mesh, StringOf(Record, TEXT("id")), FTransform(Rotator, Location, Scale), bMovable, false);
+			PlaceMesh(Mesh, StringOf(Record, TEXT("id")), FTransform(Rotator, Location, Scale), bMovable, VertexLightKind(MeshAsset));
 		}
 	}
 
@@ -489,7 +580,7 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 	return true;
 }
 
-AActor* AScctRuntimeMapActor::PlaceMesh(UStaticMesh* Mesh, const FString& Name, const FTransform& Transform, bool bMovable, bool bVertexLit)
+AActor* AScctRuntimeMapActor::PlaceMesh(UStaticMesh* Mesh, const FString& Name, const FTransform& Transform, bool bMovable, float VertexLightKind)
 {
 	FActorSpawnParameters Params;
 	Params.Owner = this;
@@ -512,9 +603,9 @@ AActor* AScctRuntimeMapActor::PlaceMesh(UStaticMesh* Mesh, const FString& Name, 
 		// The surface material's detail layer travels with what moves.
 		Component->SetDefaultCustomPrimitiveDataFloat(LocalDetailSlot, 1.0f);
 	}
-	if (bVertexLit)
+	if (VertexLightKind != 0.0f)
 	{
-		Component->SetDefaultCustomPrimitiveDataFloat(BakedVertexSlot, 1.0f);
+		Component->SetDefaultCustomPrimitiveDataFloat(BakedVertexSlot, VertexLightKind);
 	}
 	Component->RegisterComponent();
 	Actor->SetActorTransform(Transform);

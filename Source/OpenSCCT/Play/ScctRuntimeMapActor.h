@@ -44,7 +44,7 @@ private:
 	UTexture2D* TextureFor(const FString& RelativePath, bool bSRGB = true);
 	void BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, const TSharedPtr<FJsonObject>& MaterialDoc);
 	void PlaceLights(const TSharedPtr<FJsonObject>& Lighting);
-	AActor* PlaceMesh(UStaticMesh* Mesh, const FString& Name, const FTransform& Transform, bool bMovable, bool bVertexLit);
+	AActor* PlaceMesh(UStaticMesh* Mesh, const FString& Name, const FTransform& Transform, bool bMovable, float VertexLightKind);
 
 	FString RenderFolder;
 
@@ -75,4 +75,5 @@ class OPENSCCT_API UScctRuntimeMapSubsystem : public UWorldSubsystem
 public:
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
+	virtual void Deinitialize() override;
 };

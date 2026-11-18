@@ -592,7 +592,15 @@ def main():
             actor.set_actor_scale3d(unreal.Vector(1, 1, 1))
         return actor
 
-    def place_mesh(mesh, label, location, rotation, scale, folder, movable=False, baked_colours=False, tags=None):
+    authored_meshes = set(material_doc.get("authoredColorMeshes", []))
+    vertex_lit_meshes = {entry["name"] for entry in material_doc.get("vertexLitMeshes", [])}
+
+    def vertex_light_kind(name, instance):
+        if instance.get("authoredColors") or name in authored_meshes:
+            return 2.0
+        return 1.0 if instance.get("vertexLit") or name in vertex_lit_meshes else 0.0
+
+    def place_mesh(mesh, label, location, rotation, scale, folder, movable=False, vertex_kind=0.0, tags=None):
         actor = spawn(unreal.StaticMeshActor, location, rotation)
         actor.static_mesh_component.set_static_mesh(mesh)
         actor.set_actor_scale3d(scale)
@@ -605,8 +613,8 @@ def main():
             component.set_mobility(unreal.ComponentMobility.MOVABLE)
             # The surface material's detail layer is world-aligned; on something that moves it must travel along.
             component.set_default_custom_primitive_data_float(scct_materials.LOCAL_DETAIL_SLOT, 1.0)
-        if baked_colours:
-            component.set_default_custom_primitive_data_float(scct_materials.BAKED_VERTEX_SLOT, 1.0)
+        if vertex_kind:
+            component.set_default_custom_primitive_data_float(scct_materials.BAKED_VERTEX_SLOT, vertex_kind)
         return actor
 
     for node in gltf["nodes"]:
@@ -614,7 +622,8 @@ def main():
         if role.get("role") == "bsp" and not role.get("sky"):
             mesh = meshes.get(key(node["name"]))
             if mesh:
-                place_mesh(mesh, node["name"], unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0), unreal.Vector(1, 1, 1), "Geometry/World")
+                place_mesh(mesh, node["name"], unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0), unreal.Vector(1, 1, 1), "Geometry/World",
+                           vertex_kind=vertex_light_kind(node["name"], role))
 
     placed = missing = 0
     for instance in gltf["extras"]["svmap"]["instances"]:
@@ -639,7 +648,7 @@ def main():
             location = location - unreal.MathLibrary.greater_greater_vector_rotator(offset, rotation)
         mover = instance.get("kind") == "mover"
         place_mesh(mesh, instance["actor"], location, rotation, scale, "Geometry/Movers" if mover else "Geometry/Meshes", movable=mover or bool(instance.get("gameplay")),
-                   baked_colours=bool(instance.get("vertexLit")), tags=scct_fx.instance_tags(instance))
+                   vertex_kind=vertex_light_kind(instance["mesh"], instance), tags=scct_fx.instance_tags(instance))
         placed += 1
     log("placed %d meshes, %d without a mesh asset" % (placed, missing))
 
@@ -684,7 +693,7 @@ def main():
             if pivot:
                 offset = unreal.Vector(pivot[0] * scale.x, pivot[1] * scale.y, pivot[2] * scale.z)
                 location = location - unreal.MathLibrary.greater_greater_vector_rotator(offset, rotation)
-            actor = place_mesh(mesh, instance["actor"], location, rotation, scale, "Atmosphere/Skyline", baked_colours=bool(instance.get("vertexLit")),
+            actor = place_mesh(mesh, instance["actor"], location, rotation, scale, "Atmosphere/Skyline", vertex_kind=vertex_light_kind(instance["mesh"], instance),
                                tags=[unreal.Name("ScctBackdrop")])
             component = actor.static_mesh_component
             # A picture behind the level: it throws no shadow into it and is no part of its bounce light.
