@@ -5,6 +5,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
+#include "Input/HittestGrid.h"
 #include "Hud/ScctChatSubsystem.h"
 #include "Hud/ScctHudLayout.h"
 #include "Hud/ScctHudModel.h"
@@ -75,71 +76,65 @@ public:
 		return FBox2f(Offset + Live.Raw.Min * Scale, Offset + Live.Raw.Max * Scale);
 	}
 
-	/** The smallest on-screen group whose box holds the canvas point; false when none does. */
-	bool PickAt(const FVector2f& CanvasPoint, EScctHudGroup& OutGroup) const
+	// Both the paint and pointer paths use overlay-local coordinates. Slate pointer events arrive in
+	// desktop space, while the geometry supplied to OnPaint starts at the game window's client area.
+	struct FHitRegion
 	{
-		float Best = TNumericLimits<float>::Max();
+		FBox2f Body = FBox2f(ForceInit);
+		FBox2f Label = FBox2f(ForceInit);
+	};
+	mutable FHitRegion HitRegions[ScctHudLayout::NumGroups];
+
+	bool PickAt(const FVector2f& LocalPoint, EScctHudGroup& OutGroup) const
+	{
+		float BestArea = TNumericLimits<float>::Max();
 		bool bFound = false;
-		for (int32 Index = 0; Index < ScctHudLayout::NumGroups; ++Index)
+		for (int32 Index = ScctHudLayout::NumGroups - 1; Index >= 0; --Index)
 		{
-			const EScctHudGroup Group = static_cast<EScctHudGroup>(Index);
-			const FBox2f Box = PlacedNow(Group, Side.Get(0)).ExpandBy(4.0f);
-			if (Box.bIsValid && Box.IsInside(CanvasPoint) && Box.GetArea() < Best)
+			const FHitRegion& Region = HitRegions[Index];
+			if (Region.Label.bIsValid && Region.Label.IsInside(LocalPoint))
 			{
-				Best = Box.GetArea();
-				OutGroup = Group;
+				OutGroup = static_cast<EScctHudGroup>(Index);
+				return true;
+			}
+			if (Region.Body.bIsValid && Region.Body.IsInside(LocalPoint) && Region.Body.GetArea() < BestArea)
+			{
+				BestArea = Region.Body.GetArea();
+				OutGroup = static_cast<EScctHudGroup>(Index);
 				bFound = true;
 			}
 		}
 		return bFound;
 	}
 
-	/** A window point in the safe-area canvas's units (the canvas the groups were last drawn on). */
-	static FVector2f ToCanvas(const FVector2f& Absolute)
+	static FVector2f CanvasToLocal(const FGeometry& PaintGeometry, const FScctHudGroupLive& Live, const FVector2f& Point)
 	{
-		const FScctHudGroupLive& Any = AnyLive();
-		return (Absolute - Any.AbsoluteOrigin) / FMath::Max(Any.AbsoluteScale, 0.01f);
+		return FVector2f(PaintGeometry.AbsoluteToLocal(Live.AbsoluteOrigin + Point * Live.AbsoluteScale));
 	}
 
-	static FVector2f FromCanvas(const FVector2f& CanvasPoint)
+	bool BeginDrag(const FVector2f& LocalPoint)
 	{
-		const FScctHudGroupLive& Any = AnyLive();
-		return Any.AbsoluteOrigin + CanvasPoint * Any.AbsoluteScale;
-	}
-
-	/** Every group is drawn on the same canvas: the most recently drawn one says where it is. */
-	static const FScctHudGroupLive& AnyLive()
-	{
-		const FScctHudGroupLive* Newest = &ScctHudLayout::Live(EScctHudGroup::Status);
-		for (int32 Index = 0; Index < ScctHudLayout::NumGroups; ++Index)
-		{
-			const FScctHudGroupLive& Live = ScctHudLayout::Live(static_cast<EScctHudGroup>(Index));
-			if (Live.CanvasSize.X > 0.0f && (Newest->CanvasSize.X <= 0.0f || Live.PaintedAt > Newest->PaintedAt))
-			{
-				Newest = &Live;
-			}
-		}
-		return *Newest;
-	}
-
-	// ---- the gestures, also run by the unattended switch -------------------------------------------------------------
-
-	bool BeginDrag(const FVector2f& CanvasPoint)
-	{
-		EScctHudGroup Group = EScctHudGroup::Status;
-		if (!PickAt(CanvasPoint, Group))
+		if (!PickAt(LocalPoint, Selected))
 		{
 			return false;
 		}
-		Selected = Group;
 		bHasSelection = true;
 		bDragging = true;
-		DragStart = CanvasPoint;
-		DragFrom = ScctHudLayout::Get(Side.Get(0), Group);
+		DragStart = LocalPoint;
+		DragFrom = ScctHudLayout::Get(Side.Get(0), Selected);
+		const FScctHudGroupLive& Live = ScctHudLayout::Live(Selected);
+		const FVector2f Size = Live.CanvasSize.ComponentMax(FVector2f(1.0f));
+		FVector2f Offset;
+		float Scale;
+		ScctHudLayout::Placement(Selected, DragFrom, Size, Live.Raw, Offset, Scale);
+		// If the old position was clamped after a resize, start at the box the player actually grabbed.
+		const FVector2f Fraction = (Offset - ScctHudLayout::Anchor(Selected) * Size * (1.0f - Scale)) / Size;
+		DragFrom.X = Fraction.X;
+		DragFrom.Y = Fraction.Y;
 		return true;
 	}
 
-	void MoveDrag(const FVector2f& CanvasPoint)
+	void MoveDrag(const FVector2f& LocalPoint)
 	{
 		if (!bDragging)
 		{
@@ -149,8 +144,10 @@ public:
 		const FScctHudGroupLive& Live = ScctHudLayout::Live(Selected);
 		const FVector2f Size = Live.CanvasSize.ComponentMax(FVector2f(1.0f, 1.0f));
 		FScctHudGroupLayout Layout = DragFrom;
-		Layout.X = DragFrom.X + (CanvasPoint.X - DragStart.X) / Size.X;
-		Layout.Y = DragFrom.Y + (CanvasPoint.Y - DragStart.Y) / Size.Y;
+		const float ToCanvasScale = GetPaintSpaceGeometry().GetAccumulatedLayoutTransform().GetScale() / Live.AbsoluteScale;
+		const FVector2f Delta = (LocalPoint - DragStart) * ToCanvasScale / Size;
+		Layout.X += Delta.X;
+		Layout.Y += Delta.Y;
 
 		// Where the group would be, unclamped, then pulled onto the nearest edge or centre line in reach.
 		const FVector2f Anchor = ScctHudLayout::Anchor(Selected) * Size;
@@ -196,10 +193,10 @@ public:
 	}
 
 	/** One wheel step over the canvas point (or on the picked group): its size, or with bOpacity its opacity. */
-	void Wheel(const FVector2f& CanvasPoint, float Steps, bool bOpacity)
+	void Wheel(const FVector2f& LocalPoint, float Steps, bool bOpacity)
 	{
 		EScctHudGroup Group = EScctHudGroup::Status;
-		if (PickAt(CanvasPoint, Group))
+		if (PickAt(LocalPoint, Group))
 		{
 			Selected = Group;
 			bHasSelection = true;
@@ -222,16 +219,16 @@ public:
 
 	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
 	{
-		if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton && BeginDrag(ToCanvas(FVector2f(MouseEvent.GetScreenSpacePosition()))))
+		if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton && BeginDrag(FVector2f(MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition()))))
 		{
-			return FReply::Handled().CaptureMouse(SharedThis(this));
+			return FReply::Handled().SetUserFocus(SharedThis(this), EFocusCause::Mouse).CaptureMouse(SharedThis(this));
 		}
 		return FReply::Handled();
 	}
 
 	virtual FReply OnMouseMove(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
 	{
-		const FVector2f Point = ToCanvas(FVector2f(MouseEvent.GetScreenSpacePosition()));
+		const FVector2f Point = FVector2f(MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition()));
 		bHovering = PickAt(Point, Hovered);
 		MoveDrag(Point);
 		return FReply::Handled();
@@ -247,9 +244,15 @@ public:
 		return FReply::Handled();
 	}
 
+	virtual void OnMouseCaptureLost(const FCaptureLostEvent& CaptureLostEvent) override
+	{
+		EndDrag();
+		SLeafWidget::OnMouseCaptureLost(CaptureLostEvent);
+	}
+
 	virtual FReply OnMouseWheel(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
 	{
-		Wheel(ToCanvas(FVector2f(MouseEvent.GetScreenSpacePosition())), MouseEvent.GetWheelDelta() > 0.0f ? 1.0f : -1.0f, MouseEvent.IsShiftDown());
+		Wheel(FVector2f(MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition())), MouseEvent.GetWheelDelta() > 0.0f ? 1.0f : -1.0f, MouseEvent.IsShiftDown());
 		return FReply::Handled();
 	}
 
@@ -308,12 +311,13 @@ public:
 		const int32 InSide = Side.Get(0);
 		const FLinearColor Colour = Accent(InSide);
 		const FSlateFontInfo LabelFont = Label(8.0f);
-		auto ToLocal = [&AllottedGeometry](const FVector2f& CanvasPoint) { return FVector2f(AllottedGeometry.AbsoluteToLocal(FromCanvas(CanvasPoint))); };
 
 		TArray<FString> Offscreen;
 		for (int32 Index = 0; Index < ScctHudLayout::NumGroups; ++Index)
 		{
 			const EScctHudGroup Group = static_cast<EScctHudGroup>(Index);
+			FHitRegion& Region = HitRegions[Index];
+			Region = FHitRegion{};
 			const FBox2f Placed = PlacedNow(Group, InSide);
 			if (!Placed.bIsValid)
 			{
@@ -321,7 +325,9 @@ public:
 				continue;
 			}
 			const FScctHudGroupLayout L = ScctHudLayout::Get(InSide, Group);
-			const FBox2f Box(ToLocal(Placed.Min - FVector2f(3.0f)), ToLocal(Placed.Max + FVector2f(3.0f)));
+			const FScctHudGroupLive& Live = ScctHudLayout::Live(Group);
+			const FBox2f Box(CanvasToLocal(AllottedGeometry, Live, Placed.Min - FVector2f(3.0f)), CanvasToLocal(AllottedGeometry, Live, Placed.Max + FVector2f(3.0f)));
+			Region.Body = Box;
 			const bool bPicked = bHasSelection && Selected == Group;
 			const bool bHot = bPicked || (bHovering && Hovered == Group);
 			Painter.Fill(Box, Fade(Colour, bHot ? 0.12f : 0.05f), 2.0f, Fade(L.bVisible ? Colour : TextFaint(), bHot ? 0.95f : 0.55f), bPicked ? 2.0f : 1.0f);
@@ -337,21 +343,23 @@ public:
 			}
 			const FVector2f TextSize = Painter.Measure(Caption, LabelFont);
 			const float TagY = Box.Min.Y - TextSize.Y - 4.0f >= 0.0f ? Box.Min.Y - TextSize.Y - 4.0f : Box.Max.Y + 2.0f;
-			Painter.Fill(FBox2f(FVector2f(Box.Min.X, TagY), FVector2f(Box.Min.X + TextSize.X + 10.0f, TagY + TextSize.Y + 2.0f)), FLinearColor(0.0f, 0.0f, 0.0f, 0.7f), 2.0f);
+			Region.Label = FBox2f(FVector2f(Box.Min.X, TagY), FVector2f(Box.Min.X + TextSize.X + 10.0f, TagY + TextSize.Y + 2.0f));
+			Painter.Fill(Region.Label, FLinearColor(0.0f, 0.0f, 0.0f, 0.7f), 2.0f);
 			Painter.Text(FVector2f(Box.Min.X + 5.0f, TagY + 1.0f), Caption, LabelFont, bHot ? Colour : Text(), FScctHudPainter::EAlign::Left, false);
 		}
 
 		// The snap guides while dragging.
-		const FVector2f CanvasSize = AnyLive().CanvasSize;
+		const FScctHudGroupLive& Dragged = ScctHudLayout::Live(Selected);
+		const FVector2f CanvasSize = Dragged.CanvasSize;
 		if (bDragging && CanvasSize.X > 0.0f)
 		{
 			if (SnapX.IsSet())
 			{
-				Painter.Line(ToLocal(FVector2f(SnapX.GetValue(), 0.0f)), ToLocal(FVector2f(SnapX.GetValue(), CanvasSize.Y)), Fade(Colour, 0.8f), 1.0f);
+				Painter.Line(CanvasToLocal(AllottedGeometry, Dragged, FVector2f(SnapX.GetValue(), 0.0f)), CanvasToLocal(AllottedGeometry, Dragged, FVector2f(SnapX.GetValue(), CanvasSize.Y)), Fade(Colour, 0.8f), 1.0f);
 			}
 			if (SnapY.IsSet())
 			{
-				Painter.Line(ToLocal(FVector2f(0.0f, SnapY.GetValue())), ToLocal(FVector2f(CanvasSize.X, SnapY.GetValue())), Fade(Colour, 0.8f), 1.0f);
+				Painter.Line(CanvasToLocal(AllottedGeometry, Dragged, FVector2f(0.0f, SnapY.GetValue())), CanvasToLocal(AllottedGeometry, Dragged, FVector2f(CanvasSize.X, SnapY.GetValue())), Fade(Colour, 0.8f), 1.0f);
 			}
 		}
 
@@ -596,7 +604,7 @@ void UScctHudEditSubsystem::Tick(float DeltaTime)
 			UE_LOG(LogOpenSCCT, Log, TEXT("ScctHudEdit: something else took the keys"));
 			Stop();
 		}
-		else if (Overlay.IsValid() && !FApp::IsUnattended() && FSlateApplication::IsInitialized() && !Overlay->HasKeyboardFocus())
+		else if (Overlay.IsValid() && !FApp::IsUnattended() && FSlateApplication::IsInitialized() && !Overlay->HasKeyboardFocus() && !Overlay->HasMouseCapture())
 		{
 			// The pause menu this was opened from hands the keys and the mouse back to the game as it closes, after the
 			// edit mode took them: the overlay then got no click and no Escape. Take them again whenever they are lost.
@@ -607,7 +615,6 @@ void UScctHudEditSubsystem::Tick(float DeltaTime)
 				Mode.SetWidgetToFocus(Overlay);
 				Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 				Holder->SetInputMode(Mode);
-				FSlateApplication::Get().ReleaseAllPointerCapture();
 				FSlateApplication::Get().SetKeyboardFocus(Overlay, EFocusCause::SetDirectly);
 			}
 		}
@@ -674,17 +681,39 @@ void UScctHudEditSubsystem::RunUnattended()
 				}
 				else
 				{
-					// The press at the group's centre (the smallest group there is picked, as a click would).
-					const FVector2f Centre = Box.GetCenter();
-					if (Overlay->BeginDrag(Centre))
+					// Route a desktop-coordinate drag through the window's real hit-test grid. Calling the
+					// gesture helpers directly used to pass even when the match menu ate every mouse click.
+					FSlateApplication& Slate = FSlateApplication::Get();
+					const TSharedPtr<SWindow> Window = Slate.FindWidgetWindow(Overlay.ToSharedRef());
+					if (Window.IsValid())
 					{
-						Overlay->MoveDrag(Centre + DebugDrag * 0.5f);
-						Overlay->MoveDrag(Centre + DebugDrag);
-						Overlay->EndDrag();
-					}
-					for (int32 Step = 0; Step < FMath::Abs(DebugWheel); ++Step)
-					{
-						Overlay->Wheel(Centre + DebugDrag, DebugWheel > 0 ? 1.0f : -1.0f, false);
+						const FScctHudGroupLive& Live = ScctHudLayout::Live(Group);
+						auto ScreenPoint = [&](const FVector2f& CanvasPoint)
+						{
+							return FVector2D(Overlay->GetTickSpaceGeometry().LocalToAbsolute(
+								SScctHudEditOverlay::CanvasToLocal(Overlay->GetPaintSpaceGeometry(), Live, CanvasPoint)));
+						};
+						const FVector2D Start = ScreenPoint(Box.GetCenter());
+						const FVector2D End = ScreenPoint(Box.GetCenter() + DebugDrag);
+						const FWidgetPath Path(Window->GetHittestGrid().GetBubblePath(Start, Slate.GetCursorRadius(), false, 0));
+						if (!Path.ContainsWidget(Overlay.Get()))
+						{
+							UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHudEdit: drag blocked by %s"),
+								Path.IsValid() ? *Path.GetLastWidget()->ToString() : TEXT("empty hit path"));
+							return;
+						}
+						const FModifierKeysState Mods;
+						const TSet<FKey> Held{EKeys::LeftMouseButton};
+						const TSet<FKey> Up;
+						const uint32 Pointer = Slate.CursorPointerIndex;
+						Slate.RoutePointerDownEvent(Path, FPointerEvent(Pointer, Start, Start, Held, EKeys::LeftMouseButton, 0, Mods));
+						const FWidgetPath EndPath(Window->GetHittestGrid().GetBubblePath(End, Slate.GetCursorRadius(), false, 0));
+						Slate.RoutePointerMoveEvent(EndPath, FPointerEvent(Pointer, End, Start, Held, EKeys::Invalid, 0, Mods), false);
+						Slate.RoutePointerUpEvent(EndPath, FPointerEvent(Pointer, End, End, Up, EKeys::LeftMouseButton, 0, Mods));
+						for (int32 Step = 0; Step < FMath::Abs(DebugWheel); ++Step)
+						{
+							Slate.RouteMouseWheelOrGestureEvent(EndPath, FPointerEvent(Pointer, End, End, Up, EKeys::Invalid, FMath::Sign(DebugWheel), Mods));
+						}
 					}
 				}
 			}

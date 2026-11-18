@@ -203,7 +203,7 @@ TSharedRef<SWidget> UScctMatchMenuWidget::RebuildWidget()
 		}))
 		.OnLeave(FSimpleDelegate::CreateUObject(this, &UScctMatchMenuWidget::LeaveMatch))
 		.OnWantsOpen(FSimpleDelegate::CreateWeakLambda(this, [this] { OnWantsOpen.ExecuteIfBound(); }));
-	Overlay->SetMenuOpen(bMenuOpen);
+	SetMenuOpen(bMenuOpen);
 	if (PlayErrorSerial != 0)
 	{
 		Overlay->ShowPlayError(ShownPlayError);
@@ -218,6 +218,7 @@ void UScctMatchMenuWidget::ShowPlayError(const FScctPlayError& Error)
 		return;
 	}
 	PlayErrorSerial = Error.Serial;
+	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	ShownPlayError = Error;
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctPlayError: page shown: \"%s\""), *SScctPlayErrorPage::Describe(Error, SScctPlayErrorPage::MapTitleOf(Error.Map)));
 	if (Overlay.IsValid())
@@ -262,6 +263,9 @@ void UScctMatchMenuWidget::LeaveMatch()
 void UScctMatchMenuWidget::SetMenuOpen(bool bOpen)
 {
 	bMenuOpen = bOpen;
+	// This full-screen UMG layer stays mounted for round results even with the menu closed.
+	// While passive, its Slate descendants must let the HUD editor underneath receive pointer events.
+	SetVisibility(bOpen || IsShowingPlayError() ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::HitTestInvisible);
 	if (Overlay.IsValid())
 	{
 		Overlay->SetMenuOpen(bOpen);
