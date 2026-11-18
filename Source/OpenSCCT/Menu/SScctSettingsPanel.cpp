@@ -656,7 +656,7 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildAudio()
 	[
 		SNew(SScctStepper)
 			.Label(FText::FromString(TEXT("Output mode")))
-			.Description(FText::FromString(TEXT("Headphones renders the sounds around you binaurally (HRTF), so above, below and behind can be told apart. Speakers pans them between the speakers. A change reaches the sounds that start after it.")))
+			.Description(FText::FromString(TEXT("Headphones renders the sounds around you binaurally (HRTF), so above, below and behind can be told apart. Speakers pans them between the speakers.")))
 			.Wrap(false)
 			.Options({ TEXT("Speakers"), TEXT("Headphones") })
 			.Get([] { return UScctAudioOutputSubsystem::HeadphonesChosen() ? 1 : 0; })

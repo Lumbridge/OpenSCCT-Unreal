@@ -170,6 +170,7 @@ void UScctAudioSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	bLastListenerSet = false;
 	NumStarted =NumStopped = NumOutOfReach = NumRefused = NumStolen = NumFailedFiles = NumObjectiveSkipped = PeakVoices = 0;
 	NumHrtfStarted = NumPannedStarted = 0;
+	bOutputModeHrtf = UScctAudioOutputSubsystem::UseHrtf();
 	// Segment keys and clocks belong to one match (Play/ScctAudioSequences.cpp).
 	SequenceSegments.Reset();
 	SequenceClock = 0.0f;
@@ -682,6 +683,33 @@ void UScctAudioSubsystem::UpdateAmbient()
 
 void UScctAudioSubsystem::UpdateVoices(float DeltaSeconds)
 {
+	// Speakers or Headphones changed (Play/ScctAudioOutput.h): the engine cannot change a playing voice's
+	// spatialization, so the looping 3D voices (machines, ambient emitters), which would otherwise keep the old mode
+	// for as long as they play, are started again with the new one. One-shots end by themselves within seconds.
+	const bool bHrtfNow = UScctAudioOutputSubsystem::UseHrtf();
+	if (bHrtfNow != bOutputModeHrtf)
+	{
+		bOutputModeHrtf = bHrtfNow;
+		int32 Restarted = 0;
+		for (FVoice& Voice : Voices)
+		{
+			UAudioComponent* Component = Voice.Component.Get();
+			if (Voice.State != EVoiceState::Playing || !Voice.bPositional || !Voice.bLoop || Voice.SequenceKey != 0 || Component == nullptr)
+			{
+				continue;
+			}
+			Component->AttenuationSettings = FindOrCreateAttenuation(Voice.MinDistance, Voice.Radius);
+			// The new engine sound has none of the old one's sends: the room routing puts them on again next frame.
+			Component->bOverrideAttenuation = false;
+			Voice.AppliedRoomMix = 0.0f;
+			Voice.AppliedRoomSend = 0.0f;
+			Voice.AppliedRoomField = INDEX_NONE;
+			Component->Play();
+			++Restarted;
+		}
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctAudio: output mode now %s: %d looping 3D voices started again with it"), bHrtfNow ? TEXT("HRTF (Headphones)") : TEXT("panning (Speakers)"), Restarted);
+	}
+
 	for (auto It = Voices.CreateIterator(); It; ++It)
 	{
 		FVoice& Voice = *It;

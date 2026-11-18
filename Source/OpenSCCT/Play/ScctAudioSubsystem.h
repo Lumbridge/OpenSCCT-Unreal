@@ -546,4 +546,6 @@ private:
 	/** 3D voices started rendered by HRTF (Headphones, Play/ScctAudioOutput.h) and panned. */
 	int32 NumHrtfStarted = 0;
 	int32 NumPannedStarted = 0;
+	/** The spatialization the playing voices were started with; a change starts the looping 3D voices again (UpdateVoices). */
+	bool bOutputModeHrtf = false;
 };
