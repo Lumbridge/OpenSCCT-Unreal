@@ -38,14 +38,15 @@ namespace ScctPoisonLocal
 	constexpr FPoisonRect DodgeAt = { -571.0f, -249.0f, 69.0f, 231.0f };
 	constexpr float DodgeColour[3] = { 50.0f, 62.0f, 46.0f };
 
-	/** The health area on a side's page: where it stands and the colour everything in it is multiplied by. */
+	/** Origin of the layers on the page, and the tint inherited from the side's health gauge. */
 	struct FHealthArea
 	{
 		float X, Y;
 		float Colour[3];
 	};
 	constexpr FHealthArea SpyHealth = { 566.0f, 230.0f, { 150.0f, 185.0f, 138.0f } };
-	constexpr FHealthArea MercHealth = { 40.0f, 230.0f, { 255.0f, 182.0f, 68.0f } };
+	// The merc's gauge is on the left. Anchor the poison texture to the viewport instead of to that gauge.
+	constexpr FHealthArea MercHealth = { -DodgeAt.L, -DodgeAt.T, { 255.0f, 182.0f, 68.0f } };
 
 	const FHealthArea& HealthOf(int32 Side)
 	{

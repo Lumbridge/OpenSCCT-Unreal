@@ -29,10 +29,8 @@ struct FScctVisorState;
  * loop of 0.9 s that runs for as long as the pawn is poisoned, goes with the cure and starts again at frame 1 with a
  * new infection. The layers show only while the health gauge does (a live pawn, the health element not switched off).
  *
- * Both rectangles are given from the health area's place on the side's page, (566, 230) for the spy and (40, 230) for
- * the merc, and take that area's colour, (150, 185, 138) and (255, 182, 68); they are stretched over the view's width
- * (x times width / 640) whatever its shape, as the Godot client stretches them. On the spy's page they cover the
- * view; on the merc's page the same numbers put them over the left of the view only, which is what the page gives.
+ * The spy uses the original health-area position (566, 230). The merc uses the viewport's top left as the origin of
+ * the dodge texture, so both layers cover the screen throughout the loop. Each side keeps its own health-area tint.
  *
  * Driven by the snapshot alone: EScctHudFlags::Poisoned. -ScctVisorFx=poison fakes it (10 s poisoned, 2 s cured, and
  * so on). Log lines start with "Visor: poison".

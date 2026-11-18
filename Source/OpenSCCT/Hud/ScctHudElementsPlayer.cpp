@@ -250,11 +250,6 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 			}
 		}
 	}
-	else if (State.Side == 0 && !bScoped && (State.Flags & EScctHudFlags::LaserOn) == 0)
-	{
-		// The spy has no weapon reticle: a quiet dot marks the centre.
-		Painter.Fill(FBox2f(Centre - FVector2f(1.5f), Centre + FVector2f(1.5f)), Fade(Text(), 0.45f), 1.5f);
-	}
 
 	// The throw charge: an arc under the centre that fills as the throw winds up.
 	if (State.Ballistic > 0.001f)

@@ -199,12 +199,12 @@ public sealed class HudReader
 
         flags |= pc.bFastSpeed ? HudFlags.FastSpeed : 0;
         flags |= pc.bGameEnded ? HudFlags.GameEnded : 0;
+        GameReplicationInfo? gri = pc.GameReplicationInfo ?? info.GRI;
         if (pawn is not null)
         {
-            ReadPawn(pc, pawn, f, ref flags, ref fx);
+            ReadPawn(pc, pawn, f, ref flags, ref fx, gri is not null && Loadouts.IsBombMode(gri.GameMode));
         }
 
-        GameReplicationInfo? gri = pc.GameReplicationInfo ?? info.GRI;
         int objectivesLeft = MissionRules.GetObjectivesLeft(level);
         if (pc.PlayerReplicationInfo is { } pri)
         {
@@ -361,7 +361,7 @@ public sealed class HudReader
             !string.IsNullOrWhiteSpace(name) && !string.Equals(name, UnspecifiedLocation, StringComparison.OrdinalIgnoreCase);
     }
 
-    private void ReadPawn(SPlayerController pc, SBasePawn pawn, HudFrame f, ref int flags, ref int fx)
+    private void ReadPawn(SPlayerController pc, SBasePawn pawn, HudFrame f, ref int flags, ref int fx, bool bombMode)
     {
         ref HudState s = ref f.State;
         flags |= HudFlags.HasPawn;
@@ -425,6 +425,13 @@ public sealed class HudReader
         for (SGadget? gadget = pawn.MyGadget; gadget is not null && guard++ < 32; gadget = gadget.MyGadget)
         {
             if (gadget.bDeleteMe)
+            {
+                continue;
+            }
+
+            // The modern plant interaction keeps an internal SGadBomb with 5,000 charges. Only the PS2
+            // placement gadget belongs in this strip. Its profile and remaining charge come from the server.
+            if (gadget is SGadBomb modem && (!modem.Ps2ModemProfile || !bombMode))
             {
                 continue;
             }
