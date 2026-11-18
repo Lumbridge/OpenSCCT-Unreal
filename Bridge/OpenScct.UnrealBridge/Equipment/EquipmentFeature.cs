@@ -4,6 +4,7 @@ using System.Numerics;
 using OpenScct.Core;
 using OpenScct.Core.Engine;
 using OpenScct.Game.Animation;
+using OpenScct.Game.Combat;
 using OpenScct.Game.Equipment;
 using OpenScct.Game.Lighting;
 using OpenScct.Game.SBase;
@@ -11,6 +12,7 @@ using OpenScct.Game.Svm;
 using OpenScct.Physics.Collision;
 using OpenScct.UnrealBridge.Pose;
 using OpenScctGame.Play.Session;
+using K = OpenScct.Game.Equipment.K;
 
 namespace OpenScct.UnrealBridge.Equipment;
 
@@ -373,7 +375,7 @@ public sealed class EquipmentFeature
             flags |= pawn.WeaponLoaded != 0 ? BridgeEquipmentFlags.WeaponInHand : 0;
             if (pistol is { bDeleteMe: false })
             {
-                flags |= SpyLaser(pistol, ref e);
+                flags |= SpyLaser(pistol, isLocal, ref e);
             }
         }
         else if (pawn is SpyClone clone)
@@ -471,6 +473,10 @@ public sealed class EquipmentFeature
 
             start = laser.BeamStart;
             end = laser.HitLocation;
+            if (!inCamera && DrawnMercBeam(merc) is { } drawn)
+            {
+                (start, end) = drawn;
+            }
         }
         else
         {
@@ -484,6 +490,90 @@ public sealed class EquipmentFeature
         e.LaserEndY = end.Y;
         e.LaserEndZ = end.Z;
         return flags | BridgeEquipmentFlags.LaserBeam;
+    }
+
+    /// <summary>The nearest the sight's zero comes to the eye, in units (MercLaserView.SightZeroMin).</summary>
+    private const float SightZeroMin = 150f;
+
+    /// <summary>
+    /// The local merc's beam for the frame being drawn (port of MercLaserView.LocalBeam and TraceMountedBeam): the
+    /// simulation places its beam once a tick from the eye and aim of that tick, but the camera of a frame is between
+    /// two ticks and has the mouse turn not yet simulated in it, so a beam drawn to the tick's hit stands still on the
+    /// world while the picture turns and then jumps. Here the sight is zeroed on the point under the centre of the
+    /// camera drawn this frame (no nearer than <see cref="SightZeroMin"/>), turned with the view model's barrel away
+    /// from its idle pose (breathing, recoil, reload), and traced from the drawn muzzle to the first thing it hits.
+    /// Null when no view model is drawn (the scope, a camera) or there is no camera of the frame: the simulation's
+    /// beam is then the one to draw.
+    /// </summary>
+    public (FVector Start, FVector End)? DrawnMercBeam(SPAWNDEFENSE merc)
+    {
+        ArgumentNullException.ThrowIfNull(merc);
+        BeginFrame();
+        if (_firstPerson.Kind != BridgeFirstPersonKind.Merc || _firstPerson.ActorId != merc.ActorId || _merc.Barrel is not { } barrel ||
+            merc.MyWeapon is not SWeaponDefense { bDeleteMe: false } weapon ||
+            _session.FindFeature<Controls.ControlsFeature>()?.DrawnCamera is not { } eye)
+        {
+            return null;
+        }
+
+        // The camera's frame of the view model: metres, X forward, Y up, Z right.
+        eye.Rotation.GetAxes(out FVector forward, out FVector right, out FVector up);
+        IHitZones zones = CombatServices.HitZones(weapon);
+        FVector ahead = eye.Location + (forward * K.TraceLength);
+        BoneTraceResult seen = zones.TraceBone(weapon, ahead, eye.Location, false);
+        float reach = seen.bHit ? MathF.Max((seen.HitLocation - eye.Location) | forward, SightZeroMin) : K.TraceLength;
+        FVector zero = eye.Location + (forward * reach);
+
+        FVector muzzle = eye.Location + (((forward * barrel.Origin.X) + (up * barrel.Origin.Y) + (right * barrel.Origin.Z)) * RenderSpace.UnitsPerMetre);
+        FVector direction = (zero - muzzle).SafeNormal();
+        if (_merc.SightReference is { } reference)
+        {
+            FVector toZero = zero - eye.Location;
+            Vector3 zeroInCamera = new Vector3(toZero | forward, toZero | up, toZero | right) / RenderSpace.UnitsPerMetre;
+            Vector3 sighted = Vector3.Normalize(zeroInCamera - reference.Origin);
+            Vector3 turned = (barrel.Basis.Orthonormalized() * reference.Basis.Orthonormalized().Inverse()) * sighted;
+            direction = ((forward * turned.X) + (up * turned.Y) + (right * turned.Z)).SafeNormal();
+        }
+
+        float pullBack = weapon is MercSidearm ? 0f : K.LaserFireStartPullBack;
+        FVector start = muzzle - (direction * pullBack);
+        FVector far = muzzle + (direction * K.TraceLength);
+        BoneTraceResult hit = zones.TraceBone(weapon, far, start, false);
+        return (start, hit.bHit ? hit.HitLocation : far);
+    }
+
+    /// <summary>
+    /// The local spy's laser for the frame being drawn (port of SpyLaserView.LineFromHand's ready sight and
+    /// TraceReadyBeam): the simulation places the beam once a tick from the aim of that tick, while the body and the
+    /// camera of a frame have the mouse turn not yet simulated in them and stand between two ticks. With the pistol
+    /// ready (WeaponLoaded 2 or 7) and the view Unreal handed over for this frame's pose, the pistol's frame is worked
+    /// out again for that view where the body is drawn, the shot's line gives the point aimed at and the beam runs
+    /// from the pistol to it, stopping at whatever is in between. Null when the pistol is not ready or no view was
+    /// handed over: the simulation's beam is then the one to draw.
+    /// </summary>
+    public (FVector Start, FVector End)? DrawnSpyBeam(SWeaponAttaque pistol)
+    {
+        ArgumentNullException.ThrowIfNull(pistol);
+        if (pistol.Instigator is not SPawnAttaque { bDeleteMe: false, WeaponLoaded: 2 or 7 } spy ||
+            _session.PoserOf(spy.ActorId)?.DrawnView is not { } view)
+        {
+            return null;
+        }
+
+        FCoords shot = CombatNatives.SpyPistolCoords(spy, view);
+        if (_session.TryDrawnLocation(spy.ActorId, out FVector drawnAt))
+        {
+            shot.Origin += drawnAt - spy.Location;
+        }
+
+        FVector start = SWeaponAttaque.LaserStartOn(shot, spy.WeaponLoaded == 7);
+        IHitZones zones = CombatServices.HitZones(pistol);
+        FVector shotStart = SWeaponAttaque.GetAxesAndLocation(shot.Origin, shot.XAxis.Rotation(), out FVector shotDirection, out _, out _);
+        FVector far = shotStart + (shotDirection * pistol.ShootingRange);
+        BoneTraceResult target = zones.TraceBone(pistol, far, shotStart, false);
+        FVector at = target.bHit ? target.HitLocation : far;
+        BoneTraceResult between = zones.TraceBone(pistol, at, start, false);
+        return (start, between.bHit ? between.HitLocation : at);
     }
 
     /// <summary>
@@ -539,7 +629,7 @@ public sealed class EquipmentFeature
     /// client starts its own beam at the drawn hand (30 X, -4 Y, 8 Z of "B R Hand") or, in the eye view, at the view
     /// model's "Laser" socket.
     /// </summary>
-    private static int SpyLaser(SWeaponAttaque pistol, ref BridgeEquipment e)
+    private int SpyLaser(SWeaponAttaque pistol, bool isLocal, ref BridgeEquipment e)
     {
         if (!pistol.bLaserOn)
         {
@@ -549,11 +639,17 @@ public sealed class EquipmentFeature
         int flags = BridgeEquipmentFlags.LaserOn;
         if (pistol.LaserBeam is { bDeleteMe: false } beam)
         {
+            FVector start = beam.Location;
             FVector end = beam.Location + (beam.Rotation.Vector() * MathF.Max(0f, beam.DrawScale3D.X - 1f));
+            if (isLocal && DrawnSpyBeam(pistol) is { } drawn)
+            {
+                (start, end) = drawn;
+            }
+
             flags |= BridgeEquipmentFlags.LaserBeam;
-            e.LaserStartX = beam.Location.X;
-            e.LaserStartY = beam.Location.Y;
-            e.LaserStartZ = beam.Location.Z;
+            e.LaserStartX = start.X;
+            e.LaserStartY = start.Y;
+            e.LaserStartZ = start.Z;
             e.LaserEndX = end.X;
             e.LaserEndY = end.Y;
             e.LaserEndZ = end.Z;

@@ -55,6 +55,18 @@ internal sealed class MercFirstPerson
     /// <summary>The channels of the last draw (for the probe).</summary>
     public ViewModelPose Pose => _pose;
 
+    /// <summary>
+    /// The muzzle bone ("FX") of the last draw in the camera's frame (metres, X forward, Y up, Z right), as posed;
+    /// null when no view model was drawn or the model has no muzzle bone.
+    /// </summary>
+    public Xform? Barrel { get; private set; }
+
+    /// <summary>
+    /// The same bone at the middle of the idle clip (FirstWaitStFd2), the pose the laser sight is zeroed in
+    /// (MercLaserView's sight reference); null when the model has no such clip.
+    /// </summary>
+    public Xform? SightReference { get; private set; }
+
     /// <summary>After each client tick: samples the view model channels of the local merc's weapon.</summary>
     public void OnTick(SPlayerController? pc) => _pose.OnTick(((pc?.Pawn as SBasePawn)?.MyWeapon as SWeaponDefense)?.ViewAnim);
 
@@ -72,6 +84,8 @@ internal sealed class MercFirstPerson
     {
         Model = null;
         Applier = null;
+        Barrel = null;
+        SightReference = null;
         SWeaponDefense? weapon = _observed.Update(pawn, 0f);
         if (!ReferenceEquals(_lastWeapon, weapon))
         {
@@ -92,6 +106,8 @@ internal sealed class MercFirstPerson
     {
         Model = null;
         Applier = null;
+        Barrel = null;
+        SightReference = null;
         var weapon = (pc?.Pawn as SBasePawn)?.MyWeapon as SWeaponDefense;
         bool show = pc is { bBehindView: false } && weapon is { bDrawWeapon: true, bDeleteMe: false } && !weapon.Mesh.IsNone &&
             ReferenceEquals(pc.ViewTarget ?? pc.Pawn, pc.Pawn);
@@ -153,6 +169,13 @@ internal sealed class MercFirstPerson
         view.RateOfFireSkin = weapon.Skins.Count > SWeaponDefense.ROF_MaterialID
             ? EquipmentNames.Id(weapon.Skins[SWeaponDefense.ROF_MaterialID].Path) : 0;
         view.Part0 = FirstPersonParts.Part(loaded.Model, root, loaded.Applier.Positions, loaded.Applier.Rotations, loaded.Applier.Scales);
+        if (loaded.Model.MuzzleBone >= 0)
+        {
+            Xform toCamera = root * loaded.Model.ActorToSkeleton;
+            Barrel = toCamera * loaded.Model.Global(loaded.Model.MuzzleBone, loaded.Applier.Positions, loaded.Applier.Rotations, loaded.Applier.Scales);
+            SightReference = loaded.NeutralMuzzle is { } neutral ? toCamera * neutral : null;
+        }
+
         return true;
     }
 
@@ -166,7 +189,7 @@ internal sealed class MercFirstPerson
         Loaded? loaded = null;
         if (EquipmentModel.Load(asset, _sharedRoot) is { } model)
         {
-            loaded = new Loaded(model, new ChannelPoseApplier(model.Character), SidearmSight(asset, model));
+            loaded = new Loaded(model, new ChannelPoseApplier(model.Character), SidearmSight(asset, model), NeutralMuzzleOf(model));
         }
 
         _loaded[asset] = loaded;
@@ -196,7 +219,23 @@ internal sealed class MercFirstPerson
         return new Xform(rotation, neutral.Origin - (rotation * neutral.Origin));
     }
 
-    private sealed record Loaded(EquipmentModel Model, ChannelPoseApplier Applier, Xform? SightOffset);
+    /// <summary>The muzzle bone in the skeleton's space at the middle of the idle clip, or null without the bone or the clip.</summary>
+    private static Xform? NeutralMuzzleOf(EquipmentModel model)
+    {
+        if (model.MuzzleBone < 0 || model.Character.Find(s_firstWaitStFd2.ToString()) is not { } idle)
+        {
+            return null;
+        }
+
+        int count = model.Character.BoneCount;
+        var positions = new Vector3[count];
+        var rotations = new Quaternion[count];
+        var scales = new Vector3[count];
+        model.Sample(idle, .5f, positions, rotations, scales);
+        return model.Global(model.MuzzleBone, positions, rotations, scales);
+    }
+
+    private sealed record Loaded(EquipmentModel Model, ChannelPoseApplier Applier, Xform? SightOffset, Xform? NeutralMuzzle);
 }
 
 /// <summary>

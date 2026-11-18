@@ -333,6 +333,30 @@ public sealed class BridgeSession : IDisposable
         return (T)feature;
     }
 
+    /// <summary>The feature of type <typeparamref name="T"/> when the session has made one, else null (nothing is made).</summary>
+    public T? FindFeature<T>()
+        where T : class => _features.TryGetValue(typeof(T), out object? feature) ? (T)feature : null;
+
+    /// <summary>
+    /// Where a pawn is drawn this frame (between the last two ticks, as <see cref="GetPawns"/> places it). False for
+    /// a pawn the session does not draw.
+    /// </summary>
+    public bool TryDrawnLocation(int actorId, out FVector location)
+    {
+        if (!_current.TryGetValue(actorId, out PawnSample now))
+        {
+            location = default;
+            return false;
+        }
+
+        PawnSample from = _previous.TryGetValue(actorId, out PawnSample before) && before.ResetId == now.ResetId &&
+            DistanceSquared(before.Location, now.Location) <= PawnCutDistanceSquared
+            ? before
+            : now;
+        location = Lerp(from.Location, now.Location, Alpha);
+        return true;
+    }
+
     /// <summary>
     /// Runs the simulation ticks that are due, and returns how many client ticks ran since the last call. For a
     /// remote round the online visit runs the ticks (on its own Update, earlier in the frame); they are counted
