@@ -258,6 +258,12 @@ void UScctEffectsWarmupSubsystem::HandleMatchStarted()
 	{
 		return;
 	}
+	if (Session->IsBackdrop())
+	{
+		// The match behind the main menu: no loading page goes over the menu for it, and its effects are behind
+		// the menu's shade when they are first drawn.
+		return;
+	}
 	if (bDisabled || IsRunningDedicatedServer())
 	{
 		Phase = EPhase::Done;

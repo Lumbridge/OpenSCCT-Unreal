@@ -111,7 +111,10 @@ void UScctHudSubsystem::Deinitialize()
 void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessionId)
 {
 	// Text ids, messages and everything in motion belong to one session.
-	Api = NewSessionId != 0 ? ScctFeature<FScctHudApi>() : nullptr;
+	// The match behind the main menu has no HUD: nobody at this machine plays it.
+	const UScctSessionSubsystem* ChangedSession = GetWorld()->GetSubsystem<UScctSessionSubsystem>();
+	const bool bBackdrop = ChangedSession != nullptr && ChangedSession->IsBackdrop();
+	Api = NewSessionId != 0 && !bBackdrop ? ScctFeature<FScctHudApi>() : nullptr;
 	Model->Reset(Api);
 	bSnapshotRead = false;
 	ViewportSize = FIntPoint::ZeroValue;
@@ -163,7 +166,11 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	LastLoggedTutorialId = 0;
 	LastLoggedFadeStep = -1;
 	bLastLoggedHeldBriefings = false;
-	if (NewSessionId != 0 && Api == nullptr)
+	if (bBackdrop)
+	{
+		HideWidget();
+	}
+	else if (NewSessionId != 0 && Api == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Error, TEXT("HUD: the bridge has no HUD table (its reason is in the log above); the match plays without a HUD and without goggles"));
 	}

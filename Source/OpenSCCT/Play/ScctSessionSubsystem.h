@@ -205,6 +205,19 @@ public:
 	void StopMatch();
 
 	/**
+	 * Presents the menu's backdrop match (Menu/ScctMenuBackdrop.h): the session NewSessionId, which the bridge's
+	 * backdrop table has just put in the session slot. It is this world's to stop, like a match started here.
+	 * False when the slot holds another session.
+	 */
+	bool PresentBackdrop(int32 NewSessionId);
+
+	/**
+	 * The session presented is the match behind the main menu: bots play it and nobody at this machine is in it.
+	 * What belongs to a player (the HUD, the sounds, the loading page over the warm-up) is left out for it.
+	 */
+	bool IsBackdrop() const { return SessionId != 0 && (SessionInfo.Flags & EScctSessionFlags::Backdrop) != 0; }
+
+	/**
 	 * Connects to the bridge without starting a match, so OnBeforeTicks runs. With bFollow set this world also
 	 * presents sessions it did not start: the rounds the online visit puts in the bridge's slot. Returns false
 	 * (GetFailure has the reason) when the bridge cannot be loaded.

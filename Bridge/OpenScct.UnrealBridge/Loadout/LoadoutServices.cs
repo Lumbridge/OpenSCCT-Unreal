@@ -246,6 +246,7 @@ public static class ProfileOptionValues
     {
         0 => false,
         1 => true,
-        _ => PlaySession.OfflineSessionRunning,
+        // The match behind the main menu has its own host, but the player is not in it.
+        _ => PlaySession.OfflineSessionRunning && Exports.Current is not { IsBackdrop: true },
     };
 }

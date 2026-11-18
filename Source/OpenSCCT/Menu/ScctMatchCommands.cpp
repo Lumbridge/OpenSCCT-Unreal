@@ -92,6 +92,11 @@ void UScctMatchCommandsSubsystem::Deinitialize()
 
 void UScctMatchCommandsSubsystem::OnFrame(float DeltaSeconds)
 {
+	if (const UScctSessionSubsystem* BackdropSession = GetWorld()->GetSubsystem<UScctSessionSubsystem>(); BackdropSession != nullptr && BackdropSession->IsBackdrop())
+	{
+		// The match behind the main menu: nobody at this machine plays it.
+		return;
+	}
 	// The bindings' commands come from the local controller, which is there by the first frame of a match.
 	AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController());
 	if (Player != nullptr && CommandSource.Get() != Player)

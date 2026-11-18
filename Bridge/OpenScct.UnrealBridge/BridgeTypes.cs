@@ -158,6 +158,9 @@ public static class BridgeSessionFlags
 
     /// <summary>The local player is on the mercs' side (his pawn's side once he has one, else the side asked for).</summary>
     public const int Merc = 2;
+
+    /// <summary>The match behind the main menu: bots play it, the local player only watches (Backdrop/BackdropMatch.cs).</summary>
+    public const int Backdrop = 4;
 }
 
 /// <summary>What <c>StartLocalEx</c> starts (version 3). Zero the struct, set <see cref="Size"/>, then the fields.</summary>

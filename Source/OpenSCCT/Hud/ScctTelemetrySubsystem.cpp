@@ -639,6 +639,11 @@ void UScctTelemetrySubsystem::BuildNetPanel(FScctTelemetryPanel& Panel, const FS
 
 void UScctTelemetrySubsystem::HandleFrame(float DeltaSeconds)
 {
+	if (const UScctSessionSubsystem* BackdropSession = GetWorld()->GetSubsystem<UScctSessionSubsystem>(); BackdropSession != nullptr && BackdropSession->IsBackdrop())
+	{
+		// The match behind the main menu: nobody at this machine plays it.
+		return;
+	}
 	// Unreal's own frame time, not the world's (which time dilation and pauses change).
 	const float FrameSeconds = static_cast<float>(FApp::GetDeltaTime());
 	Clock += FMath::Max(0.0f, FrameSeconds);
