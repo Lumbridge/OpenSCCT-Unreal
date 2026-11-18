@@ -58,6 +58,7 @@ namespace EScctMenuSides
 {
 	constexpr int32 Spy = 1;
 	constexpr int32 Merc = 2;
+	constexpr int32 DoubleTap = 4;
 }
 
 /** An action a key or pad control can be bound to (GetActions). */
@@ -105,11 +106,12 @@ struct FScctMenuApi
 	int32 (__cdecl* GetKeyActions)(int32 bMerc, int32 bPad, const TCHAR* Key, TCHAR* Buffer, int32 Capacity);
 
 	/**
-	 * Binds Action of one side to Key (null or empty: only clears). Unless bKeepOthers, the keys that did it stop
-	 * doing it. Key then does Action and nothing else. Returns 1, 0 for an unknown action or key name. Save with
+	 * Binds Action of one side to Key (null or empty: only clears). Key then does Action and nothing else.
+	 * Returns 1, 0 for an unknown action or key name. Save with
 	 * the controls table's SaveBindings.
 	 */
-	int32 (__cdecl* BindAction)(int32 bMerc, int32 bPad, const TCHAR* Action, const TCHAR* Key, int32 bKeepOthers);
+	// Mode 0 replaces all slots, 1 keeps them, 2 edits only ordinary presses, 3 edits only double taps.
+	int32 (__cdecl* BindAction)(int32 bMerc, int32 bPad, const TCHAR* Action, const TCHAR* Key, int32 Mode);
 
 	/** Forgets the map catalog and the strings, so content converted since is listed. */
 	void (__cdecl* RefreshMaps)();

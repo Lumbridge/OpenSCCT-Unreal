@@ -1,6 +1,7 @@
 #include "Play/ScctPlayerController.h"
 
 #include "Camera/PlayerCameraManager.h"
+#include "Engine/Console.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerInput.h"
@@ -62,6 +63,8 @@ void AScctPlayerController::SetInputMode(const FInputModeDataBase& InData)
 {
 	Super::SetInputMode(InData);
 	GameplayMousePresses.Reset();
+	KeyEdges.Reset();
+	HeldModifierKeys.Reset();
 	const ULocalPlayer* Local = GetLocalPlayer();
 	UGameViewportClient* Client = Local ? Local->ViewportClient.Get() : nullptr;
 	// Every return from a menu applies a new input mode. GameOnly resets the project's capture
@@ -74,13 +77,38 @@ void AScctPlayerController::SetInputMode(const FInputModeDataBase& InData)
 
 bool AScctPlayerController::InputKey(const FInputKeyEventArgs& Params)
 {
-	if (Params.Event == IE_Pressed && Params.Key.IsMouseButton() && !bMenuOpen && !bShowMouseCursor)
+	const bool bPressed = Params.Event == IE_Pressed || Params.Event == IE_DoubleClick;
+	if (bPressed && Params.Key.IsMouseButton() && !bMenuOpen && !bShowMouseCursor)
 	{
 		const ULocalPlayer* Local = GetLocalPlayer();
 		const UGameViewportClient* Client = Local ? Local->ViewportClient.Get() : nullptr;
 		if (Client && Client->GetMouseCaptureMode() == EMouseCaptureMode::CapturePermanently_IncludingInitialMouseDown)
 		{
 			GameplayMousePresses.Add(Params.Key);
+		}
+	}
+	if ((bPressed || Params.Event == IE_Released) && !bMenuOpen && !bShowMouseCursor &&
+		(!bPressed || !Params.Key.IsMouseButton() || GameplayMousePresses.Contains(Params.Key)))
+	{
+		const auto& Table = FScctControls::Keys();
+		const int32 Code = Table.IndexOfByPredicate([&Params](const auto& Pair) { return Pair.Key == Params.Key || Pair.Value == Params.Key; });
+		if (Params.Key.IsValid() && Code >= 0 && Code < static_cast<int32>(EScctKey::MouseWheelUp))
+		{
+			// Left and right modifiers share a binding. Only their combined transitions count.
+			bool bChanged = true;
+			if (Table[Code].Value.IsValid())
+			{
+				const auto& Pair = Table[Code];
+				const bool bWasDown = HeldModifierKeys.Contains(Pair.Key) || HeldModifierKeys.Contains(Pair.Value);
+				if (bPressed) HeldModifierKeys.Add(Params.Key);
+				else HeldModifierKeys.Remove(Params.Key);
+				bChanged = bWasDown != (HeldModifierKeys.Contains(Pair.Key) || HeldModifierKeys.Contains(Pair.Value));
+			}
+			if (bChanged)
+			{
+				const uint64 Time = Params.EventTimestamp ? Params.EventTimestamp : FPlatformTime::Cycles64();
+				KeyEdges.Add({ Code, bPressed ? 1 : 0, static_cast<int64>(FPlatformTime::ToMilliseconds64(Time)) });
+			}
 		}
 	}
 	return Super::InputKey(Params);
@@ -278,7 +306,8 @@ bool AScctPlayerController::HasPlayInput() const
 	const FViewport* Viewport = Client != nullptr ? Client->Viewport : nullptr;
 	// HasFocus is the keyboard focus inside the game's own windows, which stays where it was while another
 	// program is in front, so the window is asked as well.
-	return Viewport != nullptr && Viewport->HasFocus() && Viewport->IsForegroundWindow() && !bShowMouseCursor;
+	return Viewport != nullptr && (!Client->ViewportConsole || !Client->ViewportConsole->ConsoleActive())
+		&& Viewport->HasFocus() && Viewport->IsForegroundWindow() && !bShowMouseCursor;
 }
 
 bool AScctPlayerController::IsPadActive() const
@@ -328,6 +357,7 @@ void AScctPlayerController::FeedControls(float DeltaSeconds)
 	}
 	FrameMouseX = Raw.MouseX;
 	Controls->Frame(&Raw);
+	KeyEdges.Reset();
 	GameplayMousePresses.Reset();
 
 	TakeLocalCommands(*Controls);
@@ -335,6 +365,9 @@ void AScctPlayerController::FeedControls(float DeltaSeconds)
 
 void AScctPlayerController::ReadDevices(FScctRawInput& Raw) const
 {
+	Raw.Edges = KeyEdges.GetData();
+	Raw.EdgeCount = KeyEdges.Num();
+	Raw.NowMsec = static_cast<int64>(FPlatformTime::ToMilliseconds64(FPlatformTime::Cycles64()));
 	const UPlayerInput* Input = PlayerInput;
 	if (Input == nullptr)
 	{

@@ -30,7 +30,7 @@ namespace ScctBindings
 	/** The rows of a side, in the Godot client's order. */
 	TArray<FScctBindingRow> Rows(bool bMerc);
 
-	/** How a binding name is shown: "Left Mouse", "Ctrl + F", "Double-tap H", "Wheel Up". */
+	/** How a binding name is shown: "Left Mouse", "Ctrl + F", "2x H", "Wheel Up". */
 	FString DisplayName(const FString& Key);
 
 	/** Why Key cannot take the action ("" when it can). */

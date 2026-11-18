@@ -5,6 +5,13 @@ namespace OpenScct.UnrealBridge;
 // The structs below cross to C++ as they are. Source/OpenSCCT/Runtime/ScctControlsApi.h mirrors them field for
 // field; change both together and bump ControlsExports.ApiVersion.
 
+[StructLayout(LayoutKind.Sequential)]
+public struct BridgeKeyEdge
+{
+    public int Code, Pressed;
+    public long TimeMsec;
+}
+
 /// <summary>The devices as Unreal reads them in one rendered frame.</summary>
 [StructLayout(LayoutKind.Sequential)]
 public unsafe struct BridgeRawInput
@@ -34,6 +41,9 @@ public unsafe struct BridgeRawInput
 
     /// <summary><see cref="BridgeRawInputFlags"/>.</summary>
     public int Flags;
+    public BridgeKeyEdge* Edges;
+    public long NowMsec;
+    public int EdgeCount;
 }
 
 public static class BridgeRawInputFlags

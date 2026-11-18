@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/Console.h"
 #include "Engine/LocalPlayer.h"
 #include "ScctLocalPlayer.generated.h"
 
@@ -16,7 +17,21 @@ class OPENSCCT_API UScctLocalPlayer : public ULocalPlayer
 	GENERATED_BODY()
 
 public:
+	virtual void PlayerAdded(UGameViewportClient* InViewport, FPlatformUserId InUserId) override;
+	virtual void PlayerRemoved() override;
 #if UE_ALLOW_EXEC_COMMANDS
 	virtual bool Exec(UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar) override;
 #endif
+
+private:
+	TSharedPtr<class IInputProcessor> ConsoleShortcut;
+};
+
+/** Shipping has no engine exec console. The viewport still draws and edits the line for the game's own commands. */
+UCLASS(Within=GameViewportClient)
+class UScctGameConsole : public UConsole
+{
+	GENERATED_BODY()
+public:
+	virtual void ConsoleCommand(const FString& Command) override;
 };

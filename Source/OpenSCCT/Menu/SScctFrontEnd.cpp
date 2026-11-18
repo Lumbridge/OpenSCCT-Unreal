@@ -493,7 +493,7 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 	PageBox->SetRenderOpacity(Shown);
 	PageBox->SetRenderTransform(FSlateRenderTransform(FVector2D(0.0, 16.0 * (1.0 - Shown))));
 
-	if (bFocusPending && !Dialogs->IsOpen())
+	if (bFocusPending && !Dialogs->IsOpen() && !ScctUi::IsConsoleOpen())
 	{
 		const TSharedPtr<SScctMenuPage> Page = GetTopPage();
 		TSharedPtr<SWidget> Focus = ReturnFocus.Pin();
@@ -521,7 +521,7 @@ void SScctFrontEnd::Tick(const FGeometry& AllottedGeometry, const double InCurre
 		}
 		bFocusPending = false;
 	}
-	else if (!Dialogs->IsOpen() && !HasKeyboardFocus() && !HasFocusedDescendants())
+	else if (!Dialogs->IsOpen() && !ScctUi::IsConsoleOpen() && !HasKeyboardFocus() && !HasFocusedDescendants())
 	{
 		// Something outside the menu took the focus (the viewport after a click on the 3D view): it comes back here,
 		// so the keyboard and the controller keep working.

@@ -15,7 +15,7 @@
 //   Host.GetFunction(TEXT("OpenScct.UnrealBridge.ControlsExports, OpenScct.UnrealBridge"), TEXT("GetApi"))
 // called with an FScctControlsApi*; it returns ScctControlsApiVersion.
 
-constexpr int32 ScctControlsApiVersion = 1;
+constexpr int32 ScctControlsApiVersion = 2;
 
 /** The length of FScctRawInput::Keys. */
 constexpr int32 ScctKeyCount = 128;
@@ -119,6 +119,13 @@ constexpr FScctKeyNames ScctKeyNames[] = {
 
 static_assert(UE_ARRAY_COUNT(ScctKeyNames) == static_cast<int32>(EScctKey::Last) + 1, "ScctKeyNames must have one entry per EScctKey");
 
+struct FScctKeyEdge
+{
+	int32 Code;
+	int32 Pressed;
+	int64 TimeMsec;
+};
+
 /** The devices as read in one rendered frame. */
 struct FScctRawInput
 {
@@ -130,6 +137,9 @@ struct FScctRawInput
 	float LeftTrigger, RightTrigger; // 0 (released) to 1
 	float DeltaSeconds;       // the length of the frame, seconds
 	int32 Flags;              // EScctRawInputFlags
+	const FScctKeyEdge* Edges; // keyboard and mouse buttons in device order, valid for this call
+	int64 NowMsec;
+	int32 EdgeCount;
 };
 
 namespace EScctRawInputFlags
@@ -277,7 +287,7 @@ struct FScctControlsApi
 
 // The sizes the C# side has (the probe prints them: Bridge/Probes/ControlsProbe). A mismatch here means the two
 // files have drifted apart.
-static_assert(sizeof(FScctRawInput) == 168, "FScctRawInput must match BridgeRawInput");
+static_assert(sizeof(FScctKeyEdge) == 16 && sizeof(FScctRawInput) == 192, "Raw input must match the bridge");
 static_assert(sizeof(FScctLookView) == 68, "FScctLookView must match BridgeLookView");
 static_assert(sizeof(FScctLocalCommand) == 12, "FScctLocalCommand must match BridgeLocalCommand");
 static_assert(sizeof(FScctLookSettings) == 72, "FScctLookSettings must match BridgeLookSettings");

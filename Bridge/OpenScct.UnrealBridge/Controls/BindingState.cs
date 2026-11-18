@@ -77,7 +77,8 @@ public sealed class BindingInputState
         bool second = false;
         if (!pulse)
         {
-            second = string.Equals(_lastTap, input, StringComparison.OrdinalIgnoreCase) && nowMsec - _lastTapAt <= DoubleTapMsec;
+            second = string.Equals(_lastTap, input, StringComparison.OrdinalIgnoreCase) &&
+                nowMsec >= _lastTapAt && nowMsec - _lastTapAt <= DoubleTapMsec;
             _lastTap = second ? null : input;
             _lastTapAt = nowMsec;
         }

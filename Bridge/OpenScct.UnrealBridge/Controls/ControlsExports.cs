@@ -37,7 +37,7 @@ public unsafe struct ControlsApi
 
 public static unsafe class ControlsExports
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     // Command names cross as ids: the table only grows, so an id stays good for the life of the process.
     private static readonly List<string> s_names = new();

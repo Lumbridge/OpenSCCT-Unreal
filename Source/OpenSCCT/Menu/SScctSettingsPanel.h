@@ -102,6 +102,7 @@ private:
 	TSharedPtr<SComboBox<TSharedPtr<FIntPoint>>> ResolutionCombo;
 
 	bool bBindMerc = false;
+	bool bBindDoubleTap = false;
 	bool bBindPad = false;
 	bool bControlsDirty = false;
 	bool bBindingsDirty = false;

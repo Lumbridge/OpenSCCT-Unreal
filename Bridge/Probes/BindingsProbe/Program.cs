@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Controls;
+using OpenScctGame.Play.Session;
 
 // The console check of the key bindings editor (Controls/BindingsEditor.cs): the rows a side lists, a conflict and
 // each of its answers, clearing, the shared layout, apply, discard and the file. No map is loaded.
@@ -105,10 +106,49 @@ Check(!ClutchKeys.Set(2, "Double+G", out clutchError) && clutchError.Contains("d
 Check(ClutchKeys.Set(2, "MiddleMouse", out _) && ClutchKeys.Set(1, "", out _) && ClutchKeys.Get(1) == "" && ClutchKeys.Get(2) == "MiddleMouse",
     "clutch two on the middle mouse button, clutch one cleared");
 
+Console.WriteLine("Binding gestures in play:");
+var live = new ControlBindings();
+ControlAction reload = ActionBindings.Find("reload")!;
+Check(ActionBindings.Bind(live.Spy, false, reload, "Double+H", false, doubleTapSlot: true) &&
+    live.Spy.Keys.Bindings.ContainsKey("R") && live.Spy.Keys.Bindings["H"].Contains("bSpecialsChat") &&
+    ControlBindings.FromJson(live.ToJson()).Spy.Keys.Bindings["Double+H"] == reload.Command,
+    "editing the double-tap slot keeps ordinary bindings and survives a save/load");
+Check(!ActionBindings.Bind(live.Spy, false, reload, "Double+MouseWheelUp", false, true) &&
+    !ActionBindings.Bind(live.Spy, false, ActionBindings.Find("map")!, "Double+M", false, true) &&
+    ActionBindings.Bind(live.Spy, false, reload, "", false, true) && live.Spy.Keys.Bindings.ContainsKey("R") &&
+    !live.Spy.Keys.Bindings.ContainsKey("Double+H"), "wheel and interface doubles refused, clearing a double leaves the single");
+Check(new ControlSettings().SpyRollFreeLook && ControlSettings.FromJson("{}").SpyRollFreeLook &&
+    !ControlSettings.FromJson("""{"spy_roll_free_look":false}""").SpyRollFreeLook, "new and missing roll-look settings default on, explicit false loads off");
+
+static BridgeKeyEdge Edge(BridgeKey key, bool down, int time) => new() { Code = (int)key, Pressed = down ? 1 : 0, TimeMsec = time };
+static string Taps(params BridgeKeyEdge[] events)
+{
+    var layout = new KeyLayout();
+    layout.Bind("LeftMouse", "PushToTalk");
+    layout.Bind("Double+LeftMouse", "ToggleAutoHack");
+    var target = new LocalInput();
+    var mapper = new InputMapper(target, layout, false, new ControlSettings());
+    var keys = new byte[BridgeKeys.Count];
+    mapper.Frame(keys, 0, 0, 0, true);
+    mapper.Frame(keys, 0, 0, 0.5, true, events, 1000);
+    mapper.FillTick(target, null);
+    return string.Join(",", mapper.LocalCommands.Select(c => c.Name + (c.Pressed ? "+" : "-")));
+}
+const BridgeKey button = BridgeKey.LeftMouse;
+const string single = "PushToTalk+,PushToTalk-";
+Check(Taps(Edge(button, true, 10), Edge(button, false, 20)) == single, "first tap runs its ordinary press and release");
+Check(Taps(Edge(button, true, 10), Edge(button, false, 20), Edge(button, true, 310), Edge(button, false, 320)) ==
+    single + ",PushToTalk+,ToggleAutoHack+,PushToTalk-", "two complete taps in one render frame trigger at 300 ms, after the ordinary press");
+Check(Taps(Edge(button, true, 10), Edge(button, false, 20), Edge(button, true, 311), Edge(button, false, 320)) ==
+    single + "," + single, "301 ms is two ordinary taps");
+Check(Taps(Edge(button, true, 10), Edge(button, false, 20), Edge(BridgeKey.J, true, 30), Edge(BridgeKey.J, false, 40),
+    Edge(button, true, 50), Edge(button, false, 60)) == single + "," + single, "intervening key in the same frame cancels the double tap");
+
 unsafe
 {
     // The sizes Source/OpenSCCT/Runtime/ScctBindingsApi.h and ScctMouseAimApi.h assert for their mirrors.
     Check(sizeof(BindingsApi) == 128, $"table size for the C++ mirror: {sizeof(BindingsApi)}");
+    Check(sizeof(BridgeRawInput) == 192 && sizeof(BridgeKeyEdge) == 16, "raw input and edge sizes match the C++ table");
     Check(sizeof(MouseAimApi) == 48, $"mouse and aim table size for the C++ mirror: {sizeof(MouseAimApi)}");
     // And Runtime/ScctLoadoutApi.h (Bridge/Probes/LoadoutProbe checks each struct and plays a match with it).
     Check(sizeof(LoadoutApi) == 112 && sizeof(BridgeLoadout) == 1280 && sizeof(BridgeGearItem) == 236 && sizeof(BridgeGearAnswer) == 200,

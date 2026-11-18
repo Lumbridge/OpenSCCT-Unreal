@@ -128,9 +128,11 @@ public sealed class InputMapper
     /// </param>
     /// <param name="mouseX">Mouse counts since the last frame, right positive.</param>
     /// <param name="mouseY">Mouse counts since the last frame, up positive.</param>
-    public void Frame(ReadOnlySpan<byte> keys, float mouseX, float mouseY, double deltaSeconds, bool play)
+    public void Frame(ReadOnlySpan<byte> keys, float mouseX, float mouseY, double deltaSeconds, bool play,
+        ReadOnlySpan<BridgeKeyEdge> edges = default, long nowMsec = 0)
     {
-        if (double.IsFinite(deltaSeconds) && deltaSeconds > 0)
+        if (nowMsec != 0) _clockMsec = nowMsec;
+        else if (double.IsFinite(deltaSeconds) && deltaSeconds > 0)
         {
             _clockMsec += deltaSeconds * 1000.0;
         }
@@ -170,7 +172,7 @@ public sealed class InputMapper
                 {
                     _state.Forget(name);
                     _was[code] = false;
-                    Press(keys, code);
+                    if (edges.IsEmpty) Press(keys, code);
                     continue;
                 }
 
@@ -185,14 +187,28 @@ public sealed class InputMapper
                     _state.Forget(name);
                 }
             }
+
+            foreach (ref readonly BridgeKeyEdge edge in edges)
+            {
+                if (edge.Code is >= (int)BridgeKey.LeftMouse and <= (int)BridgeKey.MouseX2 &&
+                    edge.Code < count && (keys[edge.Code] & 2) != 0) ApplyEdge(edge);
+            }
         }
         else
         {
-            // Releases first, then presses with the modifiers ahead of the keys they modify: the state of a frame
-            // has no order of its own.
+            Span<bool> seen = stackalloc bool[BridgeKeys.Count];
+            seen.Clear();
+            foreach (ref readonly BridgeKeyEdge edge in edges)
+            {
+                if ((uint)edge.Code >= (uint)count) continue;
+                seen[edge.Code] = true;
+                ApplyEdge(edge);
+            }
+
+            // Reconcile inputs without an event, including synthesized releases on focus loss.
             for (int code = 0; code < count; code++)
             {
-                if (_was[code] && (keys[code] & 1) == 0 && !BridgeKeys.IsWheel(code) && BridgeKeys.NameOf(code) is { } name)
+                if (!seen[code] && _was[code] && (keys[code] & 1) == 0 && !BridgeKeys.IsWheel(code) && BridgeKeys.NameOf(code) is { } name)
                 {
                     _was[code] = false;
                     Physical(name, false);
@@ -201,12 +217,12 @@ public sealed class InputMapper
 
             for (int code = (int)BridgeKey.Shift; code <= (int)BridgeKey.Alt; code++)
             {
-                Press(keys, code);
+                if (!seen[code]) Press(keys, code);
             }
 
             for (int code = 0; code < count; code++)
             {
-                if (code is < (int)BridgeKey.Shift or > (int)BridgeKey.Alt)
+                if (!seen[code] && (code is < (int)BridgeKey.Shift or > (int)BridgeKey.Alt))
                 {
                     Press(keys, code);
                 }
@@ -228,6 +244,14 @@ public sealed class InputMapper
 
         _mouseX += mouseX;
         _mouseY += mouseY;
+    }
+
+    private void ApplyEdge(in BridgeKeyEdge edge)
+    {
+        bool pressed = edge.Pressed != 0;
+        if (_was[edge.Code] == pressed || BridgeKeys.NameOf(edge.Code) is not { } name) return;
+        _was[edge.Code] = pressed;
+        Physical(name, pressed, edge.TimeMsec);
     }
 
     private void Press(ReadOnlySpan<byte> keys, int code)
@@ -256,10 +280,10 @@ public sealed class InputMapper
     }
 
     /// <summary>A physical key or button changed: the binding it owns (plain, chord or double tap) goes down or up.</summary>
-    private void Physical(string name, bool pressed)
+    private void Physical(string name, bool pressed, long? timeMsec = null)
     {
         _events.Clear();
-        _state.Update(_layout, name, pressed, _state.HeldModifiers, (long)_clockMsec, _events);
+        _state.Update(_layout, name, pressed, _state.HeldModifiers, timeMsec ?? (long)_clockMsec, _events);
         for (int i = 0; i < _events.Count; i++)
         {
             BindingInputEvent ev = _events[i];

@@ -111,7 +111,7 @@ FString ScctBindings::DisplayName(const FString& Key)
 		}
 		Text += Text.IsEmpty() ? Shown : TEXT(" + ") + Shown;
 	}
-	return bDouble ? TEXT("Double-tap ") + Text : Text;
+	return bDouble ? TEXT("2x ") + Text : Text;
 }
 
 FString ScctBindings::Check(bool bMerc, const FString& ActionId, const FString& Key)

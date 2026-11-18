@@ -81,7 +81,7 @@ public unsafe struct BridgeMenuAction
     public const int CategoryCapacity = 24;
     public const int LabelCapacity = 64;
 
-    /// <summary>1 the spies have it, 2 the mercs have it.</summary>
+    /// <summary>1 the spies have it, 2 the mercs have it, 4 offers a double-tap binding.</summary>
     public int Sides;
 
     public fixed char Id[IdCapacity];
@@ -392,6 +392,7 @@ public static unsafe class MenuExports
             {
                 BridgeMenuAction action = default;
                 action.Sides = (all[i].Spy ? 1 : 0) | (all[i].Merc ? 2 : 0);
+                if (ControlActionList.SupportsDoubleTap(all[i].Category, all[i].Id)) action.Sides |= 4;
                 Fill(all[i].Id, action.Id, BridgeMenuAction.IdCapacity);
                 Fill(all[i].Category, action.Category, BridgeMenuAction.CategoryCapacity);
                 Fill(all[i].Label, action.Label, BridgeMenuAction.LabelCapacity);
@@ -417,7 +418,7 @@ public static unsafe class MenuExports
         try
         {
             return action != null && ActionBindings.Find(new string(action)) is { } found
-                ? Copy(string.Join('\n', ActionBindings.KeysOf(ControlsStore.Bindings.Of(merc != 0), pad != 0, found)), buffer, capacity)
+                ? Copy(string.Join('\n', ActionBindings.KeysOf(BindingSide(merc, pad), pad != 0, found)), buffer, capacity)
                 : Copy("", buffer, capacity);
         }
         catch (Exception e)
@@ -438,7 +439,7 @@ public static unsafe class MenuExports
         {
             return key == null
                 ? Copy("", buffer, capacity)
-                : Copy(string.Join('\n', ActionBindings.LabelsOf(ControlsStore.Bindings.Of(merc != 0), merc != 0, pad != 0, new string(key))), buffer, capacity);
+                : Copy(string.Join('\n', ActionBindings.LabelsOf(BindingSide(merc, pad), merc != 0, pad != 0, new string(key))), buffer, capacity);
         }
         catch (Exception e)
         {
@@ -452,14 +453,15 @@ public static unsafe class MenuExports
     /// action or a name that is not a key. Not saved until the controls table's SaveBindings.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int BindAction(int merc, int pad, char* action, char* key, int keepOthers)
+    private static int BindAction(int merc, int pad, char* action, char* key, int mode)
     {
         try
         {
-            return action != null && ActionBindings.Find(new string(action)) is { } found
-                && ActionBindings.Bind(ControlsStore.Bindings.Of(merc != 0), pad != 0, found, key == null ? null : new string(key), keepOthers != 0)
-                ? 1
-                : 0;
+            if (action == null || ActionBindings.Find(new string(action)) is not { } found ||
+                !ActionBindings.Bind(BindingSide(merc, pad), pad != 0, found, key == null ? null : new string(key),
+                    mode == 1, mode switch { 2 => false, 3 => true, _ => null })) return 0;
+            if (pad == 0 && !ControlsStore.Bindings.Split) ControlsStore.Bindings.SetSplit(false);
+            return 1;
         }
         catch (Exception e)
         {
@@ -467,6 +469,8 @@ public static unsafe class MenuExports
             return 0;
         }
     }
+
+    private static SideBindings BindingSide(int merc, int pad) => ControlsStore.Bindings.Of(merc != 0 && (pad != 0 || ControlsStore.Bindings.Split));
 
     private static void Fill(string text, char* buffer, int capacity)
     {

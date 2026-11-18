@@ -105,6 +105,7 @@ namespace ScctUi
 
 	/** The keyboard is in a text field: letter keys are text, not shortcuts. */
 	bool IsTyping();
+	bool IsConsoleOpen();
 
 	/** A one-line text field in the menus' look. */
 	TSharedRef<SEditableTextBox> TextBox(const FString& Hint, const FString& Initial = FString(), bool bPassword = false, FOnTextCommitted OnCommitted = FOnTextCommitted());
@@ -360,6 +361,7 @@ public:
 	void Construct(const FArguments& InArgs);
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
+	virtual FReply OnKeyUp(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
 	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 	virtual FReply OnMouseWheel(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 	virtual void OnFocusLost(const FFocusEvent& InFocusEvent) override;
@@ -374,6 +376,7 @@ private:
 
 	TFunction<FString()> GetKeys;
 	TFunction<void(const FKey&)> OnCaptured;
+	FKey PendingModifier;
 	bool bCapturing = false;
 };
 

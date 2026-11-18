@@ -193,6 +193,8 @@ private:
 
 	TWeakObjectPtr<UScctSessionSubsystem> Session;
 	TSet<FKey> GameplayMousePresses;
+	TArray<FScctKeyEdge> KeyEdges;
+	TSet<FKey> HeldModifierKeys;
 	FDelegateHandle BeforeTicksHandle;
 	FDelegateHandle SessionChangedHandle;
 

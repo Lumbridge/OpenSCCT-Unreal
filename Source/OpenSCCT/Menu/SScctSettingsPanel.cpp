@@ -6,6 +6,7 @@
 #include "GameFramework/GameUserSettings.h"
 #include "Menu/SScctBrightnessPage.h"
 #include "Menu/SScctPadPanel.h"
+#include "Menu/ScctBindingsModel.h"
 #include "Menu/ScctDashboardCards.h"
 #include "Menu/ScctEnhancedImport.h"
 #include "Menu/ScctMenuSubsystem.h"
@@ -954,6 +955,12 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildBindings()
 	DefaultFocus = First;
 	// The keyboard and mouse here; the controller's buttons, with Hold B and the combinations, on the CONTROLLER tab.
 	bBindPad = false;
+	Add(SNew(SScctStepper)
+		.Label(FText::FromString(TEXT("Trigger")))
+		.Description(FText::FromString(TEXT("A double tap triggers on the second press within 300 ms. The ordinary binding runs on each press.")))
+		.Options({ TEXT("Single press"), TEXT("Double tap") })
+		.Get([this] { return bBindDoubleTap ? 1 : 0; })
+		.Set([this](int32 Value) { bBindDoubleTap = Value == 1; Rebuild(); }));
 	Rows->AddSlot().AutoHeight().HAlign(HAlign_Right).Padding(0.0f, 4.0f, 16.0f, 4.0f)
 	[
 		SNew(SScctButton)
@@ -986,7 +993,7 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildBindings()
 	FString Category;
 	for (const FScctMenuAction& Action : Menu->GetActions())
 	{
-		if ((Action.Sides & Side) == 0)
+		if ((Action.Sides & Side) == 0 || (bBindDoubleTap && (Action.Sides & EScctMenuSides::DoubleTap) == 0))
 		{
 			continue;
 		}
@@ -1002,9 +1009,14 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildBindings()
 		Add(SNew(SScctKeyRow)
 			.Label(FText::FromString(Label))
 			.Description(FText::FromString(FString::Printf(TEXT("Enter or A, then press the new %s. Escape gives up; Delete clears it."), bPad ? TEXT("controller button") : TEXT("key or mouse button"))))
-			.GetKeys([Api, Id, bMerc, bPad]
+			.GetKeys([Api, Id, bMerc, bPad, bDouble = bBindDoubleTap]
 			{
-				return ReadSettingsText([&](TCHAR* Buffer, int32 Capacity) { return Api->GetActionKeys(bMerc ? 1 : 0, bPad ? 1 : 0, *Id, Buffer, Capacity); });
+				const FString Bound = ReadSettingsText([&](TCHAR* Buffer, int32 Capacity) { return Api->GetActionKeys(bMerc ? 1 : 0, bPad ? 1 : 0, *Id, Buffer, Capacity); });
+				TArray<FString> Keys;
+				Bound.ParseIntoArrayLines(Keys);
+				Keys.RemoveAll([bDouble](const FString& Name) { return Name.StartsWith(TEXT("Double+")) != bDouble; });
+				for (FString& Name : Keys) Name = ScctBindings::DisplayName(Name);
+				return FString::Join(Keys, TEXT("\n"));
 			})
 			.OnCaptured([this, Id, Label](const FKey& Key) { HandleCaptured(Id, Label, Key); }));
 	}
@@ -1021,14 +1033,30 @@ void SScctSettingsPanel::HandleCaptured(const FString& ActionId, const FString& 
 	if (!Key.IsValid())
 	{
 		Bind(ActionId, FString());
-		Toast(FString::Printf(TEXT("%s is not bound now."), *Label));
 		return;
 	}
-	const FString Name = bBindPad ? PadName(Key) : KeyboardName(Key);
+	FString Name = bBindPad ? PadName(Key) : KeyboardName(Key);
 	if (Name.IsEmpty())
 	{
 		Toast(FString::Printf(TEXT("%s cannot be bound here."), *Key.GetDisplayName().ToString()), true);
 		return;
+	}
+
+	if (!Key.IsModifierKey())
+	{
+		const FModifierKeysState Mods = FSlateApplication::Get().GetModifierKeys();
+		if (Mods.IsAltDown()) Name = TEXT("Alt+") + Name;
+		if (Mods.IsShiftDown()) Name = TEXT("Shift+") + Name;
+		if (Mods.IsControlDown()) Name = TEXT("Ctrl+") + Name;
+	}
+	if (bBindDoubleTap)
+	{
+		if (Key == EKeys::MouseScrollUp || Key == EKeys::MouseScrollDown)
+		{
+			Toast(TEXT("A double tap needs a key or mouse button."), true);
+			return;
+		}
+		Name = TEXT("Double+") + Name;
 	}
 
 	// What the key does now, besides this action.
@@ -1042,15 +1070,16 @@ void SScctSettingsPanel::HandleCaptured(const FString& ActionId, const FString& 
 		return;
 	}
 	ScctUi::Confirm(Host.Dialogs, TEXT("Key already in use"),
-		FString::Printf(TEXT("%s is bound to %s. Bind it to %s instead? It will no longer do %s."), *Name, *FString::Join(Others, TEXT(", ")), *Label, Others.Num() == 1 ? *Others[0] : TEXT("those")),
+		FString::Printf(TEXT("%s is bound to %s. Bind it to %s instead?"), *ScctBindings::DisplayName(Name), *FString::Join(Others, TEXT(", ")), *Label),
 		TEXT("Replace"), TEXT("Cancel"), [this, ActionId, Name] { Bind(ActionId, Name); });
 }
 
 void SScctSettingsPanel::Bind(const FString& ActionId, const FString& KeyName)
 {
 	const FScctMenuApi* Api = ScctFeature<FScctMenuApi>();
-	if (Api != nullptr && Api->BindAction(bBindMerc ? 1 : 0, bBindPad ? 1 : 0, *ActionId, *KeyName, 0) != 0)
+	if (Api != nullptr && Api->BindAction(bBindMerc ? 1 : 0, bBindPad ? 1 : 0, *ActionId, *KeyName, bBindDoubleTap ? 3 : 2) != 0)
 	{
+		UScctControlSettings::Get()->NotifyRebound();
 		bBindingsDirty = true;
 		UE_LOG(LogOpenSCCT, Log, TEXT("Settings: %s %s bound to '%s'"), bBindMerc ? TEXT("merc") : TEXT("spy"), *ActionId, *KeyName);
 	}

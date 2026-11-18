@@ -184,8 +184,10 @@ public static class ControlActionList
     /// Double taps run through the play input. Interface, chat and Enhanced Reality shortcuts are read from the plain
     /// key by their own screens, so they do not offer one (OptionsMenu.SupportsDoubleTap).
     /// </summary>
-    public static bool SupportsDoubleTap(ControlActionInfo action) =>
-        action.Category != "Interface" && action.Id is not ("chat" or "teamchat" or "quickchat" or "er");
+    public static bool SupportsDoubleTap(ControlActionInfo action) => SupportsDoubleTap(action.Category, action.Id);
+
+    public static bool SupportsDoubleTap(string category, string id) =>
+        category is not ("Interface" or "Hub") && id is not ("chat" or "teamchat" or "quickchat" or "er");
 
     /// <summary>The actions that only a keyboard key can start (their screens read the key itself).</summary>
     public static bool NeedsKeyboardKey(ControlActionInfo action) => action.Category == "Interface" || action.Id is "chat" or "teamchat" or "er";

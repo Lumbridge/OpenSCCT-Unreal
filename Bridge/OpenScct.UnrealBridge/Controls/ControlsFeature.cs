@@ -163,7 +163,8 @@ public sealed class ControlsFeature
         {
             var state = new ReadOnlySpan<byte>(keys, BridgeRawInput.KeyCount);
             // A value that is not a number (a device glitch) must not reach the simulation's rotation.
-            Keys.Frame(state, Finite(raw.MouseX), Finite(raw.MouseY), delta, play);
+            Keys.Frame(state, Finite(raw.MouseX), Finite(raw.MouseY), delta, play,
+                new ReadOnlySpan<BridgeKeyEdge>(raw.Edges, raw.EdgeCount), raw.NowMsec);
             Pad.Frame(state, new Vector2(Finite(raw.LeftX), Finite(raw.LeftY)), new Vector2(Finite(raw.RightX), Finite(raw.RightY)),
                 Finite(raw.LeftTrigger), Finite(raw.RightTrigger), settings, side.Pad, _merc, play, delta);
         }

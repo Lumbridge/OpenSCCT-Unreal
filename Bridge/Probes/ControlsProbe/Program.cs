@@ -118,7 +118,7 @@ Check(stock.SpyKbm.FreeLook == 1.4f && stock.SpyKbm.Look == 1f && stock.MercKbm.
 unsafe
 {
     // The sizes Source/OpenSCCT/Runtime/ScctControlsApi.h asserts for its mirrors.
-    Check(sizeof(BridgeRawInput) == 168 && sizeof(BridgeLookView) == 68 && sizeof(BridgeLocalCommand) == 12 &&
+    Check(sizeof(BridgeRawInput) == 192 && sizeof(BridgeKeyEdge) == 16 && sizeof(BridgeLookView) == 68 && sizeof(BridgeLocalCommand) == 12 &&
         sizeof(BridgeLookSettings) == 72 && sizeof(BridgeControlSettings) == 372 && sizeof(ControlsApi) == 152,
         $"struct sizes for the C++ mirror: raw input {sizeof(BridgeRawInput)}, look view {sizeof(BridgeLookView)}, local command {sizeof(BridgeLocalCommand)}, look settings {sizeof(BridgeLookSettings)}, control settings {sizeof(BridgeControlSettings)}, table {sizeof(ControlsApi)}");
 }

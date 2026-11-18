@@ -5,6 +5,7 @@
 #include "Brushes/SlateNoResource.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
 #include "Engine/Engine.h"
+#include "Engine/Console.h"
 #include "Engine/GameViewportClient.h"
 #include "Fonts/FontMeasure.h"
 #include "Input/HittestGrid.h"
@@ -440,10 +441,16 @@ namespace ScctUi
 			];
 	}
 
+	bool IsConsoleOpen()
+	{
+		const UGameViewportClient* Client = GEngine ? GEngine->GameViewport.Get() : nullptr;
+		return Client && Client->ViewportConsole && Client->ViewportConsole->ConsoleActive();
+	}
+
 	bool IsTyping()
 	{
 		const TSharedPtr<SWidget> Focused = FSlateApplication::Get().GetKeyboardFocusedWidget();
-		return Focused.IsValid() && (Focused->GetType() == FName(TEXT("SEditableText")) || Focused->GetType() == FName(TEXT("SMultiLineEditableText")));
+		return IsConsoleOpen() || (Focused.IsValid() && (Focused->GetType() == FName(TEXT("SEditableText")) || Focused->GetType() == FName(TEXT("SMultiLineEditableText"))));
 	}
 
 	TSharedRef<SEditableTextBox> TextBox(const FString& Hint, const FString& Initial, bool bPassword, FOnTextCommitted OnCommitted)
@@ -1005,6 +1012,7 @@ void SScctKeyRow::Construct(const FArguments& InArgs)
 
 void SScctKeyRow::Press()
 {
+	PendingModifier = FKey();
 	bCapturing = true;
 }
 
@@ -1046,11 +1054,25 @@ FReply SScctKeyRow::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKe
 	{
 		Finish(FKey(), true);
 	}
+	else if (Key.IsModifierKey())
+	{
+		PendingModifier = Key;
+	}
 	else if (!InKeyEvent.IsRepeat())
 	{
 		Finish(Key, true);
 	}
-	return FReply::Handled();
+	return bCapturing ? FReply::Handled() : FReply::Handled().ReleaseMouseCapture();
+}
+
+FReply SScctKeyRow::OnKeyUp(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
+{
+	if (bCapturing && PendingModifier.IsValid() && InKeyEvent.GetKey() == PendingModifier)
+	{
+		Finish(PendingModifier, true);
+		return FReply::Handled().ReleaseMouseCapture();
+	}
+	return SScctOptionRow::OnKeyUp(MyGeometry, InKeyEvent);
 }
 
 FReply SScctKeyRow::OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent)
@@ -1110,18 +1132,7 @@ int32 SScctKeyRow::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeom
 	float X = Rect.Right;
 	for (int32 Index = 0; Index < Keys.Num() && Index < 3; ++Index)
 	{
-		// "MiddleMouse" reads as "MIDDLE MOUSE".
-		FString Name;
-		const FString& Raw = Keys[Index];
-		for (int32 At = 0; At < Raw.Len(); ++At)
-		{
-			if (At > 0 && FChar::IsUpper(Raw[At]) && FChar::IsLower(Raw[At - 1]))
-			{
-				Name.AppendChar(TEXT(' '));
-			}
-			Name.AppendChar(Raw[At]);
-		}
-		Name.ToUpperInline();
+		const FString& Name = Keys[Index];
 		const FVector2D TextSize = Measure(Name, Font);
 		const float Width = FMath::Max(TextSize.X + 20.0, 34.0);
 		X -= Width;

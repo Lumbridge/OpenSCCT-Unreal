@@ -86,7 +86,7 @@ public static class ActionBindings
     /// <paramref name="key"/> does it and nothing else. A null or empty key only clears. With <paramref name="pad"/>
     /// the same for pad controls. False for a name that is not a key or a pad control.
     /// </summary>
-    public static bool Bind(SideBindings side, bool pad, ControlAction action, string? key, bool keepOthers)
+    public static bool Bind(SideBindings side, bool pad, ControlAction action, string? key, bool keepOthers, bool? doubleTapSlot = null)
     {
         ArgumentNullException.ThrowIfNull(side);
         ArgumentNullException.ThrowIfNull(action);
@@ -114,9 +114,15 @@ public static class ActionBindings
             return true;
         }
 
-        if (name.Length > 0 && !BindingKey.TryParse(name, out _))
+        if (name.Length > 0)
         {
-            return false;
+            if (!BindingKey.TryParse(name, out var parsed)) return false;
+            bool doubled = parsed.Modifiers.HasFlag(BindingModifiers.Double);
+            if ((doubleTapSlot.HasValue && doubled != doubleTapSlot.Value) ||
+                (doubled && (parsed.IsPulse || !ControlActionList.SupportsDoubleTap(action.Category, action.Id))))
+            {
+                return false;
+            }
         }
 
         string[] parts = Parts(action.Command);
@@ -124,6 +130,8 @@ public static class ActionBindings
         {
             foreach (string held in KeysOf(side, false, action))
             {
+                if (doubleTapSlot.HasValue && BindingKey.TryParse(held, out var old) &&
+                    old.Modifiers.HasFlag(BindingModifiers.Double) != doubleTapSlot.Value) continue;
                 string rest = string.Join(" | ", Parts(side.Keys.Bindings[held]).Where(p => !parts.Contains(p, StringComparer.OrdinalIgnoreCase)));
                 side.Keys.Bind(held, rest);
             }
