@@ -333,30 +333,6 @@ public sealed class BridgeSession : IDisposable
         return (T)feature;
     }
 
-    /// <summary>The feature of type <typeparamref name="T"/> when the session has made one, else null (nothing is made).</summary>
-    public T? FindFeature<T>()
-        where T : class => _features.TryGetValue(typeof(T), out object? feature) ? (T)feature : null;
-
-    /// <summary>
-    /// Where a pawn is drawn this frame (between the last two ticks, as <see cref="GetPawns"/> places it). False for
-    /// a pawn the session does not draw.
-    /// </summary>
-    public bool TryDrawnLocation(int actorId, out FVector location)
-    {
-        if (!_current.TryGetValue(actorId, out PawnSample now))
-        {
-            location = default;
-            return false;
-        }
-
-        PawnSample from = _previous.TryGetValue(actorId, out PawnSample before) && before.ResetId == now.ResetId &&
-            DistanceSquared(before.Location, now.Location) <= PawnCutDistanceSquared
-            ? before
-            : now;
-        location = Lerp(from.Location, now.Location, Alpha);
-        return true;
-    }
-
     /// <summary>
     /// Runs the simulation ticks that are due, and returns how many client ticks ran since the last call. For a
     /// remote round the online visit runs the ticks (on its own Update, earlier in the frame); they are counted
@@ -411,6 +387,21 @@ public sealed class BridgeSession : IDisposable
     public bool HideLocalBody =>
         _session.LocalController is { FreeCameraFlying: 0 } pc && (!pc.bBehindView || _session.View.SpyFirstPerson) &&
         _session.LocalPawn is not null;
+
+    /// <summary>
+    /// How far a pawn's body is drawn this frame from where the last tick left it (<see cref="GetPawns"/> draws it
+    /// between the last two ticks); zero for a pawn not sampled, or one that jumped.
+    /// </summary>
+    public FVector DrawnOffset(int actorId)
+    {
+        if (!_current.TryGetValue(actorId, out PawnSample now) || !_previous.TryGetValue(actorId, out PawnSample before) ||
+            before.ResetId != now.ResetId || DistanceSquared(before.Location, now.Location) > PawnCutDistanceSquared)
+        {
+            return default;
+        }
+
+        return Lerp(before.Location, now.Location, Alpha) - now.Location;
+    }
 
     /// <summary>Writes the pawns as drawn this frame. Returns the count written.</summary>
     public int GetPawns(Span<BridgePawn> pawns)

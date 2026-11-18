@@ -40,6 +40,7 @@
 #include "Menu/ScctMenuPage.h"
 #include "Menu/SScctArmouryOverlay.h"
 #include "Menu/ScctOverlayPages.h"
+#include "Menu/ScctRankIcons.h"
 
 #include "Framework/Application/SlateApplication.h"
 #include "Demo/ScctDemoSubsystem.h"
@@ -1108,16 +1109,17 @@ namespace
 					// The rank, when the player has one (a guest and a bot have none, and leave no gap).
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, Rank.IsEmpty() ? 0.0f : 10.0f, 0.0f)
 					[
-						// RankIcons' emblem as a badge in its colour (the emblem art is drawn by the Godot client's own
-						// code, not in the converted content); the rank's words in the tooltip.
-						SNew(SBox).MinDesiredWidth(46.0f).Visibility(Rank.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+						// RankIcons' badge: the emblem (Menu/ScctRankIcons) and the level beside it in the emblem's
+						// colour; the rank's words in the tooltip.
+						SNew(SBox).Visibility(Rank.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
 						.ToolTipText(FText::FromString(ScctLobbyExtras::RankWords(Player.Rank)))
 						[
-							SNew(SBorder)
-							.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-							.BorderBackgroundColor(RankColour.CopyWithNewOpacity(0.18f))
-							.Padding(FMargin(6.0f, 2.0f))
-							.HAlign(HAlign_Center)
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 5.0f, 0.0f)
+							[
+								ScctRankIcons::Icon(ScctRankIcons::ForPacked(Player.Rank, 22.0f), 22.0f)
+							]
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 							[
 								ScctUi::Label(Rank, RankColour, 11.0f)
 							]

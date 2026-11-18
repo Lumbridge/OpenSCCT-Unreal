@@ -56,16 +56,12 @@ internal sealed class MercFirstPerson
     public ViewModelPose Pose => _pose;
 
     /// <summary>
-    /// The muzzle bone ("FX") of the last draw in the camera's frame (metres, X forward, Y up, Z right), as posed;
-    /// null when no view model was drawn or the model has no muzzle bone.
+    /// The muzzle ("FX") of the last draw in the camera's frame (metres, X forward, Y up, Z right), and the same bone
+    /// in the middle of the idle clip (FirstWaitStFd2), the neutral pose the laser sight is zeroed in; null when the
+    /// last draw showed no model or the model has no muzzle bone. The sight's beam is laid from them every frame
+    /// (EquipmentFeature.MountedBeam; MercLaserView.LocalBeam of the Godot client).
     /// </summary>
-    public Xform? Barrel { get; private set; }
-
-    /// <summary>
-    /// The same bone at the middle of the idle clip (FirstWaitStFd2), the pose the laser sight is zeroed in
-    /// (MercLaserView's sight reference); null when the model has no such clip.
-    /// </summary>
-    public Xform? SightReference { get; private set; }
+    public (Xform Barrel, Xform? Neutral)? Sight { get; private set; }
 
     /// <summary>After each client tick: samples the view model channels of the local merc's weapon.</summary>
     public void OnTick(SPlayerController? pc) => _pose.OnTick(((pc?.Pawn as SBasePawn)?.MyWeapon as SWeaponDefense)?.ViewAnim);
@@ -84,8 +80,6 @@ internal sealed class MercFirstPerson
     {
         Model = null;
         Applier = null;
-        Barrel = null;
-        SightReference = null;
         SWeaponDefense? weapon = _observed.Update(pawn, 0f);
         if (!ReferenceEquals(_lastWeapon, weapon))
         {
@@ -106,8 +100,7 @@ internal sealed class MercFirstPerson
     {
         Model = null;
         Applier = null;
-        Barrel = null;
-        SightReference = null;
+        Sight = null;
         var weapon = (pc?.Pawn as SBasePawn)?.MyWeapon as SWeaponDefense;
         bool show = pc is { bBehindView: false } && weapon is { bDrawWeapon: true, bDeleteMe: false } && !weapon.Mesh.IsNone &&
             ReferenceEquals(pc.ViewTarget ?? pc.Pawn, pc.Pawn);
@@ -161,6 +154,10 @@ internal sealed class MercFirstPerson
 
         Model = loaded.Model;
         Applier = loaded.Applier;
+        Sight = loaded.Model.MuzzleBone >= 0
+            ? (root * loaded.Model.ActorToSkeleton * loaded.Model.Global(loaded.Model.MuzzleBone, loaded.Applier.Positions,
+                loaded.Applier.Rotations, loaded.Applier.Scales), loaded.NeutralMuzzle is { } neutral ? root * neutral : null)
+            : null;
         view.Kind = BridgeFirstPersonKind.Merc;
         view.PartCount = 1;
         view.WeaponClass = EquipmentNames.ClassId(weapon);
@@ -169,13 +166,6 @@ internal sealed class MercFirstPerson
         view.RateOfFireSkin = weapon.Skins.Count > SWeaponDefense.ROF_MaterialID
             ? EquipmentNames.Id(weapon.Skins[SWeaponDefense.ROF_MaterialID].Path) : 0;
         view.Part0 = FirstPersonParts.Part(loaded.Model, root, loaded.Applier.Positions, loaded.Applier.Rotations, loaded.Applier.Scales);
-        if (loaded.Model.MuzzleBone >= 0)
-        {
-            Xform toCamera = root * loaded.Model.ActorToSkeleton;
-            Barrel = toCamera * loaded.Model.Global(loaded.Model.MuzzleBone, loaded.Applier.Positions, loaded.Applier.Rotations, loaded.Applier.Scales);
-            SightReference = loaded.NeutralMuzzle is { } neutral ? toCamera * neutral : null;
-        }
-
         return true;
     }
 
@@ -189,7 +179,8 @@ internal sealed class MercFirstPerson
         Loaded? loaded = null;
         if (EquipmentModel.Load(asset, _sharedRoot) is { } model)
         {
-            loaded = new Loaded(model, new ChannelPoseApplier(model.Character), SidearmSight(asset, model), NeutralMuzzleOf(model));
+            Xform? neutral = NeutralMuzzle(model);
+            loaded = new Loaded(model, new ChannelPoseApplier(model.Character), SidearmSight(asset, neutral), neutral);
         }
 
         _loaded[asset] = loaded;
@@ -200,27 +191,23 @@ internal sealed class MercFirstPerson
     /// A pistol's sights set on a point ten metres ahead, worked out once from where its muzzle sits in the idle
     /// clip (OpenSCCT's own pistols; port of FirstPersonView.SidearmSightOffset). Null for the game's own guns.
     /// </summary>
-    private static Xform? SidearmSight(string asset, EquipmentModel model)
+    private static Xform? SidearmSight(string asset, Xform? neutralMuzzle)
     {
-        if (!asset.StartsWith("OpenScctSidearms.", StringComparison.OrdinalIgnoreCase) || model.MuzzleBone < 0 ||
-            model.Character.Find(s_firstWaitStFd2.ToString()) is not { } idle)
+        if (!asset.StartsWith("OpenScctSidearms.", StringComparison.OrdinalIgnoreCase) || neutralMuzzle is not { } neutral)
         {
             return null;
         }
 
-        int count = model.Character.BoneCount;
-        var positions = new Vector3[count];
-        var rotations = new Quaternion[count];
-        var scales = new Vector3[count];
-        model.Sample(idle, .5f, positions, rotations, scales);
-        Xform neutral = model.ActorToSkeleton * model.Global(model.MuzzleBone, positions, rotations, scales);
         Vector3 direction = Vector3.Normalize(new Vector3(10f, 0f, 0f) - neutral.Origin);
         Basis3 rotation = Basis3.FromQuaternion(EquipmentMath.ShortestArc(neutral.Basis.X, direction));
         return new Xform(rotation, neutral.Origin - (rotation * neutral.Origin));
     }
 
-    /// <summary>The muzzle bone in the skeleton's space at the middle of the idle clip, or null without the bone or the clip.</summary>
-    private static Xform? NeutralMuzzleOf(EquipmentModel model)
+    /// <summary>
+    /// The muzzle ("FX") where it sits in the middle of the idle clip, in the model's actor frame: the neutral pose
+    /// the pistols' sights and every gun's laser sight are set in. Null without the bone or the clip.
+    /// </summary>
+    private static Xform? NeutralMuzzle(EquipmentModel model)
     {
         if (model.MuzzleBone < 0 || model.Character.Find(s_firstWaitStFd2.ToString()) is not { } idle)
         {
@@ -232,7 +219,7 @@ internal sealed class MercFirstPerson
         var rotations = new Quaternion[count];
         var scales = new Vector3[count];
         model.Sample(idle, .5f, positions, rotations, scales);
-        return model.Global(model.MuzzleBone, positions, rotations, scales);
+        return model.ActorToSkeleton * model.Global(model.MuzzleBone, positions, rotations, scales);
     }
 
     private sealed record Loaded(EquipmentModel Model, ChannelPoseApplier Applier, Xform? SightOffset, Xform? NeutralMuzzle);

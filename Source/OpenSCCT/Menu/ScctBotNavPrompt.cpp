@@ -20,6 +20,7 @@ namespace
 		TFunction<void()> Launch;
 		EBotNavPhase Phase = EBotNavPhase::Checking;
 		double CheckUntil = 0.0;
+		double ShowCheckAt = -1.0;
 		double AnswerAt = -1.0;
 		bool bDialogUp = false;
 		FString Question;
@@ -166,6 +167,23 @@ namespace
 			{
 				BotNavAsk(Prompt, Text, false);
 			}
+			else if (State != static_cast<int32>(EScctBotNavigationState::None) && Prompt->ShowCheckAt >= 0.0 && FPlatformTime::Seconds() >= Prompt->ShowCheckAt
+				&& FPlatformTime::Seconds() < Prompt->CheckUntil)
+			{
+				Prompt->ShowCheckAt = -1.0;
+				FScctDialog Dialog;
+				Dialog.Title = TEXT("Bot navigation");
+				Dialog.Body = TEXT("Checking for prebuilt bot navigation. The match starts when the check is done.");
+				Dialog.Buttons.Add({ TEXT("Start now"), EScctButtonLook::Secondary, [Prompt](const FString&)
+				{
+					UE_LOG(LogOpenSCCT, Log, TEXT("Bot navigation: the check was skipped (the bots prepare their routes on this PC)"));
+					BotNavFinish(Prompt, true);
+				} });
+				Dialog.Buttons.Add({ TEXT("Cancel"), EScctButtonLook::Secondary, [Prompt](const FString&) { BotNavFinish(Prompt, false); } });
+				Dialog.CancelButton = 1;
+				BotNavShow(Prompt, Dialog);
+				Prompt->AnswerAt = -1.0;
+			}
 			else if (State == static_cast<int32>(EScctBotNavigationState::None) || FPlatformTime::Seconds() >= Prompt->CheckUntil)
 			{
 				UE_LOG(LogOpenSCCT, Log, TEXT("Bot navigation: %s"), Text.IsEmpty() ? TEXT("the content index did not answer in time") : *Text);
@@ -248,14 +266,9 @@ void ScctBotNavPrompt::OfferThenLaunch(const TSharedPtr<SScctDialogLayer>& Dialo
 	{
 		// The index is still being read: the question waits up to three seconds for it, as in the Godot client.
 		UE_LOG(LogOpenSCCT, Log, TEXT("Bot navigation for %s: checking the content index"), *Map);
-		FScctDialog Dialog;
-		Dialog.Title = TEXT("Bot navigation");
-		Dialog.Body = TEXT("Checking for prebuilt bot navigation...");
-		Dialog.Buttons.Add({ TEXT("Build locally"), EScctButtonLook::Secondary, [Prompt](const FString&) { BotNavFinish(Prompt, true); } });
-		Dialog.Buttons.Add({ TEXT("Cancel"), EScctButtonLook::Secondary, [Prompt](const FString&) { BotNavFinish(Prompt, false); } });
-		Dialog.CancelButton = 1;
-		BotNavShow(Prompt, Dialog);
-		Prompt->AnswerAt = -1.0;
+		// The check usually answers within a few frames: its dialog flashed up and the match began before any button
+		// could be pressed. It is shown only when the check is still going after a second.
+		Prompt->ShowCheckAt = FPlatformTime::Seconds() + 1.0;
 	}
 	// The ticker holds the prompt: it lives until it finishes.
 	Prompt->Ticker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Prompt](float) { return BotNavTick(Prompt); }), 0.1f);

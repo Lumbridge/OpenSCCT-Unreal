@@ -5,11 +5,13 @@
 #include "HAL/PlatformProcess.h"
 #include "Menu/ScctBotNavPrompt.h"
 #include "Menu/ScctMenuSubsystem.h"
+#include "Menu/ScctRankIcons.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
 #include "Social/ScctAccountSubsystem.h"
 #include "Social/ScctDashboardSubsystem.h"
+#include "Widgets/Images/SImage.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SWrapBox.h"
@@ -392,6 +394,19 @@ namespace ScctDashboard
 					})
 				]
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(10.0f, 0.0f, 0.0f, 0.0f)
+				[
+					// The rank's emblem (Menu/ScctRankIcons) before its level.
+					SNew(SBox).WidthOverride(24.0f).HeightOverride(24.0f)
+					.Visibility_Lambda([HasRank, Shown] { return Shown(HasRank()); })
+					[
+						SNew(SImage).Image_Lambda([Account]
+						{
+							const FScctAccountInfo& Info = Account.IsValid() ? Account->GetInfo() : FScctAccountInfo();
+							return ScctRankIcons::For(Info.Prestige, Info.Level, 24.0f);
+						})
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6.0f, 0.0f, 0.0f, 0.0f)
 				[
 					SNew(STextBlock).Font(ScctUi::Caps(13.0f))
 					.Visibility_Lambda([HasRank, Shown] { return Shown(HasRank()); })

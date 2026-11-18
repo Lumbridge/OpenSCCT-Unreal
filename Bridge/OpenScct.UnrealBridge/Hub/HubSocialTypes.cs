@@ -49,6 +49,9 @@ public static class HubSocialFlags
     /// <summary>This player's chat lines are hidden for the visit.</summary>
     public const int ChatMuted = 4;
 
+    /// <summary>HubSocialTag.Flags only: the tag's packed rank without its title (level, then prestige) sits above this bit.</summary>
+    public const int TagRankShift = 16;
+
     /// <summary>Heard on voice right now (always off: the hub's voice is not carried yet).</summary>
     public const int Talking = 8;
 
