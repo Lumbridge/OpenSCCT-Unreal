@@ -216,6 +216,7 @@ void UScctEquipmentSubsystem::DropEverything()
 		FirstPersonView->Destroy();
 	}
 	FirstPersonView = nullptr;
+	LaserVision.Drop();
 	CloakLook.Trim();
 }
 
@@ -363,6 +364,7 @@ void UScctEquipmentSubsystem::OnFrame(float DeltaSeconds)
 	UpdateFirstPerson(*Api, DeltaSeconds);
 	const bool bViewModelShown = IsValid(FirstPersonView) && FirstPersonView->IsShown();
 
+	LaserVision.BeginFrame();
 	for (int32 Index = 0; Index < EquipmentCount; ++Index)
 	{
 		const FScctEquipment& Pawn = Equipment[Index];
@@ -386,6 +388,7 @@ void UScctEquipmentSubsystem::OnFrame(float DeltaSeconds)
 		}
 		LogChanges(*Api, *Found, Pawn);
 	}
+	LaserVision.EndFrame();
 
 	for (auto It = Gear.CreateIterator(); It; ++It)
 	{
@@ -659,13 +662,30 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		ProbeLaser(Start, End);
 	}
 
+	// Thermal draws both weapon beams hot and EMF the merc's sight as a dark grey streak; the goggles' own beam then
+	// stands in for the red one, whose added light the mode's material would read as brightness.
+	const UScctVisionSubsystem* Goggles = UScctVisionSubsystem::Find(GetWorld());
+	const int32 GoggleMode = Goggles != nullptr ? Goggles->GetVisionMode() : 0;
+	const int32 GoggleStencil = bBeam && Length > 1.0 ? FScctLaserVision::StencilFor(GoggleMode, (Pawn.Flags & EScctEquipmentFlags::Merc) != 0) : 0;
+	if (GoggleStencil != 0)
+	{
+		LaserVision.Show(*GetWorld(), Pawn.ActorId, Start, End, GetCamera().GetLocation(), GoggleStencil);
+	}
+	if (Found.LaserVisionStencil != GoggleStencil)
+	{
+		Found.LaserVisionStencil = GoggleStencil;
+		UE_LOG(LogOpenSCCT, Log, TEXT("Equipment: pawn %d (%s) laser beam, %.0f cm, is drawn %s (vision mode %d)"), Pawn.ActorId,
+			(Pawn.Flags & EScctEquipmentFlags::Merc) != 0 ? TEXT("merc") : TEXT("spy"), Length,
+			GoggleStencil == 0 ? (bBeam ? TEXT("as the red beam") : TEXT("not at all")) : GoggleStencil == UScctVisionSubsystem::StencilEmfStreak ? TEXT("for the goggles as a dark grey EMF streak") : TEXT("for the goggles as heat 1"), GoggleMode);
+	}
+
 	if (bBeam && !Found.Beam.IsValid())
 	{
 		Found.Beam = MakeGlowShape(Proxy, CylinderPath, LaserColor, LaserBeamIntensity, 1.5f);
 	}
 	if (UStaticMeshComponent* Beam = Found.Beam.Get())
 	{
-		const bool bShow = bBeam && Length > 1.0;
+		const bool bShow = bBeam && Length > 1.0 && GoggleStencil == 0;
 		if (bShow)
 		{
 			// The engine's cylinder is 100 across and 100 long, along Z.
