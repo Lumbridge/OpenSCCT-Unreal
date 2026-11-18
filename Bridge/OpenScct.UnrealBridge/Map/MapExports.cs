@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using OpenScct.Content.Collision;
 using OpenScct.Content.Maps;
 using OpenScct.Core;
 using OpenScct.Core.Engine;
@@ -134,16 +135,27 @@ public static class StrategicMapPage
     internal static StrategicMapPosition? You { get; private set; }
     internal static List<StrategicMapPosition> Team { get; private set; } = [];
     private static readonly Dictionary<int, BridgeMapTriangle[]> GeometryByFloor = new();
+    private static CollisionData? s_lobbyCollision;
 
     internal static ReadOnlySpan<BridgeMapTriangle> Geometry()
     {
-        if (!Live || Model is not { } model || Exports.Current is not { } round)
+        if (Model is not { } model || s_dataFolder is null)
         {
             return [];
         }
         if (!GeometryByFloor.TryGetValue(model.FloorIndex, out var mesh))
         {
-            mesh = StrategicMapGeometry.Build(round.Session.Loader.Map.Collision, model.Data, model.FloorIndex);
+            CollisionData? collision = Live ? Exports.Current?.Session.Loader.Map.Collision : s_lobbyCollision;
+            if (!Live && collision is null)
+            {
+                string path = Path.Combine(s_dataFolder, CollisionReader.RelativePath);
+                if (File.Exists(path))
+                {
+                    collision = CollisionReader.Load(path, strict: false);
+                    s_lobbyCollision = collision;
+                }
+            }
+            mesh = collision is null ? [] : StrategicMapGeometry.Build(collision, model.Data, model.FloorIndex);
             GeometryByFloor.Add(model.FloorIndex, mesh);
         }
         return mesh;
@@ -187,6 +199,7 @@ public static class StrategicMapPage
         }
 
         GeometryByFloor.Clear();
+        s_lobbyCollision = null;
         s_live = context == MatchContext;
         s_map = Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         s_model = new StrategicMapModel(s_data);
@@ -220,6 +233,7 @@ public static class StrategicMapPage
     public static void Close()
     {
         GeometryByFloor.Clear();
+        s_lobbyCollision = null;
         You = null;
         Team.Clear();
         s_model = null;

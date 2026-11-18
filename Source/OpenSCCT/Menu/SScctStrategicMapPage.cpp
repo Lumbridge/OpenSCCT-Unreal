@@ -42,7 +42,6 @@ namespace
 	constexpr float StrategicMapYouUnits = 20.0f;
 	constexpr float StrategicMapMateUnits = 32.0f;
 	constexpr float StrategicMapLegendWidth = 300.0f;
-	constexpr float StrategicMapFloorsWidth = 128.0f;
 
 	/** GUI.StrategicMap defaults ShowSpotColor, HideSpotColor, ShowTeamMateColor, HideTeamMateColor. */
 	FLinearColor StrategicMapSpot(bool bBright)
@@ -347,7 +346,7 @@ void SScctStrategicMapPage::Construct(const FArguments& InArgs)
 	const auto FloorButton = [this](const TCHAR* Caption, bool bUp)
 	{
 		return Ui::Button(Ui::ToText(Caption), FOnClicked::CreateLambda([this, bUp] { bUp ? FloorUp() : FloorDown(); return FReply::Handled(); }),
-			false, Ui::Accent(), StrategicMapFloorsWidth);
+			false, Ui::Accent());
 	};
 
 	static const FSlateColorBrush Dim(FLinearColor::White);
@@ -408,8 +407,8 @@ void SScctStrategicMapPage::Construct(const FArguments& InArgs)
 								+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
 								[
 									SNew(SHorizontalBox).Visibility(State.FloorCount > 1 ? EVisibility::Visible : EVisibility::Collapsed)
-									+ SHorizontalBox::Slot().AutoWidth().Padding(0,0,8,0)[ FloorButton(TEXT("DOWN"), false) ]
-									+ SHorizontalBox::Slot().AutoWidth()[ FloorButton(TEXT("UP"), true) ]
+									+ SHorizontalBox::Slot().FillWidth(1).Padding(0,0,8,0)[ FloorButton(TEXT("DOWN"), false) ]
+									+ SHorizontalBox::Slot().FillWidth(1)[ FloorButton(TEXT("UP"), true) ]
 								]
 								+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
 								[
@@ -463,8 +462,8 @@ void SScctStrategicMapPage::Construct(const FArguments& InArgs)
 						]
 						+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right).VAlign(VAlign_Center)
 						[
-							Ui::Text(TAttribute<FText>::CreateLambda([this] { return Ui::ToText(Shows3D() ? TEXT("White arrow  ·  You       Orange ring  ·  Teammate       Diamond  ·  Objective")
-								: (State.Live ? TEXT("White  ·  You       Orange  ·  Teammate") : TEXT("Lobby overview"))); }),
+							Ui::Text(TAttribute<FText>::CreateLambda([this] { return Ui::ToText(!State.Live ? TEXT("Lobby overview") : Shows3D() ? TEXT("White arrow  ·  You       Orange ring  ·  Teammate       Diamond  ·  Objective")
+								: TEXT("White  ·  You       Orange  ·  Teammate")); }),
 								11.5f, FSlateColor(ScctHudStyle::TextDim()))
 						]
 					], FMargin(30.0f, 26.0f), 0.82f)
@@ -519,7 +518,7 @@ FReply SScctStrategicMapPage::OnPreviewKeyDown(const FGeometry&, const FKeyEvent
 	}
 	if (Key == EKeys::PageUp || Key == EKeys::Gamepad_FaceButton_Top) { FloorUp(); return FReply::Handled(); }
 	if (Key == EKeys::PageDown || Key == EKeys::Gamepad_FaceButton_Left) { FloorDown(); return FReply::Handled(); }
-	if (Key == EKeys::Gamepad_LeftThumbstick && State.Live) return ToggleView();
+	if (Key == EKeys::Gamepad_LeftThumbstick && Iso->HasGeometry()) return ToggleView();
 	if (Shows3D() && Iso->Navigate(Key)) return FReply::Handled();
 	return FReply::Unhandled();
 }

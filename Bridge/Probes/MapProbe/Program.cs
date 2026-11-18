@@ -56,7 +56,7 @@ internal static unsafe class Probe
         Console.WriteLine($"   floors {s.FloorCount}, shown {s.Floor}, camera {s.HasCamera}, live {s.Live}, picture \"{picture}\", places {s.PlaceCount}");
         check(s.FloorCount >= 1 && s.HasPicture == 1 && File.Exists(picture), "the first floor's picture is there");
         check(s.Live == 0 && s.YouShown == 0 && s.HasYou == 0 && s.MateCount == 0, "no markers in the lobby");
-        check(api.ListGeometry(null, 0) == 0, "lobby uses the authored floor plan");
+        CheckGeometry(api, s, check);
         string legend = Legend();
         Console.WriteLine($"   legend: {legend.Replace("\n", " | ")}");
         check(legend.Length > 0, "the legend is read from the map's mapinfo");

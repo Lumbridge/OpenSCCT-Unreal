@@ -46,7 +46,7 @@ void SScctStrategicMap3D::Construct(const FArguments&, const FScctMapState* InSt
 
 void SScctStrategicMap3D::ReadFloor(const FScctMapApi& Api)
 {
-	if (!State->Live || LoadedFloor == State->Floor) return;
+	if (LoadedFloor == State->Floor) return;
 	LoadedFloor = State->Floor;
 	TArray<FScctMapTriangle> Triangles;
 	Triangles.SetNumUninitialized(Api.ListGeometry(nullptr, 0));
@@ -274,6 +274,7 @@ void SScctStrategicMap3D::PaintMarkers(const FGeometry& Geometry, FSlateWindowEl
 	}
 
 	// Reuse the local HUD's resolved objective rows, including zone, mode, visibility and visor rules.
+	if (!S.Live) return;
 	const UScctHudSubsystem* Hud = World.IsValid() ? World->GetSubsystem<UScctHudSubsystem>() : nullptr;
 	if (Hud)
 	{
