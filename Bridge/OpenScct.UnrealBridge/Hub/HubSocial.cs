@@ -202,7 +202,8 @@ public sealed class HubSocial
             row.Distance = tag.Distance;
             row.PlayerId = tag.PlayerId;
             row.Team = tag.Team;
-            row.Flags = client.IsChatMuted(tag.Name) ? HubSocialFlags.ChatMuted : 0;
+            // The rank's level and prestige (the low half of the packed rank) ride in the flags' high half, for the emblem.
+            row.Flags = (client.IsChatMuted(tag.Name) ? HubSocialFlags.ChatMuted : 0) | ((tag.Rank & 0xFFFF) << HubSocialFlags.TagRankShift);
             string caption = client.Play.EmoteOf(tag.PlayerId) is { } emote ? HubEmotes.Caption(emote) : string.Empty;
             unsafe
             {

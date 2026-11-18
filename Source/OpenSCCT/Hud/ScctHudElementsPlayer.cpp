@@ -77,8 +77,9 @@ bool ScctHudElements::ShowsPlayerHud(const FScctHudModel& Model)
 		&& (Model.State.Flags & (EScctHudFlags::HideHud | EScctHudFlags::Spectating | EScctHudFlags::GameEnded)) == 0
 		&& !ScctVisorEffects::IsHudShutDown(Model) // an EMP keeps the merc's HUD down for 12 s
 		&& Model.State.GadgetView == 0
-		// The spy's binocular page replaces his HUD, as P_BinocularsATT replaces P_HudATT in the original.
-		&& Model.State.BinocularMode != 1;
+		// A binocular page replaces the player's HUD, as P_BinocularsATT replaces P_HudATT and P_BinocularsDEF (the
+		// merc's rifle scope) replaces P_HudDEF in the original.
+		&& Model.State.BinocularMode == 0;
 }
 
 FString ScctHudElements::LivesText(const FScctHudModel& Model, int32 Lives, int32 InfiniteFrom)
@@ -274,7 +275,10 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 	}
 
 	// The merc's sound arrows: a noise from that side. Left, right, top, bottom as arcs around the centre;
-	// ahead and behind as a second arc outside the top and the bottom one.
+	// ahead and behind as a second arc outside the top and the bottom one. The simulation lights the arrow times on any
+	// player's HUD (SHud.NotifyHotSound has no side test), but only the merc's page has the arrows (they are parts of its
+	// reticle, the Godot client's MercHudPage.DriveArrows): a spy gets none.
+	const bool bSoundArrows = State.Side == 1;
 	struct FArrow
 	{
 		float Angle;
@@ -283,9 +287,7 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 	static const FArrow Arrows[ScctHudArrowCount] = {
 		{ 270.0f, 96.0f }, { 90.0f, 96.0f }, { 0.0f, 96.0f }, { 180.0f, 96.0f }, { 0.0f, 108.0f }, { 180.0f, 108.0f },
 	};
-	// The simulation times them on every player's HUD (SHud.NotifyHotSound has no side test); only the merc's page has
-	// the arrows (the Godot client's MercHudPage.DriveArrows), so a spy gets none.
-	for (int32 Index = 0; State.Side == 1 && Index < ScctHudArrowCount; ++Index)
+	for (int32 Index = 0; bSoundArrows && Index < ScctHudArrowCount; ++Index)
 	{
 		const float Seconds = State.ArrowSeconds[Index];
 		if (Seconds > 0.0f)
@@ -308,13 +310,24 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 
 void ScctHudElements::PaintScope(FScctHudPainter& Painter, const FScctHudModel& Model)
 {
-	// The merc's scope only: the spy's binoculars are their own page (PaintSpyBinoculars).
-	if (!ShowsPlayerHud(Model) || Model.State.BinocularMode != 2)
+	// The merc's scope only: the spy's binoculars are their own page (PaintSpyBinoculars). The scope replaces the
+	// player's HUD, so its gates are the HUD's own without the binocular one.
+	const FScctHudState& State = Model.State;
+	if (!Model.bHasState || State.BinocularMode != 2 || State.GadgetView != 0 || (State.Flags & EScctHudFlags::HasPawn) == 0
+		|| (State.Flags & (EScctHudFlags::HideHud | EScctHudFlags::Spectating | EScctHudFlags::GameEnded)) != 0
+		|| ScctVisorEffects::IsHudShutDown(Model))
 	{
 		return;
 	}
 
-	const FScctHudState& State = Model.State;
+	// The content's P_BinocularsDEF page (ScctHudElementsBinoculars.cpp); the drawing below stands in for it only
+	// when the content or the bridge has no such page.
+	if (Model.ScopeLayers.Num() > 0)
+	{
+		PaintScopePage(Painter, Model);
+		return;
+	}
+
 	const FVector2f Size = Painter.Size();
 	const FVector2f Centre = Size * 0.5f;
 	const FLinearColor Accent = ScctHudStyle::Accent(State.Side);
@@ -406,8 +419,8 @@ void ScctHudElements::PaintStatus(FScctHudPainter& Painter, const FScctHudModel&
 		}
 	}
 
-	// The gauges the original has, right of the block: the spy's energy, the merc's shock protection, the air
-	// left in the gas mask and the breath of a scoped merc.
+	// The gauges the original has, right of the block: the spy's energy, the merc's shock protection and the air
+	// left in the gas mask (the breath of a scoped merc is on the scope's own page).
 	FVector2f GaugeCentre(X + PanelWidth + 40.0f, Y + PanelHeight * 0.5f);
 	const auto NextGauge = [&GaugeCentre]() { GaugeCentre.X += 64.0f; };
 	if (State.Side == 0 && State.EnergyLevelMax > 0)
@@ -430,10 +443,6 @@ void ScctHudElements::PaintStatus(FScctHudPainter& Painter, const FScctHudModel&
 		const bool bLowAir = (State.EffectFlags & EScctHudEffectFlags::GasMaskLowAir) != 0;
 		Gauge(Painter, GaugeCentre, static_cast<float>(State.GasMaskAirSeconds) / FMath::Max(Model.GasMaskCapacity, 1), bLowAir ? Danger() : Good(), FString::FromInt(State.GasMaskAirSeconds));
 		NextGauge();
-	}
-	if (State.BinocularMode == 2)
-	{
-		Gauge(Painter, GaugeCentre, State.BreathTime / 5.0f, (State.Flags & EScctHudFlags::HoldBreath) != 0 ? Accent : Fade(Text(), 0.7f), FString());
 	}
 
 	// The vision mode, named as the game names it, slides up above the block while the goggles are on.

@@ -35,6 +35,13 @@ struct FScctVisorState
 	bool bShocked = false;
 	float ShockSince = 0.0f;
 
+	// The gas mask (Hud/ScctGasMaskOverlay.h): its frame is up while the mask is the selected gadget, the breathing
+	// runs while it is worn; level times each began.
+	bool bMaskShown = false;
+	float MaskShownAt = 0.0f;
+	bool bMaskWorn = false;
+	float MaskWornAt = 0.0f;
+
 	// -ScctVisorFx: which effect is faked and from when.
 	FString Forced;
 	float ForceDelay = 2.0f;
@@ -55,8 +62,10 @@ struct FScctVisorState
  * down with a trail, electric arcs. They are driven only by the snapshot: EffectFlags (Perturbed, ShutDown, FoamSplash,
  * FoamOn, StickyShocking, StickyShockHead, Wet), ShutDowns, FoamStopTime, FoamStaySeconds and TimeSeconds.
  *
- * -ScctVisorFx=shutdown|perturb|foam|shock|wet[@seconds] fakes that effect in the snapshot a few seconds (2 by default)
- * after the HUD opens, as the bridge would set it, so each can be shot unattended. Log lines start with "Visor:".
+ * The gas mask's frame and breathing are painted with them, under the others (Hud/ScctGasMaskOverlay.h).
+ *
+ * -ScctVisorFx=shutdown|perturb|foam|shock|wet|mask[@seconds] fakes that effect in the snapshot a few seconds (2 by
+ * default) after the HUD opens, as the bridge would set it, so each can be shot unattended. Log lines start with "Visor:".
  */
 namespace ScctVisorEffects
 {

@@ -159,6 +159,13 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	LastLockCandidate.Reset();
 	bLastLockMarked = false;
 	bBinocularPageMissingLogged = false;
+	ScopeAge = 0.0f;
+	ScopeZoomAge = -1.0f;
+	ScopeZoomAnimation = 0;
+	LastScopeStep = 1;
+	ScopeSpeakAge = -1.0f;
+	ScopeAlertAge = -1.0f;
+	bScopePageMissingLogged = false;
 	LastMotionSignature = 0;
 	bMotionTableMissingLogged = false;
 	AimMateUntil = -1.0f;

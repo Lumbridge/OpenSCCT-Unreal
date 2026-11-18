@@ -394,6 +394,21 @@ public sealed class BridgeSession : IDisposable
         _session.LocalController is { FreeCameraFlying: 0 } pc && (!pc.bBehindView || _session.View.SpyFirstPerson) &&
         _session.LocalPawn is not null;
 
+    /// <summary>
+    /// How far a pawn's body is drawn this frame from where the last tick left it (<see cref="GetPawns"/> draws it
+    /// between the last two ticks); zero for a pawn not sampled, or one that jumped.
+    /// </summary>
+    public FVector DrawnOffset(int actorId)
+    {
+        if (!_current.TryGetValue(actorId, out PawnSample now) || !_previous.TryGetValue(actorId, out PawnSample before) ||
+            before.ResetId != now.ResetId || DistanceSquared(before.Location, now.Location) > PawnCutDistanceSquared)
+        {
+            return default;
+        }
+
+        return Lerp(before.Location, now.Location, Alpha) - now.Location;
+    }
+
     /// <summary>Writes the pawns as drawn this frame. Returns the count written.</summary>
     public int GetPawns(Span<BridgePawn> pawns)
     {
