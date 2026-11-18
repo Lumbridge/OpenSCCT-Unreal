@@ -10,6 +10,7 @@ class AActor;
 class UMaterialInterface;
 class USceneCaptureComponent2D;
 class UStaticMeshComponent;
+class UTexture2D;
 class UTextureRenderTarget2D;
 
 /**
@@ -212,6 +213,18 @@ private:
 		FVector Centre = FVector::ZeroVector;
 	};
 	TArray<FTonePatch> TonePatches;
+	/**
+	 * The baked cards under the ramp: patches drawn with the surface master material, a texture of one display value
+	 * and a lightmap page of one stored value, on no lighting channel. Code is what the original would show
+	 * (texture x min(2, 2 x stored)); Emissive holds the texture's value and Stored the lightmap's, of 255.
+	 */
+	struct FToneCard : FTonePatch
+	{
+		float Stored = 0.0f;
+	};
+	TArray<FToneCard> ToneCards;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UTexture2D>> ToneTextures;
 	FTransform ToneCamera;
 	bool bSaveCapture = false;
 	bool bCaptured = false;

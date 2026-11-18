@@ -19,6 +19,34 @@ WATER = MATERIALS + "/M_ScctWater"
 SKY = MATERIALS + "/M_ScctSky"
 WATER_NORMAL = MATERIALS + "/T_WaterNormal"
 
+# The lighting plan's values (scct.Light.Plan, Source/OpenSCCT/Play/ScctLightPlan.h), in a material parameter
+# collection the game sets when a level loads (Source/OpenSCCT/Play/ScctLightRules.cpp). The defaults are the released
+# picture: Plan 0 makes the surface material compute exactly what it computed before the plan, so the editor, the
+# menus and a match with scct.Light.Plan 0 show the same picture as before. The collection is made once and then only
+# added to: a material holds each value by the id the collection gave it, and a collection made anew would orphan them.
+#   Plan              0 the released formula; 1 the plan's (build_surface, "the lighting plan")
+#   BakedGain         a factor on the baked light term (display units), 1 unless a measurement says otherwise
+#   BakedScale        what the stored lightmap and vertex colour are multiplied by (the original stored them halved: 2)
+#   BakedSaturation   1 the baked light's own colour, 0 its grey
+#   Boost             added to the term: the night vision's and the squint's (the plan's step 7)
+#   Ambient           added to the term: a zone ambient (0 on nearly every map; the plan's step 9)
+#   BounceGate        the most bounced and sky light a surface takes (the material's occlusion), reached where its
+#                     baked light is BounceHigh or more, none where it is BounceLow or less (luminance of the term)
+#   Floor             the share of the released picture's AmbientFloor that stays
+LIGHT_COLLECTION = MATERIALS + "/MPC_ScctLight"
+LIGHT_PARAMETERS = [
+    ("Plan", 0.0),
+    ("BakedGain", 1.0),
+    ("BakedScale", 2.0),
+    ("BakedSaturation", 1.0),
+    ("Boost", 0.0),
+    ("Ambient", 0.0),
+    ("BounceGate", 0.35),
+    ("BounceLow", 0.08),
+    ("BounceHigh", 0.5),
+    ("Floor", 0.0),
+]
+
 # Custom primitive data slot 0 on a mesh component: 1 = sample the detail layer in the mesh's own space, so the
 # grain travels with a door or a lift instead of sliding across it. import_map.py sets it on everything movable.
 LOCAL_DETAIL_SLOT = 0
@@ -138,6 +166,36 @@ def sequence_colour(g, time):
     return g.custom(pick, FLOAT4, W=clock, **samples)
 
 
+def light_collection():
+    """The lighting plan's parameter collection: made when it is missing, and given the values it lacks. The values
+    it has keep their ids; a default that differs from the table's is put back to it."""
+    collection = unreal.load_asset(LIGHT_COLLECTION) if editor_assets.does_asset_exist(LIGHT_COLLECTION) else None
+    made = collection is None
+    if made:
+        folder, name = LIGHT_COLLECTION.rsplit("/", 1)
+        collection = asset_tools.create_asset(name, folder, unreal.MaterialParameterCollection,
+                                              unreal.MaterialParameterCollectionFactoryNew())
+    values = list(collection.get_editor_property("scalar_parameters"))
+    have = {str(value.get_editor_property("parameter_name")): value for value in values}
+    changed = made
+    for name, default in LIGHT_PARAMETERS:
+        value = have.get(name)
+        if value is None:
+            value = unreal.CollectionScalarParameter()
+            value.set_editor_property("parameter_name", name)
+            value.set_editor_property("default_value", default)
+            values.append(value)
+            changed = True
+        elif abs(value.get_editor_property("default_value") - default) > 1e-6:
+            value.set_editor_property("default_value", default)
+            changed = True
+    if changed:
+        collection.set_editor_property("scalar_parameters", values)
+        editor_assets.save_asset(LIGHT_COLLECTION)
+        unreal.log_warning("SCCT-IMPORT %s %s" % ("made" if made else "updated", LIGHT_COLLECTION))
+    return collection
+
+
 class Graph:
     """Small helpers over the material editing library: every node is laid out left of the last."""
 
@@ -194,6 +252,12 @@ class Graph:
             node, output = source if isinstance(source, tuple) else (source, "")
             self.link(node, expression, name, output)
         return expression
+
+    def light(self, name):
+        """A value of the lighting plan's parameter collection (LIGHT_PARAMETERS)."""
+        node = self.node(unreal.MaterialExpressionCollectionParameter, collection=light_collection())
+        node.set_editor_property("parameter_name", name)
+        return node
 
     def static_switch(self, name, when_on, when_off):
         """A static switch parameter (off by default): an instance that turns it on compiles `when_on`, every other
@@ -363,8 +427,8 @@ def build_surface():
     g.output(roughness, unreal.MaterialProperty.MP_ROUGHNESS)
     g.output(g.scalar("Metallic", 0.0), unreal.MaterialProperty.MP_METALLIC)
     g.output(g.scalar("Specular", 0.5), unreal.MaterialProperty.MP_SPECULAR)
+    # (Its output is with the baked light below: the lighting plan gates it by that.)
     occlusion = g.custom("return lerp(1.0, D.r, AO);", FLOAT1, D=packed, AO=occlusion_amount)
-    g.output(occlusion, unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
 
     # ---- light it gives off. "Emissive" lights the whole surface with its own colour (surfaces the original drew
     # unlit); "SelfIllum" adds the original's self-illumination texture where its mask's alpha says so (lamp
@@ -384,11 +448,40 @@ def build_surface():
                           use_custom_primitive_data=True, primitive_data_index=BAKED_VERTEX_SLOT)
     # The baked light keeps only part of its colour: it is a fill under lamps that carry the same tint, and with
     # their bounces on top a tinted room turned into one flat hue.
-    baked = g.custom("float3 vertex = pow(saturate(VC.rgb) * 2.0, 2.2) * saturate(UseVC);"
-                     " float3 light = min(LM * 4.6, 4.6) + vertex;"
-                     " return lerp(dot(light, float3(0.2126, 0.7152, 0.0722)), light, 0.6) * Fill;", FLOAT3,
-                     LM=(lightmap, "RGB"), VC=g.node(unreal.MaterialExpressionVertexColor), UseVC=baked_vertex,
-                     Fill=g.scalar("BakedFill", 0.0))
+    #
+    # THE LIGHTING PLAN (scct.Light.Plan 1; LIGHT_PARAMETERS). The baked light is the world's light, whole: the
+    # original drew a surface at min(1, texture x min(2, 2 x lightmap + 2 x vertex colour + ...)) in display values,
+    # and under the plan's fixed exposure and tone curve a display value v is scene light v ^ 2.2. So the surface
+    # gives off its colour times that term to the power 2.2 (the lightmap page is sampled as sRGB, so its stored
+    # value is taken back out of the sample first), in the term's own colour and with no share held back. The
+    # instance's BakedFill does not enter: a surface without a lightmap or baked vertex colours has a term of 0.
+    # The fourth value is the surface's occlusion under the plan (below): how much bounced and sky light it takes.
+    # With Plan 0 the first three are the released formula, to the letter, and the fourth is 1.
+    baked_plan = g.custom(
+        "float3 vertex = pow(saturate(VC.rgb) * 2.0, 2.2) * saturate(UseVC);"
+        " float3 light = min(LM * 4.6, 4.6) + vertex;"
+        " float3 released = lerp(dot(light, float3(0.2126, 0.7152, 0.0722)), light, 0.6) * Fill;"
+        " if (Plan < 0.5) return float4(released, 1.0);"
+        " float3 lm = max(LM, 0.0);"
+        " float3 stored = float3(lm.r <= 0.0031308 ? lm.r * 12.92 : 1.055 * pow(lm.r, 1.0 / 2.4) - 0.055,"
+        " lm.g <= 0.0031308 ? lm.g * 12.92 : 1.055 * pow(lm.g, 1.0 / 2.4) - 0.055,"
+        " lm.b <= 0.0031308 ? lm.b * 12.92 : 1.055 * pow(lm.b, 1.0 / 2.4) - 0.055);"
+        " float3 term = Scale * (stored + saturate(VC.rgb) * saturate(UseVC)) + Ambient + Boost;"
+        " term = min(term, 2.0);"
+        " float level = dot(term, float3(0.3, 0.59, 0.11));"
+        " term = max(lerp(level, term, Saturation) * Gain, 0.0);"
+        " float gate = Bounce * smoothstep(Low, max(High, Low + 0.001), level);"
+        " return float4(pow(term, 2.2), gate);", FLOAT4,
+        LM=(lightmap, "RGB"), VC=g.node(unreal.MaterialExpressionVertexColor), UseVC=baked_vertex,
+        Fill=g.scalar("BakedFill", 0.0), Plan=g.light("Plan"), Scale=g.light("BakedScale"), Gain=g.light("BakedGain"),
+        Saturation=g.light("BakedSaturation"), Ambient=g.light("Ambient"), Boost=g.light("Boost"),
+        Bounce=g.light("BounceGate"), Low=g.light("BounceLow"), High=g.light("BounceHigh"))
+    baked = g.custom("return B.rgb;", FLOAT3, B=baked_plan)
+    # The occlusion the engine's bounce and sky light go by. Released: the detail layer's pores. Under the plan a
+    # surface takes bounced and sky light only as far as the original lit it itself: none on a surface the original
+    # has dark (or on anything without baked light: characters, movers), so no bounce lights what the original left
+    # black, and the truly lit rooms keep the bounce that makes them look built.
+    g.output(g.custom("return O * B.a;", FLOAT1, O=occlusion, B=baked_plan), unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
     # The glow of a screen, a lamp glass or an additive flare is a brightness in the finished picture (see
     # Graph.in_the_picture): 1 is the texture as painted, whatever the exposure. The baked light is light in the
     # scene like any lamp's and stays that.
@@ -403,8 +496,11 @@ def build_surface():
     # lamp's: lost in a lit room, and what the eye finds once it has opened for a dark one. (Not a brightness in
     # the picture like the glows: Lumen gathers every surface's glow without the eye's exposure, and a whole
     # level glowing "the same at any exposure" lit itself up like a lamp.)
-    least = g.custom("return Base * Tint * Floor * (0.55 + 0.45 * saturate(N.z * 0.5 + 0.5)) * AO;", FLOAT3,
-                     Base=base["RGB"], Tint=tint, Floor=g.scalar("AmbientFloor", 0.0), N=normal, AO=occlusion)
+    # Under the lighting plan the floor goes (the collection's Floor is the share that stays): the original's dark
+    # is black, and the plan's fixed exposure shows it so.
+    least = g.custom("return Base * Tint * Floor * (0.55 + 0.45 * saturate(N.z * 0.5 + 0.5)) * AO * (Plan < 0.5 ? 1.0 : Share);", FLOAT3,
+                     Base=base["RGB"], Tint=tint, Floor=g.scalar("AmbientFloor", 0.0), N=normal, AO=occlusion,
+                     Plan=g.light("Plan"), Share=g.light("Floor"))
     emissive = g.custom("return Glow + Least + Base * Tint * Baked;", FLOAT3, Glow=g.in_the_picture(glow, g.scalar("GlowInPicture", 1.0)),
                         Least=least, Base=base["RGB"], Tint=tint, Baked=baked)
     g.output(emissive, unreal.MaterialProperty.MP_EMISSIVE_COLOR)

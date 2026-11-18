@@ -282,6 +282,10 @@ private:
 	class UAnimSequenceBase* FindPropSequence(const ASkeletalMeshActor& Actor, const FString& Sequence);
 	/** Places a light that hangs on a prop's bone where that bone is now; false when the prop or the bone is not there. */
 	bool FollowBone(FLightState& State, const FScctWorldLight& Record);
+	/** Under scct.Light.Plan 1: has the level's lights dressed by Play/ScctLightRules once the simulation's light table is there. */
+	void DressForLightPlan();
+	bool bLightPlanDressed = false;
+	int32 LightPlanWaited = 0;
 	/** Moves the particle actors of the map Emitters that ride a mover or hang on a bone (Play/ScctLevelStateEmitters.cpp). */
 	void UpdateAttachedEmitters();
 	/** Puts those particle actors back where they were imported. */

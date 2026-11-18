@@ -764,6 +764,10 @@ void AScctRuntimeMapActor::PlaceLights(const TSharedPtr<FJsonObject>& Lighting)
 	// Every light of the map, as import_map.py places them: the original's falloff kept (a little tighter), its
 	// brightness in the units the post-process exposure was set for, its colour partly given up toward white, a
 	// light of small reach weakened and softened, and the lights the baked fill already stands for held back.
+	// That is the released picture (scct.Light.Plan 0). Under the lighting plan the lights placed here are dressed
+	// again when the match starts, by their tags, exactly as an imported level's are (Play/ScctLightRules.h): the
+	// strengths, shares and falloffs below are replaced there, and the materials' BakedFill and AmbientFloor are
+	// ignored by the surface material.
 	int32 NumToPlace = 0;
 	int32 NumBaking = 0;
 	for (const TSharedPtr<FJsonValue>& Value : ArrayOf(Lighting, TEXT("lights")))

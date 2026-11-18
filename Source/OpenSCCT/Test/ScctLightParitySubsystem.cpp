@@ -23,6 +23,7 @@
 #include "Play/ScctExposure.h"
 #include "Play/ScctLightAudit.h"
 #include "Play/ScctLightPlan.h"
+#include "Play/ScctLightRules.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
@@ -119,6 +120,15 @@ UMaterialInterface* UScctLightParitySubsystem::MakeGrey()
 	Material->GetEditorOnlyData()->BaseColor.Expression = Colour;
 	Material->GetEditorOnlyData()->Roughness.Expression = Rough;
 	Material->GetEditorOnlyData()->Specular.Expression = NoHighlight;
+	if (FScctLightPlan::IsOn())
+	{
+		// Under the lighting plan the sphere is lit as a body is: a body's material takes no bounced or sky light
+		// (the surface material's occlusion is 0 on what carries no baked light).
+		UMaterialExpressionConstant* NoBounce = NewObject<UMaterialExpressionConstant>(Material);
+		NoBounce->R = 0.0f;
+		Material->GetExpressionCollection().AddExpression(NoBounce);
+		Material->GetEditorOnlyData()->AmbientOcclusion.Expression = NoBounce;
+	}
 	Material->PreEditChange(nullptr);
 	Material->PostEditChange();
 	Material->EnsureIsComplete();
@@ -209,6 +219,11 @@ bool UScctLightParitySubsystem::Begin()
 	Sphere->SetMaterial(0, Grey);
 	Sphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Sphere->SetWorldScale3D(FVector(LightSphereRadius / 50.0f));
+	if (FScctLightRules::BodiesOnLampChannel())
+	{
+		// And from the lamps a body takes its light from under the plan (Play/ScctLightRules.h).
+		Sphere->SetLightingChannels(true, true, false);
+	}
 	Sphere->RegisterComponent();
 
 	Target = NewObject<UTextureRenderTarget2D>(this);

@@ -23,6 +23,8 @@
 #include "OpenSCCT.h"
 #include "Play/ScctEffectsSubsystem.h"
 #include "Play/ScctLevelStateDebug.h"
+#include "Play/ScctLightPlan.h"
+#include "Play/ScctLightRules.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
@@ -104,6 +106,11 @@ namespace
 		const FLinearColor Linear(FMath::Pow(FMath::Max(Display.R, 0.0f), 2.2f), FMath::Pow(FMath::Max(Display.G, 0.0f), 2.2f), FMath::Pow(FMath::Max(Display.B, 0.0f), 2.2f));
 		// The importer's grey: the colour's own luminance, so the light keeps its strength as it pales.
 		const float Grey = 0.2126f * Linear.R + 0.7152f * Linear.G + 0.0722f * Linear.B;
+		if (FScctLightPlan::IsOn())
+		{
+			// The lighting plan's lights keep their own colour, and their strength is not in it.
+			return FScctLightRules::LightColour(Display);
+		}
 		return FLinearColor(Grey + (Linear.R - Grey) * LevelLightSaturation, Grey + (Linear.G - Grey) * LevelLightSaturation, Grey + (Linear.B - Grey) * LevelLightSaturation);
 	}
 
@@ -293,6 +300,11 @@ void UScctLevelStateSubsystem::HandleMatchStarted()
 		NumEffectActors = 0;
 	}
 	IndexLevel();
+
+	// The lighting plan dresses the level's lights before any is bound: a bound light's strength is what it has then.
+	bLightPlanDressed = false;
+	LightPlanWaited = 0;
+	DressForLightPlan();
 
 	// The simulation's state of the first tick is applied before the first frame is drawn, so nothing the map
 	// hides or switches off shows for a frame.
@@ -693,11 +705,13 @@ void UScctLevelStateSubsystem::HandleFrame(float DeltaSeconds)
 	}
 
 	MatchSeconds += DeltaSeconds;
+	FScctLightRules::Tick(GetWorld());
 	RefreshNames();
 	RunDebugActions();
 	UpdateActors();
 	UpdateProps();
 	UpdateAttachedEmitters();
+	DressForLightPlan();
 	UpdateLights(DeltaSeconds);
 	DrainEvents();
 
@@ -1127,6 +1141,38 @@ void UScctLevelStateSubsystem::ApplySkin(FActorState& State, int32 Slot, int32 S
 // ---------------------------------------------------------------------------------------------------------------
 // Lights
 // ---------------------------------------------------------------------------------------------------------------
+
+void UScctLevelStateSubsystem::DressForLightPlan()
+{
+	if (bLightPlanDressed || !FScctLightPlan::IsOn())
+	{
+		return;
+	}
+	if (!FScctLightRules::DressLevel(GetWorld(), TaggedLights, [this](int32 Id) -> const FString& { return GetName(Id); }))
+	{
+		++LightPlanWaited;
+		return;
+	}
+	bLightPlanDressed = true;
+	// A light bound while the simulation's light table was not there yet has the strength it was made with: what
+	// the plan gave it since is its strength now.
+	int32 NumRebound = 0;
+	for (FLightState& State : LightStates)
+	{
+		if (ULightComponent* Light = State.Light.Get())
+		{
+			State.OriginalIntensity = Light->Intensity;
+			State.OriginalColor = Light->GetLightColor();
+			State.AppliedScale = -1.0f;
+			++NumRebound;
+		}
+	}
+	if (LightPlanWaited > 0 || NumRebound > 0)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: the lighting plan dressed the lights %d frames into the match (%.2f s); %d lights bound before it took the plan's strength then."),
+			LightPlanWaited, MatchSeconds, NumRebound);
+	}
+}
 
 void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 {

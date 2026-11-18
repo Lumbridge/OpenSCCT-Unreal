@@ -21,6 +21,9 @@
 #include "Play/ScctLevelStateSubsystem.h"
 #include "Play/ScctEquipmentSubsystem.h"
 #include "Play/ScctExposure.h"
+#include "Play/ScctFirstPersonView.h"
+#include "Play/ScctLightPlan.h"
+#include "Play/ScctLightRules.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
@@ -476,6 +479,60 @@ void UScctEffectsSubsystem::UpdateBodyFill(float DeltaSeconds)
 		return;
 	}
 	const AScctPawnProxy* Local = Session->FindLocalProxy();
+
+	// Under the lighting plan (Play/ScctLightRules.h) every body, and what it carries, takes the lamps that lit
+	// actors in the original from lighting channel 1; the own side's fill and rim, when they are kept at all, move
+	// to channel 2, which nothing else of the plan's lights is on.
+	const bool bPlan = FScctLightPlan::IsOn();
+	if (bPlan)
+	{
+		const bool bLamps = FScctLightRules::BodiesOnLampChannel();
+		const bool bAids = FScctLightRules::BodyAids();
+		if (static_cast<bool>(BodyFill->LightingChannels.bChannel2) != true)
+		{
+			BodyFill->SetLightingChannels(false, false, true);
+			BodyRim->SetLightingChannels(false, false, true);
+		}
+		for (const FScctBridgePawn& Pawn : Session->GetPawns())
+		{
+			const AScctPawnProxy* Proxy = Session->FindProxy(Pawn.ActorId);
+			if (Proxy == nullptr)
+			{
+				continue;
+			}
+			const bool bOwnSide = bAids && Local != nullptr && Proxy->GetTeam() == Local->GetTeam();
+			TInlineComponentArray<UPrimitiveComponent*> Parts(Proxy);
+			for (UPrimitiveComponent* Part : Parts)
+			{
+				const bool bBody = Part == Proxy->GetBodyMesh();
+				if (static_cast<bool>(Part->LightingChannels.bChannel1) != bLamps || (bBody && static_cast<bool>(Part->LightingChannels.bChannel2) != bOwnSide))
+				{
+					Part->SetLightingChannels(true, bLamps, bBody && bOwnSide);
+				}
+			}
+		}
+		if (const UScctEquipmentSubsystem* Equipment = GetWorld()->GetSubsystem<UScctEquipmentSubsystem>())
+		{
+			if (const AActor* View = Equipment->GetFirstPersonView())
+			{
+				TInlineComponentArray<UPrimitiveComponent*> Parts(View);
+				for (UPrimitiveComponent* Part : Parts)
+				{
+					if (static_cast<bool>(Part->LightingChannels.bChannel1) != bLamps)
+					{
+						Part->SetLightingChannels(true, bLamps, false);
+					}
+				}
+			}
+		}
+		if (!bAids)
+		{
+			BodyFill->SetVisibility(false);
+			BodyRim->SetVisibility(false);
+			BodyLightScale = 0.0f;
+			return;
+		}
+	}
 	if (Local == nullptr)
 	{
 		BodyFill->SetVisibility(false);
@@ -490,7 +547,7 @@ void UScctEffectsSubsystem::UpdateBodyFill(float DeltaSeconds)
 	{
 		const AScctPawnProxy* Proxy = Session->FindProxy(Pawn.ActorId);
 		UPrimitiveComponent* Body = Proxy != nullptr ? Proxy->GetBodyMesh() : nullptr;
-		if (Body == nullptr)
+		if (Body == nullptr || bPlan)
 		{
 			continue;
 		}

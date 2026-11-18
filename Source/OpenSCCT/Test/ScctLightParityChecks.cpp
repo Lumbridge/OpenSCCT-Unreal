@@ -4,6 +4,7 @@
 
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
@@ -38,6 +39,38 @@ namespace
 	};
 
 	const FName ToneLevelParameter(TEXT("Level"));
+
+	// The baked cards (FToneCard): the texture's display value and the lightmap's stored value, of 255. The original
+	// shows texture x min(2, 2 x stored / 255): 24, 48, 80, 128 on the mid-grey texture, 80 on white, and 128 on a
+	// dark texture under the term's cap of 2.
+	const float ToneCardValues[][2] = {
+		{ 128.0f, 24.0f }, { 128.0f, 48.0f }, { 128.0f, 80.0f }, { 128.0f, 127.0f }, { 255.0f, 40.0f }, { 64.0f, 255.0f },
+	};
+	const TCHAR* const ToneSurfaceMaster = TEXT("/Game/OpenSCCT/Materials/M_ScctSurface.M_ScctSurface");
+
+	/** A texture of one sRGB grey. */
+	UTexture2D* ToneGreyTexture(UObject* Outer, float Value)
+	{
+		UTexture2D* Texture = UTexture2D::CreateTransient(4, 4, PF_B8G8R8A8);
+		if (Texture == nullptr || Texture->GetPlatformData() == nullptr || Texture->GetPlatformData()->Mips.Num() == 0)
+		{
+			return nullptr;
+		}
+		const uint8 Byte = static_cast<uint8>(FMath::Clamp(FMath::RoundToInt32(Value), 0, 255));
+		FTexture2DMipMap& Mip = Texture->GetPlatformData()->Mips[0];
+		uint8* Pixels = static_cast<uint8*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
+		for (int32 Pixel = 0; Pixel < 16; ++Pixel)
+		{
+			Pixels[Pixel * 4 + 0] = Pixels[Pixel * 4 + 1] = Pixels[Pixel * 4 + 2] = Byte;
+			Pixels[Pixel * 4 + 3] = 255;
+		}
+		Mip.BulkData.Unlock();
+		Texture->SRGB = true;
+		Texture->NeverStream = true;
+		Texture->Filter = TF_Nearest;
+		Texture->UpdateResource();
+		return Texture;
+	}
 
 	float ToneLuma(const FColor& Pixel)
 	{
@@ -147,7 +180,10 @@ bool UScctLightParitySubsystem::BeginTone()
 	// The board needs open room in front of a camera: the first spot whose camera sees its sphere and has a clear
 	// line (through the simulation's collision) to the board's middle and to a little beyond each of its corners.
 	const int32 Count = UE_ARRAY_COUNT(ToneCodes);
-	const int32 Rows = (Count + ToneColumns - 1) / ToneColumns;
+	UMaterialInterface* Surface = LoadObject<UMaterialInterface>(nullptr, ToneSurfaceMaster);
+	const int32 CardCount = Surface != nullptr ? static_cast<int32>(UE_ARRAY_COUNT(ToneCardValues)) : 0;
+	const int32 RampRows = (Count + ToneColumns - 1) / ToneColumns;
+	const int32 Rows = RampRows + (CardCount + ToneColumns - 1) / ToneColumns;
 	const FVector2D Board(ToneColumns * ToneStep + 6.0f, Rows * ToneStep + 6.0f);
 	int32 Chosen = INDEX_NONE;
 	for (int32 Spot = 0; Spot < OrdinarySpots && Chosen == INDEX_NONE; ++Spot)
@@ -219,6 +255,47 @@ bool UScctLightParitySubsystem::BeginTone()
 		AddPlane(Entry.Centre, FVector2D(ToneSize, ToneSize), Entry.Emissive);
 	}
 
+	// The baked cards, a row under the ramp: the surface material as a level surface has it, on no lighting channel
+	// (so no lamp lights it), with the released picture's fill and floor (which the lighting plan's formula ignores).
+	ToneCards.Reset();
+	for (int32 Card = 0; Card < CardCount; ++Card)
+	{
+		const int32 Column = Card % ToneColumns, Row = RampRows + Card / ToneColumns;
+		FToneCard& Entry = ToneCards.AddDefaulted_GetRef();
+		Entry.Emissive = ToneCardValues[Card][0];
+		Entry.Stored = ToneCardValues[Card][1];
+		Entry.Code = Entry.Emissive * FMath::Min(2.0f, 2.0f * Entry.Stored / 255.0f);
+		Entry.Centre = Eye + Forward * ToneDistance + Right * ((Column - 0.5f * (ToneColumns - 1)) * ToneStep) + Up * ((0.5f * (Rows - 1) - Row) * ToneStep);
+		UTexture2D* Texture = ToneGreyTexture(this, Entry.Emissive);
+		UTexture2D* Page = ToneGreyTexture(this, Entry.Stored);
+		UMaterialInstanceDynamic* Lit = UMaterialInstanceDynamic::Create(Surface, this);
+		if (Texture == nullptr || Page == nullptr || Lit == nullptr)
+		{
+			ToneCards.Pop();
+			continue;
+		}
+		ToneTextures.Add(Texture);
+		ToneTextures.Add(Page);
+		Lit->SetTextureParameterValue(TEXT("BaseColor"), Texture);
+		Lit->SetTextureParameterValue(TEXT("Lightmap"), Page);
+		Lit->SetScalarParameterValue(TEXT("BakedFill"), 0.5f);
+		Lit->SetScalarParameterValue(TEXT("AmbientFloor"), 0.012f);
+		Lit->SetScalarParameterValue(TEXT("Specular"), 0.0f);
+		ToneMaterials.Add(Lit);
+		UStaticMeshComponent* Patch = NewObject<UStaticMeshComponent>(Rig);
+		Patch->SetMobility(EComponentMobility::Movable);
+		Patch->SetStaticMesh(Plane);
+		Patch->SetMaterial(0, Lit);
+		Patch->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Patch->SetCastShadow(false);
+		Patch->SetLightingChannels(false, false, false);
+		Patch->bAffectDynamicIndirectLighting = false;
+		Patch->bAffectDistanceFieldLighting = false;
+		Patch->SetWorldTransform(FTransform(Facing, Entry.Centre, FVector(ToneSize / 100.0, ToneSize / 100.0, 1.0)));
+		Patch->RegisterComponent();
+		ToneBoard.Add(Patch);
+	}
+
 	Sphere->SetVisibility(false);
 	if (UScctSessionSubsystem* Session = GetWorld()->GetSubsystem<UScctSessionSubsystem>())
 	{
@@ -246,8 +323,20 @@ void UScctLightParitySubsystem::MeasureTone(int32 Width, int32 Height, const TAr
 	const double Scale = static_cast<double>(Width) / ViewWidth;
 	const int32 Plan = FScctLightPlan::Active();
 	FString Table = TEXT("name,code,emissive,picture,r,g,b,exposure,plan\n");
+	FString CardTable = TEXT("name,expected,texture,stored,picture,r,g,b,exposure,plan\n");
+	TArray<const FTonePatch*> Read;
 	for (const FTonePatch& Patch : TonePatches)
 	{
+		Read.Add(&Patch);
+	}
+	for (const FToneCard& Card : ToneCards)
+	{
+		Read.Add(&Card);
+	}
+	for (int32 Entry = 0; Entry < Read.Num(); ++Entry)
+	{
+		const FTonePatch& Patch = *Read[Entry];
+		const FToneCard* Card = Entry >= TonePatches.Num() ? &ToneCards[Entry - TonePatches.Num()] : nullptr;
 		FVector2D Centre, Beside;
 		if (!Player->ProjectWorldLocationToScreen(Patch.Centre, Centre, false) ||
 			!Player->ProjectWorldLocationToScreen(Patch.Centre + ToneCamera.GetUnitAxis(EAxis::Y) * 10.0, Beside, false))
@@ -276,12 +365,24 @@ void UScctLightParitySubsystem::MeasureTone(int32 Width, int32 Height, const TAr
 		{
 			continue;
 		}
+		if (Card != nullptr)
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_CARD %s texture=%.0f stored=%.0f original=%.1f picture=%.1f rgb=%.1f,%.1f,%.1f exposure=%.3f"), *Name, Card->Emissive, Card->Stored,
+				Card->Code, Sum / Count, R / Count, G / Count, B / Count, ToneExposure);
+			CardTable += FString::Printf(TEXT("%s,%.2f,%.0f,%.0f,%.2f,%.2f,%.2f,%.2f,%.4f,%d\n"), *Name, Card->Code, Card->Emissive, Card->Stored, Sum / Count, R / Count, G / Count,
+				B / Count, ToneExposure, Plan);
+			continue;
+		}
 		UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_TONE %s code=%.0f emissive=%.5f picture=%.1f rgb=%.1f,%.1f,%.1f exposure=%.3f"), *Name, Patch.Code, Patch.Emissive,
 			Sum / Count, R / Count, G / Count, B / Count, ToneExposure);
 		Table += FString::Printf(TEXT("%s,%.0f,%.6f,%.2f,%.2f,%.2f,%.2f,%.4f,%d\n"), *Name, Patch.Code, Patch.Emissive, Sum / Count, R / Count, G / Count, B / Count,
 			ToneExposure, Plan);
 	}
 	FFileHelper::SaveStringToFile(Table, *(Directory / (Name + TEXT("_tone.csv"))));
+	if (ToneCards.Num() > 0)
+	{
+		FFileHelper::SaveStringToFile(CardTable, *(Directory / (Name + TEXT("_cards.csv"))));
+	}
 
 	TArray<FColor> Opaque = Bitmap;
 	for (FColor& Pixel : Opaque)

@@ -226,7 +226,8 @@ def report(path, shots, worst):
     rig_report(rows)
     switches = switch_report(os.path.splitext(path)[0] + "_switch.csv")
     tone = tone_report(os.path.splitext(path)[0] + "_tone.csv")
-    targets(rows, dark, lit, pairs, switches, tone)
+    cards = cards_report(os.path.splitext(path)[0] + "_cards.csv")
+    targets(rows, dark, lit, pairs, switches, tone, cards)
     print()
 
 
@@ -290,7 +291,19 @@ def tone_report(path):
     return rows
 
 
-def targets(rows, dark, lit, pairs, switches, tone):
+def cards_report(path):
+    """The baked cards: the surface material with a known texture and a known lightmap value, on no lighting channel."""
+    rows = table(path) if os.path.exists(path) else []
+    if not rows:
+        print(" baked cards: none in this run")
+        return rows
+    print(" baked cards (the surface material, texture and stored lightmap value of 255, no lamp on them): the original shows -> shown")
+    print("   " + "   ".join("%3.0f x 2 x %3.0f/255 = %5.1f -> %5.1f (%+.0f)" % (
+        r["texture"], r["stored"], r["expected"], r["picture"], r["picture"] - r["expected"]) for r in rows))
+    return rows
+
+
+def targets(rows, dark, lit, pairs, switches, tone, cards=()):
     """The lighting plan's targets (lighting-study synthesis) with this table's figure against each."""
     out = []
 
@@ -337,6 +350,10 @@ def targets(rows, dark, lit, pairs, switches, tone):
     if pairs:
         good = sum(1 for a, b in pairs if b["sphere_pic"] <= 8 or a["sphere_pic"] >= 4 * b["sphere_pic"])
         add("2 m step pairs", "lit >= 4x dark, or dark <= 8, on all", "%d of %d" % (good, len(pairs)), good == len(pairs))
+    if cards:
+        off = [r["picture"] / r["expected"] for r in cards if r["expected"] >= 24]
+        add("baked cards against the original", "ratio 0.85..1.2", "%.2f..%.2f (n=%d)" % (min(off), max(off), len(off)),
+            0.85 <= min(off) and max(off) <= 1.2)
     floors = [r for r in rows if r["has_baked"] and r["ground_pic"] >= 0]
     shown = [r for r in floors if 127.5 * r["baked"] > 4]
     if shown:
@@ -389,7 +406,7 @@ def main():
     parser.add_argument("--worst", type=int, default=3, help="how many disagreements to list each way (default 3)")
     args = parser.parse_args()
     for entry in args.tables:
-        files = sorted(os.path.join(entry, f) for f in os.listdir(entry) if f.endswith(".csv") and not f.endswith(("_switch.csv", "_tone.csv", "_lights.csv"))) \
+        files = sorted(os.path.join(entry, f) for f in os.listdir(entry) if f.endswith(".csv") and not f.endswith(("_switch.csv", "_tone.csv", "_lights.csv", "_cards.csv"))) \
             if os.path.isdir(entry) else [entry]
         for path in files:
             report(path, args.shots, args.worst)
