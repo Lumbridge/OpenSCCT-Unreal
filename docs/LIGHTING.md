@@ -1,6 +1,8 @@
 # Lighting reference
 
-The development lighting is opt-in. Launch with `-ScctLightPlan=1`, or set `scct.Light.Plan 1` before loading a map. The normal view uses fixed exposure and the map's baked lighting. The extra dark-room fill and the whole-body lights on the local player and teammates are off. The original goggle lenses have their own visibility, colour and material.
+Maps use fixed exposure and baked lighting by default. The extra dark-room fill and the whole-body lights on the local player and teammates are off. The original goggle lenses have their own visibility, colour and material.
+
+For legacy lighting, launch with `-ScctLightPlan=0` or enter `scct.Light.Plan 0` in the game console before loading a map. Enter `scct.Light.Plan 1` to restore fixed lighting. If a map is already open, reload it for the change to take full effect.
 
 ## Baked strength
 

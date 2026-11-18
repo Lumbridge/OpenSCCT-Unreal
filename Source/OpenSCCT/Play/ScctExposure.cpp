@@ -348,7 +348,7 @@ float FScctExposure::PictureLevel()
 
 float FScctExposure::SettledPictureLevel()
 {
-	// Middle grey, moved by the bias the maps are played with.
+	// Middle grey, moved by the legacy lighting's exposure bias.
 	return 0.18f * FMath::Pow(2.0f, CVarExposureBias.GetValueOnGameThread());
 }
 

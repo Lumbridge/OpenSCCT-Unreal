@@ -5,9 +5,9 @@
 /**
  * How bright the player's picture is exposed right now, for game code that makes light.
  *
- * The levels are played with automatic exposure: the eye closes down in a lit hall and opens up for a dim room,
- * though no further than a lamp-lit room needs (a dark place stays dark: see the range in ScctExposure.cpp). A flash of a fixed strength is then a faint flicker in the hall and a white-out of the whole
- * screen in the cellar. Lights that game code flashes (muzzle flashes, sparks, explosions) are therefore scaled
+ * Levels use fixed exposure by default. With legacy lighting (scct.Light.Plan 0), the eye closes down in a
+ * lit hall and opens up for a dim room. A flash of a fixed strength can then be a faint flicker in the hall
+ * and a white-out in the cellar. Lights that game code flashes (muzzle flashes, sparks, explosions) are scaled
  * by the exposure of the last drawn frame, so a flash is as bright in the picture wherever it goes off. The
  * glowing materials do the same in their shaders (the engine's eye adaptation node, Tools/Import/scct_materials.py).
  *
@@ -34,7 +34,7 @@ namespace FScctExposure
 
 	/**
 	 * The PictureLevel of a place the exposure has settled on: middle grey (0.18) moved by the bias the maps are
-	 * played with (scct.Exposure.Bias). The maps' exposure range and that bias are set in ScctExposure.cpp, over
+	 * played with under legacy lighting (scct.Exposure.Bias). The exposure range and bias are set in ScctExposure.cpp, over
 	 * the levels' own post-process volumes.
 	 */
 	OPENSCCT_API float SettledPictureLevel();

@@ -427,6 +427,10 @@ bool ScctConsoleCommands::ExecGameCommand(const TCHAR* Cmd, UWorld* World, FOutp
 	{
 		return false;
 	}
+	if (Verb.Equals(TEXT("scct.Light.Plan"), ESearchCase::IgnoreCase))
+	{
+		return IConsoleManager::Get().ProcessUserConsoleInput(*Line, Ar, World);
+	}
 
 	// The settings words: the Unreal client's own settings, by its own keys.
 	if (Verb.Equals(TEXT("current"), ESearchCase::IgnoreCase))

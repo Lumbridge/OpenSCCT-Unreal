@@ -271,7 +271,7 @@ class Graph:
 
     def in_the_picture(self, light, amount=None):
         """`light` as a brightness in the finished picture instead of in the scene: divided by the exposure the
-        eye has settled on (the engine's eye adaptation node). The levels are played with automatic exposure over
+        eye has settled on (the engine's eye adaptation node). With legacy lighting, exposure varies over
         a wide range, and a glow of a fixed scene brightness is a dim patch in a lit hall and a white hole in a
         dark cellar; a screen, a lamp glass or a painted flare is meant to look the same in both, as the original
         drew them. `amount` (a node, 0..1) says how far to go: 0 leaves the scene brightness. The correction is

@@ -8,11 +8,12 @@
 
 namespace
 {
-	TAutoConsoleVariable<int32> CVarLightPlan(TEXT("scct.Light.Plan"), 0,
-		TEXT("Which lighting a level is dressed with when it loads: 0 the released picture, exactly as before the lighting plan (the default); ")
-		TEXT("1 the plan's lighting (light and dark as the original has them). Takes effect at the next map load at the latest."));
+	constexpr int32 DefaultLightPlan = 1;
+	TAutoConsoleVariable<int32> CVarLightPlan(TEXT("scct.Light.Plan"), DefaultLightPlan,
+		TEXT("1 uses fixed exposure and the map's baked lighting (default). 0 uses the legacy lighting. ")
+		TEXT("Changing this setting takes full effect on the next map load."));
 
-	int32 LightPlanLatched = 0;
+	int32 LightPlanLatched = DefaultLightPlan;
 	bool bLightPlanStarted = false;
 
 	void LatchLightPlan(UWorld* World, const UWorld::InitializationValues)
