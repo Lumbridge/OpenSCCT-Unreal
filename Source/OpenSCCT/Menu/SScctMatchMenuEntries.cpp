@@ -26,6 +26,9 @@ namespace
 	constexpr int32 MatchMenuChangeSideEntry = 101;
 	constexpr int32 MatchMenuRestartEntry = 102;
 
+	/** Help & feedback (Menu/SScctHelpFeedbackPage.h), OpenSCCT's own entry after Help. */
+	constexpr int32 MatchMenuFeedbackEntry = 103;
+
 	/** GUI.SSMenu_LANMainPage s_Init: Sleep(0.5), then keys count (InGameMenuK.KeyIgnoreSeconds). */
 	constexpr float MatchMenuKeyHoldSeconds = 0.5f;
 
@@ -175,6 +178,8 @@ TArray<int32> SScctMatchMenu::GetEntries() const
 		const int32 OptionsAt = Entries.IndexOfByKey(EScctMatchMenuButton::Options);
 		Entries.Insert(EScctMatchMenuButton::Help, OptionsAt == INDEX_NONE ? Entries.Num() : OptionsAt + 1);
 	}
+	// Help & feedback right after Help (the Godot client opens it over any screen).
+	Entries.Insert(MatchMenuFeedbackEntry, Entries.IndexOfByKey(EScctMatchMenuButton::Help) + 1);
 	// A local match outside practice starts again on the other side or as it was (practice changes side in the round).
 	if (CanChangeSide() && !Entries.Contains(EScctMatchMenuButton::SwitchTeam) && Context.Tutorial == 0)
 	{
@@ -212,6 +217,7 @@ FString SScctMatchMenu::EntryCaption(int32 Entry) const
 	case MatchMenuQuitGameEntry: return TEXT("Quit game");
 	case MatchMenuChangeSideEntry: return ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Button2"), TEXT("Switch Team"));
 	case MatchMenuRestartEntry: return TEXT("Restart");
+	case MatchMenuFeedbackEntry: return TEXT("Help & feedback");
 	default: return FString();
 	}
 }
@@ -294,6 +300,11 @@ void SScctMatchMenu::Act(int32 Entry)
 		ShowStrategicMap(false);
 		break;
 	case EScctMatchMenuButton::Options:
+		bFeedbackView = false;
+		Show(EView::Settings);
+		break;
+	case MatchMenuFeedbackEntry:
+		bFeedbackView = true;
 		Show(EView::Settings);
 		break;
 	case EScctMatchMenuButton::Help:
@@ -406,7 +417,7 @@ void SScctMatchMenu::TickUnattended(float DeltaSeconds)
 			{ TEXT("Options"), EScctMatchMenuButton::Options }, { TEXT("Help"), EScctMatchMenuButton::Help }, { TEXT("Resign"), EScctMatchMenuButton::Resign },
 			{ TEXT("Lobby"), EScctMatchMenuButton::ReturnToLobby }, { TEXT("ReturnToLobby"), EScctMatchMenuButton::ReturnToLobby },
 			{ TEXT("Leave"), EScctMatchMenuButton::QuitSession }, { TEXT("QuitSession"), EScctMatchMenuButton::QuitSession }, { TEXT("Quit"), MatchMenuQuitGameEntry },
-			{ TEXT("ChangeSide"), MatchMenuChangeSideEntry }, { TEXT("Restart"), MatchMenuRestartEntry },
+			{ TEXT("ChangeSide"), MatchMenuChangeSideEntry }, { TEXT("Restart"), MatchMenuRestartEntry }, { TEXT("Feedback"), MatchMenuFeedbackEntry },
 		};
 		const int32* Entry = Names.Find(Name);
 		if (Entry == nullptr)

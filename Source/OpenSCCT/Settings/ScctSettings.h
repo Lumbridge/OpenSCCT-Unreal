@@ -71,6 +71,9 @@ namespace FScctSettings
 	/** Every page that has at least one visible option, in the settings page's order. */
 	OPENSCCT_API TArray<FName> Pages();
 
+	/** Every registered option, hidden ones included, in registration order (the settings console lists them all). */
+	OPENSCCT_API TArray<const FScctSettingDesc*> AllOptions();
+
 	/**
 	 * The stored text, or the default when the player never set it (empty for an unknown key). A value forced for
 	 * the run with -ScctSettingSet (Settings/ScctSettingsForced.h) comes before both until the option is set.
