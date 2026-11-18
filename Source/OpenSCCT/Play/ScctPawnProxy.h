@@ -95,7 +95,8 @@ public:
 	 *
 	 * The head (bone "B Head" and what hangs on it, the goggle lenses) goes whole, at once, while its bone is
 	 * nearer Eye than HeadGoneFactor times Distance: thinned by depth alone it hung beside the gun as a ghost of
-	 * loose shards when the camera was held against a wall. Its shadow goes with it.
+	 * loose shards when the camera was held against a wall. Its shadow goes with it. Never in the first-person
+	 * view, where the body is only a shadow and that shadow keeps its head.
 	 */
 	void SetNearFade(float Distance, const FVector& Eye);
 	float GetNearFade() const { return NearFade; }
