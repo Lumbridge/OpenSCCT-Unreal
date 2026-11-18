@@ -684,18 +684,25 @@ namespace
 				return FString();
 			}
 			const FString Map = Visit->GetSetupMap();
+			if (Map.IsEmpty())
+			{
+				return FString();
+			}
 			UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
 			const FString Title = Menu != nullptr ? Menu->GetMapTitle(Map) : Map;
 			TArray<FString> Missing, Differs, Checking;
 			int32 LocalState = -1;
+			bool bHasTeamPlayers = false;
 			for (const FScctOnlinePlayer& Player : Visit->GetPlayers())
 			{
+				const bool bTeamPlayer = LobbyOnSide(Player) && (Player.Flags & EScctOnlinePlayerFlags::Bot) == 0;
+				bHasTeamPlayers |= bTeamPlayer;
 				if (Player.Id == Visit->GetStatus().LocalId)
 				{
 					LocalState = Player.MapState;
 					continue;
 				}
-				if (!LobbyOnSide(Player) || (Player.Flags & EScctOnlinePlayerFlags::Bot) != 0)
+				if (!bTeamPlayer)
 				{
 					continue;
 				}
@@ -717,7 +724,7 @@ namespace
 			{
 				Lines.Add(FString::Printf(TEXT("Your copy of %s differs from the host's, so you cannot be ready and the match cannot start with you on a side. Watching lets the others play."), *Map));
 			}
-			else if (!Map.IsEmpty() && !PlayableMaps.Contains(Map.ToLower()))
+			else if (!PlayableMaps.Contains(Map.ToLower()))
 			{
 				Lines.Add(FString::Printf(TEXT("This game has no level for %s: a round on it would sit you out until it is over."), *Map));
 			}
@@ -736,13 +743,17 @@ namespace
 				Lines.Add(Who + TEXT(" The match cannot start until they have the host's map or watch."));
 			}
 			bProblem = !Lines.IsEmpty();
+			if (LocalState == LobbyMapUnknown)
+			{
+				Lines.Add(FString::Printf(TEXT("Checking your copy of %s..."), *Title));
+			}
 			if (!Checking.IsEmpty())
 			{
 				Lines.Add(FString::Printf(TEXT("Checking %s with %s..."), *Map, *FString::Join(Checking, TEXT(", "))));
 			}
-			if (Lines.IsEmpty())
+			if (Lines.IsEmpty() && bHasTeamPlayers)
 			{
-				Lines.Add(FString::Printf(TEXT("Everyone on a side has %s."), *Title));
+				Lines.Add(FString::Printf(TEXT("Every Spy and Mercenary has %s installed."), *Title));
 			}
 			return FString::Join(Lines, TEXT(" "));
 		}

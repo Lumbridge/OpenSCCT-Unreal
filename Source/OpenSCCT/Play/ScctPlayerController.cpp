@@ -417,7 +417,8 @@ void AScctPlayerController::ReadDevices(FScctRawInput& Raw) const
 	Raw.LeftX = Stick(EKeys::Gamepad_LeftX);
 	Raw.LeftY = Stick(EKeys::Gamepad_LeftY);
 	Raw.RightX = Stick(EKeys::Gamepad_RightX);
-	Raw.RightY = Stick(EKeys::Gamepad_RightY);
+	// FSceneViewport flips only the right stick's Y axis. The bridge takes both sticks as positive up.
+	Raw.RightY = -Stick(EKeys::Gamepad_RightY);
 	Raw.LeftTrigger = FMath::Max(Stick(EKeys::Gamepad_LeftTriggerAxis), 0.0f);
 	Raw.RightTrigger = FMath::Max(Stick(EKeys::Gamepad_RightTriggerAxis), 0.0f);
 }

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using OpenScct.Game.SBase;
+using OpenScct.Server.Online;
 using OpenScct.UnrealBridge.Loadout;
 
 namespace OpenScct.UnrealBridge;
@@ -136,6 +137,9 @@ public static class GearEditor
     public const string OtherSideRule = "This is the other side's kit: it goes on when you play that side.";
 
     private static readonly GearMenuModel?[] s_models = new GearMenuModel?[2];
+    // Slate reads the lobby kit every frame. Rebuild the text only when its inputs change.
+    private static (bool Spy, LoadoutChoice? Saved, LobbySetup? Setup, int Rank, bool Unrestricted) s_lobbyKit;
+    private static string s_lobbyKitText = "";
     private static int s_side;
     private static int s_context;
 
@@ -188,11 +192,13 @@ public static class GearEditor
 
     private static GearMenuModel Build(bool spy, LoadoutChoice saved)
     {
+        var visit = Online.OnlineBridge.Existing?.Client;
         if (s_context == MatchContext)
         {
             SPlayerController? pc = Exports.Current?.Session.LocalController;
             bool hub = string.Equals(Exports.Current?.Session.Settings.Map, OpenScct.Server.Hub.HubK.MapName, StringComparison.OrdinalIgnoreCase);
-            if (PlayedSide() == (spy ? 0 : 1) && GearMenuModel.For(pc, saved, hub) is { } own)
+            var lobby = pc is not null && ReferenceEquals(visit?.Session?.World.Level, pc.XLevel) ? visit?.Lobby : null;
+            if (PlayedSide() == (spy ? 0 : 1) && GearMenuModel.For(pc, saved, hub, lobby) is { } own)
             {
                 return own;
             }
@@ -200,9 +206,9 @@ public static class GearEditor
             return GearMenuModel.ForStock(spy, saved, OtherSideRule);
         }
 
-        if (s_context == LobbyContext && OpenScct.UnrealBridge.Online.OnlineBridge.Existing?.Client?.Lobby?.Setup is { } setup)
+        if (s_context == LobbyContext && visit is not null)
         {
-            return GearMenuModel.ForLobby(spy, setup, saved);
+            return GearMenuModel.ForLobby(spy, visit.Lobby, saved);
         }
 
         return GearMenuModel.ForStock(spy, saved, GearMenuModel.OfflineRule);
@@ -288,6 +294,22 @@ public static class GearEditor
     {
         LoadoutChoice saved = LoadoutStore.Current;
         bool spy = side != 1;
+        if (Online.OnlineBridge.Existing?.Client is { State: OnlineClientState.Lobby } visit)
+        {
+            LobbyState lobby = visit.Lobby;
+            var key = (spy, saved, lobby.Setup, lobby.Local?.Rank ?? 0, lobby.SidearmsUnrestricted);
+            if (s_lobbyKit != key)
+            {
+                GearMenuModel model = GearMenuModel.ForLobby(spy, lobby, saved);
+                string slots = string.Join(", ", model.Gadgets.Take(model.Slots).Where(g => g.Length != 0).Select(LoadoutGear.NameOf));
+                string sidearm = model.SidearmsEnabled ? " + " + LoadoutGear.NameOf(model.ChosenSidearm) : "";
+                s_lobbyKitText = spy ? slots : $"{LoadoutGear.NameOf(model.ChosenWeapon)}{sidearm}; {slots}";
+                s_lobbyKit = key;
+            }
+
+            return s_lobbyKitText;
+        }
+
         IEnumerable<string> gadgets = saved.GadgetsOf(spy).Where(g => !string.IsNullOrEmpty(g)).Select(LoadoutGear.NameOf);
         string kit = string.Join(", ", gadgets);
         return spy ? kit : $"{LoadoutGear.NameOf(saved.MercWeapon)} + {LoadoutGear.NameOf(saved.MercSidearm)}; {kit}";

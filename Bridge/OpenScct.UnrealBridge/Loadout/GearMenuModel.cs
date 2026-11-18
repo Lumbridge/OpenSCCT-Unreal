@@ -5,6 +5,7 @@ using OpenScct.Core.Engine;
 using OpenScct.Core.Uc;
 using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
+using OpenScct.Server.Online;
 
 namespace OpenScct.UnrealBridge.Loadout;
 
@@ -120,16 +121,19 @@ public sealed class GearMenuModel
     /// The picker for the player's own side in a running round: the team's slots, options, the host's restrictions
     /// and his level. Null before the player has a team.
     /// </summary>
-    public static GearMenuModel? For(SPlayerController? pc, LoadoutChoice saved, bool hub)
+    public static GearMenuModel? For(SPlayerController? pc, LoadoutChoice saved, bool hub, LobbyState? lobby = null)
     {
         if (pc?.PlayerReplicationInfo?.Team is not STeamInfo team)
         {
             return null;
         }
 
-        bool practice = OpenScct.Game.Modes.PracticeRules.IsOn(pc);
-        return Build(team, saved, hub, pc.PlayerReplicationInfo.SvmRank & 255,
-            pc.Level.NetMode == ENetMode.NM_Standalone || pc.PlayerReplicationInfo.SvmSidearmsUnrestricted || practice,
+        bool practice = OpenScct.Game.Modes.PracticeRules.IsOn(pc) || lobby?.Setup.Practice == true;
+        // The roster already carries the server-verified rank while the new pawn is still replicating.
+        int rank = pc.PlayerReplicationInfo.SvmRank;
+        if (rank == 0) rank = lobby?.Local?.Rank ?? 0;
+        return Build(team, saved, hub, Math.Max(1, rank & 255),
+            pc.Level.NetMode == ENetMode.NM_Standalone || pc.PlayerReplicationInfo.SvmSidearmsUnrestricted || lobby?.SidearmsUnrestricted == true || practice,
             pc.GameReplicationInfo?.RiflesEnabled == true, hub || pc.GameReplicationInfo?.SidearmsEnabled == true,
             !hub && practice ? PracticeRule : null, fromTeam: true);
     }
@@ -138,12 +142,15 @@ public sealed class GearMenuModel
     /// The picker of the lobby's Equipment button: the slots and allowed gadgets the session's setup will give that
     /// side (its Alternate Mode values), as the round's team info will hold them. Side 0 spy, 1 merc.
     /// </summary>
-    public static GearMenuModel ForLobby(bool spy, OpenScct.Server.Online.LobbySetup setup, LoadoutChoice saved)
+    public static GearMenuModel ForLobby(bool spy, LobbyState lobby, LoadoutChoice saved)
     {
-        ArgumentNullException.ThrowIfNull(setup);
+        ArgumentNullException.ThrowIfNull(lobby);
+        LobbySetup setup = lobby.Setup;
         var pd = new USPersistentData();
         setup.Alternate.ApplyTo(pd, setup.Mode);
-        return Build(StockTeam(spy, pd), saved, hub: false, 1, setup.Practice, setup.Rifles, setup.Sidearms, LobbyRule, fromTeam: false);
+        int level = Math.Max(1, (lobby.Local?.Rank ?? 0) & 255);
+        return Build(StockTeam(spy, pd), saved, hub: false, level, lobby.SidearmsUnrestricted || setup.Practice,
+            setup.Rifles, setup.Sidearms, LobbyRule, fromTeam: false);
     }
 
     /// <summary>

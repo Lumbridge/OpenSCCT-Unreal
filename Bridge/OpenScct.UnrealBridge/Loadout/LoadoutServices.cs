@@ -7,6 +7,7 @@ using OpenScct.Game.Devices;
 using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
 using OpenScct.UnrealBridge.Hud;
+using OpenScct.UnrealBridge.Online;
 using OpenScctGame.Play.Session;
 
 namespace OpenScct.UnrealBridge.Loadout;
@@ -50,7 +51,7 @@ public static class LoadoutServices
     public static void Install(Level level)
     {
         ArgumentNullException.ThrowIfNull(level);
-        level.SetService<ILoadoutSource>(new StoreLoadoutSource());
+        level.SetService<ILoadoutSource>(new StoreLoadoutSource(level));
         level.SetService<IGearChangeFeedback>(new QueuedGearFeedback(level));
         level.SetService<IProfileOptions>(new PushedProfileOptions());
     }
@@ -60,12 +61,22 @@ public static class LoadoutServices
 /// The saved gear (<see cref="LoadoutStore.Current"/>) as the level's <see cref="ILoadoutSource"/>: read each time the
 /// server asks this machine for its kit, so a new choice goes on at the next spawn (or at once while the server allows).
 /// </summary>
-public sealed class StoreLoadoutSource : ILoadoutSource
+public sealed class StoreLoadoutSource(Level level) : ILoadoutSource
 {
     public ClassRef[] Gadgets(bool Spy)
     {
         LoadoutServed.Note(Spy);
-        return Array.ConvertAll(LoadoutStore.Current.GadgetsOf(Spy), p => p.Length == 0 ? default : new ClassRef(p));
+        LoadoutChoice saved = LoadoutStore.Current;
+        string[] gadgets = saved.GadgetsOf(Spy);
+        if (OnlineBridge.Existing?.Client is { } visit && ReferenceEquals(visit.Session?.World.Level, level))
+        {
+            // Send the effective kit shown by Equipment. A restricted gadget from a practice or
+            // higher-ranked kit would otherwise simply be rejected by the server, leaving an empty slot.
+            var match = GearMenuModel.For(level.Info.LocalPlayerController as SPlayerController, saved, hub: false, visit.Lobby);
+            gadgets = match is not null && match.Spy == Spy ? match.Gadgets : GearMenuModel.ForLobby(Spy, visit.Lobby, saved).Gadgets;
+        }
+
+        return Array.ConvertAll(gadgets, p => p.Length == 0 ? default : new ClassRef(p));
     }
 
     public ClassRef Sidearm() => new(LoadoutStore.Current.MercSidearm);
