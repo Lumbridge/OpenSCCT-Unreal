@@ -28,6 +28,7 @@ public:
 	AScctFrontEndGameMode();
 
 	virtual void StartPlay() override;
+	virtual void StartToLeaveMap() override;
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
