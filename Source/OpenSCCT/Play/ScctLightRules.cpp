@@ -22,6 +22,7 @@
 #include "Materials/MaterialParameterCollection.h"
 #include "Materials/MaterialParameterCollectionInstance.h"
 #include "OpenSCCT.h"
+#include "Play/ScctEchelonLightFilter.h"
 #include "Play/ScctLightPlan.h"
 #include "Runtime/ScctFeatures.h"
 #include "Runtime/ScctLightPlanApi.h"
@@ -275,6 +276,10 @@ bool FScctLightRules::BodyAids()
 
 void FScctLightRules::Tick(UWorld* World)
 {
+	if (auto* Filter = World ? World->GetSubsystem<UScctEchelonLightFilter>() : nullptr)
+	{
+		Filter->Apply();
+	}
 	if (World != nullptr && FScctLightPlan::IsOn())
 	{
 		LightRulesPush(World, false);
@@ -398,7 +403,8 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 			{
 				// A level built at run time has no projected rectangle yet (the plan's projector step): the cone
 				// that holds the patch. The importer's dress (its light function) already has the rectangle.
-				if (Light->LightFunctionMaterial == nullptr && Info.EchelonRange > 1.0f)
+				auto* Filter = World->GetSubsystem<UScctEchelonLightFilter>();
+				if (Info.EchelonRange > 1.0f && (!Light->LightFunctionMaterial || (Filter && Filter->AddedToUnshapedLight(Light))))
 				{
 					const float Half = FMath::RadiansToDegrees(FMath::Atan(FMath::Sqrt(FMath::Square(Info.SpotWidth) + FMath::Square(Info.SpotHeight)) / Info.EchelonRange));
 					Spot->SetOuterConeAngle(FMath::Clamp(Half, 5.0f, 80.0f));

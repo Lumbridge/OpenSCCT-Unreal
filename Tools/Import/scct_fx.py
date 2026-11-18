@@ -14,6 +14,7 @@ import re
 import unreal
 
 import scct_effects
+import scct_echelon
 import scct_niagara
 
 materials_lib = unreal.MaterialEditingLibrary
@@ -417,7 +418,8 @@ class MapEffects:
                 scalars["CookieWeight"] = 1.0
             else:
                 scalars["Round"] = 1.0     # the soft round spot of M_ScctLightFunction
-            actor.tags = list(actor.tags) + [unreal.Name("ScctEchelonSpot")]
+            spot_class = "ScctDynamicSpot" if light.get("dynamic") else "ScctStaticSpot"
+            actor.tags = list(actor.tags) + [unreal.Name("ScctEchelonSpot"), unreal.Name(spot_class)]
 
         # ---- pulse, blink and flicker: the light function carries the rhythm, so it needs no game code. The
         # tag lets game code find these lights (their coronas follow the same rhythm in the original).
@@ -835,7 +837,8 @@ class MapEffects:
             actor.set_actor_label(record["id"])
             actor.set_folder_path("Geometry/Props")
             actor.tags = [unreal.Name("Scct:" + record["id"]), unreal.Name("ScctClass:" + record["class"].split(".")[-1]),
-                          unreal.Name("ScctTag:" + str(props.get("Tag", "")))]
+                          unreal.Name("ScctTag:" + str(props.get("Tag", "")))] + [
+                              unreal.Name(tag) for tag in scct_echelon.gameplay_receiver_tags(props)]
             component = actor.skeletal_mesh_component
             component.set_skinned_asset_and_update(mesh)
             component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)   # the simulation owns collision
@@ -888,7 +891,7 @@ def instance_tags(instance):
     ScctSoftBody:<patch or strip> marks the original's cloth (flags, awnings, strip curtains): placed at rest. In a
     match Play/ScctLevelStateSoftBodies swaps it for a mesh the bridge's simulation moves, matching it to the
     bridge's body by the actor's "Scct:" + map actor name tag, the instance's id that every placed mesh carries."""
-    tags = []
+    tags = scct_echelon.receiver_tags(instance.get("echelonIgnore", 0), instance.get("ignoredEchelonLights", []))
     vision = instance.get("vision")
     if vision:
         tags += ["ScctHeat:%.3f" % vision.get("heat", 0.0), "ScctHeatOpacity:%.3f" % vision.get("heatOpacity", 1.0),
