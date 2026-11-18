@@ -218,6 +218,7 @@ void UScctLevelStateSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UScctLevelStateSubsystem::Deinitialize()
 {
+	MeshParticles.Reset();
 	if (Session != nullptr)
 	{
 		Session->OnSessionChanged.RemoveAll(this);
@@ -239,6 +240,7 @@ void UScctLevelStateSubsystem::HandleSessionChanged(int32 OldId, int32 NewId)
 	}
 
 	// Name ids, actor states and what was spawned belong to one match.
+	MeshParticles.Reset();
 	RestoreLevel();
 	Names.Empty();
 	ActorStates.Reset();
@@ -300,6 +302,7 @@ void UScctLevelStateSubsystem::HandleMatchStarted()
 		NumEffectActors = 0;
 	}
 	IndexLevel();
+	MeshParticles.Begin(*this);
 
 	// The lighting plan dresses the level's lights before any is bound: a bound light's strength is what it has then.
 	bLightPlanDressed = false;
@@ -722,6 +725,7 @@ void UScctLevelStateSubsystem::HandleFrame(float DeltaSeconds)
 	DressForLightPlan();
 	UpdateLights(DeltaSeconds);
 	DrainEvents();
+	MeshParticles.Draw();
 
 	// The table is empty until the client has loaded its map; the first frame with anything in it is the map's
 	// state as the match begins.
@@ -1857,12 +1861,11 @@ void UScctLevelStateSubsystem::DrainEvents()
 
 			case EScctWorldEventKind::EmitterTriggered:
 			{
-				const int32 Reached = TriggerEmitters(Name);
+				const int32 Reached = TriggerEmitters(Name) + MeshParticles.Trigger(Event.NameId);
 				NumEmittersReached += Reached;
 				if (bLog || Reached == 0)
 				{
-					UE_LOG(LogOpenSCCT, Log, TEXT("Level state: %.1f s emitter '%s' triggered at (%.0f, %.0f, %.0f): %d of the level's particle emitters follow%s"), MatchSeconds, *Name, Event.X, Event.Y, Event.Z, Reached,
-						Reached == 0 ? TEXT(" (mesh emitters are not drawn)") : TEXT(""));
+					UE_LOG(LogOpenSCCT, Log, TEXT("Level state: %.1f s emitter '%s' triggered at (%.0f, %.0f, %.0f): %d drawable sub-emitters"), MatchSeconds, *Name, Event.X, Event.Y, Event.Z, Reached);
 				}
 				break;
 			}

@@ -90,10 +90,9 @@ void UScctLevelStateSubsystem::UpdateAttachedEmitters()
 				? FString::Printf(TEXT("'%s' of %s"), *GetName(Record.AttachBoneId),
 					(Record.Flags & EScctWorldEmitterFlags::OnPawn) != 0 ? *FString::Printf(TEXT("pawn #%d"), Record.AttachPawnId) : *FString::Printf(TEXT("'%s'"), *GetName(Record.AttachNameId)))
 				: FString::Printf(TEXT("'%s'"), Record.AttachNameId != 0 ? *GetName(Record.AttachNameId) : TEXT("(an actor the table does not follow)"));
-			UE_LOG(LogOpenSCCT, Log, TEXT("Level state: emitter '%s' rides %s %s with %d particle actors%s"), *Name, Kind, *On, State.Parts.Num(),
-				State.Parts.Num() == 0 ? TEXT(" (the level has none for it: mesh emitters are not drawn)") : TEXT(""));
+			UE_LOG(LogOpenSCCT, Log, TEXT("Level state: emitter '%s' rides %s %s with %d particle actors and %d mesh layers"), *Name, Kind, *On, State.Parts.Num(), MeshParticles.Count(Record.NameId));
 		}
-		if (State.Parts.Num() == 0)
+		if (State.Parts.Num() == 0 && MeshParticles.Count(Record.NameId) == 0)
 		{
 			continue;
 		}
@@ -150,6 +149,7 @@ void UScctLevelStateSubsystem::UpdateAttachedEmitters()
 			Frame = Relative; // a mover's rider: where the simulation carried it
 		}
 
+		MeshParticles.SetPlace(Record.NameId, Frame);
 		bool bApplied = false;
 		for (FRidingEmitter::FPart& Part : State.Parts)
 		{

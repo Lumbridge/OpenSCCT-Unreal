@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Play/ScctPlacedMeshParticles.h"
 #include "Runtime/ScctWorldApi.h"
 #include "Runtime/ScctWorldEmitterApi.h"
 #include "Subsystems/WorldSubsystem.h"
@@ -288,6 +289,8 @@ private:
 	int32 LightPlanWaited = 0;
 	/** Moves the particle actors of the map Emitters that ride a mover or hang on a bone (Play/ScctLevelStateEmitters.cpp). */
 	void UpdateAttachedEmitters();
+	friend class FScctPlacedMeshParticles;
+	FScctPlacedMeshParticles MeshParticles;
 	/** Puts those particle actors back where they were imported. */
 	void RestoreAttachedEmitters(bool bTearingDown);
 	/** The summary line of the riding emitters. */

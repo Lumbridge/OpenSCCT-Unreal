@@ -31,6 +31,13 @@
   <!-- The play session lives in the Godot project but has no Godot in it; it is linked, as OpenSCCT's map sweep does. -->
   <ItemGroup>
     <Compile Include="$(OpenScctRoot)game\Scripts\Play\Session\*.cs" Link="Linked\PlaySession\%(Filename)%(Extension)" />
+    <!-- Placed mesh emitters use the same map reader, particle simulation and placements as the Godot view. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\Render\Data\FxDoc.cs" Link="Linked\Particles\FxDoc.cs" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\Render\Particles\ParticleParams.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\Render\Particles\ParticleEmitterSim.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\Render\Particles\ParticleSystemSim.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\Render\Particles\ParticleGeometry.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\Play\DrawnTime.cs" Link="Linked\Particles\DrawnTime.cs" />
     <!-- The strategic map's data and page state (floors, snapshot camera, markers), Godot-free like the session. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\StrategicMapModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
     <!-- The in-match menu's rules (which entries show for whom, the confirmations), Godot-free. -->

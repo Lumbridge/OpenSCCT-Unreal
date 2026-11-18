@@ -33,6 +33,7 @@
 #include "Runtime/ScctLobbyApi.h"
 #include "Runtime/ScctMapsApi.h"
 #include "Runtime/ScctMenuApi.h"
+#include "Runtime/ScctMeshParticleApi.h"
 #include "Runtime/ScctMarkSurfaceApi.h"
 #include "Runtime/ScctOnlineApi.h"
 #include "Runtime/ScctOutfitArmsApi.h"
@@ -108,6 +109,7 @@ SCCT_FEATURE_TABLE(FScctLightPlanApi, "LightPlanExports", ScctLightPlanApiVersio
 SCCT_FEATURE_TABLE(FScctLobbyApi, "LobbyExports", ScctLobbyApiVersion);
 SCCT_FEATURE_TABLE(FScctMapsApi, "MapsExports", ScctMapsApiVersion);
 SCCT_FEATURE_TABLE(FScctMenuApi, "MenuExports", ScctMenuApiVersion);
+SCCT_FEATURE_TABLE(FScctMeshParticleApi, "MeshParticleExports", 1);
 SCCT_FEATURE_TABLE(FScctMarkSurfaceApi, "MarkSurfaceExports", ScctMarkSurfaceApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
 SCCT_FEATURE_TABLE(FScctOutfitArmsApi, "OutfitArmsExports", ScctOutfitArmsApiVersion);
