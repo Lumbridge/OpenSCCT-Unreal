@@ -61,7 +61,7 @@ public:
 	/** Where the laser leaves the weapon this frame: the spy pistol's laser socket, else the muzzle. */
 	bool FindLaserStart(FTransform& OutWorld) const;
 
-	/** A replacement merc gun's muzzle socket, or the bridge's mounted start for the original gun. */
+	/** The visible barrel rim on the stock rifle, or the current model's laser or muzzle socket. */
 	FVector MercLaserStart(const FVector& TracedStart) const;
 
 	/** A shot left the gun: the flash and its light, at the muzzle. */
