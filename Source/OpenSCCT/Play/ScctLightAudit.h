@@ -16,7 +16,7 @@ struct FScctLightLevel;
  *   scct.Light.AuditSeconds     the time between blocks (default 1).
  *   scct.Light.StickyCamShadow  1: under scct.Light.Plan 1 the sticky camera's fly-in follows the original's shadow
  *                               rule (it is solved twice a tick only while the own spy's shadow is drawn, so the
- *                               camera flies in at half the speed where the spy stands in the dark). 0 (the default):
+ *                               camera flies in at half the speed where the spy stands in the dark). Default 1. Set 0 for
  *                               always twice, as the game was released.
  *
  * It reads the bridge's FScctLightPlanApi and changes nothing in the picture. The picture's side of the audit (what

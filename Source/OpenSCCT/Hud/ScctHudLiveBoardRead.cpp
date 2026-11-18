@@ -43,6 +43,11 @@ void UScctHudSubsystem::ReadLiveBoard()
 		return;
 	}
 
+	if (Info.RoundSerial != ScoreboardRound)
+	{
+		if (ScoreboardRound != 0) ClearScoreboardInput();
+		ScoreboardRound = Info.RoundSerial;
+	}
 	// Closed: nothing to read. The rows are read again when it opens.
 	const bool bUp = Model->bScoreboardHeld || Model->bStatusPage || Model->ScoreboardShown > 0.01f || Model->StatusShown > 0.01f;
 	if (!bUp)

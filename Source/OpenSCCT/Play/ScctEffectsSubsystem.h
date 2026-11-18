@@ -215,6 +215,7 @@ private:
 	 */
 	struct FMarkSurface
 	{
+		bool bPlaced = false;
 		/** The level's actor for the surface; unset when the frame is the simulation's own pose of it. */
 		TWeakObjectPtr<AActor> Actor;
 		/** The decal's place in the surface's frame (location and turn, no scale). */

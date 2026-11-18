@@ -16,7 +16,7 @@
 // the HUD's own player list and the combat columns read "—". Ask for the board every frame from the session's start:
 // the bridge notes when each snapshot arrives, which the countdown is counted from. Text is UTF-16, zero terminated.
 
-constexpr int32 ScctLiveScoreboardApiVersion = 1;
+constexpr int32 ScctLiveScoreboardApiVersion = 2;
 
 /** The running round's scoreboard as a whole (LiveScoreboardInfo). */
 struct FScctLiveScoreboardInfo
@@ -34,6 +34,7 @@ struct FScctLiveScoreboardInfo
 	float ElapsedSeconds;
 	/** Changes whenever the rows or cells may have changed. */
 	int32 Revision;
+	int32 RoundSerial;
 };
 
 namespace EScctLiveScoreboardFlags
@@ -71,7 +72,7 @@ struct FScctLiveScoreboardApi
 	int32 (__cdecl* GetText)(int32 Kind, int32 A, int32 B, TCHAR* Buffer, int32 Capacity);
 };
 
-static_assert(sizeof(FScctLiveScoreboardInfo) == 36, "FScctLiveScoreboardInfo does not match LiveScoreboardInfo");
+static_assert(sizeof(FScctLiveScoreboardInfo) == 40, "FScctLiveScoreboardInfo does not match LiveScoreboardInfo");
 static_assert(sizeof(FScctLiveScoreboardApi) == 8 + 3 * sizeof(void*), "FScctLiveScoreboardApi does not match LiveScoreboardApi");
 
 template <>

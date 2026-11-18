@@ -120,8 +120,8 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	ViewportSize = FIntPoint::ZeroValue;
 	LogTimer = 0.0f;
 	bScoreboardForced = false;
-	bScoreboardKeyHeld = false;
-	bScoreboardToggled = false;
+	ClearScoreboardInput();
+	ScoreboardRound = 0;
 	bLiveBoardLogged = false;
 	for (FTimedCommand& Command : TimedCommands)
 	{
@@ -182,6 +182,13 @@ void UScctHudSubsystem::HandleSessionChanged(int32 OldSessionId, int32 NewSessio
 	{
 		UE_LOG(LogOpenSCCT, Error, TEXT("HUD: the bridge has no HUD table (its reason is in the log above); the match plays without a HUD and without goggles"));
 	}
+}
+
+void UScctHudSubsystem::ClearScoreboardInput()
+{
+	bScoreboardKeyHeld = false;
+	bScoreboardToggled = false;
+	Model->bScoreboardHeld = bScoreboardForced;
 }
 
 void UScctHudSubsystem::HandleLocalCommand(FName Name, int32 Arg, bool bPressed)
@@ -346,10 +353,14 @@ void UScctHudSubsystem::HandleFrame(float DeltaSeconds)
 		CommandSource = Player;
 		CommandHandle = Player->OnLocalCommand.AddUObject(this, &UScctHudSubsystem::HandleLocalCommand);
 	}
-	Model->bScoreboardHeld = bScoreboardForced || bScoreboardKeyHeld || bScoreboardToggled;
 	// The chat's composer (UScctChatSubsystem) open: the log above it stays readable.
 	const UScctChatSubsystem* Chat = GetWorld()->GetSubsystem<UScctChatSubsystem>();
 	Model->bChatOpen = Chat != nullptr && Chat->IsOpen();
+	if (!Player || !Player->HasPlayInput() || Model->bChatOpen || Model->bStatusPage)
+	{
+		ClearScoreboardInput();
+	}
+	Model->bScoreboardHeld = bScoreboardForced || bScoreboardKeyHeld || bScoreboardToggled;
 
 	// The status page's exit keys. The press that opened the page must not close it: a key counts once every
 	// exit key has been up since it opened.

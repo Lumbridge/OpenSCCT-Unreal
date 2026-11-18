@@ -20,9 +20,9 @@ namespace
 	TAutoConsoleVariable<float> CVarLightAuditSeconds(TEXT("scct.Light.AuditSeconds"), 1.0f,
 		TEXT("Seconds between two blocks of scct.Light.Audit."));
 
-	TAutoConsoleVariable<int32> CVarLightStickyCamShadow(TEXT("scct.Light.StickyCamShadow"), 0,
-		TEXT("1: under scct.Light.Plan 1 the sticky camera's fly-in follows the original's shadow rule (solved twice a tick only while the own spy's shadow is drawn). ")
-		TEXT("0 (the default): always twice, as released."));
+	TAutoConsoleVariable<int32> CVarLightStickyCamShadow(TEXT("scct.Light.StickyCamShadow"), 1,
+		TEXT("1 (default): under scct.Light.Plan 1 the sticky camera's fly-in follows the original's shadow rule (solved twice a tick only while the own spy's shadow is drawn). ")
+		TEXT("0: always twice."));
 
 	FTSTicker::FDelegateHandle LightAuditTicker;
 	double LightAuditNext = 0.0;

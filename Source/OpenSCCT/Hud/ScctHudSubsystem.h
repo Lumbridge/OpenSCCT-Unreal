@@ -217,6 +217,8 @@ private:
 	// model while the scoreboard or the status page is up, the whole board in the log when it comes up and its timing
 	// line every two seconds after.
 	void ReadLiveBoard();
+	void ClearScoreboardInput();
+	int32 ScoreboardRound = 0;
 	bool bLiveBoardLogged = false;
 	float LiveBoardLogAt = 0.0f;
 

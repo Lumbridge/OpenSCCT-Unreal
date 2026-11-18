@@ -749,6 +749,8 @@ void UScctEffectsSubsystem::UpdateTracers(float DeltaSeconds)
 
 void UScctEffectsSubsystem::UpdateImpactMarks()
 {
+	const UScctVisionSubsystem* Vision = UScctVisionSubsystem::Find(GetWorld());
+	const bool bVisibleInVision = !Vision || !Vision->IsHeatOrEmf();
 	const int32 Count = Events->GetImpactMarks(MarkBuffer.GetData(), MarkBuffer.Num());
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
@@ -792,7 +794,7 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 				DecalTints[Mark.Slot] = Decal->CreateDynamicMaterialInstance();
 			}
 			// A mark tied to a door that was hidden for a while comes back where it was on the door.
-			if (bNew || (!Decal->IsVisible() && !MarkSurfaces[Mark.Slot].bAttached))
+			if (!MarkSurfaces[Mark.Slot].bPlaced)
 			{
 				const float HalfSize = TintDecal(DecalTints[Mark.Slot], GetName(Mark.TypeId), GetName(Mark.SparkClassId));
 				// A decal projects along its own X axis, into the surface; its turn about that axis is random so
@@ -807,8 +809,9 @@ void UScctEffectsSubsystem::UpdateImpactMarks()
 				// that actor is (Play/ScctEffectsMarks.cpp). A mark on the level's own geometry stays put.
 				Decal->SetWorldLocationAndRotation(At, Facing);
 				AttachMark(Mark.Slot, Mark, *Decal);
+				MarkSurfaces[Mark.Slot].bPlaced = true;
 			}
-			const bool bDrawn = FollowMarkSurface(Mark.Slot, *Decal);
+			const bool bDrawn = FollowMarkSurface(Mark.Slot, *Decal) && bVisibleInVision;
 			if (Decal->IsVisible() != bDrawn)
 			{
 				Decal->SetVisibility(bDrawn);

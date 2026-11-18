@@ -37,6 +37,7 @@ public struct LiveScoreboardInfo
 
     /// <summary>Changes whenever the rows or cells may have changed (a new snapshot, another local participant).</summary>
     public int Revision;
+    public int RoundSerial;
 }
 
 public static class LiveScoreboardFlags
@@ -121,6 +122,7 @@ public sealed class LiveScoreboard : IDisposable
     private ScoreboardPlayer[] _rows = [];
     private int _omitted;
     private int _revision;
+    private int _roundSerial;
     private bool _disposed;
 
     private LiveScoreboard(BridgeSession session)
@@ -138,6 +140,7 @@ public sealed class LiveScoreboard : IDisposable
 
     private void Receive(RoundScoreboard board)
     {
+        if (_received?.RoundId != board.RoundId) _roundSerial++;
         _received = board;
         _receivedAt = Stopwatch.GetTimestamp();
     }
@@ -199,6 +202,7 @@ public sealed class LiveScoreboard : IDisposable
         Omitted = _omitted,
         ElapsedSeconds = (float)board.ElapsedSeconds,
         Revision = _revision,
+        RoundSerial = _roundSerial,
     };
 
     public string Text(RoundScoreboard board, LiveScoreboardText kind, int a, int b)
@@ -328,7 +332,7 @@ public sealed class LiveScoreboard : IDisposable
 
 public static unsafe class LiveScoreboardExports
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     /// <summary>Fills <paramref name="api"/>. Returns the API version.</summary>
     [UnmanagedCallersOnly]
