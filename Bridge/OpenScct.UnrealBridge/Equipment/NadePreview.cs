@@ -341,8 +341,12 @@ public sealed class NadePreviewFeature
     public NadeFlight Flight => _flight;
 
     /// <summary>
-    /// The preview is an aim aid that also looks round corners, so it is for matches played on this machine and
-    /// practice rounds, as the Godot client's practice aids (grabarea) are: not on someone else's server otherwise.
+    /// The preview is an aim aid that also looks round corners, so it is for offline matches (nobody else can be in
+    /// one: its server listens on loopback only) and practice rounds, as the Godot client's practice aids (grabarea)
+    /// are. Every round on a server is <see cref="BridgeSession.IsRemote"/>, the player's own included: hosting from
+    /// the game joins the host's player to its server as any other player (Online/ListenHost.cs), and a hub is
+    /// visited the same way, so a host with or without guests and a hub are refused unless the server's practice
+    /// mode is on (a hub has none). Bridge/Probes/OnlineProbe "nade" and HubProbe check it.
     /// </summary>
     public static bool IsAllowed(BridgeSession? session) =>
         session is not null && (!session.IsRemote || Test.GrabAreaReader.IsPracticeRound(session.Session));
