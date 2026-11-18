@@ -70,8 +70,8 @@ namespace
 	constexpr float AmbientSilence = 0.05f;
 	constexpr float AmbientFadeSeconds = 0.4f;
 
-	// Ambient voices are matched by actor key (3D) or by file (flat: zones playing one sound share a voice).
-	constexpr int64 FlatAmbientBit = 1ll << 40;
+	// Ambient voices are matched by actor key (3D), by the sound named (flat, a zone: zones naming one sound share a
+	// voice) or by actor key with a bit of its own (flat, no zone: Play/ScctAudioAmbientLoops.cpp).
 
 	const FName ZoneReverbTag(TEXT("ScctZone"));
 
@@ -102,6 +102,7 @@ void UScctAudioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	bLogVoices = FParse::Param(FCommandLine::Get(), TEXT("ScctAudioLog"));
 	FParse::Value(FCommandLine::Get(), TEXT("ScctAudioSummary="), SummaryEvery);
+	FParse::Value(FCommandLine::Get(), TEXT("ScctAudioAmbientAfter="), AmbientAfterSeconds);
 	SoundBuffer.SetNumUninitialized(256);
 	AmbientBuffer.SetNumUninitialized(512);
 	Voices.Reserve(MaxComponents);
@@ -582,7 +583,9 @@ void UScctAudioSubsystem::UpdateAmbient()
 	}
 	ListenerZone = INDEX_NONE;
 
-	const int32 Count = bListenerValid ? Events->GetAmbientSounds(AmbientBuffer.GetData(), AmbientBuffer.Num()) : 0;
+	const bool bHeld = AmbientAfterSeconds > 0.0f && GetWorld()->GetTimeSeconds() < AmbientAfterSeconds;
+	const int32 Count = bListenerValid && !bHeld ? Events->GetAmbientSounds(AmbientBuffer.GetData(), AmbientBuffer.Num()) : 0;
+	AmbientCount = BeginFlatLoopPass(Count);
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
 		const FScctAmbientSound& Source = AmbientBuffer[Index];
@@ -610,6 +613,7 @@ void UScctAudioSubsystem::UpdateAmbient()
 		const float Radius = Source.Radius;
 		const float Distance = FVector::Dist(Location, Listener);
 		float Volume = Source.Volume;
+		int64 Id = bPositional ? static_cast<int64>(Source.Key) : (FlatZoneLoopBit | static_cast<uint32>(Source.SoundId));
 		if (bPositional)
 		{
 			if (Radius > 0.0f && Distance >= ReachPerRadius * Radius)
@@ -626,26 +630,23 @@ void UScctAudioSubsystem::UpdateAmbient()
 		}
 		else
 		{
-			// A flat source that is no zone: full inside its radius, falling off beyond it.
-			if (Radius > 0.0f && Distance > Radius)
-			{
-				Volume /= 1.0f + 0.5f * (Distance - Radius) / Radius;
-			}
-			if (Volume < AmbientSilence)
+			// A flat source that is no zone holds a voice of its own, full inside its radius and falling off beyond
+			// it; the voices of several speakers of one sound add up. Kept, handed over or silent: nothing to make.
+			if (!UpdateFlatActorLoop(Source, Distance, Id, Volume))
 			{
 				continue;
 			}
 		}
 
-		// A flat voice is shared by the sources that play one file. (Not by the sound they name: a random list is
-		// picked per source, and two sources with different picks would take the voice from each other every frame.)
-		const int64 Id = bPositional ? static_cast<int64>(Source.Key) : (FlatAmbientBit | Source.FileId);
+		// The zones that name one sound share a flat voice, matched by the sound and not by the file: a random list is
+		// picked per source, and two sources with different picks must not take the voice from each other every frame.
+		// The voice keeps the file it started with.
 		if (const int32* Found = AmbientVoices.Find(Id))
 		{
 			FVoice& Voice = Voices[*Found];
-			if (Voice.FileId == Source.FileId && Voice.State != EVoiceState::Fading)
+			if ((bPositional ? Voice.FileId == Source.FileId : Voice.SoundId == Source.SoundId) && Voice.State != EVoiceState::Fading)
 			{
-				// Several flat sources of one sound share the voice: it plays as loud as the loudest of them.
+				// Several zones of one sound share the voice: it plays as loud as the loudest of them.
 				Voice.Volume = Voice.bSeen ? FMath::Max(Voice.Volume, Volume) : Volume;
 				if (bPositional)
 				{
@@ -659,9 +660,15 @@ void UScctAudioSubsystem::UpdateAmbient()
 			Voice.AmbientId = 0;
 			AmbientVoices.Remove(Id);
 		}
+		else if (bZone && HandFlatLoopToZone(Source, Id))
+		{
+			// The loop an actor played carries on as the zone's.
+			continue;
+		}
 
 		FVoice Voice;
 		Voice.AmbientId = Id;
+		Voice.AmbientPass = AmbientPass;
 		Voice.ActorId = Source.Key;
 		Voice.SoundId = Source.SoundId;
 		Voice.LeafId = Source.SoundId;

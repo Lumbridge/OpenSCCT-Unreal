@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Menu/ScctMapBrowser.h"
 #include "Widgets/SCompoundWidget.h"
 
 class FScctHubPads;
@@ -46,4 +47,11 @@ private:
 	FString RowsKey;
 	FString MapsKey;
 	TMap<FString, TSharedPtr<FSlateBrush>> Brushes;
+
+	/** The map list's filters (Menu/ScctMapBrowser.h): the group, saved for every map list, and the search text. */
+	TArray<FScctMapGroup> MapGroups;
+	int32 MapGroupIndex = 0;
+	TMap<FString, FScctMapDetails> MapDetails;
+	FString MapSearch;
+	int32 MapsShown = 0;
 };

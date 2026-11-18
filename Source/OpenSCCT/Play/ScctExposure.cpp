@@ -1,7 +1,16 @@
 #include "Play/ScctExposure.h"
 
+#include "Components/StaticMeshComponent.h"
+#include "Containers/Ticker.h"
 #include "Engine/Engine.h"
+#include "Engine/PostProcessVolume.h"
+#include "Engine/StaticMeshActor.h"
+#include "EngineUtils.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
+#include "OpenSCCT.h"
 #include "Runtime/ScctFeatures.h"
 #include "SceneView.h"
 #include "SceneViewExtension.h"
@@ -75,6 +84,164 @@ namespace
 	};
 
 	TSharedPtr<FScctExposureProbe, ESPMode::ThreadSafe> ScctExposureProbeInstance;
+
+	// ---- the range the eye may move over ---------------------------------------------------------------------
+	// Every map level (imported or built at run time) carries a post-process volume whose automatic exposure ran
+	// from EV100 -4 to 4 around middle grey. Measured (scct.Exposure.Log), that made every place the same
+	// brightness: StatE's night street (scene luminance 0.006) sat on the floor at -4.2 and read as an overcast
+	// day, AquaE's unlit Pirates' Room (0.006) as an evenly lit hall, and any lamp-lit room (0.03 to 0.08, EV -1.5
+	// to -2.9) was brought to middle grey. The original has no eye at all: a dark place is dark. So the range is
+	// set here, over the levels' volumes (one place for every map, and no map needs importing again): the eye still
+	// closes for a bright room, but opens no further than a dim lamp-lit room needs (luminance about 0.022), and
+	// the whole picture sits three quarters of a stop under middle grey. Darker places than that stay darker in
+	// step: the night street and the Pirates' Room come out at about a quarter of a lit room.
+	TAutoConsoleVariable<float> CVarExposureMinEV(TEXT("scct.Exposure.MinEV"), -3.0f,
+		TEXT("The darkest scene the automatic exposure of a map opens up for, in EV100 (the levels' own volumes say -4)."));
+	TAutoConsoleVariable<float> CVarExposureMaxEV(TEXT("scct.Exposure.MaxEV"), 4.0f,
+		TEXT("The brightest scene the automatic exposure of a map closes down for, in EV100."));
+	TAutoConsoleVariable<float> CVarExposureBias(TEXT("scct.Exposure.Bias"), -0.75f,
+		TEXT("Stops added to a map's exposure after the range (negative darkens the whole picture)."));
+	TAutoConsoleVariable<int32> CVarExposureLog(TEXT("scct.Exposure.Log"), 0,
+		TEXT("1 logs the exposure the player's picture has (its scale and EV100) and the scene's average luminance once a second."));
+
+	// The sky dome's brightness is light in the scene, so the more the eye opened the paler the night sky got: a
+	// washed blue over a dark roof. Above this exposure scale the dome is dimmed in step (down to a tenth of
+	// itself), so the sky a lit yard shows is the sky a dark roof shows. The sky light it throws is left alone.
+	TAutoConsoleVariable<float> CVarExposureSkyScale(TEXT("scct.Exposure.SkyScale"), 2.0f,
+		TEXT("The exposure scale above which a map's sky dome is dimmed to stay as dark in the picture (0 leaves the dome alone)."));
+	constexpr float ExposureSkyLeastShare = 0.1f;
+	const FName ExposureSkyBrightness(TEXT("Brightness"));
+	const FName ExposureSkyStars(TEXT("StarBrightness"));
+
+	struct FExposureSky
+	{
+		TWeakObjectPtr<UWorld> World;
+		TWeakObjectPtr<UMaterialInstanceDynamic> Material;
+		float Brightness = 0.0f;
+		float Stars = 0.0f;
+		float Share = 1.0f;
+	};
+	FExposureSky ExposureSky;
+
+	void ExposureFindSky(UWorld* World)
+	{
+		ExposureSky = FExposureSky();
+		ExposureSky.World = World;
+		for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
+		{
+			UStaticMeshComponent* Component = It->GetStaticMeshComponent();
+			UMaterialInterface* Material = Component != nullptr ? Component->GetMaterial(0) : nullptr;
+			const UMaterial* Base = Material != nullptr ? Material->GetMaterial() : nullptr;
+			if (Base == nullptr || Base->GetName() != TEXT("M_ScctSky"))
+			{
+				continue;
+			}
+			float Brightness = 0.0f;
+			float Stars = 0.0f;
+			Material->GetScalarParameterValue(ExposureSkyBrightness, Brightness);
+			Material->GetScalarParameterValue(ExposureSkyStars, Stars);
+			if (UMaterialInstanceDynamic* Instance = Component->CreateAndSetMaterialInstanceDynamic(0))
+			{
+				ExposureSky.Material = Instance;
+				ExposureSky.Brightness = Brightness;
+				ExposureSky.Stars = Stars;
+			}
+			return;
+		}
+	}
+
+	// Above the level's own volume (0), below the goggles' (1000, which sets no exposure).
+	constexpr float ExposureRangePriority = 10.0f;
+
+	TWeakObjectPtr<APostProcessVolume> ExposureRangeVolume;
+	FTSTicker::FDelegateHandle ExposureRangeTicker;
+	double ExposureLastLogSeconds = 0.0;
+
+	bool ExposureIsMapWorld(const UWorld* World)
+	{
+		if (World == nullptr || !(World->WorldType == EWorldType::Game || World->WorldType == EWorldType::PIE))
+		{
+			return false;
+		}
+		const FString Path = World->GetPathName();
+		return Path.Contains(TEXT("/Imported/Maps/")) || Path.Contains(TEXT("/RuntimeMap/"));
+	}
+
+	bool ExposureTickRange(float)
+	{
+		if (GEngine == nullptr)
+		{
+			return true;
+		}
+		UWorld* MapWorld = nullptr;
+		for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		{
+			if (ExposureIsMapWorld(Context.World()) && Context.World()->HasBegunPlay())
+			{
+				MapWorld = Context.World();
+				break;
+			}
+		}
+		if (MapWorld == nullptr)
+		{
+			return true;
+		}
+
+		APostProcessVolume* Volume = ExposureRangeVolume.Get();
+		if (!IsValid(Volume) || Volume->GetWorld() != MapWorld)
+		{
+			FActorSpawnParameters Parameters;
+			Parameters.ObjectFlags |= RF_Transient;
+			Volume = MapWorld->SpawnActor<APostProcessVolume>(Parameters);
+			ExposureRangeVolume = Volume;
+			if (!IsValid(Volume))
+			{
+				return true;
+			}
+			Volume->bUnbound = true;
+			Volume->BlendWeight = 1.0f;
+			Volume->Priority = ExposureRangePriority;
+		}
+		const float MinEV = CVarExposureMinEV.GetValueOnGameThread();
+		const float MaxEV = FMath::Max(CVarExposureMaxEV.GetValueOnGameThread(), MinEV);
+		FPostProcessSettings& Settings = Volume->Settings;
+		Settings.bOverride_AutoExposureMinBrightness = true;
+		Settings.AutoExposureMinBrightness = MinEV;
+		Settings.bOverride_AutoExposureMaxBrightness = true;
+		Settings.AutoExposureMaxBrightness = MaxEV;
+		Settings.bOverride_AutoExposureBias = true;
+		Settings.AutoExposureBias = CVarExposureBias.GetValueOnGameThread();
+
+		// The sky dome, held as dark in the picture as it is at the reference exposure.
+		if (ExposureSky.World.Get() != MapWorld)
+		{
+			ExposureFindSky(MapWorld);
+		}
+		if (UMaterialInstanceDynamic* Sky = ExposureSky.Material.Get())
+		{
+			const float SkyScale = CVarExposureSkyScale.GetValueOnGameThread();
+			const float Scale = LastExposure.load(std::memory_order_relaxed);
+			const float Share = SkyScale > 0.0f && Scale > 0.0f ? FMath::Clamp(SkyScale / Scale, ExposureSkyLeastShare, 1.0f) : 1.0f;
+			if (!FMath::IsNearlyEqual(Share, ExposureSky.Share, 0.002f))
+			{
+				ExposureSky.Share = Share;
+				Sky->SetScalarParameterValue(ExposureSkyBrightness, ExposureSky.Brightness * Share);
+				Sky->SetScalarParameterValue(ExposureSkyStars, ExposureSky.Stars * Share);
+			}
+		}
+
+		if (CVarExposureLog.GetValueOnGameThread() != 0 && FPlatformTime::Seconds() - ExposureLastLogSeconds >= 1.0)
+		{
+			ExposureLastLogSeconds = FPlatformTime::Seconds();
+			const float Exposure = LastExposure.load(std::memory_order_relaxed);
+			const float Luminance = LastLuminance.load(std::memory_order_relaxed);
+			// With the project's extended luminance range the scale is 1 / (1.2 * 2^EV100).
+			UE_LOG(LogOpenSCCT, Log, TEXT("Exposure: scale %.4f (EV100 %.2f), scene luminance %.5f, picture level %.3f, range %.1f..%.1f, bias %.2f, sky share %.2f"),
+				Exposure, Exposure > 0.0f ? FMath::Log2(1.0f / (1.2f * Exposure)) : 0.0f, Luminance, Exposure * Luminance, MinEV, MaxEV,
+				CVarExposureBias.GetValueOnGameThread(), ExposureSky.Share);
+		}
+		return true;
+	}
 }
 
 void FScctExposure::Start()
@@ -83,11 +250,20 @@ void FScctExposure::Start()
 	{
 		ScctExposureProbeInstance = FSceneViewExtensions::NewExtension<FScctExposureProbe>();
 	}
+	if (!ExposureRangeTicker.IsValid())
+	{
+		ExposureRangeTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateStatic(&ExposureTickRange));
+	}
 }
 
 void FScctExposure::Stop()
 {
 	ScctExposureProbeInstance.Reset();
+	if (ExposureRangeTicker.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(ExposureRangeTicker);
+		ExposureRangeTicker.Reset();
+	}
 }
 
 float FScctExposure::Get()
@@ -101,6 +277,12 @@ float FScctExposure::PictureLevel()
 	const float Exposure = LastExposure.load(std::memory_order_relaxed);
 	const float Luminance = LastLuminance.load(std::memory_order_relaxed);
 	return Exposure > 0.0f && Luminance > 0.0f ? Exposure * Luminance : 0.0f;
+}
+
+float FScctExposure::SettledPictureLevel()
+{
+	// Middle grey, moved by the bias the maps are played with.
+	return 0.18f * FMath::Pow(2.0f, CVarExposureBias.GetValueOnGameThread());
 }
 
 float FScctExposure::FlashExposure()

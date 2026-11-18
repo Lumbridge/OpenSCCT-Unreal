@@ -144,9 +144,10 @@ def build_level():
     settings = post.get_editor_property("settings")
     for name, value in [
         ("auto_exposure_method", unreal.AutoExposureMethod.AEM_HISTOGRAM),
-        ("auto_exposure_min_brightness", -4.0),
+        # The game sets these three over this volume (Source/OpenSCCT/Play/ScctExposure.cpp).
+        ("auto_exposure_min_brightness", -3.0),
         ("auto_exposure_max_brightness", 4.0),
-        ("auto_exposure_bias", 0.0),
+        ("auto_exposure_bias", -0.75),
         ("auto_exposure_speed_up", 5.0),
         ("auto_exposure_speed_down", 2.5),
         ("local_exposure_highlight_contrast_scale", 0.6),
