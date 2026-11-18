@@ -42,6 +42,9 @@ public static class HubPadsFlags
     // HubLaptopMap.Flags
     /// <summary>The laptop's draft plays this map.</summary>
     public const int Selected = 1;
+
+    /// <summary>The player lacks this map: picking it downloads it from OpenSCCT-Content (its name says the size).</summary>
+    public const int Downloadable = 2;
 }
 
 /// <summary>The texts HubPadsExports.GetText copies.</summary>

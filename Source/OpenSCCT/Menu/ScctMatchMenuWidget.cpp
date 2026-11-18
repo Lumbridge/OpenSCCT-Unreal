@@ -316,6 +316,29 @@ bool UScctMatchMenuWidget::ShowStrategicMap()
 	return bOpened;
 }
 
+bool UScctMatchMenuWidget::ShowArmoury()
+{
+	if (!Overlay.IsValid())
+	{
+		return false;
+	}
+	const bool bWasOpen = bMenuOpen;
+	if (!bWasOpen)
+	{
+		OnWantsOpen.ExecuteIfBound();
+	}
+	if (!bMenuOpen)
+	{
+		return false;
+	}
+	const bool bOpened = Overlay->GetMenu()->ShowArmoury(!bWasOpen);
+	if (!bOpened && !bWasOpen)
+	{
+		OnResumed.ExecuteIfBound();
+	}
+	return bOpened;
+}
+
 TSharedPtr<SScctGearPage> UScctMatchMenuWidget::GetGearPage() const
 {
 	return Overlay.IsValid() ? Overlay->GetMenu()->GetGear() : nullptr;

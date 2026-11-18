@@ -11,6 +11,7 @@
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctDashboardApi.h"
 #include "Runtime/ScctArmouryApi.h"
+#include "Runtime/ScctCrashApi.h"
 #include "Runtime/ScctCareerApi.h"
 #include "Runtime/ScctDemoApi.h"
 #include "Runtime/ScctDemoPlayApi.h"
@@ -80,6 +81,7 @@ SCCT_FEATURE_TABLE(FScctContentApi, "ContentExports", ScctContentApiVersion);
 SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
 SCCT_FEATURE_TABLE(FScctDashboardApi, "DashboardExports", ScctDashboardApiVersion);
 SCCT_FEATURE_TABLE(FScctArmouryApi, "ArmouryExports", ScctArmouryApiVersion);
+SCCT_FEATURE_TABLE(FScctCrashApi, "CrashExports", ScctCrashApiVersion);
 SCCT_FEATURE_TABLE(FScctCareerApi, "CareerExports", ScctCareerApiVersion);
 SCCT_FEATURE_TABLE(FScctDemoApi, "DemoExports", ScctDemoApiVersion);
 SCCT_FEATURE_TABLE(FScctDemoPlayApi, "DemoPlayExports", ScctDemoPlayApiVersion);

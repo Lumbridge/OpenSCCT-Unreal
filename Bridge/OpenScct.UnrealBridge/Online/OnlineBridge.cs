@@ -207,6 +207,48 @@ public sealed partial class OnlineBridge : IDisposable
         _visitPassword = string.IsNullOrEmpty(password) ? null : password;
         _error = null;
         _stateOverride = OnlineState.Idle;
+        if (Social.SocialBridge.Existing?.Account is not { } account)
+        {
+            StartVisit(target, password, ticket, preferredTeam, loopbackOnly, hostKey);
+            return;
+        }
+
+        // AccountService.PrepareAppearance: the account's look is asked for first (a signed-in player on a master
+        // that keeps it; anyone else connects at once, inside this call). The visit reads as connecting meanwhile.
+        int serial = ++_prepareSerial;
+        Preparing = true;
+        _stateOverride = OnlineState.Connecting;
+        account.PrepareAppearance(() =>
+        {
+            if (serial != _prepareSerial || !Preparing)
+            {
+                return;
+            }
+
+            Preparing = false;
+            _stateOverride = OnlineState.Idle;
+            try
+            {
+                StartVisit(target, password, ticket, preferredTeam, loopbackOnly, hostKey);
+            }
+            catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+            {
+                FailJoin(e.Message);
+            }
+        });
+        if (Preparing)
+        {
+            Touch();
+        }
+    }
+
+    /// <summary>The visit waits for the account's appearance before it connects (a moment at most): no client yet, the state reads Connecting.</summary>
+    public bool Preparing { get; private set; }
+
+    private int _prepareSerial;
+
+    private void StartVisit(JoinTarget target, string? password, string? ticket, int preferredTeam, bool loopbackOnly, string? hostKey)
+    {
         // Read after the old visit ended, so a content folder set since then is seen.
         PlayCatalog catalog = Catalog;
         var settings = new OnlineClientSettings
@@ -241,6 +283,7 @@ public sealed partial class OnlineBridge : IDisposable
         client.Changed += Touch;
         client.SessionEnding += OnSessionEnding;
         client.MessageReceived += OnMessage;
+        Social.ArmouryLook.LogSent(hostKey is null ? "with the join" : "with the join to this PC's own server");
         Touch();
     }
 
@@ -283,6 +326,14 @@ public sealed partial class OnlineBridge : IDisposable
         // The player's own server goes with the visit to it (OnlineService.EndVisit): a join elsewhere, a failure
         // and a leave all close it. Host() joins its server before it keeps it.
         StopHosting();
+        if (Preparing)
+        {
+            // A join still waiting for the account's appearance is given up.
+            Preparing = false;
+            _prepareSerial++;
+            _stateOverride = OnlineState.Idle;
+        }
+
         if (Client is not { } client)
         {
             return;

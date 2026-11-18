@@ -131,6 +131,7 @@ public sealed partial class HubBridge
         _padRun?.Sent();
         StopRound();
         Client = null;
+        Voice.VoiceBridge.Existing?.EndHub();
         try
         {
             client.Session.Disconnect();
@@ -206,6 +207,12 @@ public sealed partial class HubBridge
 
         if (!trip.Joined)
         {
+            return;
+        }
+
+        if (OnlineBridge.Existing is { Preparing: true })
+        {
+            // The online visit asks the account for its look first (a moment at most): no client yet.
             return;
         }
 
@@ -306,7 +313,7 @@ public sealed partial class HubBridge
             return;
         }
 
-        Connect(_target, _name, _team);
+        Connect(_target, _name, _team, prepare: true);
     }
 
     /// <summary>Ends a trip without going back (the visit is left): the online visit to the match is left too.</summary>
@@ -637,6 +644,11 @@ public sealed partial class HubBridge
     /// <summary>Picks the draft's map (its mode stays when the map plays it, else the map's default mode).</summary>
     public bool SetLaptopMap(string mapId)
     {
+        if (_draft is not null && !string.IsNullOrEmpty(mapId) && StartLaptopDownload(mapId))
+        {
+            return true;
+        }
+
         if (_draft is not { } draft || Catalog.Maps.GetCatalogEntry(mapId) is not { } entry || !entry.PlayableModes.Any())
         {
             return false;

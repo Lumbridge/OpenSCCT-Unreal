@@ -42,6 +42,7 @@ namespace EScctHubPadsFlags
 
 	// FScctHubLaptopMap::Flags
 	constexpr int32 Selected = 1; // the laptop's draft plays this map
+	constexpr int32 Downloadable = 2; // not installed: picking it downloads it (its name says the size)
 }
 
 /** The texts GetText copies. */

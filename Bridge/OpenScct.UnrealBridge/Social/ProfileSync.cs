@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using OpenScct.Net.Discovery;
 
 namespace OpenScct.UnrealBridge.Social;
 
@@ -24,8 +26,19 @@ public static class ProfileSync
 
     public const string UnrealKey = "unreal";
 
-    /// <summary>The record to send: <paramref name="previous"/> (the account's record as last seen, or null) with this client's part replaced.</summary>
-    public static string Build(string? previous, string settingsJson, string controls, string bindings)
+    /// <summary>The Godot client's settings that hold the chosen look and title (its ProfileSync.AppearanceKeys).</summary>
+    private const string SpyLookKey = "cosmetics_spy";
+    private const string MercLookKey = "cosmetics_merc";
+    private const string TitleKey = "title";
+
+    /// <summary>
+    /// The record to send: <paramref name="previous"/> (the account's record as last seen, or null) with this client's
+    /// part replaced. <paramref name="look"/> (a master without revision-checked appearance; null on any other) is
+    /// the chosen cosmetics and title: written into this client's part, and into the Godot client's settings under
+    /// its own names when the record has them, so either client takes the look the other chose. A record without
+    /// Godot settings gets none made: a settings object with three fields would read there as every other setting reset.
+    /// </summary>
+    public static string Build(string? previous, string settingsJson, string controls, string bindings, AccountAppearance? look = null)
     {
         JsonObject record = Parse(previous) ?? new JsonObject();
         if (record["version"] is null)
@@ -43,14 +56,86 @@ public static class ProfileSync
             settings = new JsonObject();
         }
 
-        record[UnrealKey] = new JsonObject
+        var mine = new JsonObject
         {
             ["version"] = UnrealVersion,
             ["settings"] = settings,
             ["controls"] = controls ?? string.Empty,
             ["bindings"] = bindings ?? string.Empty,
         };
+        record[UnrealKey] = mine;
+        if (look is not null)
+        {
+            WriteLook(mine, look);
+            if (record["settings"] is JsonObject godot)
+            {
+                WriteLook(godot, look);
+            }
+        }
+
         return record.ToJsonString();
+    }
+
+    private static void WriteLook(JsonObject into, AccountAppearance look)
+    {
+        into[SpyLookKey] = Ids(look.Spy);
+        into[MercLookKey] = Ids(look.Merc);
+        into[TitleKey] = string.IsNullOrWhiteSpace(look.Title) ? null : JsonValue.Create(look.Title);
+    }
+
+    private static JsonArray Ids(IEnumerable<string> ids)
+    {
+        var array = new JsonArray();
+        foreach (string id in ids)
+        {
+            array.Add(JsonValue.Create(id));
+        }
+
+        return array;
+    }
+
+    /// <summary>
+    /// The look a record carries, or null when it carries none: the Godot client's settings first (that client writes
+    /// only those, and this one writes both alike, so they are never the older of the two), else this client's part.
+    /// </summary>
+    public static AccountAppearance? ReadLook(string? data)
+    {
+        if (Parse(data) is not { } record || (record["version"] is JsonValue v && v.TryGetValue(out int version) && version > Version))
+        {
+            return null;
+        }
+
+        foreach (JsonNode? part in new[] { record["settings"], record[UnrealKey] })
+        {
+            if (part is JsonObject holder && holder.ContainsKey(SpyLookKey) && holder.ContainsKey(MercLookKey))
+            {
+                return new AccountAppearance
+                {
+                    Spy = Strings(holder[SpyLookKey]),
+                    Merc = Strings(holder[MercLookKey]),
+                    Title = Text(holder[TitleKey]) is { Length: > 0 } title ? title : null,
+                };
+            }
+        }
+
+        return null;
+    }
+
+    private static string[] Strings(JsonNode? node)
+    {
+        var list = new List<string>();
+        if (node is JsonArray array)
+        {
+            foreach (JsonNode? item in array)
+            {
+                if (Text(item) is { Length: > 0 } id)
+                {
+                    list.Add(id);
+                }
+            }
+        }
+
+        return [.. list];
     }
 
     /// <summary>What a record from the master holds for this client.</summary>

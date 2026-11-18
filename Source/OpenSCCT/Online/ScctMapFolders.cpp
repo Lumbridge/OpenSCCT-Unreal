@@ -6,6 +6,7 @@
 #include "Misc/Paths.h"
 #include "OpenSCCT.h"
 #include "Runtime/ScctFeatures.h"
+#include "Social/ScctLaunchOptions.h"
 
 namespace
 {
@@ -53,6 +54,12 @@ void ScctMapFolders::Apply()
 		{
 			First.Add(FPaths::ConvertRelativePathToFull(Part.TrimStartAndEnd()));
 		}
+	}
+
+	// The launcher's --svm-maps=<dir>, each one folder.
+	for (const FString& Folder : ScctLaunchOptions::MapRoots())
+	{
+		First.AddUnique(Folder);
 	}
 
 	// The maps a release ships next to the game, as the Godot client's "maps next to the executable".

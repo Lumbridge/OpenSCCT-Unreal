@@ -127,10 +127,11 @@ struct FScctHubHudModel
  * The pad panel (the queue line on glass with its pad's state colour, the note about the last match) reads the match
  * pads' view (Hub/ScctHubPads.h). The activities' clock (top middle), their notices under it and the nearest score
  * board (a panel on the right) read the hub's activities (Hub/ScctHubActivities.h). Not ported here: rank emblems on
- * the name tags, the Armoury (O is logged and ignored), the voice overlay (no voice transport yet).
+ * the name tags, the voice overlay (no voice transport yet). O opens the Armoury over the hub through the in-match
+ * menu (Menu/SScctArmouryOverlay.h); closing it is back in the hub, and a look picked there goes to the hub at once.
  *
  * Unattended switches (for runs with nobody at the keyboard):
- *   -ScctHubOpen=<panel>[@seconds][,...]   open players, chat, travel or emotes that long after the player stands in
+ *   -ScctHubOpen=<panel>[@seconds][,...]   open players, chat, travel, emotes or armoury that long after the player stands in
  *                                          the hub (2 s when no time is given)
  *   -ScctHubChat=<text>[@seconds]          say that line to everyone (4 s after standing in the hub by default)
  * Console (also from -ExecCmds, before the hub is up: it waits):

@@ -325,7 +325,7 @@ void SScctHubLaptopPage::RebuildMaps()
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 0.0f, 4.0f, 3.0f)
 						[
-							LaptopUi::Text(LaptopUi::ToText(bDrawable ? Fixed(Map.Modes, UE_ARRAY_COUNT(Map.Modes)) : FString(TEXT("not imported here"))), 9.0f,
+							LaptopUi::Text(LaptopUi::ToText(bDrawable || (Map.Flags & EScctHubPadsFlags::Downloadable) != 0 ? Fixed(Map.Modes, UE_ARRAY_COUNT(Map.Modes)) : FString(TEXT("not imported here"))), 9.0f,
 								FSlateColor(ScctHudStyle::TextFaint()))
 						]
 					]

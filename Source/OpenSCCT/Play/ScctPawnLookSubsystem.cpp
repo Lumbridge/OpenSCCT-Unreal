@@ -132,8 +132,10 @@ bool UScctPawnLookSubsystem::DoesSupportWorldType(const EWorldType::Type WorldTy
 
 void UScctPawnLookSubsystem::RegisterSettings()
 {
+	// The two switches are on the Online page (what other players see of the player, and the player of them). Their
+	// keys keep the "Display." they were first saved under, so a choice made before the move is still the player's.
 	FScctSettingDesc Desc;
-	Desc.Page = TEXT("Display");
+	Desc.Page = TEXT("Online");
 	Desc.Group = NSLOCTEXT("OpenSCCT", "CosmeticsGroup", "Cosmetics");
 	Desc.Type = EScctSettingType::Bool;
 	Desc.Default = TEXT("false");
@@ -142,18 +144,20 @@ void UScctPawnLookSubsystem::RegisterSettings()
 	Desc.Label = NSLOCTEXT("OpenSCCT", "HideMyCosmetics", "Hide my cosmetics");
 	Desc.Tooltip = NSLOCTEXT("OpenSCCT", "HideMyCosmeticsTip",
 		"Your camo, tint and light colour are shown on your own screen only: other players see you in the retail look.");
-	Desc.Order = 80;
+	Desc.Order = 700;
 	FScctSettings::Register(Desc);
 
 	Desc.Key = HideOthersSetting;
 	Desc.Label = NSLOCTEXT("OpenSCCT", "HideOthersCosmetics", "Hide others' cosmetics");
 	Desc.Tooltip = NSLOCTEXT("OpenSCCT", "HideOthersCosmeticsTip",
 		"Every other player is drawn in the retail look, whatever camo, tint or light colour they wear. A map's outfits still show.");
-	Desc.Order = 81;
+	Desc.Order = 701;
 	FScctSettings::Register(Desc);
 
 	// The look shown on the player's own pawn while "Hide my cosmetics" keeps it off the servers (the Armoury's
-	// choice, as names "woodland+blue" or "hex:..."): set by code, not shown on the page.
+	// choice, as names "woodland+blue" or "hex:..."): set by code, not shown on the page, and this PC's own (the
+	// Display page is not sent to the account; the chosen cosmetics follow it by their own sync).
+	Desc.Page = TEXT("Display");
 	Desc.Key = OwnLookSetting;
 	Desc.Label = NSLOCTEXT("OpenSCCT", "OwnCosmeticLook", "Own cosmetic look");
 	Desc.Tooltip = FText::GetEmpty();

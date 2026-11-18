@@ -16,6 +16,8 @@
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 #include "Settings/ScctSettings.h"
+#include "Demo/ScctDemoPlayback.h"
+#include "Social/ScctCrashContext.h"
 #include "Social/SScctSocialToast.h"
 
 const TCHAR* const UScctSocialSubsystem::DiscordStatusSetting = TEXT("Online.DiscordStatus");
@@ -403,6 +405,18 @@ void UScctSocialSubsystem::SendPresence()
 	{
 		P.Activity = static_cast<int32>(EScctSocialActivity::Menus);
 		P.Page = static_cast<int32>(IsFrontEndOpen() ? FrontEndPage : EScctSocialPage::Other);
+	}
+
+	// Crash reports say the same: the map, the mode, the side and where.
+	{
+		const bool bDemo = World != nullptr && World->URL.HasOption(UScctDemoPlayback::DemoOption);
+		const FString CrashMap = !Map.IsEmpty() || !bDemo ? Map : FPackageName::GetShortName(UWorld::RemovePIEPrefix(World->GetOutermost()->GetName()));
+		const FString Where = bDemo ? FString(TEXT("demo"))
+			: P.Activity == static_cast<int32>(EScctSocialActivity::Online) ? TEXT("online server ") + Server
+			: P.Activity == static_cast<int32>(EScctSocialActivity::Hub) ? TEXT("hub ") + Server
+			: P.Activity == static_cast<int32>(EScctSocialActivity::Offline) ? FString(TEXT("offline"))
+			: FString();
+		ScctCrashContext::Update(CrashMap, P.Mode, P.Side, Where);
 	}
 
 	Api->SetPresence(&P, *Server, *Map, *JoinValue);

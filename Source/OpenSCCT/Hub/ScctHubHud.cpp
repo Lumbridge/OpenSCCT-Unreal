@@ -10,6 +10,7 @@
 #include "Hub/ScctHubActivities.h"
 #include "Hub/ScctHubPads.h"
 #include "Hub/ScctHubSubsystem.h"
+#include "Menu/ScctMatchMenuWidget.h"
 #include "Misc/App.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -480,7 +481,25 @@ void FScctHubHud::RunCommand(const FString& Command)
 	}
 	else if (Command == TEXT("HubArmoury"))
 	{
-		UE_LOG(LogOpenSCCT, Log, TEXT("ScctHubHud: the Armoury is not in this client yet"));
+		// HubHud.OpenArmoury: the Armoury over the hub (not while the player list is up). The in-match menu holds it
+		// (Menu/SScctArmouryOverlay.h): it takes the keys and the mouse, and closing it is back in the hub. A look
+		// picked there goes to the hub at once (the bridge's account service sends it).
+		if (Model->bPlayerList)
+		{
+			return;
+		}
+		const AScctPlayerController* Player = CommandSource.Get();
+		const UWorld* HubWorld = Player != nullptr ? Player->GetWorld() : nullptr;
+		bool bOpened = false;
+		for (TObjectIterator<UScctMatchMenuWidget> It; It && HubWorld != nullptr; ++It)
+		{
+			if (It->GetWorld() == HubWorld && It->IsInViewport())
+			{
+				bOpened = It->ShowArmoury();
+				break;
+			}
+		}
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctHubHud: the Armoury %s"), bOpened ? TEXT("is open over the hub") : TEXT("could not open (no in-match menu in this level)"));
 	}
 	else if (Command.StartsWith(TEXT("HubEmote")))
 	{
@@ -762,6 +781,7 @@ void FScctHubHud::RunUnattended(float DeltaSeconds)
 			else if (Panel == TEXT("chat")) { OpenComposer(EScctHubChatChannel::Everyone); }
 			else if (Panel == TEXT("travel")) { OpenTravel(); }
 			else if (Panel == TEXT("emotes") && !Model->bEmoteMenu) { ToggleEmoteMenu(); }
+			else if (Panel == TEXT("armoury")) { RunCommand(TEXT("HubArmoury")); }
 			continue;
 		}
 
