@@ -13,7 +13,7 @@ cook, stage and archive the game (RunUAT BuildCookRun) and writes the release fo
     OpenSCCTUnreal\Binaries\Win64\     the game (OpenSCCTUnreal-Win64-Shipping.exe)
     OpenSCCTUnreal\Binaries\Bridge\    the bridge and OpenSCCT's assemblies
     OpenSCCTUnreal\Binaries\DotNet\    the private .NET runtime (players need none installed)
-    OpenSCCTUnreal\Content\Paks\       the cooked project content
+    OpenSCCTUnreal\Content\Paks\       the cooked project content and enhanced maps
     Engine\                            the engine's staged files
     Prerequisites\vc_redist.x64.exe    the Visual C++ runtime installer
     README.txt                         what it is, the notices
@@ -38,8 +38,11 @@ release also gets a patch from that release's version of it (Tools/ReleaseDelta,
 a few MB instead of 66, the cooked content to under 1 MB for a handful of changed assets instead of 494. Launchers that
 do not know patches ignore them and take the blob.
 
-Nothing under /Game/Imported is cooked (DirectoriesToNeverCook in Config/DefaultGame.ini): the original game's content
-is never published. The script fails when any of it reaches the cook. docs/RELEASING.md has the whole procedure.
+A release bundles the enhanced maps: every level imported on this machine into Content/Imported/Maps/<Map>/<Map>.umap
+is cooked with what it refers to (DirectoriesToAlwaysCook in Config/DefaultGame.ini). The script fails when
+Content/Imported/Maps holds no map (run the import first) or when any of them is missing from the staged files, and
+lists them in README.txt, version.json (bundledMaps) and notes.md. Content/Imported is git-ignored and never
+committed; the provenance check covers every other asset. docs/RELEASING.md has the whole procedure.
 
 .PARAMETER Version
 The version to package. Default: ProjectVersion in Config/DefaultGame.ini, which it must match. A pre-release adds a
@@ -175,6 +178,18 @@ if ($provenance.Count -gt 0) {
     Write-Host ('No source asset comes from converted original content ({0:0.0} s).' -f $provenanceWatch.Elapsed.TotalSeconds)
 }
 if ($CheckContentOnly) { return }
+
+# --- Bundled maps --------------------------------------------------------------------------------------------------
+# The enhanced maps: every level the release machine imported into Content/Imported/Maps/<Map>/<Map>.umap is cooked
+# (DirectoriesToAlwaysCook in Config/DefaultGame.ini) and shipped. Content/Imported is git-ignored local import output:
+# without it a release would ship no maps at all.
+$importedMaps = Join-Path $repo 'Content/Imported/Maps'
+$bundledMaps = @(Get-ChildItem -LiteralPath $importedMaps -Directory -ErrorAction SilentlyContinue |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "$($_.Name).umap") } | ForEach-Object Name | Sort-Object)
+if ($bundledMaps.Count -eq 0) {
+    Fail "no imported maps in $importedMaps (no <Map>\<Map>.umap): run the map import on this machine first, a release bundles the enhanced maps"
+}
+Write-Host "Bundling $($bundledMaps.Count) enhanced maps: $($bundledMaps -join ', ')"
 
 # --- Version -------------------------------------------------------------------------------------------------------
 $gameIni = Get-Content -LiteralPath (Join-Path $repo 'Config/DefaultGame.ini') -Raw
@@ -357,10 +372,15 @@ try {
     # --- Cook, stage, archive --------------------------------------------------------------------------------------
     Write-Host "Cooking and staging... this takes a while; the log is $Out\uat.log"
     $uatArgs = @(
-        'BuildCookRun', "-project=$project", '-noP4', '-utf8output', '-unattended',
+        # -WaitForUATMutex: one AutomationTool runs at a time per engine; wait for another checkout's instead of failing.
+        '-WaitForUATMutex', 'BuildCookRun', "-project=$project", '-noP4', '-utf8output', '-unattended',
         '-platform=Win64', "-clientconfig=$Configuration", "-target=$target", '-nocompileeditor',
         '-cook', '-stage', '-pak', '-iostore', '-compressed', '-nodebuginfo',
-        '-archive', "-archivedirectory=$archive"
+        '-archive', "-archivedirectory=$archive",
+        # DirectoriesToAlwaysCook finds no .umap, so the levels are named here; a map list on the command line replaces
+        # MapsToCook in Config/DefaultGame.ini, hence the front end and the runtime level (which builds every map
+        # without an imported level from the player's packs) too.
+        ('-MapsToCook=' + ((@('/Game/OpenSCCT/Maps/L_FrontEnd', '/Game/OpenSCCT/RuntimeMap/L_RuntimeMap') + @($bundledMaps | ForEach-Object { "/Game/Imported/Maps/$_/$_" })) -join '+'))
     )
     if ($Configuration -eq 'Shipping') { $uatArgs += '-distribution' }
     & $uat @uatArgs *> (Join-Path $Out 'uat.log')
@@ -375,14 +395,18 @@ $staged = Join-Path $archive 'Windows'
 if (-not (Test-Path -LiteralPath (Join-Path $staged $starter))) { $staged = $archive }
 if (-not (Test-Path -LiteralPath (Join-Path $staged $starter))) { Fail "the archive has no $starter (see $Out\uat.log)" }
 
-# The original game's content must never be in a release. The cook writes into the Zen store, not loose files, so the
-# check reads staging's own list of what went into the paks (one line per file, with its staged path).
+# Every imported map must be in the release. The cook writes into the Zen store, not loose files, so the check reads
+# staging's own list of what went into the paks (one line per file, with its staged path).
 $ufsManifest = Join-Path $staged 'Manifest_UFSFiles_Win64.txt'
 if (-not (Test-Path -LiteralPath $ufsManifest)) { Fail "staging wrote no ${ufsManifest}: cannot check what was cooked" }
-$imported = @(Select-String -LiteralPath $ufsManifest -Pattern '[\\/]Content[\\/]Imported[\\/]' | ForEach-Object Line)
-if ($imported.Count -gt 0) {
-    Fail ("imported content was cooked ($($imported.Count) files, see $ufsManifest); check DirectoriesToNeverCook and what refers to /Game/Imported:`n  " + (($imported | Select-Object -First 10) -join "`n  "))
+$stagedFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($l in [IO.File]::ReadLines($ufsManifest)) { [void]$stagedFiles.Add(($l -split "`t")[0].Replace('\', '/')) }
+$unbundled = @($bundledMaps | Where-Object { -not $stagedFiles.Contains("$target/Content/Imported/Maps/$_/$_.umap") })
+if ($unbundled.Count -gt 0) {
+    Fail "imported maps missing from the cook (see $ufsManifest; check DirectoriesToAlwaysCook=/Game/Imported/Maps in Config/DefaultGame.ini and $Out\uat.log): $($unbundled -join ', ')"
 }
+$importedCount = @($stagedFiles | Where-Object { $_ -like "$target/Content/Imported/*" }).Count
+Write-Host "Staged $($bundledMaps.Count) enhanced maps ($importedCount files from /Game/Imported)."
 # The map packs (Tools/Cook/Cook-MapPaks.ps1, docs/MAP-PAKS.md) are downloaded by the game, never shipped with it: a
 # release cook is not chunked (Config/Custom/MapPaks is read only with -CustomConfig=MapPaks), so the only container is
 # pakchunk0. Any other chunk means the map pak settings reached this cook.
@@ -412,8 +436,11 @@ $readme = @(
     $title, ('=' * $title.Length), '',
     'OpenSCCT on Unreal Engine 5: the OpenSCCT simulation and servers with an Unreal presentation.',
     'Install and start it from the OpenSCCT launcher, or run OpenSCCTUnreal.exe.', '',
-    'The maps, characters and other content of the original game are not included. They come from your own copy of',
-    'the game, converted by OpenSCCT.', '',
+    'This release includes the enhanced versions of these maps, converted from the original game:',
+    ($bundledMaps -join ', '), '',
+    'Everything else of the original game (the other maps, the characters, sounds and other content) is not included:',
+    'it comes from your own copy of the game, converted by OpenSCCT (the launcher''s content packs), and the game still',
+    'needs it.', '',
     'If the game does not start, install the Visual C++ runtime: Prerequisites\vc_redist.x64.exe.',
     'It needs a DirectX 12 graphics card with Shader Model 6.', '',
     'OpenSCCT is a fan project. It is not affiliated with or endorsed by Ubisoft. Splinter Cell is a trademark of',
@@ -465,7 +492,8 @@ $info = [ordered]@{
     openscctCommit  = $openScctCommit
     executable      = $starter
     gameExecutable  = "$target/Binaries/Win64/$gameExe"
-    built           = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    bundledMaps     = $bundledMaps
+    built          = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     entries         = $entries
     files           = $files
 }
@@ -573,13 +601,16 @@ if (Test-Path -LiteralPath $packPath) {
 # Patches: for each file of 1 MB or more that a base release has at the same path with other contents, a binary patch
 # from that version of it, kept when it is under half the gzipped file. Named by both hashes, so the same patch is
 # never made or uploaded twice. Every patch is applied once here and checked against the file's SHA-256.
+# Files where either version is over 256 MB get no patch (the matcher's suffix array needs several GB and its pass runs
+# for tens of minutes on the cooked content's .ucas once maps are bundled); they update as whole changed files.
 $patchMin = 1MB
+$patchMax = 256MB
 $jobs = @{}
 foreach ($e in $listEntries) {
-    if ($e.size -lt $patchMin) { continue }
+    if ($e.size -lt $patchMin -or $e.size -gt $patchMax) { continue }
     foreach ($b in $bases) {
         $old = $b.Files | Where-Object path -eq $e.path | Select-Object -First 1
-        if (-not $old -or $old.sha256 -eq $e.sha256) { continue }
+        if (-not $old -or $old.sha256 -eq $e.sha256 -or $old.size -gt $patchMax) { continue }
         $name = "$($old.sha256)-$($e.sha256).osdiff"
         if (-not $jobs.ContainsKey($name)) {
             $jobs[$name] = [pscustomobject]@{ Name = $name; Path = $e.path; From = (Join-Path $b.Folder $old.path); FromSha = $old.sha256
@@ -637,7 +668,9 @@ foreach ($b in $bases) {
 $previous = git -C $repo describe --tags --abbrev=0 --match 'v*' HEAD 2>$null
 $log = if ($LASTEXITCODE -eq 0 -and $previous) { git -C $repo log --no-merges "$previous..HEAD" --format='- %s' } else { @('- First release.') }
 $notes = @($title, '', "Built against OpenSCCT $openScctVersion ($openScctDescribe): it joins servers of that version.", '',
-    '## Changes', '') + $log + @('', '## Download', '',
+    '## Changes', '') + $log + @('', '## Maps', '',
+    "Includes the enhanced versions of these $($bundledMaps.Count) maps, converted from the original game: $($bundledMaps -join ', ').",
+    'Everything else still comes from your own converted content (the launcher''s content packs).', '', '## Download', '',
     'Install it from the OpenSCCT launcher. Or download the zip, extract it and run OpenSCCTUnreal.exe.')
 Write-Text (Join-Path $Out 'notes.md') ($notes -join "`n")
 

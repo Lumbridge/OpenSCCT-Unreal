@@ -572,7 +572,12 @@ void ScctCrosshair::RegisterOptions()
 	Code.Order = Order++;
 	FScctSettings::Register(Code);
 
-	FScctSettings::OnChanged().AddStatic(&HandleCrosshairSettingChanged);
+	// Once a process: this runs each time a level's HUD starts, and a second binding would read a pasted code twice.
+	static FDelegateHandle CrosshairChangedHandle;
+	if (!CrosshairChangedHandle.IsValid())
+	{
+		CrosshairChangedHandle = FScctSettings::OnChanged().AddStatic(&HandleCrosshairSettingChanged);
+	}
 
 	// The code shown is the stored crosshair's (before anything is forced for the run).
 	const FString StoredCode = ToShareCode(Read());

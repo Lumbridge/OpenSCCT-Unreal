@@ -12,6 +12,7 @@
 #include "Social/ScctDashboardSubsystem.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
@@ -436,13 +437,32 @@ namespace ScctDashboard
 				.Visibility_Lambda([SignedIn, Shown] { return Shown(SignedIn() && ScctDashFlag(EScctDashboardFlags::HasUnlock)); })
 				.Text(ScctDashAttr(EScctDashboardText::NextUnlock))
 			]
-			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(0.0f, 12.0f, 0.0f, 0.0f)
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Fill).Padding(0.0f, 12.0f, 0.0f, 0.0f)
 			[
-				SNew(SScctButton)
-				.Look(EScctButtonLook::Chip)
-				.Text_Lambda([SignedIn] { return FText::FromString(SignedIn() ? TEXT("MANAGE ACCOUNT") : TEXT("SIGN IN / ACCOUNT")); })
-				.Description(FText::FromString(TEXT("Sign in or out, claim or change your name, your rank, career, prestige and title.")))
-				.OnPressed(FSimpleDelegate::CreateLambda([Host] { Host.Open(TEXT("account")); }))
+				// The chips wrap across the card's width: the card is narrower than the four of them.
+				SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.0f, 8.0f))
+				+ SWrapBox::Slot()
+				[
+					SNew(SScctButton)
+					.Look(EScctButtonLook::Chip)
+					.Text_Lambda([SignedIn] { return FText::FromString(SignedIn() ? TEXT("MANAGE ACCOUNT") : TEXT("SIGN IN / ACCOUNT")); })
+					.Description(FText::FromString(TEXT("Sign in or out, claim or change your name, your rank, career, prestige and title.")))
+					.OnPressed(FSimpleDelegate::CreateLambda([Host] { Host.Open(TEXT("account")); }))
+				]
+				+ SWrapBox::Slot()
+				[
+					ScctDashChip(TEXT("Match history"), TEXT("Every round you played, on this PC and on your account, with its scoreboard."), [Host] { Host.Open(TEXT("history")); })
+				]
+				+ SWrapBox::Slot()
+				[
+					ScctDashChip(TEXT("Stats"), TEXT("Your career totals by category."), [Host] { Host.Open(TEXT("stats")); })
+				]
+				+ SWrapBox::Slot()
+				[
+					// The next unlock opens the achievement it names, as the Godot next-unlock card does.
+					ScctDashChip(TEXT("Achievements"), TEXT("Every achievement with your progress and what it unlocks."),
+						[Host] { Host.Open(ScctDashFlag(EScctDashboardFlags::HasUnlock) ? TEXT("achievements/next") : TEXT("achievements")); })
+				]
 			]);
 	}
 

@@ -20,6 +20,9 @@
 #include "Windows/AllowWindowsPlatformTypes.h"
 #include <shobjidl.h>
 #include "Windows/HideWindowsPlatformTypes.h"
+// The Windows headers rename DialogBox to DialogBoxW, which breaks the menu kit's DialogBox member in a file that shares
+// this unity translation unit.
+#undef DialogBox
 #endif
 
 namespace

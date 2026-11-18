@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Hud/ScctChatSubsystem.h"
+#include "Hud/ScctHudLayout.h"
 #include "Hud/ScctHudModel.h"
 #include "Hud/ScctHudWidget.h"
 #include "Hud/ScctTeamPingSubsystem.h"
@@ -68,6 +69,7 @@ void UScctHudSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	InitBinoculars();
 	InitDetails();
 	ScctCrosshair::RegisterOptions();
+	ScctHudLayout::RegisterOptions();
 
 	// -ScctHudCommands="3 SwitchHeadset 1;9 Scoreboard 1"
 	FString Commands;

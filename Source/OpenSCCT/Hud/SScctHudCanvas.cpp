@@ -1,6 +1,7 @@
 #include "Hud/SScctHudCanvas.h"
 
 #include "Hud/ScctHudElements.h"
+#include "Hud/ScctHudLayout.h"
 
 void SScctHudCanvas::Construct(const FArguments& InArgs)
 {
@@ -44,24 +45,32 @@ int32 SScctHudCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 	}
 	else
 	{
-		PaintRadar(Painter, *Model);
-		PaintObjectives(Painter, *Model);
-		PaintRound(Painter, *Model);
-		PaintFeed(Painter, *Model);
-		PaintHeadlines(Painter, *Model);
-		PaintTutorial(Painter, *Model);
-		PaintLog(Painter, *Model);
-		PaintStatus(Painter, *Model);
-		PaintEquipment(Painter, *Model);
-		PaintBackpack(Painter, *Model);
-		PaintPrompt(Painter, *Model);
-		PaintGadgetMenu(Painter, *Model);
-		PaintCoopIcon(Painter, *Model);
-		PaintSpectator(Painter, *Model);
-		PaintRespawnWeapon(Painter, *Model);
-		PaintBanner(Painter, *Model);
-		PaintScoreboard(Painter, *Model);
-		PaintTelemetry(Painter, *Model);
+		// Each group of the player's HUD layout (Hud/ScctHudLayout.h) is painted moved, scaled and faded as the side's
+		// layout says; the pages and banners over the HUD stay where they are.
+		const FScctHudModel& M = *Model;
+		const int32 Side = M.LocalTeam;
+		auto Group = [&Painter, Side](EScctHudGroup Id, TFunctionRef<void()> Paint)
+		{
+			const ScctHudLayout::FScope Scope(Painter, Id, Side);
+			if (Scope.Draws())
+			{
+				Paint();
+			}
+		};
+		Group(EScctHudGroup::Radar, [&] { PaintRadar(Painter, M); });
+		Group(EScctHudGroup::Objectives, [&] { PaintObjectives(Painter, M); });
+		Group(EScctHudGroup::Round, [&] { PaintRound(Painter, M); PaintHeadlines(Painter, M); });
+		Group(EScctHudGroup::Feed, [&] { PaintFeed(Painter, M); });
+		PaintTutorial(Painter, M);
+		Group(EScctHudGroup::Log, [&] { PaintLog(Painter, M); });
+		Group(EScctHudGroup::Status, [&] { PaintStatus(Painter, M); PaintCoopIcon(Painter, M); });
+		Group(EScctHudGroup::Equipment, [&] { PaintEquipment(Painter, M); PaintBackpack(Painter, M); PaintRespawnWeapon(Painter, M); });
+		Group(EScctHudGroup::Prompt, [&] { PaintPrompt(Painter, M); });
+		PaintGadgetMenu(Painter, M);
+		PaintSpectator(Painter, M);
+		PaintBanner(Painter, M);
+		PaintScoreboard(Painter, M);
+		Group(EScctHudGroup::Telemetry, [&] { PaintTelemetry(Painter, M); });
 	}
 	return Painter.GetLayer();
 }
