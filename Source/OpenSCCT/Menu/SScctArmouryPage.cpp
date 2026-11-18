@@ -1,15 +1,23 @@
 // The Armoury page (the Godot client's ArmouryScreen and AppearanceSyncPanel over Social/ScctArmourySubsystem.h): the
-// spy's and the mercenary's cosmetics by slot (suit or armour, light colour, pistol or each gun) with a colour swatch
-// per item, which of them the account unlocked and by what, the kit equipped on each slot, the two cosmetics options,
-// and the appearance sync's status with its two conflict choices. Picking an unlocked item equips it: the bridge
-// saves it, sends it to the account and to the lobby or hub the player is in.
+// spy's and the mercenary's cosmetics by slot (suit or armour, light colour, pistol or each gun) with a picture per
+// item (the content's flat picture of its camo or tint, a colour swatch where there is none), which of them the
+// account unlocked and by what, a turning 3D preview of the slot (Menu/SScctArmouryPreview.h: the character for the
+// suit and the light, the gun for a gun slot) wearing the kit, the kit equipped on each slot, the two cosmetics
+// options, and the appearance sync's status with its two conflict choices. Pointing at an item (the mouse over it, or
+// the focus on it) tries it on the preview without equipping it; pointing away shows the equipped look again. Picking
+// an unlocked item equips it: the bridge saves it, sends it to the account and to the lobby or hub the player is in.
 
 #include "Menu/ScctCareerPages.h"
 
 #include "Menu/ScctMenuSubsystem.h"
+#include "Menu/SScctArmouryPreview.h"
+#include "Runtime/ScctArmouryPreviewApi.h"
 #include "Settings/ScctSettings.h"
 #include "Social/ScctArmourySubsystem.h"
 #include "Widgets/Colors/SColorBlock.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/SOverlay.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SWrapBox.h"
 
@@ -27,6 +35,16 @@ namespace
 			+ SOverlay::Slot()[ SNew(SColorBlock).Color(UScctAccountSubsystem::ToColour(Rgb2)) ]
 			+ SOverlay::Slot().Padding(Size * 0.22f)[ SNew(SColorBlock).Color(UScctAccountSubsystem::ToColour(Rgb)) ]
 		];
+	}
+
+	/** An item's flat picture where the content has one, else its swatch. */
+	TSharedRef<SWidget> ArmouryPicture(const FString& Id, int32 Rgb, int32 Rgb2, float Size)
+	{
+		if (const FSlateBrush* Brush = ScctArmouryThumbs::For(Id))
+		{
+			return SNew(SBox).WidthOverride(Size).HeightOverride(Size)[ SNew(SImage).Image(Brush).DesiredSizeOverride(FVector2D(Size, Size)) ];
+		}
+		return ArmourySwatch(Rgb, Rgb2, Size);
 	}
 
 	class SScctArmouryPage : public SScctMenuPage
@@ -134,7 +152,45 @@ namespace
 						]
 						+ SHorizontalBox::Slot().FillWidth(1.0f)
 						[
-							SNew(SScrollBox) + SScrollBox::Slot()[ SAssignNew(Kit, SBox) ]
+							SNew(SScrollBox)
+							+ SScrollBox::Slot().Padding(0.0f, 0.0f, 0.0f, 10.0f)
+							[
+								ScctUi::Card(TEXT("Preview"),
+									SNew(SVerticalBox)
+									+ SVerticalBox::Slot().AutoHeight()
+									[
+										SNew(SBox).HeightOverride(330.0f)
+										[
+											SNew(SOverlay)
+											+ SOverlay::Slot()[ SNew(SColorBlock).Color(FLinearColor(0.0f, 0.0f, 0.0f, 1.0f)) ]
+											+ SOverlay::Slot()[ SAssignNew(Preview, SScctArmouryPreview) ]
+											+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
+											[
+												// Without the imported models: the item's flat picture.
+												SNew(SBox).WidthOverride(160.0f).HeightOverride(160.0f)
+												.Visibility_Lambda([this] { return !Preview->HasModel() && ScctArmouryThumbs::For(PreviewItem) != nullptr ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
+												[
+													SNew(SImage).DesiredSizeOverride(FVector2D(160.0, 160.0))
+													.Image_Lambda([this] { return ScctArmouryThumbs::For(PreviewItem); })
+												]
+											]
+											+ SOverlay::Slot().HAlign(HAlign_Fill).VAlign(VAlign_Bottom).Padding(14.0f)
+											[
+												SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextFaint()).AutoWrapText(true).Justification(ETextJustify::Center)
+												.Text(FText::FromString(TEXT("The 3D preview needs the imported character and gun models.")))
+												.Visibility_Lambda([this] { return Preview->HasModel() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; })
+											]
+										]
+									]
+									+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)
+									[
+										SNew(STextBlock).Font(ScctUi::Small()).AutoWrapText(true)
+										.ColorAndOpacity_Lambda([this] { return FSlateColor(bTrying ? ScctUi::Accent() : ScctHudStyle::TextDim()); })
+										.Text_Lambda([this] { return FText::FromString(PreviewCaption); })
+									],
+									FMargin(20.0f, 14.0f))
+							]
+							+ SScrollBox::Slot()[ SAssignNew(Kit, SBox) ]
 						]
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 0.0f)[ Actions ]
@@ -143,6 +199,8 @@ namespace
 			DefaultFocus = First;
 			RebuildSide();
 			RegisterActiveTimer(0.2f, FWidgetActiveTimerDelegate::CreateSP(this, &SScctArmouryPage::Watch));
+			RegisterActiveTimer(0.05f, FWidgetActiveTimerDelegate::CreateSP(this, &SScctArmouryPage::WatchPointed));
+			UpdatePreview();
 		}
 
 		virtual FString GetTitle() const override { return TEXT("Armoury"); }
@@ -212,6 +270,57 @@ namespace
 			return EActiveTimerReturnType::Continue;
 		}
 
+		EActiveTimerReturnType WatchPointed(double, float)
+		{
+			UpdatePreview();
+			return EActiveTimerReturnType::Continue;
+		}
+
+		/**
+		 * What the preview wears: the equipped kit, with the item pointed at (the mouse over its row, else the focus on
+		 * it) in place of the slot's own. The stage does nothing while that stays the same.
+		 */
+		void UpdatePreview()
+		{
+			if (!Preview.IsValid())
+			{
+				return;
+			}
+			bool bPointed = false;
+			FString Pointed;
+			for (int32 Pass = 0; Pass < 2 && !bPointed; ++Pass)
+			{
+				for (const TPair<TWeakPtr<SWidget>, FString>& Row : RowButtons)
+				{
+					const TSharedPtr<SWidget> Button = Row.Key.Pin();
+					if (Button.IsValid() && (Pass == 0 ? Button->IsHovered() : Button->HasAnyUserFocus().IsSet()))
+					{
+						bPointed = true;
+						Pointed = Row.Value;
+						break;
+					}
+				}
+			}
+
+			const FString Worn = Equipped.FindRef(Slot);
+			const FString Shown = bPointed ? Pointed : Worn;
+			const bool bCharacter = Slot == EScctCosmeticSlot::Body || Slot == EScctCosmeticSlot::Light;
+			Preview->Show(Side, Slot,
+				!bCharacter || Slot == EScctCosmeticSlot::Body ? Shown : Equipped.FindRef(EScctCosmeticSlot::Body),
+				Slot == EScctCosmeticSlot::Light ? Shown : Equipped.FindRef(EScctCosmeticSlot::Light));
+
+			if (Shown != PreviewItem || (bPointed && Shown != Worn) != bTrying || PreviewCaption.IsEmpty())
+			{
+				PreviewItem = Shown;
+				bTrying = bPointed && Shown != Worn;
+				const FScctArmouryRow* Row = Rows.IsValid() ? Rows->FindByPredicate([&Shown](const FScctArmouryRow& R) { return R.Id == Shown; }) : nullptr;
+				const FString Name = Row != nullptr ? Row->Name.ToUpper() : FString(TEXT("RETAIL"));
+				PreviewCaption = bTrying
+					? FString::Printf(TEXT("TRYING ON: %s%s  ·  not equipped"), *Name, Row != nullptr && !Row->IsUnlocked() ? TEXT("  ·  LOCKED") : TEXT(""))
+					: FString::Printf(TEXT("EQUIPPED: %s  ·  point at an item to try it on, drag to turn"), *Name);
+			}
+		}
+
 		/** The slot chips of the side, then the list. */
 		void RebuildSide()
 		{
@@ -244,6 +353,8 @@ namespace
 			UScctArmourySubsystem* Armoury = UScctArmourySubsystem::GetCurrent();
 			const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
 			Rows = MakeShared<TArray<FScctArmouryRow>>(Armoury != nullptr ? Armoury->ItemsOf(Side, Slot) : TArray<FScctArmouryRow>());
+			RowButtons.Reset();
+			PreviewCaption.Reset();
 			if (Armoury == nullptr || !Armoury->IsReady())
 			{
 				Box->AddSlot().AutoHeight()[ ScctCareerUi::Line(TEXT("The Armoury is starting…"), ScctUi::Body(), ScctHudStyle::TextDim()) ];
@@ -256,8 +367,9 @@ namespace
 
 			const TSharedPtr<TArray<FScctArmouryRow>> Shared = Rows;
 			const int32 InSide = Side, InSlot = Slot;
-			const auto Row = [&Box](const TSharedRef<SWidget>& Swatch, const TSharedRef<SWidget>& Button)
+			const auto Row = [this, &Box](const TSharedRef<SWidget>& Swatch, const TSharedRef<SWidget>& Button, const FString& Id)
 			{
+				RowButtons.Emplace(Button, Id);
 				Box->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
 				[
 					SNew(SHorizontalBox)
@@ -271,11 +383,11 @@ namespace
 				.Text_Lambda([NoneChosen] { return FText::FromString(NoneChosen() ? TEXT("RETAIL  ·  EQUIPPED") : TEXT("RETAIL")); })
 				.Selected_Lambda(NoneChosen)
 				.Description(FText::FromString(TEXT("The original look.")))
-				.OnPressed(FSimpleDelegate::CreateLambda([this, InSide, InSlot] { Pick(InSide, InSlot, FString()); })));
+				.OnPressed(FSimpleDelegate::CreateLambda([this, InSide, InSlot] { Pick(InSide, InSlot, FString()); })), FString());
 			for (int32 Index = 0; Index < Shared->Num(); ++Index)
 			{
 				const FScctArmouryRow& Item = (*Shared)[Index];
-				Row(ArmourySwatch(Item.Item.Rgb, Item.Item.Rgb2, 40.0f),
+				Row(ArmouryPicture(Item.Id, Item.Item.Rgb, Item.Item.Rgb2, 40.0f),
 					SNew(SScctButton).Look(EScctButtonLook::Secondary).FillWidth(true)
 					.Text_Lambda([Shared, Index]
 					{
@@ -291,7 +403,7 @@ namespace
 					})
 					.Selected_Lambda([Shared, Index] { return (*Shared)[Index].IsChosen(); })
 					.Description(FText::FromString(Item.Tip))
-					.OnPressed(FSimpleDelegate::CreateLambda([this, InSide, InSlot, Id = Item.Id] { Pick(InSide, InSlot, Id); })));
+					.OnPressed(FSimpleDelegate::CreateLambda([this, InSide, InSlot, Id = Item.Id] { Pick(InSide, InSlot, Id); })), Item.Id);
 			}
 			List->SetContent(ScctUi::Card(Armoury->GetText(EScctArmouryText::SlotName, Side, Slot), Box, FMargin(20.0f, 14.0f)));
 			Refresh();
@@ -351,17 +463,19 @@ namespace
 				: FString::Printf(TEXT("%d / %d looks available for this slot.%s%s"), Owned + 1, (Rows.IsValid() ? Rows->Num() : 0) + 1, Sync.IsEmpty() ? TEXT("") : TEXT("  "), *Sync);
 
 			// The kit: what is equipped on every slot of the side.
-			const TSharedRef<SVerticalBox> Equipped = SNew(SVerticalBox);
+			const TSharedRef<SVerticalBox> KitBox = SNew(SVerticalBox);
+			Equipped.Reset();
 			for (const int32 Each : Slots)
 			{
 				const TArray<FScctArmouryRow> Items = Armoury->ItemsOf(Side, Each);
 				const FScctArmouryRow* Chosen = Items.FindByPredicate([](const FScctArmouryRow& R) { return R.IsChosen(); });
-				Equipped->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
+				Equipped.Add(Each, Chosen != nullptr ? Chosen->Id : FString());
+				KitBox->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
 				[
 					SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 10.0f, 0.0f)
 					[
-						Chosen != nullptr ? ArmourySwatch(Chosen->Item.Rgb, Chosen->Item.Rgb2, 26.0f) : ArmourySwatch(0x6f7a72, 0x3a423d, 26.0f)
+						Chosen != nullptr ? ArmouryPicture(Chosen->Id, Chosen->Item.Rgb, Chosen->Item.Rgb2, 26.0f) : ArmourySwatch(0x6f7a72, 0x3a423d, 26.0f)
 					]
 					+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
 					[
@@ -369,13 +483,15 @@ namespace
 					]
 				];
 			}
-			Equipped->AddSlot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
+			KitBox->AddSlot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
 			[
 				ScctCareerUi::Line((Info.Flags & EScctArmouryFlags::HideMine) != 0
 					? TEXT("Hide my cosmetics is on: servers get the retail look, and this kit is drawn on your own screen only.")
 					: TEXT("This kit is sent to the server when you join, and to the lobby or hub you are in when you change it."), ScctUi::Small(), ScctHudStyle::TextFaint())
 			];
-			Kit->SetContent(ScctUi::Card(Side == 0 ? TEXT("Your spy kit") : TEXT("Your mercenary kit"), Equipped, FMargin(20.0f, 14.0f)));
+			Kit->SetContent(ScctUi::Card(Side == 0 ? TEXT("Your spy kit") : TEXT("Your mercenary kit"), KitBox, FMargin(20.0f, 14.0f)));
+			PreviewCaption.Reset();
+			UpdatePreview();
 		}
 
 		int32 Side = 0;
@@ -391,6 +507,15 @@ namespace
 		TSharedPtr<SBox> SlotChips;
 		TSharedPtr<SBox> List;
 		TSharedPtr<SBox> Kit;
+		TSharedPtr<SScctArmouryPreview> Preview;
+		/** The buttons of the listed items with their ids (empty: retail), to see which one is pointed at. */
+		TArray<TPair<TWeakPtr<SWidget>, FString>> RowButtons;
+		/** The equipped item of each slot of the side (empty: retail). */
+		TMap<int32, FString> Equipped;
+		/** The item of the viewed slot the preview shows, whether that is a try-on, and the line under the preview. */
+		FString PreviewItem;
+		bool bTrying = false;
+		FString PreviewCaption;
 	};
 }
 
