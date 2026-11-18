@@ -249,6 +249,11 @@ void UScctMarkersSubsystem::HandleFrame(float DeltaSeconds)
 	{
 		return;
 	}
+	if (Session->IsBackdrop())
+	{
+		// The objective signs and lamps are a player's aids; the match behind the main menu is only looked at.
+		return;
+	}
 
 	++Frame;
 	MatchSeconds += DeltaSeconds;

@@ -39,6 +39,10 @@ class UTexture2D;
  *     Tools/Effects/build_effect_assets.py; a small glowing stand-in shape where a mesh is missing), explosions,
  *     smoke, sparks, flares and trails as particles, and the lights the simulation gives them. The PS2 modem's
  *     destruction preset (Ps2ModemEffect) is drawn as its own three emitters (Play/ScctEffectsDevices.cpp);
+ *   - the spy's smoke grenade cloud (SSmokeEmitter) as the original emitter makes it: fifteen sprites of the game's
+ *     own picture let out at once, standing for ten seconds and fading over the last two (EmitGrenadeCloud; the
+ *     picture is read from the content folder and drawn by M_ScctFxCloud, lit by the room). Thermal vision keeps a
+ *     fifth of it, EMF vision none;
  *   - responsive smoke: on a match that runs it, every cloud of the shared smoke field is a ray-marched volume over
  *     the field's bounds, and a smoke grenade's own sprite cloud is not drawn (Play/ScctEffectsSmokeVolume.h);
  *   - device faults: a network camera a spy's shocker has put out shows an orange cross on its lens with sparks and
@@ -149,6 +153,10 @@ private:
 		int32 Light = INDEX_NONE; // index into Lights
 		uint32 SeenFrame = 0;
 		bool bStandIn = false;
+
+		// The spy's smoke grenade cloud (SSmokeEmitter): the original's fifteen sprites, and how many are out.
+		bool bGrenadeCloud = false;
+		int32 CloudSprites = 0;
 
 		// Rain on a pawn (SFlicFlocEmitter, Play/ScctEffectsFlicFloc.cpp): the script's restarts and puff triggers
 		// already applied, each sub-emitter's spawns owed and the spawn budget left since its restart.
@@ -307,6 +315,8 @@ private:
 	void EndActor(FActorFx& Fx, bool bKilled);
 	void PlaceActorMesh(FActorFx& Fx, const FScctEffectActor& Record);
 	void Emit(EStyle Style, const FVector& At, const FVector& Velocity, float DeltaSeconds, float& Debt);
+	/** Lets out what a smoke grenade's cloud owes by its age: the original emitter's fifteen sprites, once. */
+	void EmitGrenadeCloud(FActorFx& Fx);
 
 	// The looks.
 	void SpawnMuzzleFlash(const FVector& At, const FVector& Direction, float Scale, bool bSticky, bool bSuppressed, bool bShotgun);
@@ -401,6 +411,8 @@ private:
 
 	const FScctEventsApi* Events = nullptr;
 	FScctFxSprites Sprites;
+	/** The cloud layer draws the game's own picture of the smoke grenade's cloud (else plain grey discs). */
+	bool bCloudPicture = false;
 	FScctSmokeVolumes SmokeVolumes;
 	FRandomStream Random;
 

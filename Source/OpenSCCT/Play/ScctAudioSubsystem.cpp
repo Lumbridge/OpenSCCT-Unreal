@@ -201,6 +201,14 @@ void UScctAudioSubsystem::HandleMatchStarted()
 	// Harmless when the bridge already started the feature with the session.
 	Events->Begin();
 
+	if (Session->IsBackdrop())
+	{
+		// The match behind the main menu is not heard: the menu has its own music. Its sound records are still
+		// taken off the bridge's queue every frame (HandleFrame), so the queue does not grow.
+		UE_LOG(LogOpenSCCT, Log, TEXT("Audio: the menu's backdrop match on %s is silent"), Session->GetSessionInfo().Map);
+		return;
+	}
+
 	FString AcousticError;
 	Acoustics = ScctFeature<FScctAcousticApi>(&AcousticError);
 	UE_CLOG(Acoustics == nullptr, LogOpenSCCT, Warning, TEXT("Audio: walls do not change sound this match, the bridge's acoustic table is missing: %s"), *AcousticError);
@@ -239,6 +247,13 @@ void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
 {
 	if (Events == nullptr)
 	{
+		return;
+	}
+	if (Session->IsBackdrop())
+	{
+		while (Events->DrainSounds(SoundBuffer.GetData(), SoundBuffer.Num()) >= SoundBuffer.Num())
+		{
+		}
 		return;
 	}
 

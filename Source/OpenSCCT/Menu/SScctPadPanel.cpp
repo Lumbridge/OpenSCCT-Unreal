@@ -500,6 +500,12 @@ TSharedRef<SWidget> SScctPadPanel::BuildSettings()
 	Slider(TEXT("Spy free look"), TEXT("The spy's look with the stick, gun holstered."), &Controls->SpyPad.FreeLook, 0.05f, 10.0f, 0.05f, PadPanelTimes);
 	Slider(TEXT("Spy gun look"), TEXT("The spy's look with the stick, gun drawn."), &Controls->SpyPad.Look, 0.05f, 10.0f, 0.05f, PadPanelTimes);
 	Slider(TEXT("Mercenary look"), TEXT("The mercenary's look with the stick."), &Controls->MercPad.Look, 0.05f, 10.0f, 0.05f, PadPanelTimes);
+	// The views with a look of their own, as the Godot client's controller tuning has them ("Scope & cameras").
+	Slider(TEXT("Spy binoculars"), TEXT("The stick's look through the binoculars, times the spy's look."), &Controls->SpyPad.Scope, 0.05f, 10.0f, 0.05f, PadPanelTimes);
+	Slider(TEXT("Spy sticky camera"), TEXT("The stick's look of a sticky camera."), &Controls->SpyPad.Cam, 0.05f, 10.0f, 0.05f, PadPanelTimes);
+	Slider(TEXT("Mercenary sniper scope"), TEXT("The stick's look through the scope, times the mercenary's look."), &Controls->MercPad.Scope, 0.05f, 10.0f, 0.05f, PadPanelTimes);
+	Slider(TEXT("Mercenary scope vertical"), TEXT("The scope's up and down speed: 1 is the original's, 2.45 turns up and down as fast as sideways."), &Controls->MercPad.ScopeVertical, 0.05f, 10.0f, 0.05f, PadPanelTimes);
+	Slider(TEXT("Mercenary camera network"), TEXT("The stick's look of the camera network."), &Controls->MercPad.Cam, 0.05f, 10.0f, 0.05f, PadPanelTimes);
 
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Vibration")) ];
 	Switch(TEXT("Vibration"), TEXT("The controller rumbles with the match: shots, gadgets, blasts, grabs, a sticky shock. Off on a first run, as in Reloaded."), &Controls->bPadRumble);

@@ -9,6 +9,10 @@
 #include "Play/ScctPlayerController.h"
 #include "Runtime/ScctHudBinocularApi.h"
 
+// The merc's rifle scope is read here too (ReadScope): the content's P_BinocularsDEF page evaluated by the bridge with the
+// clip of its rings on each zoom step, the aim point of the drawn moment placed on the page for its sights, the breath,
+// the range finder and the player's keys. Its painting is in ScctHudElementsBinoculars.cpp as well.
+//
 // The HUD subsystem's part for the spy binoculars: the objective targets placed on the screen, the content's
 // P_BinocularsATT page evaluated by the bridge for this moment (the frame, sound meter and zoom areas run from the moment
 // the binoculars came up, the speak box from when the Hack prompt appeared) with the player's keys in its key help, the
@@ -128,7 +132,7 @@ void UScctHudSubsystem::ReadBinoculars(float DeltaSeconds)
 	SpeakAge = bSpeak ? (SpeakAge < 0.0f ? 0.0f : SpeakAge + DeltaSeconds) : -1.0f;
 
 	// The key help and the lock hint follow the bindings: read on entering and every two seconds while up.
-	if (Mode == 1 && (LastBinocularMode != 1 || M.Clock - BinocularKeysAge > 2.0f))
+	if (Mode != 0 && (LastBinocularMode != Mode || M.Clock - BinocularKeysAge > 2.0f))
 	{
 		BinocularKeysAge = M.Clock;
 		if (const AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController()))
@@ -138,8 +142,10 @@ void UScctHudSubsystem::ReadBinoculars(float DeltaSeconds)
 			BinocularZoomKeys = EKeys::MouseScrollUp.GetDisplayName().ToString() + TEXT(" / ") + EKeys::MouseScrollDown.GetDisplayName().ToString();
 			BinocularExitKey = BoundKeyName(*Player, TEXT("SwitchBinocularVision"));
 			M.BinocularUseKey = BoundKeyName(*Player, TEXT("InvButton bUsing"));
+			ScopeBreathKey = BoundKeyName(*Player, TEXT("Button bHoldBreath"));
 		}
 	}
+	ReadScope(DeltaSeconds, Mode);
 
 	M.BinocularLayers.Reset();
 	const FScctHudBinocularApi* Binoculars = ScctFeature<FScctHudBinocularApi>();
@@ -187,6 +193,117 @@ void UScctHudSubsystem::ReadBinoculars(float DeltaSeconds)
 	if (bChange)
 	{
 		LogBinoculars(true);
+	}
+}
+
+void UScctHudSubsystem::ReadScope(float DeltaSeconds, int32 Mode)
+{
+	FScctHudModel& M = *Model;
+	const FScctHudState& S = M.State;
+	M.ScopeLayers.Reset();
+	if (Mode != 2)
+	{
+		return;
+	}
+
+	// The page is made anew each time the scope comes up (spec/hud/binoculars.md rule 1): its clocks start then, and the
+	// new page stands on zoom step 1, so the scope's first step (3, the 30 degree view) plays the rings' opening clip.
+	const int32 Step = FMath::TruncToInt32(S.BinocularFov * 0.1f);
+	const bool bEntered = LastBinocularMode != 2;
+	if (bEntered)
+	{
+		ScopeAge = 0.0f;
+		ScopeZoomAge = -1.0f;
+		ScopeZoomAnimation = 0;
+		LastScopeStep = 1;
+		ScopeSpeakAge = -1.0f;
+		ScopeAlertAge = -1.0f;
+	}
+	else
+	{
+		ScopeAge += DeltaSeconds;
+		ScopeZoomAge = ScopeZoomAge < 0.0f ? ScopeZoomAge : ScopeZoomAge + DeltaSeconds;
+	}
+	const bool bStepped = Step != LastScopeStep;
+	if (bStepped)
+	{
+		// A smaller step is a narrower view: the rings close in; a larger one opens them out.
+		ScopeZoomAnimation = Step < LastScopeStep ? 1 : 2;
+		ScopeZoomAge = 0.0f;
+		LastScopeStep = Step;
+	}
+	const bool bSpeak = (S.Flags & EScctHudFlags::BinocularHackPrompt) != 0;
+	ScopeSpeakAge = bSpeak ? (ScopeSpeakAge < 0.0f ? 0.0f : ScopeSpeakAge + DeltaSeconds) : -1.0f;
+	const bool bAlert = S.ObjectiveCountdown0 >= 0;
+	ScopeAlertAge = bAlert ? (ScopeAlertAge < 0.0f ? 0.0f : ScopeAlertAge + DeltaSeconds) : -1.0f;
+
+	const FScctHudBinocularApi* Binoculars = ScctFeature<FScctHudBinocularApi>();
+	if (Binoculars == nullptr || Binoculars->GetMercPage == nullptr)
+	{
+		UE_CLOG(!bScopePageMissingLogged, LogOpenSCCT, Warning, TEXT("ScctHud: the bridge has no scope page table; the merc's scope shows a plain ring and sights"));
+		bScopePageMissingLogged = true;
+		return;
+	}
+
+	// The aim point (1000 uu out along the aim, at the drawn moment between the last two ticks) seen from the camera of
+	// this frame, on the 640 x 480 page as high as the picture: SHud s_H_Binoculars_Def.PostRender keeps it within the
+	// middle half of the page's width and the middle 60 percent of its height. The sights sit there, off the centre by
+	// the breath's sway and the view's lag behind the aim.
+	FVector2f Spot(320.0f, 240.0f);
+	float Aim[3] = {};
+	const AScctPlayerController* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController());
+	if (Player != nullptr && Binoculars->GetMercAim != nullptr && Binoculars->GetMercAim(Aim) != 0)
+	{
+		const FScctLookView& View = Player->GetLookView();
+		if (View.Valid != 0 && View.VerticalFov > 0.5f && View.VerticalFov < 179.0f)
+		{
+			const FVector Local = FRotator(View.Pitch, View.Yaw, View.Roll).UnrotateVector(FVector(Aim[0], Aim[1], Aim[2]) - FVector(View.X, View.Y, View.Z));
+			if (Local.X > 1.0)
+			{
+				const double Focal = 240.0 / FMath::Tan(FMath::DegreesToRadians(static_cast<double>(View.VerticalFov) * 0.5));
+				Spot.X = 320.0f + static_cast<float>(Local.Y / Local.X * Focal);
+				Spot.Y = 240.0f - static_cast<float>(Local.Z / Local.X * Focal);
+			}
+		}
+	}
+	Spot.X = FMath::Clamp(Spot.X, 160.0f, 480.0f);
+	Spot.Y = FMath::Clamp(Spot.Y, 96.0f, 384.0f);
+
+	FScctHudScopePageInput Input = {};
+	Input.Seconds = ScopeAge;
+	Input.ZoomSeconds = ScopeZoomAge;
+	Input.ZoomAnimation = ScopeZoomAnimation;
+	Input.ZoomStep = Step;
+	Input.SpotX = Spot.X;
+	Input.SpotY = Spot.Y;
+	Input.Flags = ((S.Flags & EScctHudFlags::HoldBreath) != 0 ? EScctHudScopeFlags::HoldBreath : 0)
+		| ((S.Flags & EScctHudFlags::BinocularHit) != 0 ? EScctHudScopeFlags::Hit : 0);
+	Input.BreathTime = S.BreathTime;
+	Input.Distance = S.BinocularDistance;
+	Input.DistanceScale = S.DistanceScale;
+	Input.SpeakSeconds = ScopeSpeakAge;
+	Input.AlertSeconds = ScopeAlertAge;
+	CopyInto(Input.ZoomKeys, BinocularZoomKeys);
+	CopyInto(Input.ExitKey, BinocularExitKey);
+	CopyInto(Input.BreathKey, ScopeBreathKey);
+	CopyInto(Input.SpeakText, bSpeak ? M.Text(S.HackPromptId) : FString());
+	CopyInto(Input.Message, S.ReticleMessageId != 0 ? M.Text(S.ReticleMessageId) : FString());
+	M.ScopeLayers.SetNumUninitialized(PageCapacity);
+	const int32 Count = Binoculars->GetMercPage(&Input, M.ScopeLayers.GetData(), PageCapacity);
+	M.ScopeLayers.SetNum(FMath::Clamp(Count, 0, PageCapacity));
+	if (Count == 0 && !bScopePageMissingLogged)
+	{
+		bScopePageMissingLogged = true;
+		UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHud: the content has no P_BinocularsDEF page; the merc's scope shows a plain ring and sights"));
+	}
+
+	// A line when the scope page comes up and on each zoom step.
+	if (bEntered || bStepped)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctHud: scope page %s, fov %.0f zoom %s, rings %s, %d layers, sights at (%.0f,%.0f) of 640 x 480, breath %.1f s, range %.0f uu, keys zoom '%s' exit '%s' breath '%s'"),
+			bEntered ? TEXT("up") : TEXT("zoom step"), S.BinocularFov, Step == 1 ? TEXT("x6") : (Step == 2 ? TEXT("x4") : TEXT("x2")),
+			ScopeZoomAnimation == 1 ? TEXT("closing in") : TEXT("opening out"), M.ScopeLayers.Num(), Spot.X, Spot.Y, S.BreathTime, S.BinocularDistance,
+			*BinocularZoomKeys, *BinocularExitKey, *ScopeBreathKey);
 	}
 }
 

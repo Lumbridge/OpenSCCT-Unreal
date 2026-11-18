@@ -5,6 +5,7 @@
 #include "ScctFrontEndGameMode.generated.h"
 
 class UScctFrontEndWidget;
+class UScctMenuBackdrop;
 class ULevelStreamingDynamic;
 
 /**
@@ -18,6 +19,9 @@ class ULevelStreamingDynamic;
  *   -ScctMenuPage=start                  open the offline page and press its START (each time the menu is shown)
  *   -ScctOptions=<Page>                  open the settings page on that tab (video, audio, hud, online...; Menu/SScctSettingsPanel.h)
  *   -ScctConfirmTest                     open the QUIT question (a screenshot of the confirmation box)
+ *
+ * Once that still is up, the live backdrop takes over when the player has it on (Menu/ScctMenuBackdrop.h): a match
+ * played by bots behind the menu, on a map that changes every few minutes.
  */
 UCLASS()
 class OPENSCCT_API AScctFrontEndGameMode : public AGameModeBase
@@ -30,6 +34,13 @@ public:
 	virtual void StartPlay() override;
 	virtual void StartToLeaveMap() override;
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	/**
+	 * Where the camera rests while no match gives it a view. The live backdrop holds its last picture with it when
+	 * its match stops without another to show.
+	 */
+	void SetStillCamera(const FVector& Location, const FRotator& Rotation, float Sway);
 
 private:
 	void ShowMenu();
@@ -38,6 +49,15 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UScctFrontEndWidget> Menu;
+
+	/** The live backdrop's director; it does nothing until the still below is settled. */
+	UPROPERTY(Transient)
+	TObjectPtr<UScctMenuBackdrop> LiveBackdrop;
+
+	/** The still that was shown, for the live backdrop to start from: its map and its level (none: the level's own scene). */
+	UPROPERTY(Transient)
+	TObjectPtr<ULevelStreamingDynamic> StillLevel;
+	FString StillMap;
 
 	/** Where the camera rests; it sways a little around this. */
 	FVector CameraLocation = FVector(-620.0, 0.0, 190.0);

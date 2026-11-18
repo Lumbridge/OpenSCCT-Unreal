@@ -287,6 +287,12 @@ public sealed class BridgeSession : IDisposable
 
     public bool IsDisposed => _disposed;
 
+    /// <summary>
+    /// The match behind the main menu (Backdrop/BackdropMatch.cs): bots play it and the local player only watches.
+    /// It is not a match the player is in, so what asks "does this machine play" leaves it out.
+    /// </summary>
+    public bool IsBackdrop { get; internal set; }
+
     /// <summary>Client simulation ticks run so far.</summary>
     public long Ticks { get; private set; }
 

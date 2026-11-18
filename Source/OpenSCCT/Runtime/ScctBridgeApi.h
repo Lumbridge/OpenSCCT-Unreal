@@ -111,6 +111,7 @@ namespace EScctSessionFlags
 {
 	constexpr int32 Remote = 1; // a round on a remote server; clear for a local match
 	constexpr int32 Merc = 2;   // the local player is a merc (his pawn's side once he has one, else the side asked for)
+	constexpr int32 Backdrop = 4; // the match behind the main menu: bots play it, the local player only watches
 }
 
 /** What GetSession says about the session in the main slot. */
