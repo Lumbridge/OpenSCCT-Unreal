@@ -301,6 +301,9 @@ internal sealed class EffectTracker
         };
     }
 
+    /// <summary>ShockFxView.BlinkPeriod: the original's LT_Blink period is not decoded.</summary>
+    private const float BlinkPeriod = 0.2f;
+
     /// <summary>
     /// EffectViews.PlaceLight: no light for LT_None; the flash of a frag fades from 255 to 0 over fTempsDisparition
     /// (the port leaves LightBrightness alone and the views work the fade out).
@@ -308,6 +311,12 @@ internal sealed class EffectTracker
     private static float LightBrightnessOf(Actor a)
     {
         if (a.LightType == ELightType.LT_None)
+        {
+            return 0f;
+        }
+
+        // LT_Blink (the shock sparks' light): fully on and off, every 0.2 s as ShockFxView blinks it.
+        if (a.LightType == ELightType.LT_Blink && (int)(a.Level.TimeSeconds / BlinkPeriod) % 2 != 0)
         {
             return 0f;
         }

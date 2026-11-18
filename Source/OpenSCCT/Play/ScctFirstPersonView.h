@@ -113,6 +113,8 @@ private:
 	float FlashAge = -1.0f;
 	/** The exposure scale the flash's light took when it fired (Play/ScctExposure.h). */
 	float FlashExposureScale = 1.0f;
+	/** How much of that the nearest wall let it have when it fired (FScctExposure::WallHold). */
+	float FlashWallHold = 1.0f;
 	int32 FlashesPlayed = 0;
 	TArray<FScctBridgeBone> PoseBuffer;
 };
