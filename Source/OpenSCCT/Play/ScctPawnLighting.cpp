@@ -64,7 +64,7 @@ FScctPawnLighting FScctPawnLighting::Sample(FVector Centre, float Radius)
 
 void FScctPawnLighting::Apply(UMeshComponent& Mesh, bool bReceiveBodyAid) const
 {
-	const bool bMaterialRig = Data[0] > 0.0f && Mesh.GetCustomPrimitiveDataIndexForScalarParameter(HasPawnRig) == 3;
+	const bool bSupportsMaterialRig = Mesh.GetCustomPrimitiveDataIndexForScalarParameter(HasPawnRig) == 3;
 	// A custom gun or overlay with its own material still receives shadowed world lights. Only fall back
 	// to the level's actor-light channel while waiting for the bridge to provide a rig.
 	const bool bLampChannel = bLamps && Data[0] == 0.0f;
@@ -72,11 +72,11 @@ void FScctPawnLighting::Apply(UMeshComponent& Mesh, bool bReceiveBodyAid) const
 	{
 		Mesh.SetLightingChannels(true, bLampChannel, bReceiveBodyAid);
 	}
-	if (bMaterialRig)
+	if (bSupportsMaterialRig && Data[0] > 0.0f)
 	{
 		Mesh.SetCustomPrimitiveDataFloatArray(3, MakeArrayView(Data));
 	}
-	else if (Mesh.GetCustomPrimitiveData().Data.IsValidIndex(3) && Mesh.GetCustomPrimitiveData().Data[3] != 0.0f)
+	else if (bSupportsMaterialRig && Mesh.GetCustomPrimitiveData().Data.IsValidIndex(3) && Mesh.GetCustomPrimitiveData().Data[3] != 0.0f)
 	{
 		Mesh.SetCustomPrimitiveDataFloat(3, 0.0f);
 	}
