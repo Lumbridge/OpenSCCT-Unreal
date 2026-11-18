@@ -7,6 +7,7 @@
 #include "Misc/App.h"
 #include "OpenSCCT.h"
 #include "Play/ScctControlSettings.h"
+#include "Settings/ScctDisplaySettings.h"
 #include "Settings/ScctGraphicsSettings.h"
 #include "Settings/ScctPerformanceSettings.h"
 #include "Settings/ScctSettings.h"
@@ -54,14 +55,11 @@ namespace
 		{
 			return;
 		}
+		UScctDisplaySettings::ApplyResolution(*Engine);
 		if (FApp::IsUnattended())
 		{
 			UE_LOG(LogOpenSCCT, Log, TEXT("ScctSettingsConsole: display %dx%d mode %d kept for the next run (unattended: the window is not changed)"),
 				Engine->GetScreenResolution().X, Engine->GetScreenResolution().Y, static_cast<int32>(Engine->GetFullscreenMode()));
-		}
-		else
-		{
-			Engine->ApplyResolutionSettings(false);
 		}
 		Engine->ConfirmVideoMode();
 		Engine->SaveSettings();
@@ -275,7 +273,7 @@ namespace
 			FScctConsoleOwned Resolution;
 			Resolution.Key = TEXT("Display.Resolution");
 			Resolution.Type = EScctSettingType::Text;
-			Resolution.Note = TEXT("width x height, as 1920x1080");
+			Resolution.Note = TEXT("width x height, as 1920x1080. Borderless uses the desktop size.");
 			Resolution.Get = [] { const UGameUserSettings* E = ScctConsoleEngineSettings(); const FIntPoint Size = E != nullptr ? E->GetScreenResolution() : FIntPoint::ZeroValue; return FString::Printf(TEXT("%dx%d"), Size.X, Size.Y); };
 			Resolution.Set = [](const FString& Value)
 			{

@@ -5,6 +5,8 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "ScctDisplaySettings.generated.h"
 
+class UGameUserSettings;
+
 /**
  * The display, graphics and performance options the settings page (Menu/SScctSettingsPanel.h) has no row of its own
  * for: registers them in the settings registry (Settings/ScctSettings.h), puts them into effect when the game starts,
@@ -37,6 +39,12 @@ class OPENSCCT_API UScctDisplaySettings : public UGameInstanceSubsystem
 public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
+
+	/** Desktop pixels on the selected display (or the display containing the game window). */
+	static FIntPoint DesktopSize(const UGameUserSettings& Settings);
+	static TArray<FIntPoint> ResolutionChoices(const UGameUserSettings& Settings, EWindowMode::Type Mode, FIntPoint Current);
+	/** Applies the pending engine settings, resolving borderless to the desktop before requesting a resize. */
+	static void ApplyResolution(UGameUserSettings& Settings);
 
 private:
 	void RegisterDisplay();

@@ -4,7 +4,6 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Hud/ScctHudEdit.h"
 #include "GameFramework/GameUserSettings.h"
-#include "Kismet/KismetSystemLibrary.h"
 #include "Menu/SScctBrightnessPage.h"
 #include "Menu/SScctPadPanel.h"
 #include "Menu/ScctDashboardCards.h"
@@ -20,8 +19,10 @@
 #include "Play/ScctTone.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctFeatures.h"
+#include "Settings/ScctDisplaySettings.h"
 #include "Settings/ScctGraphicsSettings.h"
 #include "Settings/ScctSettings.h"
+#include "Widgets/Input/SComboBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
@@ -136,6 +137,7 @@ namespace
 	}
 
 	FString Percent(float Value) { return FString::Printf(TEXT("%d %%"), FMath::RoundToInt32(Value)); }
+	FText ResolutionText(FIntPoint Size) { return FText::FromString(FString::Printf(TEXT("%d x %d"), Size.X, Size.Y)); }
 	FString Times(float Value) { return FString::Printf(TEXT("%.2f x"), Value); }
 }
 
@@ -176,16 +178,6 @@ void SScctSettingsPanel::Construct(const FArguments& InArgs, const FScctMenuHost
 	{
 		PendingMode = static_cast<int32>(Engine->GetFullscreenMode());
 		PendingSize = Engine->GetScreenResolution();
-	}
-	UKismetSystemLibrary::GetSupportedFullscreenResolutions(Sizes);
-	if (Sizes.IsEmpty())
-	{
-		Sizes = { FIntPoint(1280, 720), FIntPoint(1600, 900), FIntPoint(1920, 1080), FIntPoint(2560, 1440), FIntPoint(3840, 2160) };
-	}
-	Sizes.Sort([](const FIntPoint& A, const FIntPoint& B) { return A.X * A.Y < B.X * B.Y; });
-	if (PendingSize.X > 0 && !Sizes.Contains(PendingSize))
-	{
-		Sizes.Add(PendingSize);
 	}
 
 	const FString Labels[] = {
@@ -319,6 +311,11 @@ void SScctSettingsPanel::ShowSub(const FString& Sub)
 
 bool SScctSettingsPanel::HandleBack()
 {
+	if (ResolutionCombo && ResolutionCombo->IsOpen())
+	{
+		ResolutionCombo->SetIsOpen(false);
+		return true;
+	}
 	// A key row that is waiting for a key took the Escape itself; anything else closes the page.
 	return false;
 }
@@ -530,15 +527,52 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 		.Description(FText::FromString(TEXT("Fullscreen takes the monitor over; borderless keeps the desktop's resolution and switches away instantly; windowed is a window. Takes effect with Apply display.")))
 		.Options({ TEXT("Fullscreen"), TEXT("Borderless"), TEXT("Windowed") })
 		.Get([this] { return PendingMode; })
-		.Set([this](int32 Value) { PendingMode = Value; }));
+		.Set([this](int32 Value)
+		{
+			PendingMode = Value;
+			if (const UGameUserSettings* Engine = EngineSettings(); Engine && PendingMode == EWindowMode::Fullscreen)
+			{
+				const auto Choices = UScctDisplaySettings::ResolutionChoices(*Engine, EWindowMode::Fullscreen, PendingSize);
+				if (!Choices.IsEmpty() && !Choices.Contains(PendingSize)) { PendingSize = Choices.Last(); }
+			}
+		}));
 	DefaultFocus = First;
-	Add(SNew(SScctStepper)
-		.Label(FText::FromString(ScctUi::GameLabel(TEXT("Video_Settings"), TEXT("NUMResolution.Caption"), TEXT("Screen Resolution"))))
-		.Description(FText::FromString(TEXT("The window's size in pixels (in borderless the desktop's is used). Takes effect with Apply display.")))
-		.Wrap(false)
-		.GetOptions([this] { TArray<FString> Out; for (const FIntPoint& Size : Sizes) { Out.Add(FString::Printf(TEXT("%d x %d"), Size.X, Size.Y)); } return Out; })
-		.Get([this] { return FMath::Max(Sizes.IndexOfByKey(PendingSize), 0); })
-		.Set([this](int32 Value) { if (Sizes.IsValidIndex(Value)) { PendingSize = Sizes[Value]; } }));
+	Add(SNew(SBox).MinDesiredHeight(ScctUi::RowHeight)
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(18, 4, 12, 4)
+		[
+			ScctUi::Text(FText::FromString(ScctUi::GameLabel(TEXT("Video_Settings"), TEXT("NUMResolution.Caption"), TEXT("Screen Resolution"))), ScctUi::Body())
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 16, 0)
+		[
+			SNew(SBox).WidthOverride(SScctOptionRow::ControlWidth)
+			[
+				SAssignNew(ResolutionCombo, SComboBox<TSharedPtr<FIntPoint>>)
+				.OptionsSource(&Sizes)
+				.Method(EPopupMethod::UseCurrentWindow)
+				.EnableGamepadNavigationMode(true)
+				.IsEnabled_Lambda([this] { return PendingMode != EWindowMode::WindowedFullscreen; })
+				.OnComboBoxOpening(this, &SScctSettingsPanel::RefreshResolutionChoices)
+				.OnGenerateWidget_Lambda([](TSharedPtr<FIntPoint> Size) { return ScctUi::Text(ResolutionText(*Size), ScctUi::Body()); })
+				.OnSelectionChanged_Lambda([this](TSharedPtr<FIntPoint> Size, ESelectInfo::Type) { if (Size) { PendingSize = *Size; } })
+				[
+					SNew(STextBlock).Font(ScctUi::Body()).Text_Lambda([this]
+					{
+						const UGameUserSettings* Engine = EngineSettings();
+						if (PendingMode == EWindowMode::WindowedFullscreen && Engine)
+						{
+							const FIntPoint Desktop = UScctDisplaySettings::DesktopSize(*Engine);
+							return Desktop.X > 0 && Desktop.Y > 0
+								? FText::FromString(ResolutionText(Desktop).ToString() + TEXT(" (desktop)"))
+								: FText::FromString(TEXT("Desktop"));
+						}
+						return ResolutionText(PendingSize);
+					})
+				]
+			]
+		]
+	]);
 	Rows->AddSlot().AutoHeight().HAlign(HAlign_Right).Padding(0.0f, 4.0f, 16.0f, 10.0f)
 	[
 		SNew(SScctButton)
@@ -650,10 +684,26 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 	return Rows;
 }
 
+void SScctSettingsPanel::RefreshResolutionChoices()
+{
+	const UGameUserSettings* Engine = EngineSettings();
+	if (!Engine) { return; }
+	Sizes.Reset();
+	TSharedPtr<FIntPoint> Selected;
+	for (const FIntPoint Size : UScctDisplaySettings::ResolutionChoices(*Engine, static_cast<EWindowMode::Type>(PendingMode), PendingSize))
+	{
+		const TSharedPtr<FIntPoint> Item = MakeShared<FIntPoint>(Size);
+		Sizes.Add(Item);
+		if (Size == PendingSize) { Selected = Item; }
+	}
+	ResolutionCombo->RefreshOptions();
+	ResolutionCombo->SetSelectedItem(Selected);
+}
+
 void SScctSettingsPanel::ApplyDisplay()
 {
 	UGameUserSettings* Engine = EngineSettings();
-	if (Engine == nullptr)
+	if (Engine == nullptr || !Host.Dialogs.IsValid())
 	{
 		return;
 	}
@@ -661,23 +711,29 @@ void SScctSettingsPanel::ApplyDisplay()
 	const FIntPoint OldSize = Engine->GetScreenResolution();
 	Engine->SetFullscreenMode(static_cast<EWindowMode::Type>(FMath::Clamp(PendingMode, 0, 2)));
 	Engine->SetScreenResolution(PendingSize);
+	UScctDisplaySettings::ApplyResolution(*Engine);
 	if (FApp::IsUnattended())
 	{
 		// Nobody can see a window that moves: the choice is kept but the window stays as it is.
-		UE_LOG(LogOpenSCCT, Log, TEXT("Settings: display %dx%d mode %d kept for the next run (unattended: the window is not changed)"), PendingSize.X, PendingSize.Y, PendingMode);
-	}
-	else
-	{
-		Engine->ApplyResolutionSettings(false);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Settings: display %dx%d mode %d pending confirmation"), Engine->GetScreenResolution().X, Engine->GetScreenResolution().Y, PendingMode);
 	}
 
 	FScctDialog Dialog;
 	Dialog.Title = TEXT("Keep this display?");
 	Dialog.Body = ScctUi::GameText(TEXT("Validate_VideoSettings"), TEXT("KeepText"), TEXT("Do you want to keep these settings? Original settings will be reset in:"));
 	Dialog.Timeout = 15.0f;
-	Dialog.Buttons.Add({ TEXT("Keep"), EScctButtonLook::Primary, [this](const FString&)
+	Dialog.Buttons.Add({ TEXT("Keep"), EScctButtonLook::Primary, [](const FString&)
 	{
-		if (UGameUserSettings* E = EngineSettings()) { E->ConfirmVideoMode(); E->SaveSettings(); }
+		if (UGameUserSettings* E = EngineSettings())
+		{
+			// Leaving exclusive fullscreen can restore a different desktop mode after the initial request.
+			if (E->GetFullscreenMode() == EWindowMode::WindowedFullscreen && UScctDisplaySettings::DesktopSize(*E) != E->GetScreenResolution())
+			{
+				UScctDisplaySettings::ApplyResolution(*E);
+			}
+			E->ConfirmVideoMode();
+			E->SaveSettings();
+		}
 		UScctUserSettings::Get()->LogValues(TEXT("display kept"));
 	} });
 	Dialog.Buttons.Add({ TEXT("Revert"), EScctButtonLook::Secondary, [this, OldMode, OldSize](const FString&)
@@ -686,7 +742,8 @@ void SScctSettingsPanel::ApplyDisplay()
 		{
 			E->SetFullscreenMode(OldMode);
 			E->SetScreenResolution(OldSize);
-			if (!FApp::IsUnattended()) { E->ApplyResolutionSettings(false); }
+			UScctDisplaySettings::ApplyResolution(*E);
+			E->ConfirmVideoMode();
 			E->SaveSettings();
 		}
 		PendingMode = static_cast<int32>(OldMode);
@@ -694,10 +751,7 @@ void SScctSettingsPanel::ApplyDisplay()
 	} });
 	Dialog.FocusButton = 1;
 	Dialog.CancelButton = 1;
-	if (Host.Dialogs.IsValid())
-	{
-		Host.Dialogs->Show(Dialog);
-	}
+	Host.Dialogs->Show(Dialog);
 }
 
 // ---- audio ----------------------------------------------------------------------------------------------------------

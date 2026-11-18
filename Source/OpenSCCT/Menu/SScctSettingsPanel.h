@@ -6,6 +6,7 @@
 class SBox;
 class SScctTabBar;
 class SVerticalBox;
+template<typename OptionType> class SComboBox;
 
 /**
  * The settings, the same page in the front end and over a match: tabs over a list of rows, with what the focused
@@ -74,6 +75,7 @@ private:
 	TSharedRef<SWidget> BuildRegistryTab(FName Page);
 
 	void ApplyDisplay();
+	void RefreshResolutionChoices();
 	void ApplyQuality();
 	void ApplyControls();
 	void HandleCaptured(const FString& ActionId, const FString& Label, const FKey& Key);
@@ -96,7 +98,8 @@ private:
 	// The window mode and the resolution wait here for APPLY.
 	int32 PendingMode = 0;
 	FIntPoint PendingSize = FIntPoint::ZeroValue;
-	TArray<FIntPoint> Sizes;
+	TArray<TSharedPtr<FIntPoint>> Sizes;
+	TSharedPtr<SComboBox<TSharedPtr<FIntPoint>>> ResolutionCombo;
 
 	bool bBindMerc = false;
 	bool bBindPad = false;

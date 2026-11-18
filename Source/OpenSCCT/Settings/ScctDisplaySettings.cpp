@@ -1,7 +1,9 @@
 #include "Settings/ScctDisplaySettings.h"
 
+#include "DynamicRHI.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
+#include "Framework/Application/SlateApplication.h"
 #include "GameFramework/GameUserSettings.h"
 #include "GenericPlatform/GenericApplication.h"
 #include "HAL/PlatformTime.h"
@@ -14,6 +16,7 @@
 #include "Settings/ScctPerformanceSettings.h"
 #include "Settings/ScctSettingsForced.h"
 #include "Settings/ScctVideoOptions.h"
+#include "UnrealEngine.h"
 #include "Widgets/SWindow.h"
 
 using ScctVideoOptions::Option;
@@ -76,6 +79,89 @@ namespace
 	{
 		return GEngine != nullptr && GEngine->GameViewport != nullptr ? GEngine->GameViewport->GetWindow() : nullptr;
 	}
+
+	const FMonitorInfo* TargetMonitor(const UGameUserSettings& Settings)
+	{
+		if (!FSlateApplication::IsInitialized()) { return nullptr; }
+		const FDisplayMetrics& Metrics = FSlateApplication::Get().GetCachedDisplayMetricsByRef();
+		if (Settings.GetDisplayIndex() == INDEX_NONE && Settings.GetDisplayID().IsEmpty())
+		{
+			if (const TSharedPtr<SWindow> Window = GameWindow())
+			{
+				const FSlateRect Rect = Window->GetFullScreenInfo();
+				for (const FMonitorInfo& Info : Metrics.MonitorInfo)
+				{
+					if (Rect.GetSize().X > 0 && Info.DisplayRect.Left == Rect.Left && Info.DisplayRect.Top == Rect.Top)
+					{
+						return &Info;
+					}
+				}
+			}
+		}
+		const int32 Index = Metrics.GetClosestMonitorFromIDAndIndex(Settings.GetDisplayID(), Settings.GetDisplayIndex());
+		return Metrics.MonitorInfo.IsValidIndex(Index) ? &Metrics.MonitorInfo[Index] : nullptr;
+	}
+
+	bool HasLaunchWindowOverride()
+	{
+		const TCHAR* Cmd = FCommandLine::Get();
+		FString Value;
+		return FParse::Param(Cmd, TEXT("Windowed")) || FParse::Param(Cmd, TEXT("Fullscreen"))
+			|| FParse::Param(Cmd, TEXT("RenderOffscreen")) || FParse::Param(Cmd, TEXT("ForceRes"))
+			|| FParse::Value(Cmd, TEXT("Res="), Value) || FParse::Value(Cmd, TEXT("ResX="), Value)
+			|| FParse::Value(Cmd, TEXT("ResY="), Value);
+	}
+}
+
+FIntPoint UScctDisplaySettings::DesktopSize(const UGameUserSettings& Settings)
+{
+	if (const FMonitorInfo* Info = TargetMonitor(Settings))
+	{
+		return FIntPoint(Info->DisplayRect.Right - Info->DisplayRect.Left, Info->DisplayRect.Bottom - Info->DisplayRect.Top);
+	}
+	return Settings.GetDesktopResolution();
+}
+
+TArray<FIntPoint> UScctDisplaySettings::ResolutionChoices(const UGameUserSettings& Settings, EWindowMode::Type Mode, FIntPoint Current)
+{
+	TArray<FIntPoint> Sizes;
+	const FMonitorInfo* Info = TargetMonitor(Settings);
+	FScreenResolutionArray Modes;
+	if (GDynamicRHI && Info && RHIGetAvailableResolutionsForDisplay(Modes, true, Info->NativeHandle))
+	{
+		for (const FScreenResolutionRHI& Available : Modes)
+		{
+			if (Available.Width > 0 && Available.Height > 0)
+			{
+				Sizes.AddUnique(FIntPoint(Available.Width, Available.Height));
+			}
+		}
+	}
+	const FIntPoint Desktop = DesktopSize(Settings);
+	if (Desktop.X > 0 && Desktop.Y > 0) { Sizes.AddUnique(Desktop); }
+	if (Mode == EWindowMode::Windowed)
+	{
+		for (FIntPoint Size : { FIntPoint(1280, 720), FIntPoint(1600, 900), FIntPoint(1920, 1080), FIntPoint(2560, 1440), FIntPoint(3840, 2160) })
+		{
+			if (Size.X <= Desktop.X && Size.Y <= Desktop.Y) { Sizes.AddUnique(Size); }
+		}
+		if (Current.X > 0 && Current.Y > 0) { Sizes.AddUnique(Current); }
+	}
+	if (Sizes.IsEmpty() && Current.X > 0 && Current.Y > 0) { Sizes.Add(Current); }
+	Sizes.Sort([](FIntPoint A, FIntPoint B) { return A.X == B.X ? A.Y < B.Y : A.X < B.X; });
+	return Sizes;
+}
+
+void UScctDisplaySettings::ApplyResolution(UGameUserSettings& Settings)
+{
+	if (Settings.GetFullscreenMode() == EWindowMode::WindowedFullscreen)
+	{
+		const FIntPoint Desktop = DesktopSize(Settings);
+		if (Desktop.X > 0 && Desktop.Y > 0) { Settings.SetScreenResolution(Desktop); }
+		// The requested mode can already match r.SetRes even though the actual window was created at another size.
+		if (!FApp::IsUnattended()) { GSystemResolution.ForceRefresh(); }
+	}
+	if (!FApp::IsUnattended()) { Settings.ApplyResolutionSettings(false); }
 }
 
 void UScctDisplaySettings::Initialize(FSubsystemCollectionBase& Collection)
@@ -83,7 +169,7 @@ void UScctDisplaySettings::Initialize(FSubsystemCollectionBase& Collection)
 	Super::Initialize(Collection);
 
 	// Play in editor shares the editor's window, scalability and frame rate: the options are shown, never applied.
-	bApplies = !GIsEditor;
+	bApplies = !GIsEditor && !IsRunningDedicatedServer() && FApp::CanEverRender();
 
 	RegisterDisplay();
 	ScctGraphicsSettings::Register();
@@ -180,19 +266,30 @@ bool UScctDisplaySettings::Tick(float DeltaSeconds)
 	const double Now = FPlatformTime::Seconds();
 	if (bStartPending)
 	{
+		if (bApplies && !FApp::IsUnattended() && !GameWindow().IsValid()) { return true; }
 		bStartPending = false;
 		if (bApplies)
 		{
 			ScctGraphicsSettings::Apply();
 			ScctPerformanceSettings::Apply(true);
-			// Until the player chose a monitor or a place the window stays as Unreal opened it (-ResX, -ForceRes).
-			if (IsStoredOrForced(MonitorKey))
+			if (!HasLaunchWindowOverride())
 			{
-				ApplyMonitor(true);
-			}
-			else if (IsStoredOrForced(PositionKey))
-			{
-				PlaceAt = Now + PlaceDelaySeconds;
+				UGameUserSettings* Settings = GEngine->GetGameUserSettings();
+				if (IsStoredOrForced(MonitorKey))
+				{
+					ApplyMonitor(true);
+				}
+				else if (Settings && Settings->GetFullscreenMode() == EWindowMode::WindowedFullscreen && !FApp::IsUnattended())
+				{
+					const FIntPoint Saved = Settings->GetScreenResolution();
+					ApplyResolution(*Settings);
+					if (Saved != Settings->GetScreenResolution())
+					{
+						Settings->ConfirmVideoMode();
+						Settings->SaveSettings();
+					}
+				}
+				else if (IsStoredOrForced(PositionKey)) { PlaceAt = Now + PlaceDelaySeconds; }
 			}
 		}
 		if (ChangeAt < 0.0)
@@ -269,14 +366,7 @@ void UScctDisplaySettings::ApplyMonitor(bool bAtStart)
 		Window->MoveWindowTo(FVector2D(Monitor.Work.Left + 32, Monitor.Work.Top + 32));
 	}
 	Settings->SetDisplayProperties(Monitor.Id, Monitor.Index);
-	if (Mode == EWindowMode::WindowedFullscreen)
-	{
-		Settings->SetScreenResolution(Monitor.Desktop);
-	}
-	if (!FApp::IsUnattended())
-	{
-		Settings->ApplyResolutionSettings(false);
-	}
+	ApplyResolution(*Settings);
 	if (!FScctSettingsForced::IsForced(MonitorKey))
 	{
 		Settings->ConfirmVideoMode();
