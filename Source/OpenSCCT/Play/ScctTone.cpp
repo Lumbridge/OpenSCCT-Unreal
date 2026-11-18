@@ -74,7 +74,7 @@ namespace
 		int32 LoggedGlow = -2;
 		int32 LoggedOn = -1;
 	};
-	FToneState Tone;
+	FToneState ToneHeld;
 
 	/** The light the engine's tone pass must get to show a display value (0..1): the sRGB decoding. */
 	float ToneLightOf(float Display)
@@ -84,30 +84,30 @@ namespace
 
 	UMaterialInstanceDynamic* ToneEnsureMaterial(APostProcessVolume* Volume)
 	{
-		if (Tone.Volume.Get() == Volume)
+		if (ToneHeld.Volume.Get() == Volume)
 		{
-			return Tone.Material.Get();
+			return ToneHeld.Material.Get();
 		}
-		const bool bHeldGamma = Tone.bHeldGamma;
-		const bool bWasMissing = Tone.bMissing;
-		Tone = FToneState();
-		Tone.bHeldGamma = bHeldGamma;
-		Tone.bMissing = bWasMissing;
-		Tone.Volume = Volume;
-		UMaterialInterface* Base = Tone.bMissing ? nullptr : LoadObject<UMaterialInterface>(nullptr, ToneMaterialPath);
+		const bool bHeldGamma = ToneHeld.bHeldGamma;
+		const bool bWasMissing = ToneHeld.bMissing;
+		ToneHeld = FToneState();
+		ToneHeld.bHeldGamma = bHeldGamma;
+		ToneHeld.bMissing = bWasMissing;
+		ToneHeld.Volume = Volume;
+		UMaterialInterface* Base = ToneHeld.bMissing ? nullptr : LoadObject<UMaterialInterface>(nullptr, ToneMaterialPath);
 		if (Base == nullptr)
 		{
-			if (!Tone.bMissing)
+			if (!ToneHeld.bMissing)
 			{
 				UE_LOG(LogOpenSCCT, Warning, TEXT("Tone: %s is missing; run Tools/Materials/Build-ToneMaterial.ps1. The plan's picture keeps the engine's film curve."), ToneMaterialPath);
 			}
-			Tone.bMissing = true;
+			ToneHeld.bMissing = true;
 			return nullptr;
 		}
 		UMaterialInstanceDynamic* Instance = UMaterialInstanceDynamic::Create(Base, Volume);
-		Tone.Material = Instance;
+		ToneHeld.Material = Instance;
 		// Weight 0 keeps the material out of the frame until the curve is on.
-		Tone.Blendable = Volume->Settings.WeightedBlendables.Array.Emplace(0.0f, Instance);
+		ToneHeld.Blendable = Volume->Settings.WeightedBlendables.Array.Emplace(0.0f, Instance);
 		return Instance;
 	}
 }
@@ -118,7 +118,7 @@ void FScctTone::Apply(UWorld* World, APostProcessVolume* Volume, bool bPlan, flo
 	{
 		// The released picture: nothing of this file touches the volume. A display gamma held for a plan level before
 		// this one goes back to the setting's.
-		Tone.bOn = false;
+		ToneHeld.bOn = false;
 		Leave();
 		return;
 	}
@@ -131,16 +131,16 @@ void FScctTone::Apply(UWorld* World, APostProcessVolume* Volume, bool bPlan, flo
 		{
 			GEngine->DisplayGamma = Gamma;
 		}
-		Tone.bHeldGamma = true;
+		ToneHeld.bHeldGamma = true;
 	}
 
 	UMaterialInstanceDynamic* Material = ToneEnsureMaterial(Volume);
 	const bool bOn = Material != nullptr && CVarLightTone.GetValueOnGameThread() != 0;
-	Tone.bOn = bOn;
+	ToneHeld.bOn = bOn;
 	FPostProcessSettings& Settings = Volume->Settings;
-	if (Volume->Settings.WeightedBlendables.Array.IsValidIndex(Tone.Blendable))
+	if (Volume->Settings.WeightedBlendables.Array.IsValidIndex(ToneHeld.Blendable))
 	{
-		Volume->Settings.WeightedBlendables.Array[Tone.Blendable].Weight = bOn ? 1.0f : 0.0f;
+		Volume->Settings.WeightedBlendables.Array[ToneHeld.Blendable].Weight = bOn ? 1.0f : 0.0f;
 	}
 
 	// The engine's film curve off: its tone pass is then light x exposure, clipped at 1 and sRGB encoded, and the
@@ -166,9 +166,9 @@ void FScctTone::Apply(UWorld* World, APostProcessVolume* Volume, bool bPlan, flo
 	const float Asked = CVarLightBloomThreshold.GetValueOnGameThread();
 	if (Vision != nullptr && Vision->GetData().HasLevel())
 	{
-		Tone.LevelGlow = Vision->GetData().GetLevel().GlowThreshold;
+		ToneHeld.LevelGlow = Vision->GetData().GetLevel().GlowThreshold;
 	}
-	const int32 Glow = Asked >= 0.0f ? FMath::RoundToInt32(Asked) : Tone.LevelGlow;
+	const int32 Glow = Asked >= 0.0f ? FMath::RoundToInt32(Asked) : ToneHeld.LevelGlow;
 	const float Intensity = Glow >= 255 ? 0.0f : FMath::Max(CVarLightBloomIntensity.GetValueOnGameThread(), 0.0f);
 	Settings.bOverride_BloomThreshold = bOn;
 	Settings.BloomThreshold = ToneLightOf(FMath::Clamp(Glow / 255.0f, 0.0f, 1.0f));
@@ -190,10 +190,10 @@ void FScctTone::Apply(UWorld* World, APostProcessVolume* Volume, bool bPlan, flo
 		Material->SetScalarParameterValue(ToneGateFloorParameter, ToneGateFloor);
 	}
 
-	if (Tone.LoggedOn != (bOn ? 1 : 0) || (bOn && Tone.LoggedGlow != Glow))
+	if (ToneHeld.LoggedOn != (bOn ? 1 : 0) || (bOn && ToneHeld.LoggedGlow != Glow))
 	{
-		Tone.LoggedOn = bOn ? 1 : 0;
-		Tone.LoggedGlow = Glow;
+		ToneHeld.LoggedOn = bOn ? 1 : 0;
+		ToneHeld.LoggedGlow = Glow;
 		if (bOn)
 		{
 			UE_LOG(LogOpenSCCT, Log, TEXT("Tone: the plan's curve in %s: exposure %.3f, knee %.0f, gate %.2f, gain %.3f, gamma %.3f; bloom above %d of 255 (light %.3f) at intensity %.1f; lens flares %s; vignette %s; display gamma %.2f"),
@@ -211,9 +211,9 @@ void FScctTone::Apply(UWorld* World, APostProcessVolume* Volume, bool bPlan, flo
 
 void FScctTone::Leave()
 {
-	if (Tone.bHeldGamma)
+	if (ToneHeld.bHeldGamma)
 	{
-		Tone.bHeldGamma = false;
+		ToneHeld.bHeldGamma = false;
 		if (GEngine != nullptr)
 		{
 			GEngine->DisplayGamma = DisplayGamma(UScctUserSettings::Get()->Gamma);
@@ -223,7 +223,7 @@ void FScctTone::Leave()
 
 bool FScctTone::IsOn()
 {
-	return Tone.bOn && FScctLightPlan::IsOn();
+	return ToneHeld.bOn && FScctLightPlan::IsOn();
 }
 
 float FScctTone::GammaMin()
