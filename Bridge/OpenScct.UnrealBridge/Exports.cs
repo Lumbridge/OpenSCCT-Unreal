@@ -348,7 +348,7 @@ public static unsafe class Exports
             ClearFailure();
             // The player's demo-saving choice records the match (Demo/DemoSaving.cs).
             match = match with { DemoFolder = match.DemoFolder ?? Demo.DemoSaving.OfflineFolder() };
-            BridgeSession started = Adopt(BridgeSession.StartLocal(Test.NetLinkLaunch.Apply(Test.LessonLaunch.Apply(match))));
+            BridgeSession started = Adopt(BridgeSession.StartLocal(Test.FeatureLaunch.Apply(Test.NetLinkLaunch.Apply(Test.LessonLaunch.Apply(match)))));
             Demo.DemoSaving.Started(started);
             return started.Id;
         }
