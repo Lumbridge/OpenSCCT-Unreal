@@ -355,7 +355,7 @@ public sealed class HubSocial
                 $"{Hint(client, "HubWatch")} watch   {Hint(client, "HubPlayers")} players   " +
                 $"{Hint(client, "Talk")} chat   {Hint(client, "TeamTalk")} team chat   {Hint(client, "ShowMenu")} menu",
             HubSocialText.EmoteMenu => EmoteMenu(client),
-            HubSocialText.Queue => client.Queue.PadId is not null ? client.Queue.Text : string.Empty,
+            HubSocialText.Queue => _hub.QueueTextOf(client),
             HubSocialText.HubName => client.ServerName,
             _ => string.Empty,
         };

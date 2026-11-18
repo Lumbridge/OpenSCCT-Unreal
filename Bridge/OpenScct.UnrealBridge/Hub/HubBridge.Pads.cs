@@ -638,6 +638,11 @@ public sealed partial class HubBridge
     /// <summary>Picks the draft's map (its mode stays when the map plays it, else the map's default mode).</summary>
     public bool SetLaptopMap(string mapId)
     {
+        if (_draft is not null && !string.IsNullOrEmpty(mapId) && StartLaptopDownload(mapId))
+        {
+            return true;
+        }
+
         if (_draft is not { } draft || Catalog.Maps.GetCatalogEntry(mapId) is not { } entry || !entry.PlayableModes.Any())
         {
             return false;

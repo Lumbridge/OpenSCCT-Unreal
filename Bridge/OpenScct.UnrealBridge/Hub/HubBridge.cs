@@ -414,6 +414,7 @@ public sealed partial class HubBridge : IDisposable
         }
 
         PumpPadRun(client);
+        WatchDownloads(client);
 
         if (Round is { } drawn)
         {
