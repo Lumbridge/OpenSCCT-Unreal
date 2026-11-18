@@ -52,6 +52,7 @@
 #include "Test/ScctGrabAreaApi.h"
 #include "Test/ScctInspectApi.h"
 #include "Test/ScctLessonApi.h"
+#include "Test/ScctLightProbeApi.h"
 #include "Test/ScctTestApi.h"
 
 // The bridge's feature tables by their C++ type: which bridge class hands each one over and which version the
@@ -121,6 +122,7 @@ SCCT_FEATURE_TABLE(FScctWorldApi, "WorldExports", ScctWorldApiVersion);
 SCCT_FEATURE_TABLE(FScctWorldEmitterApi, "WorldEmitterExports", ScctWorldEmitterApiVersion);
 SCCT_FEATURE_TABLE(FScctGrabAreaApi, "GrabAreaExports", ScctGrabAreaApiVersion);
 SCCT_FEATURE_TABLE(FScctLessonApi, "LessonExports", ScctLessonApiVersion);
+SCCT_FEATURE_TABLE(FScctLightProbeApi, "LightProbeExports", ScctLightProbeApiVersion);
 SCCT_FEATURE_TABLE(FScctTestApi, "TestExports", ScctTestApiVersion);
 SCCT_FEATURE_TABLE(FScctInspectApi, "InspectExports", ScctInspectApiVersion);
 SCCT_FEATURE_TABLE(FScctFeatureTestApi, "FeatureTestExports", ScctFeatureTestApiVersion);

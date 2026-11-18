@@ -291,6 +291,26 @@ public:
 	 */
 	bool IsTourView() const { return bTourView; }
 
+	/**
+	 * A check's own camera (the light parity measurement, Test/ScctLightParitySubsystem.h): the view is held at
+	 * Camera exactly as at a -ScctCams tour point, until the next call or ClearCheckCamera.
+	 */
+	void SetCheckCamera(const FTransform& Camera)
+	{
+		TourCameras.Reset();
+		TourCameras.Add(Camera);
+		TourIndex = 0;
+		bAdvanceTour = false;
+		bTourView = true;
+	}
+
+	void ClearCheckCamera()
+	{
+		TourCameras.Reset();
+		TourIndex = 0;
+		bTourView = false;
+	}
+
 	// UTickableWorldSubsystem
 	virtual void Tick(float DeltaTime) override;
 	virtual TStatId GetStatId() const override;
