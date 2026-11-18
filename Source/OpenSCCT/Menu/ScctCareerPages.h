@@ -28,6 +28,9 @@ namespace ScctCareerPages
 	TSharedRef<SScctMenuPage> MakeStats(const FScctMenuHost& Host);
 	TSharedRef<SScctMenuPage> MakeMatchHistory(const FScctMenuHost& Host);
 	TSharedRef<SScctMenuPage> MakeAchievements(const FScctMenuHost& Host);
+
+	/** "armoury" (or "cosmetics"): the cosmetics of each side by slot and the kit equipped (Menu/SScctArmouryPage.cpp); "armoury/merc" opens on the mercenary. */
+	TSharedRef<SScctMenuPage> MakeArmoury(const FScctMenuHost& Host);
 }
 
 /** Small shared pieces of the career pages (the Godot CareerPanels). */
