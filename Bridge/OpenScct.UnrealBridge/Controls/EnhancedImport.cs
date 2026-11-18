@@ -101,8 +101,32 @@ public sealed class EnhancedImport
     /// <summary>The profile's name (the file name before <c>_prf.ini</c>), empty without a profile.</summary>
     public string ProfileName { get; } = "";
 
-    /// <summary>Reloaded's use_split_spy_merc_keyboard; an install without the config plays one layout (stock).</summary>
-    public bool SplitKeyboard => Flag(_config, "use_split_spy_merc_keyboard") ?? false;
+    /// <summary>
+    /// Reloaded's use_split_spy_merc_keyboard; an install without the config plays one layout (stock). The profile
+    /// alone (no install chosen) has no config to say: two key files that differ are then taken as the spy's and the
+    /// mercenary's, since one layout for both would have given the spy the mercenary's keys.
+    /// </summary>
+    public bool SplitKeyboard => Flag(_config, "use_split_spy_merc_keyboard") ?? (Root is null && KeyFilesDiffer);
+
+    private bool KeyFilesDiffer
+    {
+        get
+        {
+            if (_keys0 is null || _keys1 is null)
+            {
+                return false;
+            }
+
+            try
+            {
+                return !string.Equals(File.ReadAllText(_keys0).ReplaceLineEndings("\n").Trim(), File.ReadAllText(_keys1).ReplaceLineEndings("\n").Trim(), StringComparison.Ordinal);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+    }
 
     /// <summary>The wheel mode of the profile (SelectedMouse 0 changes gadgets, 1 walk and run), or null without one.</summary>
     public string? WheelMode => ProfileInt("SelectedMouse") switch { 0 => "Gadget", 1 => "Speed", _ => null };
