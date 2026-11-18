@@ -3,6 +3,11 @@
 #include "Engine/Engine.h"
 #include "GameFramework/GameUserSettings.h"
 #include "Menu/ScctUserSettings.h"
+#include "Misc/App.h"
+#include "Misc/CommandLine.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/Parse.h"
+#include "RHIGlobals.h"
 #include "Settings/ScctVideoOptions.h"
 
 using ScctVideoOptions::Option;
@@ -65,6 +70,46 @@ void ScctGraphicsSettings::Register()
 bool ScctGraphicsSettings::Owns(FName Key)
 {
 	return Key.ToString().StartsWith(TEXT("Graphics."));
+}
+
+void ScctGraphicsSettings::DetectFirstLaunch()
+{
+	if (GIsEditor || FApp::IsUnattended() || !FApp::CanEverRender() || !GIsRHIInitialized || GUsingNullRHI
+		|| FParse::Param(FCommandLine::Get(), TEXT("RenderOffscreen")))
+	{
+		return;
+	}
+	UGameUserSettings* Engine = GEngine->GetGameUserSettings();
+	const TCHAR* Section = TEXT("OpenSCCT.Settings");
+	int32 StoredValue;
+	// Older versions have no detection flag. Either settings writer is evidence of an existing video profile.
+	if (!Engine || GConfig->DoesSectionExist(TEXT("ScalabilityGroups"), GGameUserSettingsIni)
+		|| GConfig->GetInt(Section, TEXT("RenderScale"), StoredValue, GGameUserSettingsIni)
+		|| GConfig->GetInt(TEXT("/Script/Engine.GameUserSettings"), TEXT("Version"), StoredValue, GGameUserSettingsIni))
+	{
+		return;
+	}
+
+	// Use Unreal's short CPU/GPU benchmark and the installed scalability thresholds for each quality group.
+	Engine->RunHardwareBenchmark(1);
+	const bool bEntryIntel = GRHIAdapterName.Contains(TEXT("HD Graphics"))
+		|| (GRHIAdapterName.Contains(TEXT("Iris")) && GRHIAdapterName.Contains(TEXT(" Xe")));
+	// These older Intel families can score well on the synthetic passes. On other integrated adapters use
+	// UE's GPU-only illumination tier to distinguish those with enough headroom for its full desktop profile.
+	const bool bBudgetIntegrated = GRHIDeviceIsIntegrated && (bEntryIntel || Engine->GetGlobalIlluminationQuality() < 3);
+	if (bBudgetIntegrated)
+	{
+		Engine->SetOverallScalabilityLevel(0);
+	}
+	const int32 Scale = bBudgetIntegrated ? 50 : FMath::Clamp(FMath::RoundToInt(Engine->ScalabilityQuality.ResolutionQuality), 50, 100);
+	UScctUserSettings::Get()->RenderScale = Scale;
+	GConfig->SetInt(Section, TEXT("RenderScale"), Scale, GGameUserSettingsIni);
+	Engine->ApplyHardwareBenchmarkResults();
+	SetCVar(TEXT("r.ScreenPercentage"), Scale);
+	GConfig->Flush(false, GGameUserSettingsIni);
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctGraphics: first launch on %s (integrated %d, CPU %.1f, GPU %.1f), lighting %d, shadows %d, textures %d, render scale %d%%"),
+		*GRHIAdapterName, GRHIDeviceIsIntegrated, Engine->GetLastCPUBenchmarkResult(), Engine->GetLastGPUBenchmarkResult(),
+		Engine->GetGlobalIlluminationQuality(), Engine->GetShadowQuality(), Engine->GetTextureQuality(), Scale);
 }
 
 void ScctGraphicsSettings::Apply()

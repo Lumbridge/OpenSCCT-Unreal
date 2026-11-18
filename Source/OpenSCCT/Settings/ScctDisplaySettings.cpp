@@ -175,6 +175,11 @@ void UScctDisplaySettings::Initialize(FSubsystemCollectionBase& Collection)
 	ScctGraphicsSettings::Register();
 	ScctPerformanceSettings::Register();
 	FScctSettingsForced::Report();
+	if (bApplies)
+	{
+		// The startup window can save an engine config when it moves. Detect before it is created.
+		ScctGraphicsSettings::DetectFirstLaunch();
+	}
 
 	ChangedHandle = FScctSettings::OnChanged().AddUObject(this, &UScctDisplaySettings::HandleChanged);
 	// The render scale is UScctUserSettings' and the automatic render scale goes up to it.

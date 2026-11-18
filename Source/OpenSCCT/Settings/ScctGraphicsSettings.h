@@ -23,6 +23,9 @@ namespace ScctGraphicsSettings
 {
 	void Register();
 
+	/** Seeds a new player's quality groups and render scale before startup writes the first video settings. */
+	void DetectFirstLaunch();
+
 	/** Puts every Graphics option into effect. */
 	void Apply();
 
