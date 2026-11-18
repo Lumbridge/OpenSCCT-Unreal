@@ -262,6 +262,7 @@ void UScctScreenEffectsSubsystem::Present(FScctHudModel& Model, float DeltaSecon
 	}
 	ScctVisorEffects::Update(Visor, Model, DeltaSeconds);
 	Model.Visor = &Visor;
+	PoisonDodge.Present(GetWorld(), Visor, Model.bHasState ? &Model.State : nullptr);
 
 	const FScctHudState& State = Model.State;
 	PresentDoubleVision(Model.bHasState ? CrossEyeFactor(State) : 0.0f);
@@ -310,6 +311,7 @@ void UScctScreenEffectsSubsystem::Clear()
 	LastCaptures = INDEX_NONE;
 	ScctVisorEffects::Reset(Visor);
 	PresentDoubleVision(0.0f);
+	PoisonDodge.Present(GetWorld(), Visor, nullptr);
 }
 
 void UScctScreenEffectsSubsystem::RequestCapture()
