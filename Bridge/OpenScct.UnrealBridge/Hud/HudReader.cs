@@ -391,7 +391,9 @@ public sealed class HudReader
         if (pawn.MyWeapon is SWeaponDefense { bDeleteMe: false } weapon)
         {
             flags |= HudFlags.HasWeapon | (pawn.SidearmWeapon is not null ? HudFlags.HasSidearm : 0);
-            s.WeaponNameId = _texts.Id(weapon.ItemName);
+            // The standard rifle (the class itself, not the rifles derived from it) is named FN2000 as in the Godot client
+            // (HudSimReader); every other weapon keeps the item name of the content.
+            s.WeaponNameId = _texts.Id(weapon.GetType() == typeof(SWeaponDefense) ? "FN2000" : weapon.ItemName);
             s.ClipAmmo = weapon.ClipAmmo;
             s.Ammo = weapon.Ammo;
             s.FireMode = (int)weapon.ROFMode;
