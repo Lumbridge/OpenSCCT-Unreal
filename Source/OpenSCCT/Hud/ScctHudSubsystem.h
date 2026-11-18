@@ -100,6 +100,15 @@ public:
 	/** For the HUD's other subsystems that fill a part of the model themselves (the team ping's badges and wheel). */
 	FScctHudModel& GetMutableModel() { return *Model; }
 
+	/** For the named checks (Test/Features): runs one -ScctHudCommands command ("Scoreboard 1") on the next frame. */
+	void QueueCommandForCheck(const FString& Name, int32 Argument)
+	{
+		FTimedCommand Command;
+		Command.Name = Name;
+		Command.Argument = Argument;
+		TimedCommands.Add(Command);
+	}
+
 	/**
 	 * Every message drained from the bridge, as it is drained (once each, oldest first), before the model files it.
 	 * The chat takes the Chat and TeamChat lines from here; the model leaves those to it.

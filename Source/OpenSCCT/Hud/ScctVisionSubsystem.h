@@ -80,6 +80,20 @@ public:
 	const FScctVisionData& GetData() const { return Data; }
 	FScctVisionData& GetData() { return Data; }
 
+	/** For the named checks (Test/Features): holds Mode as -ScctForceVision does; INDEX_NONE gives the HUD's mode back. */
+	void ForceModeForCheck(int32 Mode) { ForcedMode = Mode; }
+
+	/** For the named checks: one mode's post-process as it is now (Index 0 night, 1 thermal, 2 motion, 3 EMF). */
+	struct FModeCheck
+	{
+		int32 Mode = 0;
+		bool bMaterial = false;      // the mode's material instance exists and is the volume's blendable
+		float Amount = 0.0f;         // how far the picture is into the mode
+		float MaterialAmount = 0.0f; // the material's Amount parameter
+		float BlendWeight = 0.0f;    // the volume's weight for it
+	};
+	FModeCheck GetModeCheck(int32 Index) const;
+
 	/** The goggles of a world, or null. */
 	static const UScctVisionSubsystem* Find(const UWorld* World);
 
