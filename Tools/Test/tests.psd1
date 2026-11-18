@@ -47,6 +47,17 @@
     'play-net-grab100-stock'      = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
     'play-net-coop100'            = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
     'play-net-coop200'            = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    # The per-feature gameplay checks (Test/Features): each stages one feature and asserts what Unreal draws or the HUD
+    # shows. -Extra '-ScctFeatureBreak' leaves out the staged step (each must then fail with its reason, run them with
+    # -ExpectedFailures); -Extra '-ScctFeatureShots' saves a picture at each stage to Saved/ScctShots/<test>/.
+    'combat-autofire' = @{ Map = 'AquaE'; Timeout = 400; Tags = @('needs-content', 'needs-maps') }
+    'gadgets'         = @{ Map = 'AquaE'; Timeout = 400; Tags = @('needs-content', 'needs-maps') }
+    'doors'           = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'lights'          = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'emitters'        = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    'bots'            = @{ Map = 'AquaE'; Timeout = 320; Tags = @('needs-content', 'needs-maps') }
+    'traversal'       = @{ Map = 'TestRange'; Timeout = 480; Tags = @('needs-content', 'needs-maps') }
+    'modes'           = @{ Map = 'AquaE'; Timeout = 400; Tags = @('needs-content', 'needs-maps') }
     'play-net-listen300'          = @{ Map = 'SteeE'; Timeout = 240; Tags = @('needs-content', 'needs-maps', 'helper') }
     'play-net-dedicated300'       = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps', 'helper') }
 }
