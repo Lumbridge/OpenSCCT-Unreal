@@ -196,6 +196,11 @@ void SScctMapPicker::SetGroup(const FString& Name, bool bSave)
 	{
 		Found = Groups.IndexOfByPredicate([&Name](const FScctMapGroup& Group) { return Group.Name.StartsWith(Name, ESearchCase::IgnoreCase); });
 	}
+	if (Found == INDEX_NONE && Name.IsNumeric())
+	{
+		// A number is the group's place in the list (-ScctHostPreset Group=1, for a check that does not know the names).
+		Found = FCString::Atoi(*Name);
+	}
 	Found = FMath::Max(Found, 0);
 	if (!Groups.IsValidIndex(Found))
 	{
