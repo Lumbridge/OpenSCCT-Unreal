@@ -577,6 +577,21 @@ void UScctHudEditSubsystem::Tick(float DeltaTime)
 			UE_LOG(LogOpenSCCT, Log, TEXT("ScctHudEdit: something else took the keys"));
 			Stop();
 		}
+		else if (Overlay.IsValid() && !FApp::IsUnattended() && FSlateApplication::IsInitialized() && !Overlay->HasKeyboardFocus())
+		{
+			// The pause menu this was opened from hands the keys and the mouse back to the game as it closes, after the
+			// edit mode took them: the overlay then got no click and no Escape. Take them again whenever they are lost.
+			if (AScctPlayerController* Holder = InputHolder.Get())
+			{
+				Holder->SetShowMouseCursor(true);
+				FInputModeUIOnly Mode;
+				Mode.SetWidgetToFocus(Overlay);
+				Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+				Holder->SetInputMode(Mode);
+				FSlateApplication::Get().ReleaseAllPointerCapture();
+				FSlateApplication::Get().SetKeyboardFocus(Overlay, EFocusCause::SetDirectly);
+			}
+		}
 	}
 	RunUnattended();
 }
