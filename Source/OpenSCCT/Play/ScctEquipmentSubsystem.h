@@ -148,6 +148,8 @@ private:
 
 	/** What a pawn's weapon is doing this frame, for the moving parts of a model drawn in its place. */
 	static FScctWeaponMotion MotionOf(const FScctEquipment& Pawn);
+	/** The suit refracts the scene in plain sight and night vision. Other modes draw their own view of it. */
+	float VisibleCloak(float Amount) const;
 
 	/** The frame's length, for what UpdateAttachment animates. */
 	float FrameSeconds = 0.0f;

@@ -255,6 +255,7 @@ class MapEffects:
         self.rain_cover = load(os.path.join(rain_cover, "rain_cover.json")) if rain_cover else {}
         self.spawn, self.texture_of, self.import_files, self.log = spawn, texture_of, import_files, log
         self.instances = {}
+        self.props = {}
         shared = os.path.join(render, "..", "..", "..", "shared", "classes.json")
         self.classes = load(shared).get("classes", {})
         beams = load(os.path.join(render, "lightbeams.json")).get("beams", [])
@@ -814,7 +815,6 @@ class MapEffects:
         sequence; the rest stand in its first frame until the game plays them. Hidden ones (the broken state of
         something, an animation waiting for its event) are placed hidden. The simulation moves and plays them
         once game code drives these actors: they are tagged Scct:<actor id> like everything else."""
-        self.props = {}
         placed = hidden = missing = 0
         for record in gameplay.get("actors", []):
             props = record.get("props", {})

@@ -17,6 +17,8 @@ its opacity in that mode (see PAWNS below). Detector beams are marked
 while thermal or EMF is on by a cylinder drawn only into the custom depth (Source/OpenSCCT/Play/ScctMarkersSubsystem):
 3 a beam EMF draws as a dark grey streak, 128 to 255 a beam thermal draws at the heat (stencil - 128) / 127.
 """
+import sys
+
 import unreal
 
 PACKAGE = "/Game/OpenSCCT/UI/Vision"
@@ -96,37 +98,26 @@ for (int b = 0; b < 5; b++)
 }
 """
 
-NIGHT = PRELUDE + """
-// Bloom: brightness gathered from two rings around the pixel.
-float B = 0.0;
-for (int i = 0; i < 8; i++)
+NIGHT = """
+// Retail rotates and translates Engine.Noise0_gauss each frame, one bilinear texel per output pixel.
+float2 Pixel = GetViewportUV(Parameters) * View.ViewSizeAndInvSize.xy;
+float3 Frame = float3(Rand3DPCG16(int3(View.StateFrameIndex, 0, 0))) / 65536.0;
+float2 GrainUV = Pixel / 128.0;
+float S, K;
+sincos(Frame.x, S, K);
+GrainUV = float2(K * GrainUV.x - S * GrainUV.y, S * GrainUV.x + K * GrainUV.y) + Frame.yz;
+float N = Texture2DSampleLevel(NoiseMap, NoiseMapSampler, GrainUV, 0).r;
+if (HasNoise < 0.5)
 {
-    float Ai = i * 0.785398 + 0.39;
-    float2 D = float2(cos(Ai), sin(Ai));
-    B += dot(SceneTextureLookup(UV + D * Px * 5.0, 14, true).rgb, Lw);
-    B += dot(SceneTextureLookup(UV + D * Px * 13.0, 14, true).rgb, Lw) * 0.6;
+    // Older content can lack the texture. Approximate its measured mean (0.5) and deviation (0.086).
+    float3 Random = float3(Rand3DPCG16(int3(floor(Pixel), View.StateFrameIndex))) / 65536.0;
+    N = 0.5 + 0.172 * dot(Random - 0.5, float3(1, 1, 1));
 }
-B /= 12.8;
-
-// The tube amplifies: darks are lifted hard, brights run into saturation and glow. Like a real tube it has an
-// automatic gain, so a lit room or a street under lamps is a readable green picture and not a white screen, and
-// a dark cellar still gets the full lift. The game sets Gain from the brightness of the whole picture as the
-// exposure measured it, bounded and eased over time (Source/OpenSCCT/Hud/ScctVisionSubsystem.cpp): measured here
-// from a handful of pixels it jumped whenever a lamp crossed one of them.
-float Gain = clamp(GainIn, 0.9, 4.5);
-float A = 1.0 - exp(-(L * Gain + B * Gain * 0.45));
-A += max(B * Gain / 4.5 - 0.32, 0.0) * 0.9;
-A += Grain * 0.12;
-A *= 0.95 + 0.05 * sin(VUV.y * Res.y * 1.5708);
-A = saturate(A);
-
-// Green phosphor: near black, through green, to a pale hot green.
-float3 Out = lerp(float3(0.0, 0.035, 0.012), float3(0.13, 0.80, 0.30), saturate(A * 1.5));
-Out = lerp(Out, float3(0.80, 1.0, 0.84), saturate((A - 0.62) * 2.6));
-
-// The goggle's tube darkens towards the edge of the picture.
-Out *= lerp(0.10, 1.0, smoothstep(1.02, 0.42, length(Q)));
-return lerp(C, Out, Amount);
+// The scene already contains the surface light boost and the engine's filtered highlight bloom.
+// The original post pass (mad_x2, mul_x2) multiplies display luminance by green phosphor and grain.
+float L = dot(Scene.rgb, float3(0.30, 0.59, 0.11));
+float3 Night = saturate(GainIn * N * L * float3(0.718, 1.0, 0.667));
+return lerp(Scene.rgb, Night, Amount);
 """
 
 THERMAL = PRELUDE + """
@@ -273,7 +264,7 @@ Out *= lerp(0.35, 1.0, smoothstep(1.05, 0.45, length(Q)));
 return lerp(C, Out, Amount);
 """
 
-MODES = [("Night", NIGHT, [], []), ("Thermal", THERMAL, [], []), ("Motion", MOTION, MOTION_SCALARS, MOTION_VECTORS), ("Emf", EMF, [], [])]
+MODES = [("Night", NIGHT, [("HasNoise", 0)], []), ("Thermal", THERMAL, [], []), ("Motion", MOTION, MOTION_SCALARS, MOTION_VECTORS), ("Emf", EMF, [], [])]
 
 
 def log(text):
@@ -328,8 +319,13 @@ def build(name, code, scalars, vectors):
         y = 950 + (len(scalars) + len(vectors)) * 150
         gain = library.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -700, y)
         gain.set_editor_property("parameter_name", "Gain")
-        gain.set_editor_property("default_value", 1.25)
+        gain.set_editor_property("default_value", 4.0)
         inputs.append(("GainIn", gain, ""))
+    if name == "Night":
+        noise = library.create_material_expression(material, unreal.MaterialExpressionTextureObjectParameter, -700, 1400)
+        noise.set_editor_property("parameter_name", "NoiseMap")
+        noise.set_editor_property("texture", unreal.load_asset("/Engine/EngineResources/WhiteSquareTexture"))
+        inputs.append(("NoiseMap", noise, ""))
 
     custom = library.create_material_expression(material, unreal.MaterialExpressionCustom, -250, 300)
     custom.set_editor_property("description", "ScctVision" + name)
@@ -407,7 +403,9 @@ def build_double_vision():
     log("built %s" % path)
 
 
-for mode_name, mode_code, mode_scalars, mode_vectors in MODES:
-    build(mode_name, mode_code, mode_scalars, mode_vectors)
-build_double_vision()
-log("done: %d materials" % (len(MODES) + 1))
+if __name__ == "__main__":
+    for mode_name, mode_code, mode_scalars, mode_vectors in MODES:
+        if len(sys.argv) == 1 or mode_name in sys.argv[1:]:
+            build(mode_name, mode_code, mode_scalars, mode_vectors)
+    if len(sys.argv) == 1 or "DoubleVision" in sys.argv[1:]:
+        build_double_vision()

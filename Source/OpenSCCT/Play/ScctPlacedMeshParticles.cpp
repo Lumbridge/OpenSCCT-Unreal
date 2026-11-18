@@ -9,6 +9,7 @@
 #include "Misc/Paths.h"
 #include "Online/ScctMapFolders.h"
 #include "Play/ScctLevelStateSubsystem.h"
+#include "Play/ScctMeshMaterial.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 
@@ -123,7 +124,7 @@ void FScctPlacedMeshParticles::Begin(UScctLevelStateSubsystem& Level)
 			Template->SetLightingChannels(false, false, false);
 			for (int32 Slot = 0; Slot < Template->GetNumMaterials(); ++Slot)
 			{
-				if (auto* Surface = Template->CreateDynamicMaterialInstance(Slot))
+				if (auto* Surface = ScctMeshMaterial::CreateSlotOverride(*Template, Slot))
 					Surface->SetScalarParameterValue(TEXT("Emissive"), 1.f);
 			}
 		}

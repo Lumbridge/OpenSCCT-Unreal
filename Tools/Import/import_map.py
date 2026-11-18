@@ -961,4 +961,15 @@ def main():
     log("saved " + level_path)
 
 
-main()
+if NORMALS_DIR == "--props-only":
+    # Runtime maps place these cooked meshes using their own gameplay records and source mesh transforms.
+    effects = scct_fx.MapEffects(MAP, RENDER, DEST, None, None, import_files, log)
+    for folder, _, files in os.walk(os.path.join(RENDER, "chars")):
+        for filename in sorted(files):
+            if filename.lower().endswith(".glb"):
+                asset = os.path.basename(folder) + "." + os.path.splitext(filename)[0]
+                if not effects.prop_assets(asset):
+                    raise RuntimeError("Could not import animated prop " + asset)
+    editor_assets.save_directory(DEST + "/Props", only_if_is_dirty=True)
+else:
+    main()

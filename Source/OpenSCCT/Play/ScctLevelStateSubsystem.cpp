@@ -330,6 +330,8 @@ void UScctLevelStateSubsystem::IndexLevel()
 	bIndexed = true;
 	LoadedMeshes.Reset();
 	LoadedMaterials.Reset();
+	HackPanelDisplay = nullptr;
+	bTriedHackPanelDisplay = false;
 	RuntimeMap.Reset();
 	for (TActorIterator<AScctRuntimeMapActor> It(GetWorld()); It; ++It)
 	{
@@ -773,8 +775,8 @@ void UScctLevelStateSubsystem::HandleFrame(float DeltaSeconds)
 	}
 	RefreshNames();
 	RunDebugActions();
-	UpdateActors();
 	UpdateProps();
+	UpdateActors();
 	DrawWorldGeometry();
 	UpdateAttachedEmitters();
 	DressForLightPlan();
@@ -1178,9 +1180,13 @@ void UScctLevelStateSubsystem::ApplySkins(FActorState& State)
 	UStaticMeshComponent* Component = State.Mesh.Get();
 	UStaticMesh* Mesh = Component ? Component->GetStaticMesh() : nullptr;
 	int32 Skins[ScctWorldSkinSlots] = {};
-	if (!Mesh || !World->GetActorSkins(State.Info.NameId, Skins, ScctWorldSkinSlots)) return;
-	// The bomb socket ghost covers the entire model, including sections absent from the actor's skin array.
-	if (State.WornSkins.IsEmpty() && !Algo::AnyOf(Skins, [](int32 Id) { return Id != 0; })) return;
+	if (!Mesh) return;
+	if (!World->GetActorSkins(State.Info.NameId, Skins, ScctWorldSkinSlots) ||
+		(State.WornSkins.IsEmpty() && !Algo::AnyOf(Skins, [](int32 Id) { return Id != 0; })))
+	{
+		ApplyHackPanelDisplay(State);
+		return;
+	}
 	if (const auto* Sections = SourceSections.Find(FName(*LevelKey(Mesh->GetName()))))
 	{
 		if (const int32* Source = Sections->Find(TEXT("#split")))
@@ -1197,6 +1203,7 @@ void UScctLevelStateSubsystem::ApplySkins(FActorState& State)
 			}
 		}
 	}
+	// The bomb socket ghost covers the entire model, including sections absent from the actor's skin array.
 	const bool bGhost = Skins[0] && GetName(Skins[0]).Equals(TEXT("SGameplayObjectsTex.Object.FX_pose_bomb_heat"), ESearchCase::IgnoreCase);
 	State.WornSkins.SetNumZeroed(Mesh->GetStaticMaterials().Num());
 	for (int32 Surface = 0; Surface < State.WornSkins.Num(); ++Surface)
@@ -1215,6 +1222,7 @@ void UScctLevelStateSubsystem::ApplySkins(FActorState& State)
 		Component->SetMaterial(Surface, Material ? Material : FindFixtureMaterial(Component, Surface));
 		State.bSkinned = true;
 	}
+	if (!bGhost && !Skins[1]) ApplyHackPanelDisplay(State);
 	if (State.bSkinned) LevelAvoidNanite(Component);
 }
 
@@ -1530,14 +1538,6 @@ void UScctLevelStateSubsystem::BindProp(FPropState& State, const FScctWorldAnima
 {
 	State.bBound = true;
 	const FString& Name = GetName(Record.NameId);
-	ASkeletalMeshActor* Actor = Cast<ASkeletalMeshActor>(TaggedActors.FindRef(FScctWorld::LevelTag(*Name)).Get());
-	USkeletalMeshComponent* Component = Actor != nullptr ? Actor->GetSkeletalMeshComponent() : nullptr;
-	if (Component == nullptr)
-	{
-		return;
-	}
-
-	State.ImportedTransform = Actor->GetActorTransform();
 	// A fish has already picked a random position and heading by the first draw. Only the authored
 	// placement separates the mesh's fixed axis correction from the actor's live swimming pose.
 	FScctWorldActorInfo Placement{};
@@ -1546,11 +1546,30 @@ void UScctLevelStateSubsystem::BindProp(FPropState& State, const FScctWorldAnima
 		UE_LOG(LogOpenSCCT, Warning, TEXT("Level state: no map placement for skeletal prop '%s'"), *Name);
 		return;
 	}
-	State.Actor = Actor;
 	State.FirstLocation = FVector(Placement.X, Placement.Y, Placement.Z);
 	State.FirstQuat = FScctWorld::ToRotator(Placement.Pitch, Placement.Yaw, Placement.Roll).Quaternion();
-	State.OriginQuat = State.FirstQuat.Inverse() * State.ImportedTransform.GetRotation();
 	const FVector Scale(Placement.ScaleX, Placement.ScaleY, Placement.ScaleZ);
+	const FName Tag = FScctWorld::LevelTag(*Name);
+	ASkeletalMeshActor* Actor = Cast<ASkeletalMeshActor>(TaggedActors.FindRef(Tag).Get());
+	if (!Actor && RuntimeMap.IsValid())
+	{
+		Actor = RuntimeMap->SpawnAnimatedProp(GetName(Record.MeshId), FTransform(State.FirstQuat, State.FirstLocation, Scale));
+		if (Actor)
+		{
+			Actor->Tags.Add(Tag);
+			Actor->SetActorHiddenInGame((Record.Flags & EScctWorldAnimatedFlags::Visible) == 0);
+			TaggedActors.Add(Tag, Actor);
+			Spawned.Add(Actor);
+		}
+	}
+	if (!Actor)
+	{
+		return;
+	}
+	USkeletalMeshComponent* Component = Actor->GetSkeletalMeshComponent();
+	State.Actor = Actor;
+	State.ImportedTransform = Actor->GetActorTransform();
+	State.OriginQuat = State.FirstQuat.Inverse() * State.ImportedTransform.GetRotation();
 	const FVector Imported = Actor->GetActorScale3D();
 	State.ScaleRatio = FVector(
 		FMath::Abs(Scale.X) > UE_SMALL_NUMBER ? Imported.X / Scale.X : 1.0,

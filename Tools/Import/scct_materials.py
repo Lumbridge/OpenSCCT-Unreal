@@ -335,7 +335,7 @@ def pawn_light(g, normal, world_position):
                            default_value=unreal.LinearColor(0, 0, 0, 0), use_custom_primitive_data=True,
                            primitive_data_index=4 + 8 * i + 4 * j)
             inputs[key] = (param, "RGBA")
-    return g.custom("""
+    term = g.custom("""
         if (Active < 0.5 || Plan < 0.5) return 0;
         float4 places[4] = {Place0, Place1, Place2, Place3};
         float3 colours[4] = {Colour0.rgb, Colour1.rgb, Colour2.rgb, Colour3.rgb};
@@ -346,6 +346,9 @@ def pawn_light(g, normal, world_position):
         }
         return pow(clamp(term, 0.0, 2.0), 2.2);
         """, FLOAT3, Active=active, Plan=g.light("Plan"), N=normal, P=world_position, **inputs)
+    # Alpha of the last lamp is independent of that lamp. Zero keeps ordinary surfaces and previews as authored.
+    # On a spy body it is one plus the display-space illumination actually reaching the pawn.
+    return term, (inputs["Colour3"][0], "A")
 
 
 def build_surface(cosmetic=False):
@@ -445,7 +448,11 @@ def build_surface(cosmetic=False):
         " return Base * Tint * grain * lerp(1.0, D.r, AO * 0.5 * fade);", FLOAT3,
         Base=base["RGB"], Tint=tint, D=packed, Amount=g.scalar("DetailColour", 0.0), AO=occlusion_amount,
         Depth=g.node(unreal.MaterialExpressionPixelDepth))
-    g.output(colour, unreal.MaterialProperty.MP_BASE_COLOR)
+    pawn, spy_light = pawn_light(g, normal, world_position)
+    # Real lights still shade the mesh per pixel. A spy wholly in cover must not pick up the room's reflection
+    # environment. Fade in the engine lighting response through the dark end of the original light term.
+    receiver = g.custom("return L < 1.0 ? 1.0 : smoothstep(0.0, 0.15, L - 1.0);", FLOAT1, L=spy_light)
+    g.output(g.custom("return C * Receive;", FLOAT3, C=colour, Receive=receiver), unreal.MaterialProperty.MP_BASE_COLOR)
 
     # ---- roughness: the class sets the level (darker parts of the original read as rougher grime, brighter parts
     # as worn, smoother material); the set adds scratches, pores and smears around it.
@@ -453,6 +460,11 @@ def build_surface(cosmetic=False):
                          Dark=g.scalar("RoughnessDark", 0.85), Bright=g.scalar("RoughnessBright", 0.45),
                          G=base["G"], D=packed, Amount=g.scalar("DetailRoughness", 0.0))
     metallic = g.scalar("Metallic", 0.0)
+    # Dry spy cloth uses its painted wear. Suppress the white dielectric reflection that makes dark fabric look wet,
+    # including imported map outfits inheriting the surface master's default specular.
+    roughness = g.custom("return L >= 1.0 ? max(R, 0.92) : R;", FLOAT1, L=spy_light, R=roughness)
+    specular = g.custom("return L >= 1.0 ? min(S, 0.04) * Receive : S;", FLOAT1,
+                        S=g.scalar("Specular", 0.5), L=spy_light, Receive=receiver)
     if cosmetic:
         material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
         coverage = (g.texture("FinishMask", "/Engine/EngineResources/WhiteSquareTexture"), "R")
@@ -461,7 +473,7 @@ def build_surface(cosmetic=False):
         metallic = g.custom("return lerp(M, Gold, Mask);", FLOAT1, M=metallic, Gold=mirror, Mask=coverage)
     g.output(roughness, unreal.MaterialProperty.MP_ROUGHNESS)
     g.output(metallic, unreal.MaterialProperty.MP_METALLIC)
-    g.output(g.scalar("Specular", 0.5), unreal.MaterialProperty.MP_SPECULAR)
+    g.output(specular, unreal.MaterialProperty.MP_SPECULAR)
     # (Its output is with the baked light below: the lighting plan gates it by that.)
     occlusion = g.custom("return lerp(1.0, D.r, AO);", FLOAT1, D=packed, AO=occlusion_amount)
 
@@ -497,7 +509,8 @@ def build_surface(cosmetic=False):
         "float3 vertex = pow(saturate(VC.rgb) * 2.0, 2.2) * saturate(UseVC);"
         " float3 light = min(LM * 4.6, 4.6) + vertex;"
         " float3 released = lerp(dot(light, float3(0.2126, 0.7152, 0.0722)), light, 0.6) * Fill;"
-        " if (Plan < 0.5) return float4(released, 1.0);"
+        "\n#if MATERIAL_SHADINGMODEL_UNLIT || MATERIALBLENDING_ADDITIVE\n Boost = 0.0;\n#endif\n"
+        " if (Plan < 0.5) return float4(released + pow(max(Boost, 0.0), 2.2), 1.0);"
         " float3 lm = max(LM, 0.0);"
         " float3 stored = float3(lm.r <= 0.0031308 ? lm.r * 12.92 : 1.055 * pow(lm.r, 1.0 / 2.4) - 0.055,"
         " lm.g <= 0.0031308 ? lm.g * 12.92 : 1.055 * pow(lm.g, 1.0 / 2.4) - 0.055,"
@@ -546,9 +559,9 @@ def build_surface(cosmetic=False):
     emissive = g.custom("return Painted > 0.5 ? Glow : Glow + Least + Base * Tint * (Baked + Pawn);", FLOAT3,
                         Painted=painted_additive,
                         Glow=g.in_the_picture(glow, g.scalar("GlowInPicture", 1.0)), Least=least, Base=base["RGB"],
-                        Tint=tint, Baked=baked, Pawn=pawn_light(g, normal, world_position))
+                        Tint=tint, Baked=baked, Pawn=pawn)
     if cosmetic:
-        # Gold reflects a bright studio environment even in shade. Pyre lacquer keeps the local lighting.
+        # The Armoury's studio reflection follows the light reaching the suit when worn in a match.
         reflection = g.node(unreal.MaterialExpressionReflectionVectorWS)
         view = g.node(unreal.MaterialExpressionTransform,
                       transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_WORLD,
@@ -558,6 +571,7 @@ def build_surface(cosmetic=False):
         sheen = g.custom("""float3 r = normalize(R);
             float level = saturate(dot(Lit,float3(1,1,1))/max(dot(C,float3(1,1,1)),.03));
             float shade = lerp(lerp(.3,1,level),1,Gold);
+            if (SpyLight >= 1.0) shade = pow(saturate(SpyLight - 1.0), 2.2);
             float env = lerp(.3,1.25,smoothstep(-.45,.9,r.y)) + .85*exp(-pow((r.y-.12)*7,2));
             float streaks = .35*sin(r.x*7+r.y*2.5) + .2*sin(r.x*17-r.z*5)
                 + .7*pow(saturate(dot(r,normalize(float3(-.7,.45,.4)))),6);
@@ -569,7 +583,7 @@ def build_surface(cosmetic=False):
             float3 tint = lerp(float3(1,.93,.85),float3(1,.8,.36),Gold);
             float strength = lerp(.7,1,Gold);
             return saturate((C*env*lerp(.75,.95,Gold) + tint*(1.8*spec+.5*spec2+.6*Rim+.5*glint*Gold))*shade*strength);""",
-            FLOAT3, R=view, C=base_rgb, Gold=mirror, T=time, UV=uv, Rim=fresnel, Lit=emissive)
+            FLOAT3, R=view, C=base_rgb, Gold=mirror, T=time, UV=uv, Rim=fresnel, Lit=emissive, SpyLight=spy_light)
         emissive = g.custom("return E*(1-Mask*lerp(.525,.95,Gold)) + Mask*S;", FLOAT3,
                             E=emissive, Mask=coverage, Gold=mirror, S=g.in_the_picture(sheen))
     g.output(emissive, unreal.MaterialProperty.MP_EMISSIVE_COLOR)

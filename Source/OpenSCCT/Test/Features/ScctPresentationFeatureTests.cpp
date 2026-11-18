@@ -31,6 +31,8 @@
 #include "Hud/ScctHudSubsystem.h"
 #include "Hud/ScctVisionSubsystem.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialParameterCollection.h"
+#include "Materials/MaterialParameterCollectionInstance.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Play/ScctAudioSubsystem.h"
@@ -601,6 +603,23 @@ namespace ScctPresentationFeatureLocal
 				bHeld = true;
 				// -ScctFeatureBreak holds plain sight throughout.
 				Vision->ForceModeForCheck(ScctFeatureKit::IsBroken() ? 0 : Mode);
+				if (Mode == 0)
+				{
+					// Sample the first frame out of EMF. By the settled-mode checks below the old
+					// render-pass delay has already elapsed.
+					const UScctSessionSubsystem* Session = Context.GetWorld()->GetSubsystem<UScctSessionSubsystem>();
+					const AScctPawnProxy* Spy = Session ? Session->FindLocalProxy() : nullptr;
+					const UPoseableMeshComponent* Body = Spy ? Spy->GetBodyMesh() : nullptr;
+					if (!Body || Body->bRenderInMainPass)
+					{
+						return FScctTestResult::Fail(TEXT("the idle spy was not hidden from the main pass in EMF"));
+					}
+					Vision->Present(Mode, 1.0f / 60.0f);
+					if (!Body->bRenderInMainPass || !Body->bRenderInDepthPass || Vision->GetModeCheck(3).Amount <= 0.0f)
+					{
+						return FScctTestResult::Fail(TEXT("the spy's normal colour and depth did not return on the first frame of EMF fade-out"));
+					}
+				}
 				return FScctTestResult::Running();
 			}
 			if (!Waited(Context, 1.5))
@@ -608,6 +627,14 @@ namespace ScctPresentationFeatureLocal
 				return FScctTestResult::Running();
 			}
 			ScctFeatureKit::Shot(GetName(), FString::Printf(TEXT("mode-%d"), Mode));
+			auto* Light = LoadObject<UMaterialParameterCollection>(nullptr, TEXT("/Game/OpenSCCT/Materials/MPC_ScctLight.MPC_ScctLight"));
+			auto* Instance = Light ? Context.GetWorld()->GetParameterCollectionInstance(Light) : nullptr;
+			float Boost = 0.0f;
+			if (!Instance || !Instance->GetScalarParameterValue(TEXT("Boost"), Boost)
+				|| !FMath::IsNearlyEqual(Boost, Mode == 34 ? 30.0f / 255.0f : 0.0f))
+			{
+				return FScctTestResult::Fail(FString::Printf(TEXT("surface night-light boost is %.4f in mode %d"), Boost, Mode));
+			}
 			TArray<FString> Parts;
 			for (int32 Index = 0; Index < 4; ++Index)
 			{

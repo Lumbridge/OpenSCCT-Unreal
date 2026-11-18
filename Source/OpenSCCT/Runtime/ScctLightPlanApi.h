@@ -154,6 +154,8 @@ namespace EScctLightRigOptions
 	constexpr int32 NoSpecialLit = 8;
 	/** Only ordinary lamps supplied by the pawn material. Unreal draws live lights separately. */
 	constexpr int32 MaterialLamps = 16;
+	/** Alongside MaterialLamps, Level also reports how much ordinary and live illumination reaches this spy (0..1). */
+	constexpr int32 SpySurface = 32;
 }
 
 namespace EScctRigLightFlags

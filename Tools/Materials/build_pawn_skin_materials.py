@@ -144,11 +144,19 @@ def build_wet():
     env = g.texture("EnvMap", NEUTRAL, uvs=env_uv)
     mask = g.texture("SpecMask", NEUTRAL)
     # Strength: half of the original's sum, for the same reason as the edge's quarter (-ScctSkinWet tries others).
-    sheen = g.custom("return E.rgb * EnvColor.rgb * M * Strength;", FLOAT3,
+    # On a spy body the last custom primitive float holds one plus the light reaching the pawn, in display units.
+    # The wet environment picture is a reflection: the same rain mask must go dark behind cover and relight in a torch.
+    spy_light = g.node(unreal.MaterialExpressionScalarParameter, parameter_name="SpySurfaceLight", default_value=0.0,
+                       use_custom_primitive_data=True, primitive_data_index=35)
+    sheen = g.custom("float light = L < 1.0 ? 1.0 : pow(saturate(L - 1.0), 2.2);"
+                     " return E.rgb * EnvColor.rgb * M * Strength * light;", FLOAT3, L=spy_light,
                      E=(env, "RGBA"), EnvColor=g.colour("EnvColor", (0.3135, 0.3087, 0.3135, 1.0)),
                      M=(mask, "A"), Strength=g.scalar("Strength", 0.5))
     g.output(in_the_picture(g, sheen), unreal.MaterialProperty.MP_EMISSIVE_COLOR)
-    material = g.finish()
+    return g.finish()
+
+
+def build_wet_instances(material):
     log("built M_ScctWetSkin")
 
     for name in WET_INSTANCES:
@@ -166,8 +174,9 @@ def main():
     remove_old_textures()
     build_sticky()
     build_edge()
-    build_wet()
+    build_wet_instances(build_wet())
     log("done: 3 materials, %d instances, no textures" % len(WET_INSTANCES))
 
 
-main()
+if __name__ == "__main__":
+    main()

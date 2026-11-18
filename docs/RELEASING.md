@@ -26,6 +26,7 @@ A release is a zip that the OpenSCCT launcher installs, plus a checksum and a la
   script also fails when the paks folder holds a container other than `pakchunk0`: the map packs (docs/MAP-PAKS.md)
   are cooked with `-CustomConfig=MapPaks`, which a release never passes, and are never shipped with it.
 - The C# bridge, built against the OpenSCCT checkout (`-OpenScct`, default `..\OSC-unreal-bridge`).
+- Runtime maps reuse the cooked skeletal props from other editions with the same source mesh. For maps with unique props, run `Tools/Import/Import-Map.ps1 -Map <map> -Content <converted content folder> -PropsOnly` before packaging. The stock tutorial packs with additional meshes are TME30, TME33 and TSP29.
 - A private .NET 10 runtime in `Binaries/DotNet`, copied from the newest installed 10.x runtime. Players then need
   no .NET installed. `-NoDotNet` leaves it out.
 - `Prerequisites/vc_redist.x64.exe`, the Visual C++ runtime installer from the engine.

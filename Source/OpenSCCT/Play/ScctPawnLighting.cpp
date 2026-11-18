@@ -12,7 +12,7 @@ namespace
 	const FName HasPawnRig(TEXT("HasPawnRig"));
 }
 
-FScctPawnLighting FScctPawnLighting::Sample(FVector Centre, float Radius)
+FScctPawnLighting FScctPawnLighting::Sample(FVector Centre, float Radius, int32 SpyActorId)
 {
 	FScctPawnLighting Sample;
 	Sample.bLamps = FScctLightRules::BodiesOnLampChannel();
@@ -29,7 +29,12 @@ FScctPawnLighting FScctPawnLighting::Sample(FVector Centre, float Radius)
 	const int32 Options = EScctLightRigOptions::MaterialLamps | (bShadows ? 0 : EScctLightRigOptions::NoOcclusion);
 	FScctLightRig Rig{};
 	// Viewer is only used by the audit's facing estimate. Per-pixel normals determine the drawn term.
-	if (!Api->GetPointRig(Centre.X, Centre.Y, Centre.Z, Radius, Centre.X, Centre.Y, Centre.Z, Options, &Rig))
+	if (SpyActorId != INDEX_NONE && Api->GetActorRig(SpyActorId, Centre.X, Centre.Y, Centre.Z,
+		Options | EScctLightRigOptions::SpySurface, &Rig))
+	{
+		Sample.SpySurfaceLight = 1.0f + FMath::Clamp(Rig.Level, 0.0f, 1.0f);
+	}
+	else if (!Api->GetPointRig(Centre.X, Centre.Y, Centre.Z, Radius, Centre.X, Centre.Y, Centre.Z, Options, &Rig))
 	{
 		return Sample;
 	}
@@ -62,7 +67,7 @@ FScctPawnLighting FScctPawnLighting::Sample(FVector Centre, float Radius)
 	return Sample;
 }
 
-void FScctPawnLighting::Apply(UMeshComponent& Mesh, bool bReceiveBodyAid) const
+void FScctPawnLighting::Apply(UMeshComponent& Mesh, bool bReceiveBodyAid, bool bBody) const
 {
 	const bool bSupportsMaterialRig = Mesh.GetCustomPrimitiveDataIndexForScalarParameter(HasPawnRig) == 3;
 	// A custom gun or overlay with its own material still receives shadowed world lights. Only fall back
@@ -79,5 +84,9 @@ void FScctPawnLighting::Apply(UMeshComponent& Mesh, bool bReceiveBodyAid) const
 	else if (bSupportsMaterialRig && Mesh.GetCustomPrimitiveData().Data.IsValidIndex(3) && Mesh.GetCustomPrimitiveData().Data[3] != 0.0f)
 	{
 		Mesh.SetCustomPrimitiveDataFloat(3, 0.0f);
+	}
+	if (bBody && (SpySurfaceLight != 0.0f || Mesh.GetCustomPrimitiveData().Data.IsValidIndex(35)))
+	{
+		Mesh.SetCustomPrimitiveDataFloat(35, SpySurfaceLight);
 	}
 }

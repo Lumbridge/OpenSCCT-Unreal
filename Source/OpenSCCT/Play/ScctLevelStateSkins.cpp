@@ -1,12 +1,16 @@
 #include "Play/ScctLevelStateSubsystem.h"
 
 #include "Dom/JsonObject.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
 #include "ImageUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "OpenSCCT.h"
+#include "Online/ScctMapFolders.h"
+#include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 #include "Runtime/ScctMenuApi.h"
 #include "Serialization/JsonSerializer.h"
@@ -38,6 +42,61 @@ namespace
 		FString Path = FPaths::ConvertRelativePathToFull(Folder / Relative);
 		if (!FPaths::CollapseRelativeDirectories(Path) || !FPaths::IsUnderDirectory(Path, Folder)) return nullptr;
 		return FImageUtils::ImportFileAsTexture2D(Path);
+	}
+}
+
+void UScctLevelStateSubsystem::ApplyHackPanelDisplay(FActorState& State)
+{
+	// The original switch's second section is a permanent self-lit combiner, independent of
+	// the switch's usable/hacking state. Cooked and loose maps both bind their actors here.
+	UStaticMeshComponent* Component = State.Mesh.Get();
+	if (!Component || !Component->GetStaticMesh() || !Session ||
+		!GetName(State.MeshId).Equals(TEXT("SGameplayObjects.SGPO_SM.trigger_hack"), ESearchCase::IgnoreCase)) return;
+
+	if (!bTriedHackPanelDisplay)
+	{
+		bTriedHackPanelDisplay = true;
+		const FString Folder = ScctMapFolders::FolderOf(Session->GetSessionInfo().Map) / TEXT("render");
+		FString Json;
+		TSharedPtr<FJsonObject> Doc;
+		if (!FFileHelper::LoadFileToString(Json, *(Folder / TEXT("materials.json"))) ||
+			!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Doc)) return;
+		const FJsonObject* Table = Child(Doc.Get(), TEXT("materials"));
+		if (!Table) return;
+		for (const auto& Pair : Table->Values)
+		{
+			const auto Entry = Pair.Value->AsObject();
+			if (!TextField(Entry.Get(), TEXT("source")).Equals(TEXT("SGameplayObjectsTex.SGPO.triggers_hack_fx_heat"), ESearchCase::IgnoreCase)) continue;
+			const FJsonObject* Combine = Child(Child(Entry.Get(), TEXT("flags")), TEXT("combine"));
+			if (!Combine || Combine->GetIntegerField(TEXT("op")) != 4) continue;
+			UMaterialInterface* Parent = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/OpenSCCT/Materials/M_ScctHackPanel.M_ScctHackPanel"));
+			if (!Parent) return;
+			UMaterialInstanceDynamic* Mid = UMaterialInstanceDynamic::Create(Parent, this);
+			for (int32 Layer = 1; Layer <= 2; ++Layer)
+			{
+				const FString Suffix = FString::FromInt(Layer);
+				const FJsonObject* Anim = Child(Combine, TEXT("anim") + Suffix);
+				const TArray<TSharedPtr<FJsonValue>>* Direction = nullptr;
+				double Rate = 0;
+				if (!Anim || TextField(Anim, TEXT("type")) != TEXT("panner") ||
+					!Anim->TryGetArrayField(TEXT("direction"), Direction) || Direction->Num() < 2 ||
+					!Anim->TryGetNumberField(TEXT("rate"), Rate)) return;
+				UTexture2D* LayerTexture = SkinPicture(Folder, TextField(Combine, *(TEXT("tex") + Suffix)));
+				if (!LayerTexture) return;
+				const double Yaw = (*Direction)[1]->AsNumber() * (2.0 * PI / 65536.0);
+				Mid->SetTextureParameterValue(FName(*(TEXT("Layer") + Suffix)), LayerTexture);
+				Mid->SetVectorParameterValue(FName(*(TEXT("Pan") + Suffix)), FLinearColor(Rate * FMath::Cos(Yaw), Rate * FMath::Sin(Yaw), 0, 0));
+			}
+			HackPanelDisplay = Mid;
+			break;
+		}
+	}
+	if (HackPanelDisplay)
+	{
+		for (int32 Slot = 0; Slot < Component->GetNumMaterials(); ++Slot)
+		{
+			if (SourceSlot(Component->GetStaticMesh(), Slot) == 1) Component->SetMaterial(Slot, HackPanelDisplay);
+		}
 	}
 }
 

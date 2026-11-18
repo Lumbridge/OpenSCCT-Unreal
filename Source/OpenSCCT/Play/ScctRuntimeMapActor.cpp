@@ -1,5 +1,10 @@
 #include "Play/ScctRuntimeMapActor.h"
+#include "Animation/SkeletalMeshActor.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "Play/ScctAuthoredMaterial.h"
+#include "Play/ScctMeshMaterial.h"
 #include "Play/ScctAuthoredDirections.h"
 
 #include "Components/PointLightComponent.h"
@@ -793,7 +798,7 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 		for (int32 S = 0; S < Mesh->GetStaticMaterials().Num(); ++S)
 		{
 			const int32 Material = FCString::Atoi(*Mesh->GetStaticMaterials()[S].MaterialSlotName.ToString());
-			if (auto* Mid = Part->CreateDynamicMaterialInstance(S))
+			if (auto* Mid = ScctMeshMaterial::CreateSlotOverride(*Part, S))
 			{
 				Mid->SetScalarParameterValue(TEXT("Emissive"), 1.f);
 				if (BoolOf(SkyZone, TEXT("fog")) && FogEnd > 0 && !ClearMaterials.Contains(Material) && Mid->GetBlendMode() == BLEND_Opaque)
@@ -909,6 +914,62 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 		*Map, Meshes.Num(), NumSections, NumTriangles, *GlbPath, NumReaderErrors, Materials.Num(), Textures.Num(), NumTexturesMissing,
 		NumPlaced, LevelMeshes.Num(), NumSkipped, NumWithoutMesh, NumLights, ReadSeconds, FPlatformTime::Seconds() - Start);
 	return true;
+}
+
+ASkeletalMeshActor* AScctRuntimeMapActor::SpawnAnimatedProp(const FString& MeshName, const FTransform& Placement)
+{
+	// world.glb contains static geometry. The prop and its clips live in a separate file shared by map variants.
+	FString Package, Name;
+	if (!MeshName.Split(TEXT("."), &Package, &Name) || !FPackageName::IsValidLongPackageName(FString(TEXT("/Game")) / Package / Name)
+		|| Package.Contains(TEXT("/")) || Name.Contains(TEXT("/")))
+	{
+		return nullptr;
+	}
+	const auto Document = ReadGlbJson(RenderFolder / TEXT("chars") / Package / (Name + TEXT(".glb")));
+	if (!Document)
+	{
+		return nullptr;
+	}
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	TArray<FString> Folders;
+	const FString Root = TEXT("/Game/Imported/Maps");
+	Registry.GetSubPaths(Root, Folders, false);
+	Folders.Sort();
+	const FString OwnFolder = Root / FPaths::GetCleanFilename(FPaths::GetPath(RenderFolder));
+	Folders.Remove(OwnFolder);
+	Folders.Insert(OwnFolder, 0);
+	const FString Suffix = FString(TEXT("Props")) / Package / Name / TEXT("SkeletalMeshes") / (Name + TEXT(".") + Name);
+	USkeletalMesh* Mesh = nullptr;
+	for (const FString& Folder : Folders)
+	{
+		const FAssetData Asset = Registry.GetAssetByObjectPath(FSoftObjectPath(Folder / Suffix));
+		if (Asset.IsValid() && (Mesh = Cast<USkeletalMesh>(Asset.GetAsset())) != nullptr)
+		{
+			break;
+		}
+	}
+	if (!Mesh)
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Runtime map: could not find the cooked skeletal prop %s"), *MeshName);
+		return nullptr;
+	}
+	const auto Metadata = ObjectOf(ObjectOf(Document, TEXT("extras")), TEXT("svmap"));
+	const FVector Origin = VectorOf(Metadata, TEXT("rotOrigin"), FVector::ZeroVector);
+	const FQuat Rotation = Placement.GetRotation() * RotatorOfUnits(Origin.X, Origin.Y, Origin.Z).Quaternion();
+	const FVector Scale = Placement.GetScale3D() * VectorOf(Metadata, TEXT("meshScale"), FVector::OneVector);
+	const FTransform Transform(Rotation, Placement.GetLocation(), Scale);
+	FActorSpawnParameters Params;
+	Params.ObjectFlags |= RF_Transient;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	auto* Actor = GetWorld()->SpawnActor<ASkeletalMeshActor>(ASkeletalMeshActor::StaticClass(), Transform, Params);
+	if (Actor)
+	{
+		USkeletalMeshComponent* Component = Actor->GetSkeletalMeshComponent();
+		Component->SetMobility(EComponentMobility::Movable);
+		Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Component->SetSkeletalMeshAsset(Mesh);
+	}
+	return Actor;
 }
 
 AActor* AScctRuntimeMapActor::PlaceMesh(UStaticMesh* Mesh, const FString& Name, const FTransform& Transform, bool bMovable, float VertexLightKind)

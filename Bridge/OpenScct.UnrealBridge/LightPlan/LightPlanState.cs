@@ -28,6 +28,9 @@ public static class BridgeLightRigOptions
     // The pawn material supplies the ordinary lamps whose world contribution is already baked.
     // Live map lamps, projectors, torches and effect lights have their own shadowed Unreal light.
     public const int MaterialLamps = 16;
+
+    /// <summary>With MaterialLamps, return the light reaching a Spy's surface this frame in Level (0..1).</summary>
+    public const int SpySurface = 32;
 }
 
 /// <summary>Flags of one light of a rig.</summary>
@@ -277,9 +280,11 @@ public sealed class LightPlanState : IDisposable
     public void Rig(FVector centre, float radius, FVector viewer, int options, Actor? self, RigResult rig)
     {
         bool materialLamps = (options & BridgeLightRigOptions.MaterialLamps) != 0;
-        bool runtime = !materialLamps && (options & BridgeLightRigOptions.NoRuntimeLights) == 0;
+        bool spySurface = materialLamps && (options & BridgeLightRigOptions.SpySurface) != 0;
+        bool runtime = (!materialLamps || spySurface) && (options & BridgeLightRigOptions.NoRuntimeLights) == 0;
         Refresh(runtime);
         ICollisionWorld? collision = Collision;
+        ICollisionWorld? shadowWorld = (options & BridgeLightRigOptions.NoOcclusion) == 0 ? collision : null;
         bool placed = (options & BridgeLightRigOptions.PlacedOnly) != 0;
         bool noSpecial = (options & BridgeLightRigOptions.NoSpecialLit) != 0;
         float time = Level.Info.TimeSeconds;
@@ -289,6 +294,7 @@ public sealed class LightPlanState : IDisposable
         FVector normal = length > 1e-3f ? toViewer * (1f / length) : new FVector(0f, 0f, 1f);
 
         LightRgb ambient = zone >= 0 && Map.Ambient.TryGetValue(zone, out LightRgb a) ? a : default;
+        LightRgb surfaceLight = ambient;
         rig.Ambient = ambient;
         rig.Zone = zone;
         rig.Count = 0;
@@ -299,12 +305,17 @@ public sealed class LightPlanState : IDisposable
         for (int i = 0; i < _lights.Length; i++)
         {
             PlanLight l = _lights[i];
-            if (materialLamps && (l.Hidden || l.Class is not (BridgeLightClass.Baked or BridgeLightClass.CharactersOnly)))
+            if (!l.InSet || !_on[i] || (noSpecial && l.SpecialLit) || (l.OwnZoneOnly && zone >= 0 && l.Zone >= 0 && l.Zone != zone))
             {
                 continue;
             }
-            if (!l.InSet || !_on[i] || (noSpecial && l.SpecialLit) || (l.OwnZoneOnly && zone >= 0 && l.Zone >= 0 && l.Zone != zone))
+            if (materialLamps && (l.Hidden || l.Class is not (BridgeLightClass.Baked or BridgeLightClass.CharactersOnly)))
             {
+                if (spySurface && !l.Hidden && l.Class == BridgeLightClass.Dynamic)
+                {
+                    surfaceLight += LiveSurfaceLight(l.Effect, _location[i], _rotation[i], l.Hue, l.Saturation,
+                        l.Brightness * _scale[i], l.Radius, l.Cone, centre, shadowWorld);
+                }
                 continue;
             }
 
@@ -336,6 +347,13 @@ public sealed class LightPlanState : IDisposable
                     }
                 }
 
+                if (spySurface)
+                {
+                    float modulation = FieldModulation((int)actor.LightType, actor.LightPeriod, actor.LightPhase, time);
+                    surfaceLight += LiveSurfaceLight(effect, actor.Location, actor.Rotation, actor.LightHue, actor.LightSaturation,
+                        actor.LightBrightness * modulation, actor.LightRadius, actor.LightCone, centre, shadowWorld);
+                    continue;
+                }
                 float score = ActorLightRules.Score(effect, actor.Location, actor.Rotation, actor.LightBrightness, actor.LightRadius, actor.LightCone,
                     centre, radius);
                 if (score > 0f)
@@ -428,22 +446,25 @@ public sealed class LightPlanState : IDisposable
                 flags |= BridgeRigLightFlags.Sun;
                 location = -rotation.Vector();
             }
-            if ((options & BridgeLightRigOptions.NoOcclusion) == 0 && collision is not null &&
-                (effect != ActorLightRules.LE_Sunlight || materialLamps))
+            if ((effect != ActorLightRules.LE_Sunlight || materialLamps) && shadowWorld is not null)
             {
                 FVector source = effect == ActorLightRules.LE_Sunlight ? centre + (location * 65536f) : location;
-                if (collision.LineCheck(out _, null, centre, source, default, ShadowFlags))
+                if (shadowWorld.LineCheck(out _, null, centre, source, default, ShadowFlags))
                 {
                     flags |= BridgeRigLightFlags.Occluded;
                 }
             }
 
+            if (spySurface && (flags & BridgeRigLightFlags.Occluded) == 0)
+            {
+                surfaceLight += effect == ActorLightRules.LE_PointAmbient ? reach * 2f : reach;
+            }
             rig.Lights[i] = new RigLight { Id = id, Flags = flags, Position = location, Colour = reach };
         }
 
         rig.Count = count;
 
-        if (materialLamps)
+        if (materialLamps && !spySurface)
         {
             rig.Spot = default;
             rig.Level = ActorLightRules.Combine(around, default).Luminance;
@@ -456,7 +477,8 @@ public sealed class LightPlanState : IDisposable
         for (int i = 0; i < _lights.Length; i++)
         {
             PlanLight l = _lights[i];
-            if (!l.IsProjector || l.Brightness <= 0f || !_on[i] || (noSpecial && l.SpecialLit))
+            if (!l.IsProjector || l.Brightness <= 0f || !_on[i] || (noSpecial && l.SpecialLit) ||
+                (spySurface && (l.Hidden || l.Class != BridgeLightClass.Projector)))
             {
                 continue;
             }
@@ -464,7 +486,7 @@ public sealed class LightPlanState : IDisposable
             FVector location = placed ? l.Location : _location[i];
             FRotator rotation = placed ? l.Rotation : _rotation[i];
             AddSpot(l.Frustum, location, rotation, l.Hue, l.Saturation, l.Brightness, l.LightType, l.Period, l.Phase, time, centre, normal,
-                collision, ref spotAround, ref spotFacing, rig);
+                spySurface ? shadowWorld : collision, ref spotAround, ref spotFacing, rig, spySurface);
         }
 
         if (runtime)
@@ -485,23 +507,39 @@ public sealed class LightPlanState : IDisposable
                     actor is SGadTorche ? 0f : actor.EchelonNormalInfluence,
                     1);
                 AddSpot(frustum, actor.Location, actor.Rotation, actor.LightHue, actor.LightSaturation, actor.LightBrightness, (int)actor.LightType,
-                    actor.LightPeriod, actor.LightPhase, time, centre, normal, collision, ref spotAround, ref spotFacing, rig);
+                    actor.LightPeriod, actor.LightPhase, time, centre, normal, spySurface ? shadowWorld : collision,
+                    ref spotAround, ref spotFacing, rig, spySurface);
             }
         }
 
         rig.Spot = spotAround;
-        rig.Level = ActorLightRules.Combine(around, spotAround).Luminance;
+        rig.Level = spySurface ? Math.Clamp((surfaceLight + spotAround).Luminance, 0f, 1f) : ActorLightRules.Combine(around, spotAround).Luminance;
         rig.LevelFacing = ActorLightRules.Combine(facing, spotFacing).Luminance;
+    }
+
+    // Dynamic lamps and effects already light the model in Unreal. Their contribution here controls reflections only.
+    private static LightRgb LiveSurfaceLight(int effect, FVector location, FRotator rotation, byte hue, byte saturation,
+        float brightness, float radius, byte cone, FVector centre, ICollisionWorld? collision)
+    {
+        LightRgb reach = ActorLightRules.Term(effect, location, rotation, ActorLightRules.Colour(hue, saturation, brightness),
+            radius, cone, centre, null);
+        if (reach.Max <= 0f || collision is null)
+        {
+            return reach;
+        }
+        FVector source = effect == ActorLightRules.LE_Sunlight ? centre - rotation.Vector() * 65536f : location;
+        return collision.LineCheck(out _, null, centre, source, default, ShadowFlags) ? default : reach;
     }
 
     private static void AddSpot(in SpotShadowFrustum frustum, FVector location, FRotator rotation, byte hue, byte saturation, float brightness,
         int type, float period, float phase, float time, FVector centre, FVector normal, ICollisionWorld? collision,
-        ref LightRgb around, ref LightRgb facing, RigResult rig)
+        ref LightRgb around, ref LightRgb facing, RigResult rig, bool instantaneous)
     {
         bool? open = null;
         bool Open() => open ??= collision is null || !collision.LineCheck(out _, null, centre, location, default, ShadowFlags);
 
-        float mean = ActorLightRules.MeanModulation(type);
+        float now = FieldModulation(type, period, phase, time);
+        float mean = instantaneous ? now : ActorLightRules.MeanModulation(type);
         if (mean > 0f)
         {
             LightRgb c = ActorLightRules.SpotShadowColour(hue, saturation, brightness) * mean;
@@ -513,7 +551,6 @@ public sealed class LightPlanState : IDisposable
             }
         }
 
-        float now = FieldModulation(type, period, phase, time);
         if (now > 0f)
         {
             LightRgb c = ActorLightRules.SpotShadowColour(hue, saturation, brightness) * now;

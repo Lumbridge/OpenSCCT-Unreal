@@ -24,7 +24,7 @@ bool FScctOutfitVision::Mark(UPoseableMeshComponent& Body, int32 Kind, bool bWet
 {
 	const FScctOutfitArmsApi* Api = ScctFeature<FScctOutfitArmsApi>();
 	USkinnedAsset* Mesh = Body.GetSkinnedAsset();
-	if (!Api || !Mesh || Intensity <= 0.f || !Body.IsVisible() || !Body.GetWorld() || (Body.GetOwner() && Body.GetOwner()->IsHidden())) return false;
+	if (!Api || !Mesh || (bHeat && Intensity <= 0.f) || !Body.ShouldRender() || !Body.GetWorld()) return false;
 	FBody& State = Bodies.FindOrAdd(&Body);
 	State.bUsed = true;
 	const int32 Skin = Kind * 4 + (bWet ? 2 : 0) + (bLocalSpy ? 1 : 0);
@@ -107,14 +107,18 @@ bool FScctOutfitVision::Mark(UPoseableMeshComponent& Body, int32 Kind, bool bWet
 		}
 	}
 	if (State.Bands.IsEmpty()) return false;
-	if (State.Intensity != Intensity || State.bHeat != bHeat)
+	const bool bModeChanged = State.bHeat != bHeat;
+	if (State.Intensity != Intensity || bModeChanged)
 	{
+		// Heat scales the suit texture by the actor's intensity. EMF inverts the finished
+		// image: its brightness is 1 - texture * (1 - glow), even on a zero-glow spy.
+		const float MaskScale = bHeat ? Intensity : 1.f - FMath::Clamp(Intensity, 0.f, 1.f);
 		for (auto& Weak : State.Materials)
 		{
 			if (auto* Mat = Weak.Get())
 			{
 				Mat->SetScalarParameterValue(TEXT("Heat"), bHeat ? 1.f : 0.f);
-				Mat->SetScalarParameterValue(TEXT("Intensity"), Intensity);
+				Mat->SetScalarParameterValue(TEXT("Intensity"), MaskScale);
 			}
 		}
 		State.Intensity = Intensity;
@@ -125,8 +129,11 @@ bool FScctOutfitVision::Mark(UPoseableMeshComponent& Body, int32 Kind, bool bWet
 		if (auto* Part = State.Bands[Band].Get())
 		{
 			Part->SetWorldTransform(Body.GetComponentTransform());
-			if (State.Opacity != Opacity)
-				Part->SetCustomDepthStencilValue(UScctVisionSubsystem::PawnStencil(static_cast<float>(Band) / OutfitBandSteps, Opacity));
+			if (State.Opacity != Opacity || bModeChanged)
+			{
+				const int32 Level = bHeat ? Band : OutfitBandSteps - Band;
+				Part->SetCustomDepthStencilValue(UScctVisionSubsystem::PawnStencil(static_cast<float>(Level) / OutfitBandSteps, Opacity));
+			}
 		}
 	}
 	State.Opacity = Opacity;

@@ -11,6 +11,7 @@
 
 class APostProcessVolume;
 class UMaterialInstanceDynamic;
+class UMaterialParameterCollectionInstance;
 class UPrimitiveComponent;
 
 /**
@@ -75,6 +76,9 @@ public:
 		}
 		return Most;
 	}
+
+	/** Share of the night vision picture, including its transition. */
+	float GetNightAmount() const { return Amounts[0]; }
 
 	/** Thermal or EMF: the modes that show detector beams flagged bHideInNormalVision. */
 	bool IsHeatOrEmf() const { return ShownMode == 36 || ShownMode == 38; }
@@ -149,6 +153,9 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> Materials;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialParameterCollectionInstance> SurfaceLight;
 
 	/** How far the picture is into each mode, 0 to 1. */
 	float Amounts[ModeCount] = {};

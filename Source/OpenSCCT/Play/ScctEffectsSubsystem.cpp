@@ -509,7 +509,7 @@ void UScctEffectsSubsystem::UpdateBodyFill(float DeltaSeconds)
 			}
 			const bool bOwnSide = bAids && Local != nullptr && Proxy->GetTeam() == Local->GetTeam();
 			const FScctPawnLighting Lighting = FScctPawnLighting::Sample(FVector(Pawn.X, Pawn.Y, Pawn.Z),
-				Pawn.CollisionRadius + 0.5f * Pawn.CollisionHeight);
+				Pawn.CollisionRadius + 0.5f * Pawn.CollisionHeight, Proxy->GetKind() == 0 ? Pawn.ActorId : INDEX_NONE);
 			TArray<USceneComponent*> Parts;
 			Proxy->GetRootComponent()->GetChildrenComponents(true, Parts);
 			if (Proxy == Local && FirstPerson && FirstPerson->IsShown())
@@ -522,7 +522,8 @@ void UScctEffectsSubsystem::UpdateBodyFill(float DeltaSeconds)
 			{
 				if (UMeshComponent* Mesh = Cast<UMeshComponent>(Part))
 				{
-					Lighting.Apply(*Mesh, bOwnSide && Mesh == Proxy->GetBodyMesh());
+					const bool bBody = Mesh == Proxy->GetBodyMesh();
+					Lighting.Apply(*Mesh, bOwnSide && bBody, bBody);
 				}
 			}
 		}

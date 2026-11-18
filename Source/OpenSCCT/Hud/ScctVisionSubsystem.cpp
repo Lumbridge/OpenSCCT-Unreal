@@ -2,12 +2,17 @@
 
 #include "Components/PoseableMeshComponent.h"
 #include "Engine/PostProcessVolume.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "Hud/ScctHudStyle.h"
+#include "ImageUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialParameterCollection.h"
+#include "Materials/MaterialParameterCollectionInstance.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "Misc/Paths.h"
 #include "OpenSCCT.h"
 #include "Play/ScctExposure.h"
 #include "Play/ScctPawnProxy.h"
@@ -30,6 +35,9 @@ namespace
 
 	const FName AmountParameter(TEXT("Amount"));
 	const FName GainParameter(TEXT("Gain"));
+	const FName BoostParameter(TEXT("Boost"));
+	// Original RendMap 34 sets lighting byte 30, halves it for the lightmap stage, then uses Modulate2X.
+	constexpr float NightSurfaceBoost = 30.0f / 255.0f;
 
 	// The night vision gain: NightGainSettled for a picture the exposure has settled on (a readable green picture
 	// of a lit room, not a white screen), more as the picture gets darker than the exposure can follow, by the
@@ -123,6 +131,22 @@ bool UScctVisionSubsystem::EnsureVolume()
 		// Weight 0 keeps a material out of the frame entirely until its mode is on.
 		Volume->Settings.WeightedBlendables.Array.Emplace(0.0f, Instance);
 	}
+	if (auto* Collection = LoadObject<UMaterialParameterCollection>(nullptr, TEXT("/Game/OpenSCCT/Materials/MPC_ScctLight.MPC_ScctLight")))
+	{
+		SurfaceLight = GetWorld()->GetParameterCollectionInstance(Collection);
+	}
+	const FString NoisePath = FOpenSCCTModule::FindContentRoot() / TEXT("shared/render/textures/Engine_Noise0_gauss.png");
+	if (FPaths::FileExists(NoisePath))
+	{
+		if (UTexture2D* Noise = FImageUtils::ImportFileAsTexture2D(NoisePath))
+		{
+			Noise->SRGB = false; // The stored byte is a multiplier in display space.
+			Noise->Filter = TF_Bilinear;
+			Noise->UpdateResource();
+			Materials[NightIndex]->SetTextureParameterValue(TEXT("NoiseMap"), Noise);
+			Materials[NightIndex]->SetScalarParameterValue(TEXT("HasNoise"), 1.0f);
+		}
+	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Vision: %d post-process materials ready"), Materials.Num());
 	return true;
 }
@@ -163,6 +187,7 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 	{
 		const float Target = VisionModes[Index].Mode == VisionMode ? 1.0f : 0.0f;
 		float& Amount = Amounts[Index];
+		const float Previous = Amount;
 		// Goggles come on fast and go off a little faster.
 		Amount = ScctHudStyle::Ease(Amount, Target, DeltaSeconds, Target > 0.5f ? 9.0f : 14.0f);
 		if (FMath::Abs(Amount - Target) < 0.004f)
@@ -170,6 +195,10 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 			Amount = Target;
 		}
 		Materials[Index]->SetScalarParameterValue(AmountParameter, Amount);
+		if (Index == NightIndex && Amount != Previous && SurfaceLight)
+		{
+			SurfaceLight->SetScalarParameterValue(BoostParameter, NightSurfaceBoost * Amount);
+		}
 		if (Index == NightIndex && Amount > 0.0f)
 		{
 			const float Level = FScctExposure::PictureLevel();
@@ -195,6 +224,9 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 		Volume->Settings.WeightedBlendables.Array[Index].Weight = Amount > 0.0f ? 1.0f : 0.0f;
 		bAnyShown |= Amount > 0.0f;
 	}
+	// The original night tube amplifies the current frame. Keep moving particles out of the camera's velocity blur.
+	Volume->Settings.bOverride_MotionBlurAmount = GetNightAmount() > 0.0f;
+	Volume->Settings.MotionBlurAmount = 0.0f;
 	MarkCharacters(bAnyShown);
 
 	// Motion tracking's level ramp and the tracker's clean rectangles, while its picture is in the frame at all.
@@ -230,6 +262,15 @@ void UScctVisionSubsystem::HoldModeForWarmup(int32 Mode)
 
 void UScctVisionSubsystem::Clear()
 {
+	if (GetNightAmount() > 0.0f && SurfaceLight)
+	{
+		SurfaceLight->SetScalarParameterValue(BoostParameter, 0.0f);
+	}
+	if (IsValid(Volume))
+	{
+		Volume->Settings.bOverride_MotionBlurAmount = false;
+	}
+	NightGain = 0.0f;
 	for (int32 Index = 0; Index < ModeCount; ++Index)
 	{
 		Amounts[Index] = 0.0f;
@@ -297,7 +338,7 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 		return;
 	}
 
-	// The mode the bodies are marked for: the one furthest in, so a mode fading out keeps its marks to the end.
+	// Keep the stronger filter's stencil marks during a crossfade.
 	int32 MarkMode = 0;
 	float MarkAmount = 0.0f;
 	for (int32 Index = 0; Index < ModeCount; ++Index)
@@ -307,6 +348,12 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 			MarkAmount = Amounts[Index];
 			MarkMode = VisionModes[Index].Mode;
 		}
+	}
+	// On leaving EMF, thermal or motion tracking must immediately draw the bodies it allows,
+	// including a camouflaged spy's thermal opacity or motion tracking's fully cloaked state.
+	if (MarkMode == 38 && (ShownMode == 36 || ShownMode == 37))
+	{
+		MarkMode = ShownMode;
 	}
 	const bool bThermal = MarkMode == 36;
 	const bool bEmf = MarkMode == 38;
@@ -424,6 +471,13 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 				SeeThrough += bSeeThrough ? 1 : 0;
 				++Marked;
 			}
+		}
+
+		// EMF's glow still fades with the filter. Plain sight (or night vision) needs the
+		// ordinary body in the underlying scene from the first frame of that fade.
+		if (bEmf && ShownMode != 38)
+		{
+			bMainPass = true;
 		}
 
 		// The body, what the pawn draws besides it (its weapon and gadget models, the stand-in) and what hangs on the

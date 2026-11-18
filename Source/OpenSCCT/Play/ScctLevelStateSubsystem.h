@@ -404,6 +404,10 @@ private:
 	TArray<TObjectPtr<class UTexture2D>> BombFrames;
 	UPROPERTY(Transient)
 	TObjectPtr<class UMaterialInstanceDynamic> BombGhost;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> HackPanelDisplay;
+	bool bTriedHackPanelDisplay = false;
+	void ApplyHackPanelDisplay(FActorState& State);
 	int32 BombFrame = INDEX_NONE;
 	UMaterialInterface* GameplaySkin(const FString& Name);
 	int32 SourceSlot(const UStaticMesh* Mesh, int32 Slot) const;

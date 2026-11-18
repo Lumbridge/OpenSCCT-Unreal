@@ -11,12 +11,14 @@ Content\OpenSCCT\UI\Vision\M_ScctVision*.uasset. Run it after changing the shade
 Tools\Materials\Build-VisionMaterials.ps1
 #>
 param(
-    [string] $Engine = 'F:\UE_5.8'
+    [string] $Engine = 'F:\UE_5.8',
+    [ValidateSet('Night','Thermal','Motion','Emf','DoubleVision')] [string] $Mode
 )
 
 $ErrorActionPreference = 'Stop'
 $project = (Resolve-Path "$PSScriptRoot\..\..").Path
 
 . "$PSScriptRoot\..\EditorScript.ps1"
-Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'build-vision-materials' -Script (Fwd "$PSScriptRoot\build_vision_materials.py") -Show 'SCCT-VISION|Error:.*M_Scct(Vision|DoubleVision)' | Out-Null
+$scriptPath = Fwd "$PSScriptRoot\build_vision_materials.py"
+Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'build-vision-materials' -Script "$scriptPath $Mode" -Show 'SCCT-VISION|Error:.*M_Scct(Vision|DoubleVision)' | Out-Null
 Exit-ScctScripts

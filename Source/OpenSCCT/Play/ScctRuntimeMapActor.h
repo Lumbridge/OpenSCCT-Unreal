@@ -11,6 +11,7 @@ class UMaterialInterface;
 class UStaticMesh;
 class UTexture2D;
 class FJsonObject;
+class ASkeletalMeshActor;
 
 /**
  * Draws a converted map that the editor never imported, from its render files, in the runtime level
@@ -39,6 +40,7 @@ public:
 	static void ReadSectionIndex(const FString& MapFolder, TMap<FName, TMap<FName, int32>>& Sections);
 	UStaticMesh* LibraryMesh(const FString& Name) const { return Library.FindRef(FName(*Name)); }
 	UMaterialInterface* LibraryMaterial(const FString& Name) const { return SurfaceByName.FindRef(FName(*Name)); }
+	ASkeletalMeshActor* SpawnAnimatedProp(const FString& MeshName, const FTransform& Placement);
 
 	/** Builds the map whose folder (holding render/) is MapFolder. Returns false, having logged why, when it cannot. */
 	bool Build(const FString& Map, const FString& MapFolder);

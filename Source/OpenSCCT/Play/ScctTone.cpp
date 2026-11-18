@@ -169,9 +169,13 @@ void FScctTone::Apply(UWorld* World, APostProcessVolume* Volume, bool bPlan, flo
 		ToneHeld.LevelGlow = Vision->GetData().GetLevel().GlowThreshold;
 	}
 	const int32 Glow = Asked >= 0.0f ? FMath::RoundToInt32(Asked) : ToneHeld.LevelGlow;
-	const float Intensity = Glow >= 255 ? 0.0f : FMath::Max(CVarLightBloomIntensity.GetValueOnGameThread(), 0.0f);
+	// Night's own bright pass uses dot(scene, (0.2, 0.393, 0.0733)) > 0.5, i.e. display luminance above 0.75.
+	// Let the engine's bloom pyramid filter the highlights once before the phosphor tint is applied.
+	const float Night = Vision != nullptr && Asked < 0.0f ? Vision->GetNightAmount() : 0.0f;
+	const float Threshold = FMath::Lerp(FMath::Clamp(Glow / 255.0f, 0.0f, 1.0f), 0.75f, Night);
+	const float Intensity = FMath::Max(CVarLightBloomIntensity.GetValueOnGameThread(), 0.0f) * (Glow >= 255 ? Night : 1.0f);
 	Settings.bOverride_BloomThreshold = bOn;
-	Settings.BloomThreshold = ToneLightOf(FMath::Clamp(Glow / 255.0f, 0.0f, 1.0f));
+	Settings.BloomThreshold = ToneLightOf(Threshold);
 	Settings.bOverride_BloomIntensity = bOn;
 	Settings.BloomIntensity = Intensity;
 

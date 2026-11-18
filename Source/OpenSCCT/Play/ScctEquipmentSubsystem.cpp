@@ -294,6 +294,16 @@ FScctWeaponMotion UScctEquipmentSubsystem::MotionOf(const FScctEquipment& Pawn)
 	return Motion;
 }
 
+float UScctEquipmentSubsystem::VisibleCloak(float Amount) const
+{
+	const UScctVisionSubsystem* Vision = UScctVisionSubsystem::Find(GetWorld());
+	if (Vision && (Vision->IsHeatOrEmf() || Vision->GetVisionMode() == 37))
+	{
+		return 0.0f;
+	}
+	return ForcedCloak >= 0.0f ? ForcedCloak : Amount;
+}
+
 FTransform UScctEquipmentSubsystem::GetCamera() const
 {
 	const FScctBridgeView& View = Session->GetView();
@@ -381,7 +391,7 @@ void UScctEquipmentSubsystem::OnFrame(float DeltaSeconds)
 		UpdateTorch(*Found, Proxy, Pawn, bFromEye);
 		UpdateLaser(*Found, Proxy, Pawn, bFromEye && bViewModelShown && Pawn.ActorId == FirstPerson.ActorId);
 
-		const float Cloak = ForcedCloak >= 0.0f ? ForcedCloak : Pawn.Cloak;
+		const float Cloak = VisibleCloak(Pawn.Cloak);
 		CloakLook.Apply(*Proxy.GetBodyMesh(), Cloak);
 		for (int32 Slot : { EScctAttachmentSlot::Weapon, EScctAttachmentSlot::Carried })
 		{
@@ -839,7 +849,7 @@ void UScctEquipmentSubsystem::UpdateFirstPerson(const FScctEquipmentApi& Api, fl
 		Motion = MotionOf(*Own);
 	}
 
-	const float Cloak = ForcedCloak >= 0.0f ? ForcedCloak : FirstPerson.Cloak;
+	const float Cloak = VisibleCloak(FirstPerson.Cloak);
 	FirstPersonView->Present(Api, Models, Weapons, FirstPerson, GetCamera(), Cloak, Motion, DeltaSeconds);
 
 	if (FirstPerson.ActorId != FirstPersonActor)

@@ -347,12 +347,12 @@ void UScctLightParitySubsystem::CheckPlanExports()
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT_ZONES %s zones=%d with_ambient=%d most_ambient=%.3f (the sky zone left out)"), *Name, Zones.Num(), Lit, Most);
 
-	FScctLightRigCheck Check = {};
+	FScctLightRigCheck RigCheck = {};
 	const double Before = FPlatformTime::Seconds();
-	if (Api->CheckRig != nullptr && Api->CheckRig(&Check) != 0)
+	if (Api->CheckRig != nullptr && Api->CheckRig(&RigCheck) != 0)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT_RIGCHECK %s nodes=%d max_level=%.6f max_facing=%.6f differ=%d live_max_level=%.6f live_differ=%d full=%d occluded=%d (%.1f s)"),
-			*Name, Check.Nodes, Check.MaxLevel, Check.MaxFacing, Check.Differ, Check.LiveMaxLevel, Check.LiveDiffer, Check.Full, Check.Occluded,
+			*Name, RigCheck.Nodes, RigCheck.MaxLevel, RigCheck.MaxFacing, RigCheck.Differ, RigCheck.LiveMaxLevel, RigCheck.LiveDiffer, RigCheck.Full, RigCheck.Occluded,
 			FPlatformTime::Seconds() - Before);
 	}
 
