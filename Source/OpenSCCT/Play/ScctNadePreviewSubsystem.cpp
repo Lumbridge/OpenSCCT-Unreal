@@ -241,7 +241,7 @@ FString UScctNadePreviewSubsystem::Request(int32 Mode)
 		}
 		if (Api->IsAllowed() == 0)
 		{
-			UE_LOG(LogOpenSCCT, Warning, TEXT("NadePreview: refused, the match is on another server and is not a practice round"));
+			UE_LOG(LogOpenSCCT, Warning, TEXT("NadePreview: refused, the match is online (hosted here or elsewhere, or a hub) and is not a practice round"));
 			Notify(NadePreviewRefusal);
 			return NadePreviewRefusal;
 		}
@@ -337,11 +337,12 @@ void UScctNadePreviewSubsystem::UpdateFrame(float DeltaSeconds)
 	}
 	if (Api->IsAllowed() == 0)
 	{
-		// A match on another server that is not a practice round: said once, asked again in the next match.
+		// An online match (hosted here or elsewhere, or a hub) that is not a practice round: said once, asked again
+		// in the next match.
 		bRefused = true;
 		HideDrawn();
 		Model->bPicture = false;
-		UE_LOG(LogOpenSCCT, Warning, TEXT("NadePreview: not shown, the match is on another server and is not a practice round"));
+		UE_LOG(LogOpenSCCT, Warning, TEXT("NadePreview: not shown, the match is online (hosted here or elsewhere, or a hub) and is not a practice round"));
 		Notify(NadePreviewRefusal);
 		return;
 	}
