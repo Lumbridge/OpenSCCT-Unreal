@@ -6,6 +6,7 @@
 #include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctRejoinPrompt.h"
 #include "Menu/ScctSplashTrivia.h"
+#include "Menu/ScctUserSettings.h"
 #include "OpenSCCT.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "Online/ScctRejoinSubsystem.h"
@@ -165,6 +166,11 @@ namespace
 			ShowLevel(INDEX_NONE, 0, false);
 
 			const FString Tagline = ScctUi::GameText(TEXT("Menu_Multi"), TEXT("TitlePage"), TEXT("Spies versus Mercenaries"));
+			UScctUserSettings* Settings = UScctUserSettings::Get();
+			const TAttribute<FText> BackdropAction = TAttribute<FText>::CreateLambda([Settings]
+			{
+				return Settings->bLiveMenuBackground ? INVTEXT("Pause live menu background") : INVTEXT("Play live menu background");
+			});
 			const FString Trivia = ScctSplashTrivia::Pick();
 			UE_LOG(LogOpenSCCT, Log, TEXT("Main menu trivia: %s"), *Trivia);
 
@@ -187,6 +193,20 @@ namespace
 							+ SHorizontalBox::Slot().AutoWidth()
 							[
 								SNew(STextBlock).Text(FText::FromString(TEXT("SCCT"))).Font(ScctHudStyle::Font(ScctHudStyle::EWeight::Bold, 76.0f, 260)).ColorAndOpacity(ScctUi::Accent())
+							]
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.0f, 0.0f)
+							[
+								SNew(SScctButton)
+								.Look(EScctButtonLook::Chip)
+								.Text_Lambda([Settings] { return Settings->bLiveMenuBackground ? INVTEXT("\u2016") : INVTEXT("\u25B6"); })
+								.Selected_Lambda([Settings] { return Settings->bLiveMenuBackground; })
+								.ToolTipText(BackdropAction)
+								.AccessibleText(BackdropAction)
+								.OnPressed(FSimpleDelegate::CreateLambda([Settings]
+								{
+									Settings->bLiveMenuBackground = !Settings->bLiveMenuBackground;
+									Settings->Save();
+								}))
 							]
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(6.0f, 2.0f, 0.0f, 0.0f)

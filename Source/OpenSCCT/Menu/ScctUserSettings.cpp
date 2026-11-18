@@ -116,7 +116,7 @@ void UScctUserSettings::ApplyAll()
 void UScctUserSettings::ResetVideo()
 {
 	bMotionBlur = true;
-	bLiveMenuBackground = true;
+	bLiveMenuBackground = false;
 	Gamma = 2.2f;
 	RenderScale = 100;
 	if (UGameUserSettings* Engine = GEngine != nullptr ? GEngine->GetGameUserSettings() : nullptr)
