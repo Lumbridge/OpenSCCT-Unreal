@@ -480,6 +480,25 @@ int32 UScctHudEditSubsystem::GetSide() const
 	return Hud != nullptr && Hud->GetModel().LocalTeam == 1 ? 1 : 0;
 }
 
+namespace
+{
+	// RequestStart: how long a match's world keeps trying, when it began to, and when the request lapses.
+	float HudEditRequestSeconds = 0.0f;
+	double HudEditRequestTryUntil = 0.0;
+	double HudEditRequestLapses = 0.0;
+
+	/** A fresh match's HUD needs a moment before its groups have their places. */
+	constexpr double HudEditRequestWorldAge = 1.5;
+}
+
+void UScctHudEditSubsystem::RequestStart(float Seconds)
+{
+	HudEditRequestSeconds = FMath::Max(Seconds, 0.1f);
+	HudEditRequestTryUntil = 0.0;
+	HudEditRequestLapses = FPlatformTime::Seconds() + 180.0;
+	UE_LOG(LogOpenSCCT, Log, TEXT("ScctHudEdit: asked to open as soon as it can (tried for %.0f s in a match)"), HudEditRequestSeconds);
+}
+
 bool UScctHudEditSubsystem::Start()
 {
 	if (bEditing)
@@ -590,6 +609,32 @@ void UScctHudEditSubsystem::Tick(float DeltaTime)
 				Holder->SetInputMode(Mode);
 				FSlateApplication::Get().ReleaseAllPointerCapture();
 				FSlateApplication::Get().SetKeyboardFocus(Overlay, EFocusCause::SetDirectly);
+			}
+		}
+	}
+	else if (HudEditRequestSeconds > 0.0f)
+	{
+		const double Now = FPlatformTime::Seconds();
+		const UWorld* World = GetWorld();
+		if (Now > HudEditRequestLapses)
+		{
+			HudEditRequestSeconds = 0.0f;
+			UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHudEdit: the request to open lapsed before a match was up"));
+		}
+		else if (World != nullptr && Cast<AScctGameMode>(World->GetAuthGameMode()) != nullptr && Clock >= HudEditRequestWorldAge)
+		{
+			if (HudEditRequestTryUntil <= 0.0)
+			{
+				HudEditRequestTryUntil = Now + HudEditRequestSeconds;
+			}
+			if (Start())
+			{
+				HudEditRequestSeconds = 0.0f;
+			}
+			else if (Now > HudEditRequestTryUntil)
+			{
+				HudEditRequestSeconds = 0.0f;
+				UE_LOG(LogOpenSCCT, Warning, TEXT("ScctHudEdit: the edit mode could not open (a menu or the chat kept the keys)"));
 			}
 		}
 	}
