@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Play/ScctEffectSkins.h"
 #include "Play/ScctEffectsParticles.h"
 #include "Play/ScctEffectsSmokeVolume.h"
 #include "Runtime/ScctEventsApi.h"
@@ -57,6 +58,8 @@ class UTexture2D;
  *   -ScctFxTimeScale=K     effects run at K times real speed (0.1: a flash lasts a second), so a screenshot
  *                          taken at any moment shows them
  *   -ScctFxLog             log every flash, tracer, impact, casing and effect actor as it starts or ends
+ *   -ScctMineLight         two proximity mines hang in front of the view 2 s into a local match and the first is
+ *                          chaffed at 10 s, so the status light can be seen in each state (Play/ScctEffectSkins.h)
  * A camera fault ('camnet fault <name>') and a modem's destruction ('Ps2ModemEffect start') are always logged.
  */
 UCLASS()
@@ -153,6 +156,7 @@ private:
 		int32 Light = INDEX_NONE; // index into Lights
 		uint32 SeenFrame = 0;
 		bool bStandIn = false;
+		FScctEffectSkins::FWorn Skins; // the run-time skins its mesh wears (the proximity mine's status light)
 
 		// The spy's smoke grenade cloud (SSmokeEmitter): the original's fifteen sprites, and how many are out.
 		bool bGrenadeCloud = false;
@@ -414,6 +418,8 @@ private:
 	/** The cloud layer draws the game's own picture of the smoke grenade's cloud (else plain grey discs). */
 	bool bCloudPicture = false;
 	FScctSmokeVolumes SmokeVolumes;
+	/** The run-time skins of the effect meshes (Play/ScctEffectSkins.h). */
+	FScctEffectSkins EffectSkins;
 	FRandomStream Random;
 
 	TMap<int32, FActorFx> Actors;

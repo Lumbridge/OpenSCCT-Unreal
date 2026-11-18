@@ -17,6 +17,7 @@
 #include "Runtime/ScctDemoApi.h"
 #include "Runtime/ScctDemoPlayApi.h"
 #include "Runtime/ScctEquipmentApi.h"
+#include "Runtime/ScctEffectSkinApi.h"
 #include "Runtime/ScctEventsApi.h"
 #include "Runtime/ScctFlicFlocApi.h"
 #include "Runtime/ScctFxTraceApi.h"
@@ -88,6 +89,7 @@ SCCT_FEATURE_TABLE(FScctCareerApi, "CareerExports", ScctCareerApiVersion);
 SCCT_FEATURE_TABLE(FScctDemoApi, "DemoExports", ScctDemoApiVersion);
 SCCT_FEATURE_TABLE(FScctDemoPlayApi, "DemoPlayExports", ScctDemoPlayApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
+SCCT_FEATURE_TABLE(FScctEffectSkinApi, "EffectSkinExports", ScctEffectSkinApiVersion);
 SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
 SCCT_FEATURE_TABLE(FScctFlicFlocApi, "FlicFlocExports", ScctFlicFlocApiVersion);
 SCCT_FEATURE_TABLE(FScctFxTraceApi, "FxTraceExports", ScctFxTraceApiVersion);
