@@ -46,6 +46,8 @@
     <!-- The first-person weapon of a merc watched in a demo, rebuilt from his recorded third-person one
          (Equipment/FirstPersonModels.cs, MercFirstPerson.DrawObserved); Godot-free like the session. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\Views\ObservedWeaponViewModel.cs" Link="Linked\Views\ObservedWeaponViewModel.cs" />
+    <!-- The Stats page's rows (Social/CareerModel.cs): the Godot StatsScreen's model, Godot-free. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\UI\StatsModel.cs" Link="Linked\UI\StatsModel.cs" />
   </ItemGroup>
   <!-- The TestBox fixture (OpenSCCT's synthetic test map, no original content) goes to maps/ next to the bridge, a map
        root the bridge always searches, so the client's checks can host it whatever the content folder holds. -->

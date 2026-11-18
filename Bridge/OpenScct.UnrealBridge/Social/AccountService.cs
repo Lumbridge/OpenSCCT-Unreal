@@ -82,6 +82,15 @@ public sealed partial class AccountService
 
     private bool SignedIn => Master is { Url: not null, AccountToken: not null };
 
+    /// <summary>The signed-in account's id (as last seen, before the master answers), 0 when signed out.</summary>
+    public long SignedInAccountId => Preview ? Account?.Id ?? 0 : SignedIn ? Account?.Id ?? _state.AccountId : 0;
+
+    /// <summary>The master the sign-in belongs to (null: none set).</summary>
+    public static string? MasterUrl => Master?.Url;
+
+    /// <summary>A refresh of the account is on its way.</summary>
+    public bool Refreshing => _refresh is not null;
+
     // ---- the run --------------------------------------------------------------------------------------------------
 
     /// <summary>
