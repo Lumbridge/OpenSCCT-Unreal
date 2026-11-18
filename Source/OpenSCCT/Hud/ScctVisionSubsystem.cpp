@@ -479,3 +479,21 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 		ShadowsTaken.Reset();
 	}
 }
+
+UScctVisionSubsystem::FModeCheck UScctVisionSubsystem::GetModeCheck(int32 Index) const
+{
+	FModeCheck Check;
+	if (Index < 0 || Index >= ModeCount)
+	{
+		return Check;
+	}
+	Check.Mode = VisionModes[Index].Mode;
+	Check.Amount = Amounts[Index];
+	if (IsValid(Volume) && Materials.IsValidIndex(Index) && Materials[Index] != nullptr && Volume->Settings.WeightedBlendables.Array.IsValidIndex(Index))
+	{
+		Check.bMaterial = Volume->Settings.WeightedBlendables.Array[Index].Object == Materials[Index];
+		Check.BlendWeight = Volume->Settings.WeightedBlendables.Array[Index].Weight;
+		Materials[Index]->GetScalarParameterValue(AmountParameter, Check.MaterialAmount);
+	}
+	return Check;
+}

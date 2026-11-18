@@ -640,6 +640,11 @@ void UScctMarkersSubsystem::UpdateLasers()
 		}
 	}
 
+	LastBeams.Listed = Count;
+	LastBeams.VisionOnly = NumVisionOnly;
+	LastBeams.Streaks = NumDrawn;
+	LastBeams.Goggle = NumGoggle;
+	LastBeams.Mode = Mode;
 	PeakBeams = FMath::Max(PeakBeams, NumDrawn);
 	PeakGoggleBeams = FMath::Max(PeakGoggleBeams, NumGoggle);
 	NumVisionOnlyBeams = FMath::Max(NumVisionOnlyBeams, NumVisionOnly);
@@ -650,4 +655,21 @@ void UScctMarkersSubsystem::UpdateLasers()
 		LoggedGoggleMode = GoggleMode;
 		UE_LOG(LogOpenSCCT, Log, TEXT("Markers: %d vision-only beams drawn (mode %d), %d beams in all for the goggles, %d listed"), NumGoggleVisionOnly, Mode, NumGoggle, Count);
 	}
+}
+
+UScctMarkersSubsystem::FBeamCheck UScctMarkersSubsystem::GetBeamCheck() const
+{
+	FBeamCheck Check = LastBeams;
+	for (int32 Slot = 0; Slot < Cores.Components.Num(); ++Slot)
+	{
+		const UStaticMeshComponent* Component = Cores.Components[Slot].Get();
+		Check.VisibleCores += Cores.Used.IsValidIndex(Slot) && Cores.Used[Slot] && Component != nullptr && Component->IsVisible() ? 1 : 0;
+	}
+	for (int32 Slot = 0; Slot < VisionBeams.Components.Num(); ++Slot)
+	{
+		const UStaticMeshComponent* Component = VisionBeams.Components[Slot].Get();
+		Check.StencilOnly += VisionBeams.Used.IsValidIndex(Slot) && VisionBeams.Used[Slot] && Component != nullptr && Component->IsVisible()
+			&& !Component->bRenderInMainPass && Component->bRenderCustomDepth ? 1 : 0;
+	}
+	return Check;
 }
