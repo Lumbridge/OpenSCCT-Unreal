@@ -352,7 +352,7 @@ public sealed partial class AccountService
     private AccountAppearance? _profileLook;
 
     /// <summary>The look the settings record is sent with: this PC's on a master that keeps no appearance of its own, else none.</summary>
-    private AccountAppearance? ProfileLook => _appearanceSupported == false ? LocalAppearance() : null;
+    private AccountAppearance? ProfileLook => Account?.AppearanceSync == false ? _profileLook ?? LocalAppearance() : null;
 
     /// <summary>This PC's look changed on such a master: the settings record goes to the account with it, as after a changed setting.</summary>
     private void QueueProfileForLook()

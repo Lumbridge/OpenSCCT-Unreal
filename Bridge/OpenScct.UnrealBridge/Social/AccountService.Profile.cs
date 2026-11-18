@@ -86,7 +86,7 @@ public sealed partial class AccountService
             _pushAt = 0;
             _social.Log("Account: took the account's settings");
             // After Unreal put the settings in (its stored title among them): the record's look is the newest word.
-            TakeProfileLook(incoming.Record);
+            AcceptProfileLook(incoming.Record, settingsChanged: true);
         }
         else
         {
@@ -208,6 +208,7 @@ public sealed partial class AccountService
             _state.SyncedAccountId = _state.AccountId;
             SaveState();
             _social.Log("Account: the account's settings match this PC's");
+            AcceptProfileLook(remote.Data, settingsChanged: false);
         }
     }
 
@@ -228,6 +229,19 @@ public sealed partial class AccountService
         _repushed = true;
         _social.Log("Account: the account's settings have no part from this client yet; adding this PC's");
         Push();
+    }
+
+    // Older Unreal profiles stored the cosmetics in the Unreal part alone. Backfill after settling which
+    // settings record won so an existing sign-in also becomes readable on the legacy Godot client.
+    private void AcceptProfileLook(string record, bool settingsChanged)
+    {
+        bool backfill = Account?.AppearanceSync == false && ProfileSync.HasUnsharedLook(record);
+        if (settingsChanged || backfill) TakeProfileLook(record);
+        if (!backfill) return;
+
+        _state.ProfileUpdatedMs++;
+        SaveState();
+        _pushAt = NowMs + 1;
     }
 
     /// <summary>Sends this PC's settings now (a send already on its way sends again when it is back).</summary>

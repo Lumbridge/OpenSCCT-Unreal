@@ -165,7 +165,7 @@ public static unsafe class ArmouryExports
         }
     }
 
-    /// <summary>0 reload the account's appearance, 1 reapply this PC's choices, 2 ask the master for the account, 3 "hide my cosmetics" (value).</summary>
+    /// <summary>0 reload the account's appearance, 1 reapply this PC's choices, 2 ask the master for the account, 3 "hide my cosmetics" (value), 4 cancel the join waiting on a conflict.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Command(int command, int value)
     {

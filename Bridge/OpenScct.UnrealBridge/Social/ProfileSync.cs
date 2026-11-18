@@ -122,6 +122,10 @@ public static class ProfileSync
         return null;
     }
 
+    internal static bool HasUnsharedLook(string data) =>
+        Parse(data) is { } record && record["settings"] is null &&
+        record[UnrealKey] is JsonObject part && part.ContainsKey(SpyLookKey) && part.ContainsKey(MercLookKey);
+
     private static string[] Strings(JsonNode? node)
     {
         var list = new List<string>();
