@@ -26,7 +26,8 @@ class UStaticMeshComponent;
  *     hidden and shadowed with it, so the local player seen from his own eyes keeps the shadow of his gun.
  *   - the torch: a shadow-casting spot light with the bridge's cone, range and colour that scatters in the
  *     level's fog. On the merc's head bone for others; at the eye for the player holding it.
- *   - the laser: a thin self-lit beam to the point the simulation's trace hit, a dot and a little red light there.
+ *   - the laser: a thin self-lit beam to the point the bridge's trace hit, a dot and a little red light there.
+ *     The local player's beam is traced by the bridge for this frame's camera, so it turns with the view.
  *   - the camo suit: body and attachments turn to bent light by the bridge's amount.
  *   - the local player's first-person view model (AScctFirstPersonView) and its muzzle flash, a flash for every
  *     shot the bridge counts.
@@ -40,6 +41,9 @@ class UStaticMeshComponent;
  *   -ScctForceCloak=<0..1>   draw every pawn and the view model with that much of the camo suit on (the suit is
  *                            not in the default kit, so a local match never switches it on by itself)
  *   -ScctNoViewModel         do not draw the first-person view model (to compare a view with and without it)
+ *   -ScctLaserProbe          once a second, while the local player's beam is drawn: how far its end was from the
+ *                            centre of the view, and the most it moved across the view from one frame to the
+ *                            next (a beam that follows a turning view stays put; one a tick behind swings)
  *
  * Console variables for tuning with the game running: scct.Torch.CandelasPerBrightness, scct.Torch.FogScattering,
  * scct.FirstPerson.Scale, and scct.Weapons.Replacements (0: the original models even where the weapon table
@@ -160,6 +164,18 @@ private:
 	FScctFirstPerson FirstPerson = {};
 	int32 FirstPersonShots = -1;
 	int32 FirstPersonActor = 0;
+
+	/** -ScctLaserProbe: the local beam's end across the view (degrees) since the last line. */
+	void ProbeLaser(const FVector& Start, const FVector& End);
+	bool bLaserProbe = false;
+	bool bLaserProbeHasLast = false;
+	FVector LaserProbeLast = FVector::ZeroVector;
+	float LaserProbeLastYaw = 0.0f;
+	float LaserProbeSeconds = 0.0f;
+	float LaserProbeLargestStep = 0.0f;
+	float LaserProbeLargestOffCentre = 0.0f;
+	float LaserProbeTurned = 0.0f;
+	int32 LaserProbeFrames = 0;
 
 	/** -ScctForceCloak; negative when not given. */
 	float ForcedCloak = -1.0f;

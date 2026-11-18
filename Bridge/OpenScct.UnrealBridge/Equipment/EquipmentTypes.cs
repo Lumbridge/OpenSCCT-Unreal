@@ -148,8 +148,10 @@ public static class BridgeEquipmentFlags
     public const int TorchFollowsBone = 1 << 11;
 
     /// <summary>
-    /// Draw the beam from LaserStart to LaserEnd: the local player's as the simulation placed it, another merc's
-    /// from the FX bone of the rifle in his hands along his aim to the first thing a line hits.
+    /// Draw the beam from LaserStart to LaserEnd: the local player's traced for the view drawn this frame (as the
+    /// simulation placed it at its last tick only where there is no such view: a network camera, a pistol being
+    /// drawn or put away), another merc's from the FX bone of the rifle in his hands along his aim, between the last
+    /// two ticks, to the first thing a line hits.
     /// </summary>
     public const int LaserBeam = 1 << 12;
 
