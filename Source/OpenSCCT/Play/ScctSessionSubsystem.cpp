@@ -331,6 +331,7 @@ void UScctSessionSubsystem::Tick(float DeltaTime)
 	if (Api != nullptr)
 	{
 		OnBeforeTicks.Broadcast(DeltaTime);
+		AdvanceOnlineVisit.ExecuteIfBound();
 		CheckSession();
 		if (bFollowBridge)
 		{

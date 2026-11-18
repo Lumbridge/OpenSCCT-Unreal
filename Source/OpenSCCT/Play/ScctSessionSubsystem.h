@@ -16,8 +16,8 @@ class AScctPawnProxy;
 //
 //   1. OnBeforeTicks(DeltaSeconds)   Raised every frame the bridge is connected, match or no match. What must
 //                                    reach the bridge before the simulation runs goes here: the controls feed
-//                                    their input (Controls.Frame), the online visit runs its Update (which may
-//                                    put a round in the bridge's session slot or take one out). The player's
+//                                    their input (Controls.Frame). Once all listeners finish, AdvanceOnlineVisit
+//                                    ticks the remote round and may change the bridge's session slot. The player's
 //                                    input has one way in, the player controller's Controls.Frame: nothing
 //                                    else writes the simulation's input (unattended switches press keys on
 //                                    the controller instead, AScctPlayerController::HoldScriptedAction).
@@ -253,6 +253,7 @@ public:
 
 	/** See "The order of a frame" at the top of this file for when each of these is raised. */
 	FScctFrameEvent OnBeforeTicks;
+	FSimpleDelegate AdvanceOnlineVisit;
 	FScctMatchEvent OnMatchStarted;
 	FScctMatchEvent OnMatchStopped;
 	FScctSessionChangedEvent OnSessionChanged;

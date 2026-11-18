@@ -490,29 +490,28 @@ void UScctOnlineSubsystem::PresentIn(UScctSessionSubsystem* Session)
 {
 	if (Session != nullptr && Session->FollowBridgeSessions(true))
 	{
-		Session->OnBeforeTicks.AddUObject(this, &UScctOnlineSubsystem::HandleBeforeTicks);
+		if (bAutoWalk)
+		{
+			Session->OnBeforeTicks.AddUObject(this, &UScctOnlineSubsystem::UpdateAutoWalk);
+		}
+		Session->AdvanceOnlineVisit.BindUObject(this, &UScctOnlineSubsystem::TickVisit);
 	}
 }
 
-void UScctOnlineSubsystem::HandleBeforeTicks(float DeltaSeconds)
+void UScctOnlineSubsystem::UpdateAutoWalk(float DeltaSeconds)
 {
 	// -ScctAutoWalk: the local player's "forward" key goes down while a round is played, on the player controller
 	// as under a finger, so it takes the path a real key takes through the bridge's bindings.
-	if (bAutoWalk)
+	const UWorld* World = GetGameInstance()->GetWorld();
+	AScctPlayerController* Player = World != nullptr ? Cast<AScctPlayerController>(World->GetFirstPlayerController()) : nullptr;
+	const bool bWalk = GetState() == EScctOnlineState::Match;
+	if (Player != nullptr && (bWalk != bAutoWalkHeld || AutoWalkPlayer.Get() != Player))
 	{
-		const UWorld* World = GetGameInstance()->GetWorld();
-		AScctPlayerController* Player = World != nullptr ? Cast<AScctPlayerController>(World->GetFirstPlayerController()) : nullptr;
-		const bool bWalk = GetState() == EScctOnlineState::Match;
-		if (Player != nullptr && (bWalk != bAutoWalkHeld || AutoWalkPlayer.Get() != Player))
-		{
-			// A new level has a new controller: the key is pressed again there.
-			AutoWalkPlayer = Player;
-			bAutoWalkHeld = bWalk;
-			Player->HoldScriptedAction(TEXT("forward"), bWalk);
-		}
+		// A new level has a new controller: the key is pressed again there.
+		AutoWalkPlayer = Player;
+		bAutoWalkHeld = bWalk;
+		Player->HoldScriptedAction(TEXT("forward"), bWalk);
 	}
-
-	TickVisit();
 }
 
 bool UScctOnlineSubsystem::TickFromTicker(float DeltaSeconds)

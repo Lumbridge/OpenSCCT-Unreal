@@ -59,9 +59,8 @@ DECLARE_MULTICAST_DELEGATE(FScctOnlineChanged);
  * It belongs to the game instance, so it lives across level changes: the lobby is shown in the front end level,
  * each round in the imported level of its map, and this subsystem moves the game between them.
  *
- * Every frame it runs the bridge's Online.Update. In a level that presents a round that happens at the start of
- * the session subsystem's frame (its OnBeforeTicks: the visit may put a round into the bridge's session slot,
- * which the session subsystem then finds); in any other level, and while no level ticks, a core ticker does it.
+ * A level presenting a round runs Online.Update after sampling the frame's input and before checking the
+ * bridge's session slot. The core ticker advances the visit in other levels and while no level ticks.
  *
  * Which level is open follows the bridge:
  *   - MapToLoad names a map (travelling to a round, loading, match, results): /Game/Imported/Maps/<Map>/<Map> is
@@ -423,7 +422,7 @@ private:
 	/** Once a frame, whoever calls first: Online.Update, the status, and everything that follows from it. */
 	void TickVisit();
 	bool TickFromTicker(float DeltaSeconds);
-	void HandleBeforeTicks(float DeltaSeconds);
+	void UpdateAutoWalk(float DeltaSeconds);
 
 	void RefreshTexts();
 	void DrainChat();
