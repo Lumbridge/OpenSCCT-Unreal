@@ -360,6 +360,7 @@ namespace
 				+ SWidgetSwitcher::Slot()
 				[
 					SAssignNew(Options, SScctSessionOptions)
+					.Dialogs(Host.Dialogs)
 					.Online(Host.Online)
 					.OnClose(FSimpleDelegate::CreateLambda([this] { ShowOptions(false); }))
 				]

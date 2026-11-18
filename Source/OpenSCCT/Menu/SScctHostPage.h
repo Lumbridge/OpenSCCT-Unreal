@@ -31,6 +31,7 @@ class SScctHostPage : public SCompoundWidget
 public:
 	SLATE_BEGIN_ARGS(SScctHostPage) {}
 		SLATE_ARGUMENT(TWeakObjectPtr<UScctOnlineSubsystem>, Online)
+		SLATE_ARGUMENT(TWeakPtr<class SScctDialogLayer>, Dialogs)
 		SLATE_EVENT(FSimpleDelegate, OnBack)
 	SLATE_END_ARGS()
 

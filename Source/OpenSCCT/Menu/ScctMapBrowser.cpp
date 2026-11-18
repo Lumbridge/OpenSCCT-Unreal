@@ -53,6 +53,14 @@ namespace
 	}
 }
 
+TArray<FString> ScctMapBrowser::TrainingMaps(int32 Team)
+{
+	TArray<FString> Maps;
+	MapBrowserText(EScctMapBrowserText::Training).ParseIntoArrayLines(Maps);
+	Maps.RemoveAll([Team](const FString& Map) { return !Map.StartsWith(Team == 1 ? TEXT("TME") : TEXT("TSP")); });
+	return Maps;
+}
+
 TArray<FScctMapGroup> ScctMapBrowser::Groups()
 {
 	TArray<FScctMapGroup> Groups;

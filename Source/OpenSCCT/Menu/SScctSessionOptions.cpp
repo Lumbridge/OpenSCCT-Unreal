@@ -3,7 +3,6 @@
 #include "Brushes/SlateColorBrush.h"
 #include "Engine/Texture2D.h"
 #include "ImageUtils.h"
-#include "Math/RandomStream.h"
 #include "Menu/SScctMapPicker.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Menu/ScctSetupRowsView.h"
@@ -91,6 +90,7 @@ void SScctSessionOptions::Construct(const FArguments& InArgs)
 {
 	Online = InArgs._Online;
 	OnClose = InArgs._OnClose;
+	Dialogs = InArgs._Dialogs;
 	Maps = ScctHostSetup::Maps();
 
 	ChildSlot.HAlign(HAlign_Left).VAlign(VAlign_Top)[ SAssignNew(Body, SBox) ];
@@ -370,10 +370,11 @@ void SScctSessionOptions::RandomMap()
 	{
 		Candidates = InGroup;
 	}
-	static FRandomStream Stream(FPlatformTime::Cycles());
-	const FString Drawn = Candidates[Stream.RandRange(0, Candidates.Num() - 1)];
-	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: lobby RANDOM MAP drew %s of %d map(s) offering %s in the group \"%s\""), *Drawn, Candidates.Num(), *ModeKey, *Group.Name);
-	Visit->SetMatch(Drawn, -1);
+	const TArray<FScctHostMap> Choices = Maps.FilterByPredicate([&](const FScctHostMap& Map) { return Candidates.Contains(Map.Id); });
+	SScctMapPicker::ShowDraw(Dialogs, Choices, FOnScctMapPicked::CreateSPLambda(this, [this](const FString& Id)
+	{
+		if (Online.IsValid() && CanControl()) Online->SetMatch(Id, -1);
+	}));
 }
 
 // ---- the picture ------------------------------------------------------------------------------------------------
@@ -457,6 +458,8 @@ TSharedRef<SWidget> SScctSessionOptions::BuildOptions()
 			SNew(SBox).HeightOverride(OptionsHeight - 80.0f)
 			[
 				SAssignNew(Picker, SScctMapPicker)
+				.Dialogs(Dialogs)
+				.OnConfirmed(FSimpleDelegate::CreateSPLambda(this, [this] { if (IsDirty()) Apply(); else OnClose.ExecuteIfBound(); }))
 				.Maps(Maps)
 				.TileWidth(124.0f)
 				.Selected(TAttribute<FString>::CreateLambda([this] { return ShownMap(); }))

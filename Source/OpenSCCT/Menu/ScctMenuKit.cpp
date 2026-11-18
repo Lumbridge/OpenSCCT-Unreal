@@ -1546,6 +1546,7 @@ void SScctDialogLayer::Show(const FScctDialog& Dialog)
 		[
 			SAssignNew(Button, SScctButton)
 			.Look(Dialog.Buttons[Index].Look)
+			.IsEnabled(Dialog.Buttons[Index].Enabled)
 			.Text(FText::FromString(Dialog.Buttons[Index].Label.ToUpper()))
 			.MinWidth(120.0f)
 			.OnPressed(FSimpleDelegate::CreateSP(this, &SScctDialogLayer::Answer, Index))
@@ -1573,6 +1574,7 @@ void SScctDialogLayer::Answer(int32 Index)
 	{
 		Index = Current.Buttons.Num() - 1;
 	}
+	if (Current.Buttons.IsValidIndex(Index) && !Current.Buttons[Index].Enabled.Get()) return;
 	const TFunction<void(const FString&)> Pressed = Current.Buttons.IsValidIndex(Index) ? Current.Buttons[Index].OnPressed : TFunction<void(const FString&)>();
 	const FString Typed = TextField.IsValid() ? TextField->GetText().ToString() : FString();
 	bOpen = false;

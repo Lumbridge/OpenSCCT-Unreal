@@ -15,6 +15,7 @@ enum class EScctMapBrowserText : int32
 {
 	Groups = 0,  // the groups, one per line: "name TAB title TAB description TAB map ids (comma separated)"; the first is every installed map
 	Details = 1, // one host map per line: "Id TAB search words TAB description TAB credit"
+	Training = 2, // installed training map ids, one per line
 };
 
 struct FScctMapBrowserApi

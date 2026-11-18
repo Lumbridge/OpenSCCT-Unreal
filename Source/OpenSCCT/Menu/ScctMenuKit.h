@@ -545,6 +545,7 @@ struct FScctDialogButton
 	EScctButtonLook Look = EScctButtonLook::Secondary;
 	/** Run after the dialog closed. With a text field: gets what was typed. */
 	TFunction<void(const FString&)> OnPressed;
+	TAttribute<bool> Enabled = true;
 };
 
 /** What a dialog asks. */

@@ -61,6 +61,18 @@ public:
 
 private:
 	void Rebuild();
+	TSharedRef<SWidget> BuildTab(int32 Index);
+	struct FSearchEntry
+	{
+		FString Label, Category;
+		int32 Tab, Side;
+		bool bSupportsDoubleTap = false;
+	};
+	void SearchChanged(const FText& Text);
+	void OpenResult(FSearchEntry Result);
+	TArray<FSearchEntry> SearchIndex;
+	TSharedPtr<class SSearchBox> SearchBox;
+	TSharedPtr<class SScrollBox> Scroll;
 	TSharedRef<SWidget> BuildVideo();
 	TSharedRef<SWidget> BuildAudio();
 	TSharedRef<SWidget> BuildControls();

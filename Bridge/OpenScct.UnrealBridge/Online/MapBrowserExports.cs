@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -23,6 +24,7 @@ public enum MapBrowserText
     /// (name, sort name, authors, tags) TAB description TAB credit (By A, B, version V)". Empty fields are kept.
     /// </summary>
     Details = 1,
+    Training = 2,
 }
 
 /// <summary>The map browser's table (Source/OpenSCCT/Runtime/ScctMapBrowserApi.h mirrors it).</summary>
@@ -80,6 +82,7 @@ public static unsafe class MapBrowserExports
         {
             MapBrowserText.Groups => Groups(maps),
             MapBrowserText.Details => Details(maps),
+            MapBrowserText.Training => string.Join("\n", maps.GetCatalog().Where(e => e.Kind == MapKind.Training).Select(e => e.Id)),
             _ => string.Empty,
         };
     }

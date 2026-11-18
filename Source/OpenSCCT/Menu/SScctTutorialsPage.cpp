@@ -1,6 +1,7 @@
 // The Tutorials hub, a side's Tutorial Maps and Visit a Map (Menu/SScctTutorialsPage.h).
 
 #include "Menu/SScctTutorialsPage.h"
+#include "Menu/ScctMapBrowser.h"
 
 #include "Framework/Application/SlateApplication.h"
 #include "Hud/ScctHudTextures.h"
@@ -271,21 +272,24 @@ namespace
 
 			UScctTutorialSubsystem* Tutorials = UScctTutorialSubsystem::GetCurrent();
 			UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
-			const TArray<FString> Maps = Tutorials != nullptr ? Tutorials->GetMaps(Team) : TArray<FString>();
+			TArray<FString> Maps = Tutorials != nullptr ? Tutorials->GetMaps(Team) : TArray<FString>();
+			const int32 StockCount = Maps.Num();
+			for (const FString& Id : ScctMapBrowser::TrainingMaps(Team)) Maps.AddUnique(Id);
 			const TSharedRef<SVerticalBox> Rows = SNew(SVerticalBox);
 			TSharedPtr<SScctButton> First;
 			for (int32 Index = 0; Index < Maps.Num(); ++Index)
 			{
 				const FString Map = Maps[Index];
-				const int32 Row = Index < 5 ? RowOfMap[Team][Index] : -1;
+				const int32 Row = Index < StockCount && Index < 5 ? RowOfMap[Team][Index] : -1;
 				const FString Title = Row >= 0
 					? TutorialCaption(TutorialMapsSection, *FString::Printf(TEXT("TutoMap%d.Caption"), Row + 1), RowFallback[Row])
 					: (Menu != nullptr ? Menu->GetMapTitle(Map) : Map);
-				const bool bDone = Tutorials != nullptr && Tutorials->IsDone(Team, Index);
+				const bool bCommunity = Index >= StockCount;
+				const bool bDone = !bCommunity && Tutorials != nullptr && Tutorials->IsDone(Team, Index);
 				const bool bPlayable = UScctTutorialSubsystem::CanPlay(Map);
 				const FString Sub = !bPlayable
 					? FString::Printf(TEXT("%s · not imported (Tools\\Import\\Import-Map.ps1 -Map %s)"), *Map, *Map)
-					: FString::Printf(TEXT("%s · %s"), *Map, bDone ? TEXT("DONE") : TEXT("not done yet"));
+					: FString::Printf(TEXT("%s · %s"), *Map, bCommunity ? TEXT("Community training") : bDone ? TEXT("DONE") : TEXT("not done yet"));
 				FString Briefing = Menu != nullptr ? Menu->GetModeText(Map, 0, Team == 1, 1) : FString();
 				if (Briefing.TrimStartAndEnd().IsEmpty() && Menu != nullptr)
 				{
@@ -293,7 +297,7 @@ namespace
 				}
 				Briefing = Briefing.Replace(TEXT("|"), TEXT(" ")).TrimStartAndEnd();
 				const FString Description = FString::Printf(TEXT("%s%s%s"), *Briefing, Briefing.IsEmpty() ? TEXT("") : TEXT("\n\n"),
-					bPlayable ? (bDone ? TEXT("Done. Play it again at any time.") : TEXT("Win it to mark it done; the next tutorial then starts by itself."))
+					bPlayable ? (bCommunity ? TEXT("Play this community training map.") : bDone ? TEXT("Done. Play it again at any time.") : TEXT("Win it to mark it done; the next tutorial then starts by itself."))
 					: TEXT("This map's level is not imported into the project, so it cannot be played here yet."));
 
 				TSharedPtr<SScctButton> Made;

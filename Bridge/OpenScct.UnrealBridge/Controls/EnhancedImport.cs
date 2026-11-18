@@ -654,7 +654,8 @@ public sealed class EnhancedImport
         }
 
         Flag(c, "classic_crosshair", v => Set("Hud.ClassicCrosshair", On(v)));
-        result.Report.Add("HUD settings (the frame rate and network readouts and the classic crosshair; the location line, the hacking icon's opacity and the map playlist have no counterpart here).");
+        Text(c, "active_map_playlist", v => Set("Maps.ActiveMapPlaylist", v));
+        result.Report.Add("HUD settings and the selected map playlist.");
 
         Flag(c, "voice_push_to_talk", v => Set("Voice.PushToTalk", On(v)));
         Flag(c, "voice_muted", v => Set("Voice.MicMuted", On(v)));

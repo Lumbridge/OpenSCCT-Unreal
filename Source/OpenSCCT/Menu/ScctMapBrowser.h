@@ -44,6 +44,7 @@ namespace ScctMapBrowser
 {
 	/** The groups, All first. Without the bridge's table: All alone. Asked once per call (the catalog may have grown). */
 	TArray<FScctMapGroup> Groups();
+	TArray<FString> TrainingMaps(int32 Team);
 
 	/** The details of every host map by lower case id. */
 	TMap<FString, FScctMapDetails> Details();

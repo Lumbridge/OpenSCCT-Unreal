@@ -1,4 +1,5 @@
 #include "Menu/ScctEnhancedImport.h"
+#include "Menu/ScctMapBrowser.h"
 
 #include "Containers/Ticker.h"
 #include "Engine/Engine.h"
@@ -171,6 +172,12 @@ FScctEnhancedImportResult ScctEnhancedImport::Import(const FString& Folder, bool
 
 	for (const TPair<FString, FString>& Set : Sets)
 	{
+		if (Set.Key == TEXT("Maps.ActiveMapPlaylist"))
+		{
+			ScctMapBrowser::SetActiveGroup(Set.Value);
+			Result.Applied.Add(FString::Printf(TEXT("Map playlist = %s"), *Set.Value));
+			continue;
+		}
 		FString Now, Why;
 		if (FScctSettingsConsole::Set(Set.Key, Set.Value, Now, Why))
 		{

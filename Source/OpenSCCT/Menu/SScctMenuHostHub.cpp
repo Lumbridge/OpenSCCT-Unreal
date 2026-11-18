@@ -25,6 +25,7 @@ namespace
 			ChildSlot
 			[
 				SNew(SScctHostPage)
+				.Dialogs(Host.Dialogs)
 				.Online(Host.Online)
 				.OnBack(FSimpleDelegate::CreateLambda([Copy] { if (Copy.Back) { Copy.Back(); } }))
 			];

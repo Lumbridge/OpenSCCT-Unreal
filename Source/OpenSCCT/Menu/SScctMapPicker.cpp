@@ -3,8 +3,8 @@
 #include "Brushes/SlateRoundedBoxBrush.h"
 #include "Engine/Texture2D.h"
 #include "ImageUtils.h"
-#include "Math/RandomStream.h"
 #include "Menu/ScctMenuStyle.h"
+#include "Menu/ScctMenuKit.h"
 #include "Misc/Paths.h"
 #include "OpenSCCT.h"
 #include "Widgets/Images/SImage.h"
@@ -22,6 +22,22 @@ namespace Ui = ScctMenuStyle;
 
 namespace
 {
+	class SScctMapTile : public SScctRingButton
+	{
+	public:
+		FSimpleDelegate Confirm;
+
+		virtual FReply OnMouseButtonDoubleClick(const FGeometry& Geometry, const FPointerEvent& Event) override
+		{
+			if (Event.GetEffectingButton() == EKeys::LeftMouseButton && Confirm.IsBound())
+			{
+				Confirm.Execute();
+				return FReply::Handled();
+			}
+			return SScctRingButton::OnMouseButtonDoubleClick(Geometry, Event);
+		}
+	};
+
 	// The modes in the order the original's mode box lists them, then the ones only custom maps have.
 	const TCHAR* const ModeOrder[] = { TEXT("Story"), TEXT("DiskHunt"), TEXT("Deathmatch"), TEXT("MercDeathMatch"), TEXT("Extraction"), TEXT("Sabotage"), TEXT("Neutralization") };
 
@@ -48,6 +64,8 @@ void SScctMapPicker::Construct(const FArguments& InArgs)
 	Maps = InArgs._Maps;
 	Selected = InArgs._Selected;
 	OnPicked = InArgs._OnPicked;
+	OnConfirmed = InArgs._OnConfirmed;
+	Dialogs = InArgs._Dialogs;
 	TileWidth = InArgs._TileWidth;
 
 	// The catalog's groups with the one picked last, the search words, and how the lists are drawn.
@@ -275,27 +293,41 @@ bool SScctMapPicker::Shows(const FScctHostMap& Map) const
 		&& ScctMapBrowser::Matches(Search, Map.Id, Map.Name, Details.Find(Map.Id.ToLower()));
 }
 
-FString SScctMapPicker::PickRandom()
+void SScctMapPicker::PickRandom(bool bConfirm)
 {
+	TArray<FScctHostMap> Candidates = Maps.FilterByPredicate([this](const FScctHostMap& Map) { return Shows(Map); });
 	const FString Current = Selected.Get();
-	TArray<FString> Candidates;
-	for (const FScctHostMap& Map : Maps)
+	if (Candidates.Num() > 1) Candidates.RemoveAll([&](const FScctHostMap& Map) { return Map.Id.Equals(Current, ESearchCase::IgnoreCase); });
+	if (Candidates.IsEmpty()) return;
+	if (bConfirm)
 	{
-		if (Shows(Map) && !Map.Id.Equals(Current, ESearchCase::IgnoreCase))
-		{
-			Candidates.Add(Map.Id);
-		}
+		ShowDraw(Dialogs, Candidates, FOnScctMapPicked::CreateSPLambda(this, [this](const FString& Map) { OnPicked.ExecuteIfBound(Map); }));
 	}
-	if (Candidates.IsEmpty())
+	else
 	{
-		return FString();
+		OnPicked.ExecuteIfBound(Candidates[FMath::RandHelper(Candidates.Num())].Id);
 	}
+}
 
-	static FRandomStream Stream(FPlatformTime::Cycles());
-	const FString Drawn = Candidates[Stream.RandRange(0, Candidates.Num() - 1)];
-	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: random map drew %s of %d"), *Drawn, Candidates.Num());
-	OnPicked.ExecuteIfBound(Drawn);
-	return Drawn;
+void SScctMapPicker::ShowDraw(TWeakPtr<SScctDialogLayer> Layer, const TArray<FScctHostMap>& Candidates, FOnScctMapPicked Use)
+{
+	const TSharedPtr<SScctDialogLayer> Dialogs = Layer.Pin();
+	if (!Dialogs || Candidates.IsEmpty()) return;
+	const int32 Winner = FMath::RandHelper(Candidates.Num());
+	const double Start = FPlatformTime::Seconds();
+	FScctDialog Dialog;
+	Dialog.Title = TEXT("Random map");
+	Dialog.LiveBody = [Candidates, Start, Winner]
+	{
+		const int32 StepsLeft = FMath::Max(0, 12 - FMath::FloorToInt32((FPlatformTime::Seconds() - Start) * 12));
+		const FScctHostMap& Map = Candidates[(Winner + StepsLeft) % Candidates.Num()];
+		return Map.Name.IsEmpty() ? Map.Id : Map.Name;
+	};
+	Dialog.Buttons.Add({ TEXT("Use map"), EScctButtonLook::Primary, [Use, Id = Candidates[Winner].Id](const FString&) { Use.ExecuteIfBound(Id); },
+		TAttribute<bool>::CreateLambda([Start] { return FPlatformTime::Seconds() >= Start + 1.0; }) });
+	Dialog.Buttons.Add({ TEXT("Spin again"), EScctButtonLook::Secondary, [Layer, Candidates, Use](const FString&) { ShowDraw(Layer, Candidates, Use); } });
+	Dialog.Buttons.Add({ TEXT("Cancel"), EScctButtonLook::Secondary, {} });
+	Dialogs->Show(Dialog);
 }
 
 void SScctMapPicker::Reveal(const FString& MapId)
@@ -434,7 +466,7 @@ TSharedRef<SWidget> SScctMapPicker::MakeTile(const FScctHostMap& Map)
 			];
 	}
 
-	const TSharedRef<SButton> Tile = SNew(SScctRingButton)
+	const TSharedRef<SScctMapTile> Tile = SNew(SScctMapTile)
 		.ButtonStyle(&TileStyle())
 		.IsFocusable(true)
 		.HAlign(View == EScctMapView::PictureGrid ? HAlign_Center : HAlign_Fill)
@@ -443,6 +475,15 @@ TSharedRef<SWidget> SScctMapPicker::MakeTile(const FScctHostMap& Map)
 		[
 			Content.ToSharedRef()
 		];
+
+	if (OnConfirmed.IsBound())
+	{
+		Tile->Confirm = FSimpleDelegate::CreateSPLambda(this, [this, Id]
+		{
+			if (!Selected.Get().Equals(Id, ESearchCase::IgnoreCase)) OnPicked.ExecuteIfBound(Id);
+			OnConfirmed.ExecuteIfBound();
+		});
+	}
 
 	// The selected map is lit in the accent, as a picked button is.
 	const TWeakPtr<SButton> Weak = Tile;

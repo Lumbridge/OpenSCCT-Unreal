@@ -144,6 +144,7 @@ void SScctHostPage::Construct(const FArguments& InArgs)
 			SNew(SBox).HeightOverride(SettingsHeight - 70.0f)
 			[
 				SAssignNew(Picker, SScctMapPicker)
+				.Dialogs(InArgs._Dialogs)
 				.Maps(Maps)
 				.TileWidth(124.0f)
 				.Selected(TAttribute<FString>::CreateLambda([this] { return ScctHostSetup::Option(Setup, TEXT("MapName")); }))
@@ -482,7 +483,7 @@ void SScctHostPage::ApplyPreset(const FString& Preset)
 	if (bRandomMap && Picker.IsValid())
 	{
 		// RANDOM MAP pressed (after the filter, so the draw is among the maps it shows).
-		Picker->PickRandom();
+		Picker->PickRandom(false);
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: -ScctHostPreset filled Create Session: %s (%s)"), *Setup, *Description);
 }

@@ -27,6 +27,7 @@ class SScctSessionOptions : public SCompoundWidget
 public:
 	SLATE_BEGIN_ARGS(SScctSessionOptions) {}
 		SLATE_ARGUMENT(TWeakObjectPtr<UScctOnlineSubsystem>, Online)
+		SLATE_ARGUMENT(TWeakPtr<class SScctDialogLayer>, Dialogs)
 		/** APPLY sent, or DISCARD / CLOSE pressed: the owner shows the lobby again. */
 		SLATE_EVENT(FSimpleDelegate, OnClose)
 	SLATE_END_ARGS()
@@ -88,6 +89,7 @@ private:
 
 	TWeakObjectPtr<UScctOnlineSubsystem> Online;
 	FSimpleDelegate OnClose;
+	TWeakPtr<SScctDialogLayer> Dialogs;
 	FDelegateHandle ChangedHandle;
 	TSharedPtr<SBox> Body;
 	int32 SeenRevision = -1;

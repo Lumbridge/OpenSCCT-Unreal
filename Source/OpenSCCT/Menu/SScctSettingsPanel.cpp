@@ -12,6 +12,8 @@
 #include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctUserSettings.h"
 #include "Misc/App.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
 #include "Play/ScctAudioOutput.h"
@@ -24,6 +26,7 @@
 #include "Settings/ScctGraphicsSettings.h"
 #include "Settings/ScctSettings.h"
 #include "Widgets/Input/SComboBox.h"
+#include "Widgets/Input/SSearchBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
@@ -31,6 +34,18 @@
 
 namespace
 {
+	void VisitSettingRows(const TSharedRef<SWidget>& Widget, TFunctionRef<void(const FString&, const TSharedRef<SWidget>&)> Visit)
+	{
+		if (IScctDriven* Row = IScctDriven::FindByWidget(&Widget.Get()))
+		{
+			Visit(Row->GetDrivenLabel(), Widget);
+			return;
+		}
+		FChildren* Children = Widget->GetChildren();
+		for (int32 I = 0; Children && I < Children->Num(); ++I)
+			VisitSettingRows(Children->GetChildAt(I), Visit);
+	}
+
 	const TCHAR* const SettingsTabNames[] = { TEXT("video"), TEXT("audio"), TEXT("controls"), TEXT("controller"), TEXT("bindings"), TEXT("game"), TEXT("profile") };
 	/** The registry's own tabs come after the fixed ones. */
 	constexpr int32 FirstRegistryTab = UE_ARRAY_COUNT(SettingsTabNames);
@@ -239,10 +254,19 @@ void SScctSettingsPanel::Construct(const FArguments& InArgs, const FScctMenuHost
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 16.0f)
 		[
+			SAssignNew(SearchBox, SSearchBox)
+			.HintText(FText::FromString(TEXT("Search settings and bindings")))
+			.OnTextChanged(this, &SScctSettingsPanel::SearchChanged)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+		[
 			SAssignNew(Tabs, SScctTabBar)
 			.Tabs(TabLabels)
 			.Initial(InArgs._InitialTab)
-			.OnChanged(FSimpleDelegate::CreateSP(this, &SScctSettingsPanel::Rebuild))
+			.OnChanged(FSimpleDelegate::CreateLambda([this] {
+				if (!SearchBox->GetText().IsEmpty()) SearchBox->SetText(FText::GetEmpty());
+				else Rebuild();
+			}))
 		]
 		+ SVerticalBox::Slot().FillHeight(1.0f)
 		[
@@ -351,10 +375,10 @@ void SScctSettingsPanel::Toast(const FString& Message, bool bBad)
 	}
 }
 
-void SScctSettingsPanel::Rebuild()
+TSharedRef<SWidget> SScctSettingsPanel::BuildTab(int32 Index)
 {
 	TSharedRef<SWidget> Rows = SNullWidget::NullWidget;
-	switch (Tabs->GetTab())
+	switch (Index)
 	{
 	case 0: Rows = BuildVideo(); break;
 	case 1: Rows = BuildAudio(); break;
@@ -363,15 +387,105 @@ void SScctSettingsPanel::Rebuild()
 	case 4: Rows = BuildBindings(); break;
 	case 5: Rows = BuildGame(); break;
 	case 6: Rows = BuildProfile(); break;
-	default: Rows = RegistryTabs.IsValidIndex(Tabs->GetTab() - FirstRegistryTab) ? BuildRegistryTab(RegistryTabs[Tabs->GetTab() - FirstRegistryTab]) : BuildProfile(); break;
+	default: Rows = RegistryTabs.IsValidIndex(Index - FirstRegistryTab) ? BuildRegistryTab(RegistryTabs[Index - FirstRegistryTab]) : BuildProfile(); break;
 	}
+	return Rows;
+}
+
+void SScctSettingsPanel::Rebuild()
+{
+	const TSharedRef<SWidget> Rows = BuildTab(Tabs->GetTab());
 	Body->SetContent(
-		SNew(SScrollBox)
+		SAssignNew(Scroll, SScrollBox)
 		.ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll)
 		+ SScrollBox::Slot().Padding(0.0f, 0.0f, 10.0f, 0.0f)[ Rows ]);
-	if (const TSharedPtr<SWidget> Focus = DefaultFocus.Pin())
+	if (const TSharedPtr<SWidget> Focus = DefaultFocus.Pin(); Focus && !SearchBox->HasFocusedDescendants() && !SearchBox->HasKeyboardFocus())
 	{
 		FSlateApplication::Get().SetKeyboardFocus(Focus, EFocusCause::SetDirectly);
+	}
+}
+
+void SScctSettingsPanel::SearchChanged(const FText& Text)
+{
+	if (!Body) return;
+	const FString Query = Text.ToString().TrimStartAndEnd();
+	if (Query.IsEmpty())
+	{
+		Rebuild();
+		return;
+	}
+
+	if (SearchIndex.IsEmpty())
+	{
+		UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
+		// Constructing the controller test panel starts its scripted binding capture.
+		FString PadScript;
+		const bool bScriptedPad = FParse::Value(FCommandLine::Get(), TEXT("ScctPadBindTest="), PadScript, false);
+		for (int32 Tab = 0; Tab < TabNames.Num(); ++Tab)
+		{
+			const TSharedRef<SWidget> Page = Tab == Tabs->GetTab() && Scroll ? StaticCastSharedRef<SWidget>(Scroll.ToSharedRef())
+				: Tab == 3 && bScriptedPad ? SNullWidget::NullWidget : BuildTab(Tab);
+			VisitSettingRows(Page, [&](const FString& Label, const TSharedRef<SWidget>& Row)
+			{
+				if (Row->GetType() != TEXT("SScctKeyRow") && Row->GetType() != TEXT("SScctPadBindRow") && !Label.IsEmpty())
+					SearchIndex.Add({ Label, TabNames[Tab], Tab, INDEX_NONE });
+			});
+			if (Tab == 0) SearchIndex.Add({ ResolutionLabel().ToString(), TabNames[Tab], Tab, INDEX_NONE });
+			if ((Tab != 3 && Tab != 4) || !Menu) continue;
+			for (int32 Side = 0; Side < 2; ++Side)
+			{
+				for (const FScctMenuAction& Action : Menu->GetActions())
+				{
+					if (!(Action.Sides & (Side ? EScctMenuSides::Merc : EScctMenuSides::Spy))) continue;
+					FString Category = Tab == 3 ? TEXT("Controller") : TEXT("Keyboard and mouse bindings");
+					Category += Side ? TEXT(" / Mercenary / ") : TEXT(" / Spy / ");
+					SearchIndex.Add({ Action.Label, Category + Action.Category, Tab, Side, (Action.Sides & EScctMenuSides::DoubleTap) != 0 });
+				}
+			}
+		}
+	}
+
+	const TSharedRef<SVerticalBox> Results = SNew(SVerticalBox);
+	TArray<FString> Words;
+	Query.ParseIntoArrayWS(Words);
+	FString LastCategory;
+	int32 Matches = 0;
+	for (const FSearchEntry& Entry : SearchIndex)
+	{
+		const FString Searchable = Entry.Category + TEXT(" ") + Entry.Label;
+		if (Words.ContainsByPredicate([&](const FString& Word) { return !Searchable.Contains(Word); })) continue;
+		if (LastCategory != Entry.Category)
+		{
+			LastCategory = Entry.Category;
+			Results->AddSlot().AutoHeight()[ ScctUi::Section(LastCategory) ];
+		}
+		Results->AddSlot().AutoHeight()[ SNew(SScctButton).FillWidth(true).Text(FText::FromString(Entry.Label))
+			.OnPressed(FSimpleDelegate::CreateSPLambda(this, [this, Entry] { OpenResult(Entry); })) ];
+		++Matches;
+	}
+	if (!Matches) Results->AddSlot().AutoHeight()[ ScctUi::Text(FText::FromString(TEXT("No matching settings")), ScctUi::Body()) ];
+	Body->SetContent(SNew(SScrollBox) + SScrollBox::Slot()[ Results ]);
+}
+
+void SScctSettingsPanel::OpenResult(FSearchEntry Result)
+{
+	if (Result.Side != INDEX_NONE)
+	{
+		bBindMerc = Result.Side == 1;
+		if (!Result.bSupportsDoubleTap) bBindDoubleTap = false;
+	}
+	if (Tabs->GetTab() == Result.Tab) SearchBox->SetText(FText::GetEmpty());
+	else Tabs->SetTab(Result.Tab);
+	TSharedPtr<SWidget> Found;
+	if (Result.Tab == 0 && Result.Label == ResolutionLabel().ToString()) Found = ResolutionCombo;
+	else VisitSettingRows(Scroll.ToSharedRef(), [&](const FString& Label, const TSharedRef<SWidget>& Row)
+	{
+		if (!Found && Label == Result.Label) Found = Row;
+	});
+	if (Found)
+	{
+		Scroll->ScrollDescendantIntoView(Found, false);
+		FSlateApplication::Get().SetKeyboardFocus(Found, EFocusCause::Navigation);
 	}
 }
 
