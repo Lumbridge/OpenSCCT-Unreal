@@ -19,7 +19,8 @@ public unsafe struct HudPageLayer
 
     /// <summary>
     /// 0 an image, 1 a text, 2 a mask (not drawn: it hides what the masked images after it have under its box),
-    /// 3 a masked image (drawn only outside the mask before it; as an image when there is none).
+    /// 3 a masked image (drawn only outside the mask before it; as an image when there is none),
+    /// 4 a Dodge image (it brightens the picture under it and covers nothing).
     /// </summary>
     public int Kind;
 
@@ -57,7 +58,7 @@ public unsafe struct HudPageLayer
 
     public void Set(in HudMagmaPage.Layer l)
     {
-        Kind = l.IsText ? 1 : l.Mask == HudMagmaPage.MaskSet ? 2 : l.Mask == HudMagmaPage.MaskUse ? 3 : 0;
+        Kind = l.IsText ? 1 : l.Mask == HudMagmaPage.MaskSet ? 2 : l.Mask == HudMagmaPage.MaskUse ? 3 : l.Dodge ? 4 : 0;
         Align = l.Align;
         fixed (char* p = Package)
         {

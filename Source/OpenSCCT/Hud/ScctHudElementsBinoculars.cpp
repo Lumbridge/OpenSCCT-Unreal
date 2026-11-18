@@ -105,6 +105,14 @@ namespace
 		const FBox2f UV = Texture->Region(Layer.U0, Layer.V0, Layer.U1, Layer.V1);
 		const FBox2f Box(Origin + FVector2f(Layer.L, Layer.T) * K, Origin + FVector2f(Layer.R, Layer.B) * K);
 		const float Turn = FMath::Fmod(Layer.Rotation, 360.0f);
+		if (Layer.Kind == 4)
+		{
+			// A Dodge picture (the glint in the middle of the merc's scope) brightens what is under it and covers
+			// nothing: the original multiplies the screen by 1 + 2 x texture x colour. Slate cannot read the screen, so
+			// the picture is added at the strength that product has over a mid-grey view (texture x colour).
+			Painter.ImageAdded(Box, Texture->Brush, UV, Colour);
+			return;
+		}
 		if (FMath::IsNearlyZero(Turn))
 		{
 			Painter.Image(Box, Texture->Brush, UV, Colour);

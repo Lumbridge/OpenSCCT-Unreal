@@ -96,6 +96,12 @@ public:
 	void RotatedImage(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint, float Degrees);
 
 	/**
+	 * Image added to the picture under it instead of covering it (tint times texture, the tint's alpha not used): the
+	 * nearest Slate has to a Magma page's Dodge picture, which brightens the screen under it by its own brightness.
+	 */
+	void ImageAdded(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint);
+
+	/**
 	 * Image drawn only outside a mask: a box of half size MaskHalfSize about MaskCentre, turned by MaskDegrees (clockwise
 	 * on screen) about that centre. A Magma page's masked picture: the mask hides what is under it.
 	 */

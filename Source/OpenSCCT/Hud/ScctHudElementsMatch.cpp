@@ -68,6 +68,14 @@ void ScctHudElements::PaintRound(FScctHudPainter& Painter, const FScctHudModel& 
 		return;
 	}
 
+	// Not over a binocular page (the spy's binoculars, the merc's rifle scope): it replaces the player page, whose
+	// timer and score this header stands for, and the original and the Godot client show neither while it is up.
+	if (Model.bHasState && Model.State.BinocularMode != 0 && (Model.State.Flags & EScctHudFlags::HasPawn) != 0
+		&& (Model.State.Flags & (EScctHudFlags::Spectating | EScctHudFlags::GameEnded)) == 0)
+	{
+		return;
+	}
+
 	const FScctHudRound& Round = Model.Round;
 	const FVector2f Size = Painter.Size();
 	const float CentreX = Size.X * 0.5f;
