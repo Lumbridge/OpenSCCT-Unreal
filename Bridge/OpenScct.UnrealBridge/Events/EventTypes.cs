@@ -219,6 +219,7 @@ public struct BridgeSound
 
     /// <summary>Loop points of a looping wave in sample frames (its smpl chunk), -1 for the whole file.</summary>
     public int LoopStart, LoopEnd;
+    public float SeekOffset, SeekFadeOut;
 }
 
 /// <summary>What a <see cref="BridgeShot"/> is.</summary>
@@ -370,6 +371,8 @@ public static class BridgeEffectFlags
 
     /// <summary>bHideInNormalVision: drawn only in the night and heat vision modes (EffectViews.Draw, rendMap 36 or 38).</summary>
     public const int VisionOnly = 256;
+    public const int RestoreAge = 512;
+    public const int HistoricalEmitter = 1024;
 }
 
 /// <summary>

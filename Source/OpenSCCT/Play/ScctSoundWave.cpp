@@ -18,7 +18,10 @@ namespace
 			// segment joined late or put back in step) reads from there; a one-shot started past its end is over at once.
 			if (StartSeconds > 0.0f)
 			{
-				Frame = FMath::Clamp(FMath::FloorToInt32(StartSeconds * static_cast<float>(Pcm->SampleRate)), 0, Pcm->NumFrames());
+				double Position = static_cast<double>(StartSeconds) * Pcm->SampleRate;
+				if (bLoop && Position >= LoopEnd && LoopEnd > LoopStart)
+					Position = LoopStart + FMath::Fmod(Position - LoopStart, static_cast<double>(LoopEnd - LoopStart));
+				Frame = FMath::FloorToInt32(FMath::Clamp(Position, 0.0, static_cast<double>(Pcm->NumFrames())));
 			}
 		}
 

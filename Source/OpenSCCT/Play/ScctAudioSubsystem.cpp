@@ -1,4 +1,5 @@
 #include "Play/ScctAudioSubsystem.h"
+#include "Demo/ScctDemoPlayback.h"
 
 #include "AudioDevice.h"
 #include "Components/AudioComponent.h"
@@ -258,6 +259,16 @@ void UScctAudioSubsystem::HandleFrame(float DeltaSeconds)
 		return;
 	}
 
+	const float Rate = UScctDemoPlayback::PresentationRate(GetWorld());
+	if ((Rate == 0.0f) != (PlaybackRate == 0.0f))
+	{
+		for (const FVoice& Voice : Voices)
+			if (auto* Component = Voice.Component.Get()) Component->SetPaused(Rate == 0.0f);
+	}
+	PlaybackRate = Rate;
+	if (Rate == 0.0f) return;
+	DeltaSeconds *= Rate;
+
 	// The listener is the camera, which Unreal's audio follows by itself (the player's view target); the same
 	// point is used here for reach, the flat ambient rules and the log.
 	const FScctBridgeView& View = Session->GetView();
@@ -434,6 +445,7 @@ void UScctAudioSubsystem::Play(const FScctSound& Record)
 	Voice.LoopStart = Record.LoopStart;
 	Voice.LoopEnd = Record.LoopEnd;
 	Voice.StartIn = FMath::Max(Record.Delay, 0.0f);
+	Voice.StartOffset = Record.SeekOffset;
 	Voice.bPositional = bPositional;
 	Voice.bAtListener = bAtListener;
 	Voice.bLoop = (Record.Flags & EScctSoundFlags::Loop) != 0;
@@ -534,7 +546,7 @@ void UScctAudioSubsystem::PlayMusic(const FScctSound& Record)
 {
 	for (const FVoice& Voice : Voices)
 	{
-		if (Voice.bMusic && Voice.State != EVoiceState::Fading && Voice.SoundId == Record.SoundId)
+		if (Voice.bMusic && Voice.State != EVoiceState::Fading && Voice.SeekFadeOut <= 0.0f && Voice.SoundId == Record.SoundId)
 		{
 			// The track asked for already plays.
 			return;
@@ -542,7 +554,7 @@ void UScctAudioSubsystem::PlayMusic(const FScctSound& Record)
 	}
 	for (FVoice& Voice : Voices)
 	{
-		if (Voice.bMusic)
+		if (Voice.bMusic && Voice.SeekFadeOut <= 0.0f)
 		{
 			FadeOutVoice(Voice, FMath::Max(Record.FadeSeconds, 2.0f), TEXT("music replaced"));
 		}
@@ -561,6 +573,8 @@ void UScctAudioSubsystem::PlayMusic(const FScctSound& Record)
 	Voice.LoopStart = Record.LoopStart;
 	Voice.LoopEnd = Record.LoopEnd;
 	Voice.FadeIn = Record.FadeSeconds;
+	Voice.StartOffset = Record.SeekOffset;
+	Voice.SeekFadeOut = Record.SeekFadeOut;
 	Voice.bLoop = (Record.Flags & EScctSoundFlags::Loop) != 0;
 	Voice.bMusic = true;
 	Voice.Category = static_cast<uint8>(EScctAudioCategory::Music);
@@ -859,6 +873,7 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 	}
 	if (!Voice.bLoop)
 	{
+		if (Voice.StartOffset >= Pcm->Seconds()) return false;
 		// The voice ends by the clock (the engine's voice ends by itself at the same moment); a little margin
 		// lets the last block play out.
 		Voice.LifeLeft = (Pcm->Seconds() - Voice.StartOffset) / Voice.Pitch + 0.1f;
@@ -868,7 +883,7 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 	Voice.bHasLastLocation = false;
 	UpdateZoomAndDoppler(Voice, 0.0f);
 	Voice.AppliedVolume = HeardVolumeOf(Voice);
-	Voice.AppliedPitch = Voice.Pitch * Voice.DopplerPitch;
+	Voice.AppliedPitch = Voice.Pitch * Voice.DopplerPitch * PlaybackRate;
 	++NumStarted;
 	++NumStartedByCategory[Voice.Category & 7];
 
@@ -923,6 +938,7 @@ bool UScctAudioSubsystem::StartVoice(FVoice& Voice, const FScctPcmPtr& Pcm)
 		}
 	}
 
+	if (Voice.SeekFadeOut > 0.0f) FadeOutVoice(Voice, Voice.SeekFadeOut, TEXT("demo music fade"));
 	if (bLogVoices)
 	{
 		LogVoice(TEXT("play"), Voice, *FString::Printf(TEXT(" %d Hz %d ch %.2f s"), Pcm->SampleRate, Pcm->Channels, Pcm->Seconds()));

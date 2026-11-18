@@ -43,6 +43,9 @@ public:
 
 	static UScctDemoPlayback* Get(const UObject* WorldContext);
 
+	/** Wall seconds to presentation seconds. A paused or seeking playback holds presentation in place. */
+	static float PresentationRate(UWorld* World);
+
 	/** The bridge's demo table, or null when the bridge is not up. */
 	static const FScctDemoPlayApi* Api();
 
@@ -116,6 +119,7 @@ private:
 	float PauseAfter = -1.0f;
 	float LeaveAfter = -1.0f;
 	float PlayingSeconds = 0.0f;
+	float PlaybackRate = 1.0f;
 	bool bStartApplied = false;
 	int32 LastLoggedSecond = -1;
 };

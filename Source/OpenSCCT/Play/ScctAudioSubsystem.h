@@ -146,6 +146,7 @@ private:
 		int32 LoopStart = INDEX_NONE;
 		int32 LoopEnd = INDEX_NONE;
 		float FadeIn = 0.0f;
+		float SeekFadeOut = 0.0f;
 
 		// Ambient voices: the key they are matched by between frames (0: not ambient) and the repeat of a one-shot.
 		int64 AmbientId = 0;
@@ -425,6 +426,7 @@ private:
 	TArray<TObjectPtr<UReverbEffect>> ZoneEffects;
 
 	const FScctEventsApi* Events = nullptr;
+	float PlaybackRate = 1.0f;
 	FScctSoundCache Cache;
 	TSparseArray<FVoice> Voices;
 	TMap<int64, int32> AmbientVoices;

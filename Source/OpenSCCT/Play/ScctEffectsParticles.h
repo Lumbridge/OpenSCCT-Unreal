@@ -28,6 +28,7 @@ struct FScctFxParticle
 	FLinearColor Color = FLinearColor::White;
 
 	float Age = 0.0f;
+	float SeekAge = 0.0f;
 	float Life = 0.0f;       // seconds; a particle with Age >= Life is free
 	float SizeStart = 10.0f; // cm across, at birth and at death
 	float SizeEnd = 10.0f;
@@ -81,6 +82,9 @@ public:
 
 	/** Removes every particle at once and stops drawing them, without waiting for a Tick (a match ended). */
 	void Clear();
+
+	/** Elapsed time given to sprites spawned during demo reconstruction. */
+	float SpawnAge = 0.0f;
 
 	int32 GetNumLive() const { return NumLive; }
 	bool IsDrawable() const { return Layers[0].Component.IsValid() || Layers[1].Component.IsValid(); }

@@ -22,7 +22,7 @@ namespace OpenScct.UnrealBridge.Events;
 /// </para>
 /// Everything here runs on Unreal's game thread, which is the thread the client world ticks on.
 /// </summary>
-public sealed class EventsFeature : ISimEventSink, IDisposable
+public sealed partial class EventsFeature : ISimEventSink, IDisposable
 {
     private const float RotatorToDegrees = 360f / 65536f;
 
@@ -153,7 +153,7 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
 
     /// <summary>
     /// The ticks being run are not presented (a demo seek fast-forwarding hundreds of ticks in a frame, docs/DEMOS.md):
-    /// their sounds, shots and effects are dropped instead of all playing at once.
+    /// their persistent sounds and particles are accumulated for the target tick.
     /// </summary>
     public bool Quiet { get; set; }
 
@@ -161,7 +161,7 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
     public void OnSimEvents(long tick, ReadOnlySpan<SimEvent> events)
     {
         _next?.OnSimEvents(tick, events);
-        if (!_ended && !Quiet)
+        if (!_ended)
         {
             Take(tick, events, late: false);
         }
@@ -211,6 +211,13 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
 
     private void Take(long tick, ReadOnlySpan<SimEvent> events, bool late)
     {
+        if (Quiet)
+        {
+            if (!ReadingCheckpointBootstrap)
+                foreach (ref readonly SimEvent e in events) TakeSeekEvent(tick, e, false);
+            return;
+        }
+
         foreach (ref readonly SimEvent e in events)
         {
             bool played = _resolver?.Handle(tick, e) ?? true;
@@ -249,19 +256,20 @@ public sealed class EventsFeature : ISimEventSink, IDisposable
         Level level = _session.Client.World.Level;
         _resolver?.AfterTick(level.TickCount, level);
         _effects.OnTick();
+        if (Quiet) AdvanceSeekTick(level.TickCount);
     }
 
     /// <summary>Takes the oldest waiting raw events. Returns how many were written; call again while it fills the buffer.</summary>
     public int DrainEvents(Span<BridgeSimEvent> into) => _events.Drain(into);
 
     /// <summary>Takes the oldest waiting sound records.</summary>
-    public int DrainSounds(Span<BridgeSound> into) => _sounds.Drain(into);
+    public int DrainSounds(Span<BridgeSound> into) => Quiet || _seekInProgress || Demo.DemoBridge.Player is { IsSeeking: true } ? 0 : _sounds.Drain(into);
 
     /// <summary>Takes the oldest waiting muzzle flashes and tracers.</summary>
     public int DrainShots(Span<BridgeShot> into) => _shots.Drain(into);
 
     /// <summary>The effect actors as drawn this frame (blended between the last two ticks like the pawns).</summary>
-    public int GetEffectActors(Span<BridgeEffectActor> into) => _effects.Write(into, _bridge.Alpha);
+    public int GetEffectActors(Span<BridgeEffectActor> into) => Quiet || _seekInProgress ? 0 : _effects.Write(into, _bridge.Alpha);
 
     /// <summary>The live impact marks.</summary>
     public int GetImpactMarks(Span<BridgeImpactMark> into) => _effects.WriteMarks(into);

@@ -1,4 +1,5 @@
 #include "Play/ScctEffectsSubsystem.h"
+#include "Demo/ScctDemoPlayback.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Components/DecalComponent.h"
@@ -430,7 +431,7 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 		Viewer->GetPlayerViewPoint(Eye, Look);
 		EffectSkins.RunCheck(MatchSeconds, Eye, Look.Vector());
 	}
-	const float FxSeconds = DeltaSeconds * TimeScale;
+	const float FxSeconds = DeltaSeconds * TimeScale * UScctDemoPlayback::PresentationRate(GetWorld());
 	DrainShots();
 	UpdateTracers(FxSeconds);
 	UpdateCasings(FxSeconds);
@@ -872,10 +873,14 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 			}
 			continue;
 		}
+		const bool bRestoring = Fx == nullptr && (Record.Flags & EScctEffectFlags::RestoreAge) != 0;
+		const bool bHistorical = (Record.Flags & EScctEffectFlags::HistoricalEmitter) != 0;
 		if (Fx == nullptr)
 		{
 			Fx = &Actors.Add(Record.ActorId);
+			TGuardValue<float> SpawnAge(Sprites.SpawnAge, bRestoring ? Record.Age : 0.0f);
 			StartActor(*Fx, Record);
+			if (bRestoring) Fx->Age = Record.Age;
 		}
 		Fx->SeenFrame = Frame;
 		Fx->Age += DeltaSeconds;
@@ -946,11 +951,25 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 		}
 		else if (Fx->Style == EStyle::StickyGas && !bHidden)
 		{
+			TGuardValue<float> SpawnAge(Sprites.SpawnAge, bRestoring ? Record.Age : 0.0f);
 			EmitStickyGas(*Fx, Place.GetRotation());
 		}
 		else if (!bHidden && !bVolumeSmoke && !bFlicDrawn && Fx->Style != EStyle::None && Record.Kind == EScctEffectKind::Emitter)
 		{
-			Emit(Fx->Style, Fx->Location, FVector(Record.VelX, Record.VelY, Record.VelZ), DeltaSeconds, Fx->EmitDebt);
+			const FVector Velocity(Record.VelX, Record.VelY, Record.VelZ);
+			if (bRestoring)
+			{
+				const float SinceEnd = bHistorical ? FMath::Max(0.0f, Record.Age - Record.LifeSpan) : 0.0f;
+				// Twenty seconds is the reference renderer's particle warm-up window.
+				for (float Age = FMath::Min(Record.Age, 20.0f); Age > SinceEnd; )
+				{
+					const float Step = FMath::Min(Age - SinceEnd, 1.0f / 60.0f);
+					Age -= Step;
+					TGuardValue<float> SpawnAge(Sprites.SpawnAge, Age);
+					Emit(Fx->Style, Fx->Location, Velocity, Step, Fx->EmitDebt);
+				}
+			}
+			if (!bHistorical) Emit(Fx->Style, Fx->Location, Velocity, DeltaSeconds, Fx->EmitDebt);
 		}
 		if (!bHidden && Fx->TrailStyle != EStyle::None && !Before.Equals(Fx->Location, 0.5))
 		{
@@ -1636,6 +1655,7 @@ void UScctEffectsSubsystem::SpawnFlashBang(const FVector& At)
 
 int32 UScctEffectsSubsystem::AcquireLight(const FVector& At, const FLinearColor& Color, float Candelas, float Radius, float Life, bool bShadows)
 {
+	if (Life > 0.0f && Sprites.SpawnAge >= Life) return INDEX_NONE;
 	for (int32 Index = 0; Index < Lights.Num(); ++Index)
 	{
 		if (Lights[Index].bUsed)
@@ -1650,7 +1670,7 @@ int32 UScctEffectsSubsystem::AcquireLight(const FVector& At, const FLinearColor&
 		{
 			FScctExposure::NoteFlash();
 		}
-		Lights[Index] = { Life, 0.0f, Shown, true };
+		Lights[Index] = { Life, Sprites.SpawnAge, Shown, true };
 		UPointLightComponent* Light = LightComponents[Index];
 		// A returned flare may have used the fitted display-space falloff. Other effects use candelas.
 		Light->SetUseInverseSquaredFalloff(true);

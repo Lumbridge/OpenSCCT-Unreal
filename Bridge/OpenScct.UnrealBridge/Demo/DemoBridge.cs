@@ -109,6 +109,7 @@ public static class DemoBridge
         {
             // A visit would lose its round to the main slot (and the server would time the player out): leave it.
             OnlineBridge.Existing?.Leave();
+            player.Clock.BeginSeek();
             PlaySession session = player.CreateSession(OnlineBridge.Instance.Catalog);
             BridgeSession adopted = Exports.AdoptRemote(session);
             s_adopted = adopted;
@@ -164,6 +165,11 @@ public static class DemoBridge
                 events.Quiet = false;
             }
 
+            if (!player.IsSeeking)
+            {
+                events.FinishSeek();
+                player.Clock.ResumeRealTime();
+            }
             Touch();
         }
 
@@ -247,17 +253,12 @@ public static class DemoBridge
         }
     }
 
-    /// <summary>Seeks to a server tick: forward fast-forwards this playback, back starts a new one at the tick.</summary>
+    /// <summary>Seeks to a server tick: restart from the closest bootstrap so audio and visual state share one timeline.</summary>
     public static void Seek(uint tick)
     {
         if (s_player is not { } player) return;
         tick = Math.Clamp(tick, player.FirstTick, player.LastTick);
-        if (tick >= player.CurrentTick)
-        {
-            player.SeekTarget = tick;
-            Touch();
-        }
-        else
+        if (tick != player.CurrentTick || player.IsSeeking)
         {
             Replace(player.Restart(tick));
         }

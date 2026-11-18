@@ -20,7 +20,7 @@
 // after Update): raw events, sounds, shots. Three lists are STATE (the whole current list every call): effect
 // actors, impact marks, ambient sounds.
 
-constexpr int32 ScctEventsApiVersion = 1;
+constexpr int32 ScctEventsApiVersion = 2;
 
 // ---- raw events ---------------------------------------------------------------------------------------------
 
@@ -140,6 +140,7 @@ struct FScctSound
 	float FadeSeconds;   // PlayMusic: fade in; StopMusic: fade out
 	int32 LoopStart;     // loop points of a looping wave in sample frames, -1: the whole file
 	int32 LoopEnd;
+	float SeekOffset, SeekFadeOut; // sample position and remaining fade on a demo seek, in seconds
 };
 
 // ---- shots --------------------------------------------------------------------------------------------------
@@ -210,6 +211,8 @@ namespace EScctEffectFlags
 	constexpr int32 OwnView = 64;     // a laser beam whose simulated start is in mid-air: draw it from the drawn hand / device instead
 	constexpr int32 Snapped = 128;    // X,Y,Z was not blended from the tick before
 	constexpr int32 VisionOnly = 256; // bHideInNormalVision: draw it only in the night and heat vision modes
+	constexpr int32 RestoreAge = 512;
+	constexpr int32 HistoricalEmitter = 1024;
 }
 
 /**
@@ -340,7 +343,7 @@ struct FScctEventsApi
 };
 
 static_assert(sizeof(FScctSimEvent) == 64, "FScctSimEvent must match BridgeSimEvent");
-static_assert(sizeof(FScctSound) == 100, "FScctSound must match BridgeSound");
+static_assert(sizeof(FScctSound) == 108, "FScctSound must match BridgeSound");
 static_assert(sizeof(FScctShot) == 72, "FScctShot must match BridgeShot");
 static_assert(sizeof(FScctEffectActor) == 148, "FScctEffectActor must match BridgeEffectActor");
 static_assert(sizeof(FScctImpactMark) == 76, "FScctImpactMark must match BridgeImpactMark");

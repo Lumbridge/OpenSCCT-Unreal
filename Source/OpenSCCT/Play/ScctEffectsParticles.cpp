@@ -114,6 +114,7 @@ FScctFxParticle& FScctFxSprites::Spawn(EScctFxLayer LayerId)
 	FScctFxParticle& Particle = Layer.Particles[Layer.Next];
 	Layer.Next = (Layer.Next + 1) % Layer.Particles.Num();
 	Particle = FScctFxParticle();
+	Particle.SeekAge = SpawnAge;
 	return Particle;
 }
 
@@ -154,6 +155,27 @@ void FScctFxSprites::Clear()
 	}
 }
 
+static void AdvanceSprite(FScctFxParticle& Particle, float DeltaSeconds)
+{
+	Particle.Velocity += Particle.Acceleration * DeltaSeconds;
+	Particle.Velocity.Z -= Particle.Gravity * DeltaSeconds;
+	if (Particle.LossMax.IsZero())
+	{
+		Particle.Velocity *= FMath::Max(0.0f, 1.0f - Particle.Drag * DeltaSeconds);
+		Particle.Position += Particle.Velocity * DeltaSeconds;
+	}
+	else
+	{
+		// The original emitter's order: the move first, then each axis loses its share (never more than all of it,
+		// where the original's would turn round on a long frame).
+		Particle.Position += Particle.Velocity * DeltaSeconds;
+		Particle.Velocity.X *= FMath::Max(0.0, 1.0 - FMath::FRandRange(Particle.LossMin.X, Particle.LossMax.X) * DeltaSeconds);
+		Particle.Velocity.Y *= FMath::Max(0.0, 1.0 - FMath::FRandRange(Particle.LossMin.Y, Particle.LossMax.Y) * DeltaSeconds);
+		Particle.Velocity.Z *= FMath::Max(0.0, 1.0 - FMath::FRandRange(Particle.LossMin.Z, Particle.LossMax.Z) * DeltaSeconds);
+	}
+	Particle.Rotation += Particle.Spin * DeltaSeconds;
+}
+
 void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const FQuat& ViewRotation)
 {
 	// A sprite faces the camera: its edges lie along the camera's right and up.
@@ -177,29 +199,20 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 				continue;
 			}
 
-			Particle.Age += DeltaSeconds;
+			Particle.Age += Particle.SeekAge + DeltaSeconds;
 			if (Particle.Age >= Particle.Life)
 			{
 				Transform = HiddenInstance;
 				continue;
 			}
-			Particle.Velocity += Particle.Acceleration * DeltaSeconds;
-			Particle.Velocity.Z -= Particle.Gravity * DeltaSeconds;
-			if (Particle.LossMax.IsZero())
+			// Reproduce drag, acceleration and rotation in simulation-sized steps.
+			while (Particle.SeekAge > 0.0f)
 			{
-				Particle.Velocity *= FMath::Max(0.0f, 1.0f - Particle.Drag * DeltaSeconds);
-				Particle.Position += Particle.Velocity * DeltaSeconds;
+				const float Step = FMath::Min(Particle.SeekAge, 1.0f / 60.0f);
+				AdvanceSprite(Particle, Step);
+				Particle.SeekAge -= Step;
 			}
-			else
-			{
-				// The original emitter's order: the move first, then each axis loses its share (never more than all of it,
-				// where the original's would turn round on a long frame).
-				Particle.Position += Particle.Velocity * DeltaSeconds;
-				Particle.Velocity.X *= FMath::Max(0.0, 1.0 - FMath::FRandRange(Particle.LossMin.X, Particle.LossMax.X) * DeltaSeconds);
-				Particle.Velocity.Y *= FMath::Max(0.0, 1.0 - FMath::FRandRange(Particle.LossMin.Y, Particle.LossMax.Y) * DeltaSeconds);
-				Particle.Velocity.Z *= FMath::Max(0.0, 1.0 - FMath::FRandRange(Particle.LossMin.Z, Particle.LossMax.Z) * DeltaSeconds);
-			}
-			Particle.Rotation += Particle.Spin * DeltaSeconds;
+			AdvanceSprite(Particle, DeltaSeconds);
 			++Layer.Live;
 
 			const float Time = Particle.Age / Particle.Life;

@@ -1,4 +1,5 @@
 #include "Play/ScctLevelStateSubsystem.h"
+#include "Demo/ScctDemoPlayback.h"
 #include "Play/ScctStudioProp.h"
 
 #include "Algo/AnyOf.h"
@@ -756,6 +757,19 @@ void UScctLevelStateSubsystem::HandleFrame(float DeltaSeconds)
 		}
 	}
 	FScctLightRules::Tick(GetWorld());
+	const float Rate = UScctDemoPlayback::PresentationRate(GetWorld());
+	if (Rate != EmitterPlaybackRate)
+	{
+		for (auto& Pair : TaggedEmitters)
+		{
+			if (auto* Component = Pair.Value.Component.Get())
+			{
+				Component->SetCustomTimeDilation(Rate > 0.0f ? Rate : 1.0f);
+				Component->SetPaused(Rate == 0.0f);
+			}
+		}
+		EmitterPlaybackRate = Rate;
+	}
 	RefreshNames();
 	RunDebugActions();
 	UpdateActors();
@@ -1919,6 +1933,29 @@ void UScctLevelStateSubsystem::DrainEvents()
 
 			case EScctWorldEventKind::EmitterTriggered:
 			{
+				if (Event.B != 0)
+				{
+					// Demo intervals precede their trigger. Mesh particles already used the same intervals in the bridge.
+					const FName Tag = FScctWorld::LevelTag(*Name);
+					for (auto It = TaggedEmitters.CreateKeyIterator(Tag); It; ++It)
+					{
+						auto& Emitter = It.Value();
+						if (auto* Component = Emitter.Component.Get())
+						{
+							Component->SetPaused(false);
+							if (Event.B == 2)
+							{
+								Emitter.bOn = Emitter.bOriginalActive;
+								if (Emitter.bOn) Component->Activate(true);
+								else Component->DeactivateImmediate();
+							}
+							if (Event.DX > 0.0f) Component->AdvanceSimulationByTime(Event.DX, 1.0f / 60.0f);
+							Component->SetPaused(EmitterPlaybackRate == 0.0f);
+						}
+					}
+					if (Event.A != 0) TriggerEmitters(Name);
+					break;
+				}
 				const int32 Reached = TriggerEmitters(Name) + MeshParticles.Trigger(Event.NameId);
 				NumEmittersReached += Reached;
 				if (bLog || Reached == 0)

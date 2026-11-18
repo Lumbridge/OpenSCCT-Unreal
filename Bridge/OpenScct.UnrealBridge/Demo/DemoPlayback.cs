@@ -23,6 +23,14 @@ public sealed class DemoClock : IClock
     private double _speed = 1.0;
 
     public bool Paused { get; set; }
+    // Reset the real-time baseline when a budgeted seek finishes, including time spent warming its effects.
+    internal bool Manual { get; private set; }
+    internal void BeginSeek() => Manual = true;
+    internal void ResumeRealTime()
+    {
+        _ = NowMicroseconds;
+        Manual = false;
+    }
 
     /// <summary>Playback speed (0.25 to 4).</summary>
     public double Speed
@@ -36,7 +44,7 @@ public sealed class DemoClock : IClock
         get
         {
             long real = (long)_watch.Elapsed.TotalMicroseconds;
-            if (!Paused)
+            if (!Paused && !Manual)
             {
                 _now += (long)((real - _lastReal) * _speed);
             }
@@ -157,7 +165,7 @@ public sealed class DemoPlayback : IDisposable
     // Even a paused restart at the first tick needs its initial packets, including the recorded loading prefix.
     public bool IsSeeking => (_played == 0 && Session is not null) || PacketTick < Math.Max(FirstTick, SeekTarget);
 
-    /// <summary>The ticks being run are a fast-forward: their sounds and effects are not presented.</summary>
+    /// <summary>Presentation is being reconstructed at simulation tick boundaries.</summary>
     internal bool RebuildingPresentation => _fastForwarding;
 
     /// <summary>True once the last packet was played.</summary>

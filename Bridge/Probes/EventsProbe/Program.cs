@@ -45,7 +45,7 @@ unsafe
 {
     (string Name, int Size, int Expected)[] sizes =
     [
-        (nameof(BridgeSimEvent), sizeof(BridgeSimEvent), 64), (nameof(BridgeSound), sizeof(BridgeSound), 100),
+        (nameof(BridgeSimEvent), sizeof(BridgeSimEvent), 64), (nameof(BridgeSound), sizeof(BridgeSound), 108),
         (nameof(BridgeShot), sizeof(BridgeShot), 72), (nameof(BridgeEffectActor), sizeof(BridgeEffectActor), 148),
         (nameof(BridgeImpactMark), sizeof(BridgeImpactMark), 76), (nameof(BridgeAmbientSound), sizeof(BridgeAmbientSound), 44),
         (nameof(BridgeMarkSurface), sizeof(BridgeMarkSurface), 32), // Runtime/ScctMarkSurfaceApi.h

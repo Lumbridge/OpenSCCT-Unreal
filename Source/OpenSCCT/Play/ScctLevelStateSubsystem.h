@@ -309,6 +309,7 @@ private:
 	void ApplyMesh(FActorState& State, int32 MeshId);
 	void ApplySkins(FActorState& State);
 	/** Emitter.Trigger on the importer's Niagara actors of that map Emitter; returns how many it reached. */
+	float EmitterPlaybackRate = 1.0f;
 	int32 TriggerEmitters(const FString& Name);
 	void BindLight(FLightState& State, const FScctWorldLight& Record);
 	void BindFixtures(FLightState& State);

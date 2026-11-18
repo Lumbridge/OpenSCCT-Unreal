@@ -10,6 +10,7 @@ using OpenScct.Game.Combat;
 using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
 using OpenScctGame.Play.Session;
+using OpenScctGame.Render.Data;
 using K = OpenScct.Game.Equipment.K;
 
 namespace OpenScct.UnrealBridge.Events;
@@ -72,10 +73,23 @@ internal sealed class EffectTracker
     private Level? _level;
     private long _tick;
     private long _ticksSeen;
+    private sealed class SeekEmitter(long born, long end, BridgeEffectActor record)
+    {
+        public long Born = born, End = end;
+        public BridgeEffectActor Record = record;
+        public bool Presented;
+    }
+    private readonly List<SeekEmitter> _seekEmitters = [];
+    private readonly string? _sharedRoot;
+    private SharedClasses? _seekDefaults;
+    private int _nextLooseId = -1;
+    private const int WarmupTicks = 20 * Sim.Hz; // ParticleSystemSim.MaxDemoWarmupSeconds
+
 
     public EffectTracker(PlaySession session, string? sharedRoot, DrainQueue<BridgeShot> shots)
     {
         _session = session;
+        _sharedRoot = sharedRoot;
         _shots = shots;
         if (sharedRoot is not null)
         {
@@ -204,6 +218,58 @@ internal sealed class EffectTracker
         }
     }
 
+    internal void RestoreFirstTick(int actorId, long born)
+    {
+        if (_level?.FindActor(actorId) is { } actor && _tracked.TryGetValue(actor, out var tracked))
+            tracked.FirstTick = born;
+    }
+
+    internal void RestoreLooseEmitter(long born, in SimEvent e)
+    {
+        var record = new BridgeEffectActor
+        {
+            ActorId = _nextLooseId--, Kind = BridgeEffectKind.Emitter, ClassId = EventNames.Id(e.What),
+            X = e.Location.X, Y = e.Location.Y, Z = e.Location.Z,
+            Pitch = e.Rotation.Pitch * RotatorToDegrees, Yaw = e.Rotation.Yaw * RotatorToDegrees,
+            Roll = e.Rotation.Roll * RotatorToDegrees
+        };
+        string cls = e.What.ToString();
+        if (_sharedRoot is not null) _seekDefaults ??= SharedClasses.Load(_sharedRoot);
+        if (!cls.Contains('.'))
+        {
+            foreach (string path in _kinds.Keys)
+                if (path.EndsWith("." + cls, StringComparison.OrdinalIgnoreCase)) { cls = path; break; }
+        }
+        // Loose one-shot bursts leave their particles behind. Timed emitters continue emitting after the seek.
+        float life = _seekDefaults?.DefaultsOf(cls) is { } d && d.TryGetProperty("LifeSpan", out var value) &&
+            value.TryGetSingle(out float seconds) ? Math.Max(0, seconds) : 0;
+        _seekEmitters.Add(new(born, born + (long)Math.Ceiling(life * Sim.Hz), record));
+    }
+
+    internal void CaptureSeekTick()
+    {
+        for (int i = _order.Count - 1; i >= 0; i--)
+        {
+            var t = _order[i];
+            if (!t.Deleted)
+            {
+                t.RestoreAge = true;
+                continue;
+            }
+            if (t.Class.Kind == BridgeEffectKind.Emitter)
+            {
+                var record = RecordOf(t, 0);
+                record.ActorId = _nextLooseId--;
+                record.Flags &= ~BridgeEffectFlags.Deleted;
+                _seekEmitters.Add(new(t.FirstTick, _tick, record));
+            }
+            _tracked.Remove(t.Actor);
+            _order.RemoveAt(i);
+        }
+        for (int i = _seekEmitters.Count - 1; i >= 0; i--)
+            if (_tick - _seekEmitters[i].End > WarmupTicks) _seekEmitters.RemoveAt(i);
+    }
+
     /// <summary>
     /// Writes the effect actors as drawn this frame. Returns the count written. An actor that went is written once
     /// more with the Deleted flag and then forgotten. The ones that went are written first, so a buffer that is too
@@ -227,8 +293,29 @@ internal sealed class EffectTracker
             Tracked t = _order[i];
             if (!t.Deleted)
             {
-                into[count++] = RecordOf(t, alpha);
+                var record = RecordOf(t, alpha);
+                if (t.RestoreAge) record.Flags |= BridgeEffectFlags.RestoreAge;
+                t.RestoreAge = false;
+                into[count++] = record;
             }
+        }
+
+        for (int i = 0; i < _seekEmitters.Count && count < into.Length;)
+        {
+            var emitter = _seekEmitters[i];
+            bool ended = emitter.End <= _tick;
+            if (!emitter.Presented || !ended)
+            {
+                var record = emitter.Record;
+                record.Age = (_tick - emitter.Born) * Sim.DeltaTime;
+                record.LifeSpan = Math.Max(0, emitter.End - emitter.Born) * Sim.DeltaTime;
+                if (!emitter.Presented) record.Flags |= BridgeEffectFlags.RestoreAge;
+                if (ended) record.Flags |= BridgeEffectFlags.HistoricalEmitter;
+                into[count++] = record;
+                emitter.Presented = true;
+            }
+            if (ended) _seekEmitters.RemoveAt(i);
+            else i++;
         }
 
         // The ones that went and have now been told are forgotten.
@@ -659,7 +746,7 @@ internal sealed class EffectTracker
         public ClassEntry Class { get; } = cls;
 
         public FVector Previous, Current;
-        public bool HasPrevious, Deleted, Killed, Reported;
+        public bool HasPrevious, Deleted, Killed, Reported, RestoreAge;
         public long FirstTick;
         public int TrailClassId, MeshId, ParticleId;
         public string? MeshPath;

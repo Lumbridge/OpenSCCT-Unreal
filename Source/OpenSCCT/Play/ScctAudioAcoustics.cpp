@@ -214,7 +214,7 @@ void UScctAudioSubsystem::ApplyAcoustics(FVoice& Voice, bool bForce)
 	}
 
 	// Its pitch carries the Doppler shift of this frame (Play/ScctAudioView.cpp).
-	const float Pitch = Voice.Pitch * Voice.DopplerPitch;
+	const float Pitch = Voice.Pitch * Voice.DopplerPitch * PlaybackRate;
 	if (bForce || !FMath::IsNearlyEqual(Voice.AppliedPitch, Pitch, 0.0005f))
 	{
 		Voice.AppliedPitch = Pitch;

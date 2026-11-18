@@ -62,6 +62,7 @@ public sealed class WorldState
     private readonly List<Marker> _markers = [];
     private readonly List<Animated> _animated = [];
     private readonly List<BridgeWorldEvent> _events = [];
+    private Queue<BridgeWorldEvent>? _restoredEmitters;
     private readonly Dictionary<Actor, int> _nameOfActor = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<Actor> _boundActors = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<Actor> _spawnedActors = new(ReferenceEqualityComparer.Instance);
@@ -351,7 +352,7 @@ public sealed class WorldState
             m.OnTick(this, first);
         }
 
-        if (!first)
+        if (!first && Demo.DemoBridge.Player?.RebuildingPresentation != true)
         {
             TriggeredEmitters(level);
         }
@@ -568,6 +569,13 @@ public sealed class WorldState
         suffix = "";
         return false;
     }
+
+    internal void RestoreEmitterTrigger(string id, bool reset, bool trigger, float seconds) =>
+        (_restoredEmitters ??= new()).Enqueue(new BridgeWorldEvent
+        {
+            Kind = BridgeWorldEventKind.EmitterTriggered, NameId = Intern(id),
+            A = trigger ? 1 : 0, B = reset ? 2 : 1, DX = seconds
+        });
 
     private void Emit(int kind, int nameId, int a, int b, FVector at, FVector direction = default)
     {
@@ -808,6 +816,10 @@ public sealed class WorldState
     /// </summary>
     public int DrainEvents(Span<BridgeWorldEvent> events)
     {
+        int restored = 0;
+        while (restored < events.Length && _restoredEmitters is { Count: > 0 })
+            events[restored++] = _restoredEmitters.Dequeue();
+        events = events[restored..];
         int count = Math.Min(events.Length, _events.Count);
         for (int i = 0; i < count; i++)
         {
@@ -815,7 +827,7 @@ public sealed class WorldState
         }
 
         _events.RemoveRange(0, count);
-        return count;
+        return restored + count;
     }
 
     // ---- helpers ---------------------------------------------------------------------------------------------

@@ -97,6 +97,21 @@ internal sealed class PlacedMeshParticles
         return _layers.Count;
     }
 
+    internal void ResetDemoEmitter(int id)
+    {
+        if (!_owners.TryGetValue(id, out var owner)) return;
+        owner.Sim.Reset();
+        _collision = GadgetWorld.Collision(_session.Session.Client.World.Level.Info);
+        _time = _clock.At(_session.Alpha);
+    }
+
+    internal void AdvanceDemoEmitter(int id, float seconds, bool trigger)
+    {
+        if (!_owners.TryGetValue(id, out var owner)) return;
+        owner.Sim.RestoreDemoAge(seconds, owner.Location, owner.Rotation, default);
+        if (trigger) owner.Sim.Trigger();
+    }
+
     internal void Trigger(int id)
     {
         if (_owners.TryGetValue(id, out Owner? owner)) owner.Sim.Trigger();
@@ -128,6 +143,7 @@ internal sealed class PlacedMeshParticles
         // slow render frame still runs collision and spawning in at most one-tick steps.
         float now = _clock.At(_session.Alpha);
         _collision = GadgetWorld.Collision(_session.Session.Client.World.Level.Info);
+        if (Demo.DemoBridge.Player is { IsSeeking: true }) return 0;
         float elapsed = now - _time;
         if (elapsed < 0)
         {

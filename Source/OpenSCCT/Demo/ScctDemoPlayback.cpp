@@ -254,6 +254,12 @@ void UScctDemoPlayback::PresentIn(UScctSessionSubsystem* Session, const FString&
 	ShowHud(World);
 }
 
+float UScctDemoPlayback::PresentationRate(UWorld* World)
+{
+	const auto* Demo = Get(World);
+	return Demo && Demo->PresentingWorld.Get() == World ? Demo->PlaybackRate : 1.0f;
+}
+
 void UScctDemoPlayback::HandleBeforeTicks(float DeltaSeconds)
 {
 	const FScctDemoPlayApi* Table = Api();
@@ -283,6 +289,9 @@ void UScctDemoPlayback::HandleBeforeTicks(float DeltaSeconds)
 	{
 		return;
 	}
+	static constexpr float Rates[] = { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
+	PlaybackRate = (Info.Flags & (EScctDemoPlayFlags::Paused | EScctDemoPlayFlags::Seeking))
+		? 0.0f : Rates[FMath::Clamp(Info.SpeedIndex, 0, 4)];
 	ApplyStartOptions(Info);
 
 	PlayingSeconds += DeltaSeconds;

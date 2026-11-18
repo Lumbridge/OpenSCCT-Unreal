@@ -53,7 +53,7 @@ public unsafe struct EventsApi
 
 public static unsafe class EventsExports
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     /// <summary>Fills <paramref name="api"/>. Returns the API version.</summary>
     [UnmanagedCallersOnly]
