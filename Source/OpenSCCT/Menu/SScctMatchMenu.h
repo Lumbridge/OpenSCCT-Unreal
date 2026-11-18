@@ -26,7 +26,8 @@ class UWorld;
  *             (Runtime/ScctMatchMenuApi.h), read again four times a second; each that ends something asks first, a
  *             resign question is taken back once resigning is no longer allowed, and the menu takes no close key in
  *             its first half second (SSMenu_LANMainPage)
- *   SETTINGS  Menu/SScctSettingsPanel.h, as in the front end
+ *   SETTINGS  Menu/SScctSettingsPanel.h, as in the front end (or Help & feedback, Menu/SScctHelpFeedbackPage.h, from
+ *             the pause page's HELP & FEEDBACK entry)
  *   RESULTS   YOU WIN / YOU LOSE from the side the local player played (online the player's own results line: a Revenge game
  *             swaps the sides), the winner and every player's score: online from the server's results with the
  *             objectives and who left early (Runtime/ScctRoundApi.h), offline from the HUD's scoreboard once the
@@ -135,6 +136,8 @@ private:
 	TSharedPtr<SBox> Body;
 	TSharedPtr<SScctDialogLayer> Dialogs;
 	TSharedPtr<SScctMenuPage> Settings;
+	/** The settings view shows Help & feedback (Menu/SScctHelpFeedbackPage.h) instead of the settings page. */
+	bool bFeedbackView = false;
 	TWeakPtr<SWidget> DefaultFocus;
 	/** The pause page's Options entry: the focus goes back to it when the settings close. */
 	TWeakPtr<SWidget> OptionsEntry;

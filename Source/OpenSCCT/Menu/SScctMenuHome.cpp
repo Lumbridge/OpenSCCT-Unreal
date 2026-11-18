@@ -134,6 +134,9 @@ namespace
 			Entry(ScctUi::GameText(TEXT("All_Settings"), TEXT("TitlePage"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
 				TEXT("Everything you can set: the picture, the sound, the mouse and the controller, every key of both sides, and your name."),
 				[this] { Host.Open(TEXT("settings")); });
+			Entry(TEXT("Help & feedback"), TEXT("Report a bug, suggest a feature, the guides"),
+				TEXT("Report a bug with the game's details filled in and a screenshot if you want one, suggest a feature, browse the reported issues, and the documentation and contribution guides."),
+				[this] { Host.Open(TEXT("feedback")); });
 			Entry(TEXT("Credits"), TEXT("The people and the licences"),
 				TEXT("Who made OpenSCCT and this Unreal presentation, and the licences of the assets it uses."),
 				[this] { Host.Open(TEXT("credits")); });
