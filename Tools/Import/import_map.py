@@ -638,6 +638,7 @@ def main():
     backdrop_rules = json.load(open(os.path.join(HERE, "map_skies.json"))).get("backdrop", {})
     skip_backdrop = set(key(name) for name in backdrop_rules.get("skip", []))
     horizon_cut = {key(name): float(cut) for name, cut in backdrop_rules.get("horizon_cut", {}).items() if not name.startswith("about")}
+    horizon_key = {key(name): float(cut) for name, cut in backdrop_rules.get("horizon_key", {}).items() if not name.startswith("about")}
     backdrop_source = {"MI_" + sanitize(name): record.get("source") or name for name, record in material_doc["materials"].items()}
     cut_sky = []
     backdrop = []
@@ -685,17 +686,20 @@ def main():
                 if isinstance(material, unreal.MaterialInstanceConstant) and material.get_path_name() not in glowing:
                     glowing.add(material.get_path_name())
                     # Parts of a skyline that are the sky itself (a painted star sphere, a cloud band) are not drawn,
-                    # and a panorama with a city under its painted sky keeps only the city: the real sky shows.
+                    # and a panorama with a city under its painted sky keeps only the city: the real sky shows. A
+                    # panorama of black hills before a painted glow keeps only what is dark below the cut as well.
                     source = backdrop_source.get(material.get_name(), "")
                     cut = BACKDROP_SKY_CUT if BACKDROP_NOT.search(source.split(".")[-1]) else horizon_cut.get(key(source), 0.0)
                     if cut > 0.0:
                         materials_lib.set_material_instance_scalar_parameter_value(material, "HorizonCut", cut)
+                        dark = horizon_key.get(key(source), 0.0) if cut < BACKDROP_SKY_CUT else 0.0
+                        materials_lib.set_material_instance_scalar_parameter_value(material, "HorizonKey", dark)
                         overrides = material.get_editor_property("base_property_overrides")
                         overrides.set_editor_property("override_blend_mode", True)
                         overrides.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
                         material.set_editor_property("base_property_overrides", overrides)
                         materials_lib.update_material_instance(material)
-                        cut_sky.append("%s %.2f" % (source.split(".")[-1], cut))
+                        cut_sky.append("%s %.2f%s" % (source.split(".")[-1], cut, " dark below %.4f" % dark if dark > 0.0 else ""))
                     if materials_lib.get_material_instance_scalar_parameter_value(material, "Emissive") > 0.0:
                         materials_lib.set_material_instance_scalar_parameter_value(material, "Emissive", BACKDROP_GLOW)
                         materials_lib.set_material_instance_scalar_parameter_value(material, "GlowInPicture", BACKDROP_GLOW_IN_PICTURE)

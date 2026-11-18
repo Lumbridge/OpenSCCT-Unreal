@@ -514,7 +514,16 @@ namespace
 					*DemosLibraryText(UScctDemoPlayback::Api(), EScctDemoLibraryText::SavedFolder));
 				if (bHistory)
 				{
-					CountLine = FString::Printf(TEXT("%d matches with a final scoreboard  ·  the account's match history is not in this build"), Rows.Num());
+					CountLine = FString::Printf(TEXT("%d demos with a final scoreboard  ·  every round you played, recorded or not, is in Match history"), Rows.Num());
+					Add(DemosCard(SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+						[
+							DemosLine(TEXT("The scoreboard of every round you play is saved even without a demo, and your account's rounds on the master are listed with them."), 13.0f, ScctHudStyle::TextDim())
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.0f, 0.0f, 0.0f, 0.0f)
+						[
+							DemosUi::Button(DemosUi::ToText(TEXT("MATCH HISTORY")), FOnClicked::CreateLambda([this] { if (Host.Open) { Host.Open(TEXT("history")); } return FReply::Handled(); }))
+						]));
 				}
 				if (Rows.Num() == 0)
 				{

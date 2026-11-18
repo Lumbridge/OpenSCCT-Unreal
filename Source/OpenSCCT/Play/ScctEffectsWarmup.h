@@ -20,7 +20,8 @@ class UScctSessionSubsystem;
  * glass materials as the shards draw them (a procedural mesh), and each of the four goggle modes is held for a few
  * frames (UScctVisionSubsystem::HoldModeForWarmup) so its post-process and its thermal and EMF marks are drawn. That
  * creates the materials' render proxies, which asks the engine to precompile their pipeline states (PSO precaching);
- * the page stays up until those requests and any shader compilation have finished (waiting 20 s at the most once every sample and mode has been drawn), and then
+ * the page stays up until those requests and any shader compilation have finished (waiting 20 s at the most once every sample and mode has been drawn, and never covering the running match for more
+ * than 30 s from its first frame, however slow the frames are: the match does not wait for the page), and then
  * everything drawn is taken away and the page goes. The engine's PSO cache (Config/DefaultEngine.ini) is switched to
  * its fast batches while this runs.
  *

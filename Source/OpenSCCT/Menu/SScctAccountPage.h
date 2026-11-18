@@ -31,6 +31,8 @@ public:
 		SLATE_ARGUMENT(TWeakObjectPtr<UScctAccountSubsystem>, Account)
 		SLATE_ARGUMENT(TWeakObjectPtr<UScctOnlineSubsystem>, Online)
 		SLATE_EVENT(FSimpleDelegate, OnBack)
+		/** Opens another page of the menus by name (the Stats, Match history and Achievements links). */
+		SLATE_ARGUMENT(TFunction<void(const FString&)>, OnOpen)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -59,6 +61,7 @@ private:
 	TWeakObjectPtr<UScctAccountSubsystem> Account;
 	TWeakObjectPtr<UScctOnlineSubsystem> Online;
 	FSimpleDelegate OnBack;
+	TFunction<void(const FString&)> OnOpen;
 	FDelegateHandle ChangedHandle;
 
 	TSharedPtr<SBox> ContentBox;

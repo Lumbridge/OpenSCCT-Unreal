@@ -101,6 +101,7 @@ void SScctAccountPage::Construct(const FArguments& InArgs)
 	Account = InArgs._Account;
 	Online = InArgs._Online;
 	OnBack = InArgs._OnBack;
+	OnOpen = InArgs._OnOpen;
 	FParse::Value(FCommandLine::Get(), TEXT("ScctAccountPress="), AutoPress);
 
 	NameBox = AccountUi::TextBox(TEXT("your name"), FString(), false, FOnTextCommitted::CreateLambda([this](const FText&, ETextCommit::Type Commit)
@@ -142,6 +143,19 @@ void SScctAccountPage::Construct(const FArguments& InArgs)
 				}
 				return FReply::Handled();
 			}))
+		]
+		// The career pages (the Godot account page's Full stats and Match history, and its Achievements).
+		+ SHorizontalBox::Slot().AutoWidth().Padding(8.0f, 0.0f, 0.0f, 0.0f)
+		[
+			AccountUi::Button(AccountUi::ToText(TEXT("FULL STATS")), FOnClicked::CreateLambda([this] { if (OnOpen) { OnOpen(TEXT("stats")); } return FReply::Handled(); }))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(8.0f, 0.0f, 0.0f, 0.0f)
+		[
+			AccountUi::Button(AccountUi::ToText(TEXT("MATCH HISTORY")), FOnClicked::CreateLambda([this] { if (OnOpen) { OnOpen(TEXT("history")); } return FReply::Handled(); }))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(8.0f, 0.0f, 0.0f, 0.0f)
+		[
+			AccountUi::Button(AccountUi::ToText(TEXT("ACHIEVEMENTS")), FOnClicked::CreateLambda([this] { if (OnOpen) { OnOpen(TEXT("achievements")); } return FReply::Handled(); }))
 		]
 		+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right)
 		[

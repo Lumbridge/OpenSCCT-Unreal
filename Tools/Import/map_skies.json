@@ -9,10 +9,17 @@
       "CLU04_TXT.SkyBox.WArp_clu_ext": 0.505,
       "TX_SKY09.sfx.warp_skyline": 0.505,
       "Prison_TEX.sfx.warp_skyline1": 0.505,
-      "drpoc_chantier.sfx.moa_warp01": 0.8,
-      "drpoc_chantier.sfx.moa_warp02": 0.8,
-      "drpoc_chantier.sfx.moa_warp03": 0.8,
-      "drpoc_chantier.sfx.moa_warp04": 0.8
+      "drpoc_chantier.sfx.moa_warp01": 0.75,
+      "drpoc_chantier.sfx.moa_warp02": 0.75,
+      "drpoc_chantier.sfx.moa_warp03": 0.75,
+      "drpoc_chantier.sfx.moa_warp04": 0.75
+    },
+    "horizon_key": {
+      "about": "Of the horizon_cut panoramas, those whose land is a black silhouette with the painted sky's glow running down between its peaks to the texture's foot, by the material's source name: below the cut, a pixel brighter than this (linear, its brightest channel; 0.001 is about 3 of 255 in the texture: the hills are 0 and the glow fades to 8 at the foot, which a key of 0.004 left as a red line under the ridge) is not drawn either, so only the ridge stays (MuseE's sunset glow sat as an orange band along the horizon, under any cut that kept the hills, whose tops reach 78% of the texture's height).",
+      "drpoc_chantier.sfx.moa_warp01": 0.001,
+      "drpoc_chantier.sfx.moa_warp02": 0.001,
+      "drpoc_chantier.sfx.moa_warp03": 0.001,
+      "drpoc_chantier.sfx.moa_warp04": 0.001
     }
   },
   "maps": {

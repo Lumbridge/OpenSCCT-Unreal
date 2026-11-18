@@ -36,6 +36,18 @@ public:
 	void SetOpacity(float InOpacity) { Opacity = FMath::Clamp(InOpacity, 0.0f, 1.0f); }
 	float GetOpacity() const { return Opacity; }
 
+	/**
+	 * The HUD layout's scope (Hud/ScctHudLayout.h): until EndGroup everything is drawn scaled by Scale and moved by
+	 * Offset (a point P of the element lands at Offset + P * Scale, in the canvas's units) and faded by GroupOpacity on
+	 * top of SetOpacity's fade. Size() stays the canvas's own size. EndGroup puts the canvas back and returns the box
+	 * the group drew in, in the element's own (untransformed) units; invalid when it drew nothing.
+	 */
+	void BeginGroup(const FVector2f& Offset, float Scale, float InGroupOpacity);
+	FBox2f EndGroup();
+
+	/** The canvas's own geometry (not a group's). */
+	const FGeometry& GetCanvasGeometry() const { return BaseGeometry; }
+
 	/** Blurs what has been drawn so far inside the box (the game picture and anything painted below). */
 	void Blur(const FBox2f& Box, float Strength, float Radius = 0.0f);
 
@@ -86,8 +98,20 @@ public:
 private:
 	FPaintGeometry BoxGeometry(const FBox2f& Box) const;
 
+	/** The fade every shape is drawn with: the block's own times the layout group's. */
+	float Alpha() const { return Opacity * GroupOpacity; }
+
+	/** Adds a box (element units) to the open group's bounds. */
+	void Track(const FBox2f& Box);
+
 	FSlateWindowElementList& Elements;
-	const FGeometry& Geometry;
+	/** The canvas's geometry, and the one drawn with now (the canvas's, or a layout group's child of it). */
+	FGeometry BaseGeometry;
+	FGeometry Geometry;
 	int32 Layer;
 	float Opacity = 1.0f;
+	float GroupOpacity = 1.0f;
+	float GroupScale = 1.0f;
+	bool bInGroup = false;
+	FBox2f TrackedBounds = FBox2f(ForceInit);
 };

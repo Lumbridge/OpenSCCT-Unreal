@@ -7,7 +7,9 @@
 #include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctTutorialPlay.h"
 #include "OpenSCCT.h"
+#include "Online/ScctOnlineSubsystem.h"
 #include "Runtime/ScctFeatures.h"
+#include "Test/ScctDrillSubsystem.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScaleBox.h"
@@ -166,14 +168,35 @@ namespace
 				TutorialMenuEntry(Unused, TutorialCaption(TutorialsSection, TEXT("Tuto_Gadgets.Caption"), TEXT("Gadget Details")), TEXT("Every gadget of both sides"),
 					TEXT("Each side's gadgets with their HUD icon, their specifications (format, range, duration) and how to use them."), [this] { Host.Open(TEXT("gadgets/spy")); }),
 			});
-			const TSharedRef<SWidget> Training = Column({
+			TArray<TSharedRef<SWidget>> TrainingEntries = {
 				TutorialMenuEntry(Unused, TutorialCaption(TutorialsSection, TEXT("Tuto_Maps_Spy.Caption"), TEXT("Spy Tutorial Maps")), TEXT("Four spy tutorials and the exam"),
 					TEXT("Play the spy tutorial maps alone. A won tutorial is marked done and the next one starts."), [this] { Host.Open(TEXT("tutorialmaps/spy")); }),
 				TutorialMenuEntry(Unused, TutorialCaption(TutorialsSection, TEXT("Tuto_Maps_Merc.Caption"), TEXT("Mercenary Tutorial Maps")), TEXT("Three mercenary tutorials"),
 					TEXT("Play the mercenary tutorial maps alone. A won tutorial is marked done and the next one starts."), [this] { Host.Open(TEXT("tutorialmaps/merc")); }),
 				TutorialMenuEntry(Unused, TutorialCaption(TutorialsSection, TEXT("Tuto_VisitMap.Caption"), TEXT("Visit a Map")), TEXT("Explore any map alone with help paths"),
 					TEXT("Walk a map alone as either side, with the help paths shown and unlimited equipment, to learn its routes."), [this] { Host.Open(TEXT("visitmap")); }),
-			});
+			};
+			// TutorialsScreen: the interactive TestRange lessons, greyed while TestRange cannot be played here.
+			const bool bTutorialRangeHere = UScctOnlineSubsystem::IsPlayable(TEXT("TestRange"));
+			for (const FScctDrillInfo& Drill : UScctDrillSubsystem::GetDrills())
+			{
+				const FString DrillKind = Drill.Kind;
+				TSharedPtr<SScctButton> DrillButton;
+				TrainingEntries.Add(TutorialMenuEntry(DrillButton, Drill.Title, bTutorialRangeHere ? TEXT("Interactive TestRange lesson with your own controls") : TEXT("TestRange is not imported (Tools\\Import\\Import-Map.ps1 -Map TestRange)"),
+					Drill.Description, [DrillKind]
+					{
+						const UScctMenuSubsystem* Menus = UScctMenuSubsystem::GetCurrent();
+						if (Menus == nullptr || !UScctDrillSubsystem::Launch(Menus, DrillKind))
+						{
+							UE_LOG(LogOpenSCCT, Warning, TEXT("ScctTutorial: the %s lesson could not start"), *DrillKind);
+						}
+					}));
+				if (DrillButton.IsValid())
+				{
+					DrillButton->SetEnabled(bTutorialRangeHere);
+				}
+			}
+			const TSharedRef<SWidget> Training = Column(TrainingEntries);
 			DefaultFocus = First;
 
 			const FString Progress = Tutorials != nullptr ? Tutorials->GetProgressLine() : FString(TEXT("The tutorial progress needs the OpenSCCT bridge."));

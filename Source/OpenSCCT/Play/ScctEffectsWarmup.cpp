@@ -36,6 +36,8 @@ namespace
 	constexpr int32 WarmupLeastFrames = 16;
 	/** The longest the page is held for compilation that does not end (a first run of an uncooked game). */
 	constexpr double WarmupLongestSeconds = 20.0;
+	/** The longest the page covers the running match at all, counted from its first frame, however slow the frames are. */
+	constexpr double WarmupMostCoverSeconds = 30.0;
 	/** The longest the effects may take to become ready after the match started, in frames. */
 	constexpr int32 WarmupReadyFrameCap = 120;
 
@@ -320,6 +322,14 @@ bool UScctEffectsWarmupSubsystem::StepWarmup()
 		StartSeconds = FPlatformTime::Seconds();
 	}
 	const double Elapsed = FPlatformTime::Seconds() - StartSeconds;
+	// The match runs on behind the page (the server does not wait for this client): on a machine so busy that each
+	// frame takes seconds, the page goes after this long whatever is left, so the player never misses much of play.
+	if (Frames > 1 && Elapsed >= WarmupMostCoverSeconds)
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Warm-up: the page has covered the match for %.0f s (%d frames, samples %s, %d of 4 goggle modes held): it goes now, what is left compiles in play"),
+			Elapsed, Frames, SpawnFrame != INDEX_NONE ? TEXT("drawn") : TEXT("not drawn yet"), FMath::Clamp(VisionStep, 0, 4));
+		return true;
+	}
 	UScctEffectsSubsystem* Effects = GetWorld()->GetSubsystem<UScctEffectsSubsystem>();
 	UScctVisionSubsystem* Vision = GetWorld()->GetSubsystem<UScctVisionSubsystem>();
 
@@ -349,8 +359,8 @@ bool UScctEffectsWarmupSubsystem::StepWarmup()
 			NumGlass = SpawnGlassSamples(Eye + Forward * (WarmupSampleDistance + 5.0f), Forward);
 			if (bLog)
 			{
-				UE_LOG(LogOpenSCCT, Log, TEXT("Warm-up: samples drawn on frame %d (%.0f ms in): %d effect meshes, %d glass materials, %u PSO precache requests and %d shader jobs waiting"),
-					Frames, Elapsed * 1000.0, NumMeshes, NumGlass, PipelineStateCache::NumActivePrecacheRequests(), WarmupShaderJobs());
+				UE_LOG(LogOpenSCCT, Log, TEXT("Warm-up: samples drawn on frame %d (%.0f ms in) in front of the eye at (%.0f, %.0f, %.0f) looking %.0f, %.0f: %d effect meshes, %d glass materials, %u PSO precache requests and %d shader jobs waiting"),
+					Frames, Elapsed * 1000.0, Eye.X, Eye.Y, Eye.Z, Look.Yaw, Look.Pitch, NumMeshes, NumGlass, PipelineStateCache::NumActivePrecacheRequests(), WarmupShaderJobs());
 			}
 		}
 		return false;

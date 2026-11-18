@@ -79,6 +79,9 @@ private:
 	void HandleCaptured(const FString& ActionId, const FString& Label, const FKey& Key);
 	void Bind(const FString& ActionId, const FString& KeyName);
 	void ResetTab();
+	/** IMPORT FROM ENHANCED SCCT VERSUS (Menu/ScctEnhancedImport.h): where from, then what was taken over. */
+	void AskImportEnhanced();
+	void RunImportEnhanced(const FString& Folder, bool bWithoutInstall);
 	void Toast(const FString& Message, bool bBad = false);
 
 	TSharedPtr<SScctTabBar> Tabs;

@@ -48,7 +48,18 @@ public static unsafe class GlassExports
     private static int StandBeside(float px, float py, float pz)
     {
         var at = new FVector(px, py, pz);
-        FVector local = Exports.Current?.Session.LocalPawn?.Location ?? default;
+        FVector local;
+        try
+        {
+            // Read on the calling thread; an exception must not leave an unmanaged entry point.
+            local = Exports.Current is { IsDisposed: false } session ? session.Session.LocalPawn?.Location ?? default : default;
+        }
+        catch (Exception e)
+        {
+            Exports.ReportFailure(e.ToString());
+            return 0;
+        }
+
         return WorldDebugExports.OnServer(host =>
         {
             Pawn? player = null;
