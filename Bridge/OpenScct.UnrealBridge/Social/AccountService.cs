@@ -132,6 +132,7 @@ public sealed partial class AccountService
         PumpRefresh();
         PumpActions();
         PumpProfile();
+        PumpAppearance();
         FollowRounds();
     }
 
@@ -713,6 +714,12 @@ internal sealed class AccountStateFile
 
     /// <summary>The account's settings record as last seen (its Godot part is sent back unchanged).</summary>
     public string? LastRecord { get; set; }
+
+    /// <summary>The appearance sync's bookkeeping (the Godot client's AccountSettings.Appearance*): whose it is, the account's copy this PC last matched, and unsent choices.</summary>
+    public long AppearanceAccountId { get; set; }
+    public string AppearanceMaster { get; set; } = string.Empty;
+    public string AppearanceBaseline { get; set; } = string.Empty;
+    public bool AppearanceDirty { get; set; }
 
     public void Remember(AccountInfo account)
     {

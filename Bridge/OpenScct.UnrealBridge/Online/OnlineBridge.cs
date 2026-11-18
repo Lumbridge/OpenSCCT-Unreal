@@ -219,6 +219,9 @@ public sealed partial class OnlineBridge : IDisposable
             // The listen host's own player proves with it that it is the lobby's host.
             HostKey = hostKey,
             PreferredTeam = preferredTeam,
+            // The Armoury's look (retail while "Hide my cosmetics" is on); the server keeps what the account unlocked.
+            SpyLook = Social.ArmouryLook.Shared(OpenScct.Net.Cosmetics.CosmeticSide.Spy).ToHex(),
+            MercLook = Social.ArmouryLook.Shared(OpenScct.Net.Cosmetics.CosmeticSide.Merc).ToHex(),
             Maps = catalog.Maps,
             Classes = Classes,
             LoopbackOnly = loopbackOnly,

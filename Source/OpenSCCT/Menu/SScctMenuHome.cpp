@@ -125,6 +125,9 @@ namespace
 			Entry(TEXT("Maps & Content"), TEXT("Download maps and shared content"),
 				TEXT("The maps of OpenSCCT-Content with what this PC has: download, update or remove a map, follow each download, and open the downloads folder."),
 				[this] { Host.Open(TEXT("content")); });
+			Entry(TEXT("Armoury"), TEXT("Cosmetics for both sides"),
+				TEXT("The camo, tint and light colour of the spy and the mercenary by slot: see what your account unlocked, equip a look, and choose whose cosmetics are shown."),
+				[this] { Host.Open(TEXT("armoury")); });
 			Entry(TEXT("Account"), TEXT("Your name, rank and career"),
 				TEXT("Sign in or out, claim or change the name the servers show, see your rank, experience and career, prestige, and choose an emblem and a title."),
 				[this] { Host.Open(TEXT("account")); });

@@ -293,5 +293,6 @@ TSharedPtr<SScctMenuPage> ScctCareerPages::Make(const FString& Name, const FScct
 	if (Name.Equals(TEXT("stats"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("career"), ESearchCase::IgnoreCase)) { return MakeStats(Host); }
 	if (Name.Equals(TEXT("history"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("matchhistory"), ESearchCase::IgnoreCase)) { return MakeMatchHistory(Host); }
 	if (Name.Equals(TEXT("achievements"), ESearchCase::IgnoreCase)) { return MakeAchievements(Host); }
+	if (Name.Equals(TEXT("armoury"), ESearchCase::IgnoreCase) || Name.Equals(TEXT("cosmetics"), ESearchCase::IgnoreCase)) { return MakeArmoury(Host); }
 	return nullptr;
 }
