@@ -163,6 +163,15 @@ namespace ScctHudElements
 	/** The scoreboard, while held; with the objective list under it as the mission status page (DisplaySessionStatus). */
 	void PaintScoreboard(FScctHudPainter& Painter, const FScctHudModel& Model);
 
+	/**
+	 * The scoreboard as the Godot client has it, when the bridge has the running round's board (Model.LiveBoard): one
+	 * table per side, the local player's first, each with rank, name, the public columns (lives, objectives, kills and
+	 * deaths), the combat columns the server releases on its 30 second delay and the ping, under the map, the clock and
+	 * the line that counts down to the next release; the mission's objectives under it on the status page. False when
+	 * there is no such board, and PaintScoreboard then draws its four plain columns. ScctHudElementsLiveBoard.cpp.
+	 */
+	bool PaintLiveScoreboard(FScctHudPainter& Painter, const FScctHudModel& Model);
+
 	// --- Shared by the elements ----------------------------------------------------------------------------
 	/** A box from its top left corner and size. */
 	inline FBox2f HudBox(float X, float Y, float Width, float Height)
