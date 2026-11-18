@@ -60,21 +60,14 @@ namespace
 		}
 	}
 
-	/** The drawn body's bone for a table index, looked up once per pawn kind (only found bones are kept). */
+	/**
+	 * The drawn body's bone for a table index, asked of this pawn's own mesh each time: a map outfit or a cosmetic
+	 * model can give two pawns of one kind different skeletons, so a cache by kind could hand one pawn another's bone.
+	 */
 	FName FindFlicBone(const AScctPawnProxy& Proxy, int32 Index)
 	{
-		static TMap<int32, FName> Known;
-		const int32 Key = Proxy.GetKind() * 64 + Index;
-		if (const FName* Found = Known.Find(Key))
-		{
-			return *Found;
-		}
-		const FName Bone = Proxy.FindMeshBoneName(FlicBoneName(Proxy.GetKind(), Index));
-		if (!Bone.IsNone())
-		{
-			Known.Add(Key, Bone);
-		}
-		return Bone;
+		const TCHAR* Name = FlicBoneName(Proxy.GetKind(), Index);
+		return *Name != TEXT('\0') ? Proxy.FindMeshBoneName(Name) : NAME_None;
 	}
 
 	/**
