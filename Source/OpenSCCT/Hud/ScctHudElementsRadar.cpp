@@ -171,8 +171,8 @@ float ScctHudElements::RadarReservedHeight(const FScctHudModel& Model)
 void ScctHudElements::PaintRadar(FScctHudPainter& Painter, const FScctHudModel& Model)
 {
 	const FScctHudState& State = Model.State;
-	// The spy binocular page replaces the whole player page, the place name with it.
-	if (!Model.bHasState || (State.Flags & EScctHudFlags::HideHud) != 0 || State.GadgetView != 0 || State.BinocularMode == 1)
+	// A binocular page (the spy's binoculars, the merc's rifle scope) replaces the whole player page, the place name with it.
+	if (!Model.bHasState || (State.Flags & EScctHudFlags::HideHud) != 0 || State.GadgetView != 0 || State.BinocularMode != 0)
 	{
 		return;
 	}

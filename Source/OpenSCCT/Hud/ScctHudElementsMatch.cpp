@@ -160,9 +160,9 @@ void ScctHudElements::PaintRound(FScctHudPainter& Painter, const FScctHudModel& 
 
 void ScctHudElements::PaintObjectives(FScctHudPainter& Painter, const FScctHudModel& Model)
 {
-	// Not over the spy binocular page, which replaces the player page this panel belongs to.
+	// Not over a binocular page (the spy's binoculars, the merc's rifle scope), which replaces the player page this panel belongs to.
 	if (!Model.bHasRound || !Model.bHasState || (Model.State.Flags & EScctHudFlags::HideHud) != 0 || Model.ObjectiveLines.Num() == 0
-		|| Model.State.BinocularMode == 1
+		|| Model.State.BinocularMode != 0
 		|| ScctVisorEffects::IsHudShutDown(Model)) // the merc page's objectives go down with an EMP
 	{
 		return;

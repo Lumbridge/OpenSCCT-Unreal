@@ -258,6 +258,20 @@ private:
 	bool bLastLockMarked = false;
 	bool bBinocularPageMissingLogged = false;
 
+	// The merc's rifle scope (ScctHudBinoculars.cpp): the content's P_BinocularsDEF page, made anew each time the scope
+	// comes up. Its rings play a clip on each zoom step, the first one as the page appears (the page object starts on
+	// step 1, the scope on step 3).
+	void ReadScope(float DeltaSeconds, int32 Mode);
+
+	float ScopeAge = 0.0f;          // seconds since the scope page came up
+	float ScopeZoomAge = -1.0f;     // seconds since the rings' clip started, below 0 before the first
+	int32 ScopeZoomAnimation = 0;   // 1 closing in (a step in), 2 opening out (a step out)
+	int32 LastScopeStep = 1;
+	float ScopeSpeakAge = -1.0f;
+	float ScopeAlertAge = -1.0f;
+	FString ScopeBreathKey;
+	bool bScopePageMissingLogged = false;
+
 	// The merc's motion tracking (ScctHudMotion.cpp): the view handed to the bridge's motion table each frame and its
 	// rows into the model, a log line when the locks change and with each snapshot line, and the timed command Summon.
 	void BuildMotion();

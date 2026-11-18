@@ -29,7 +29,14 @@ public sealed class HudMagmaPage
         int Align,
         float ShadowRed, float ShadowGreen, float ShadowBlue, float ShadowAlpha,
         float ShadowX, float ShadowY,
-        float Tracking);
+        float Tracking,
+        int Mask = 0);
+
+    /// <summary><see cref="Layer.Mask"/>: the picture is not drawn, it hides what the next masked pictures have under it (SETMASK).</summary>
+    public const int MaskSet = 1;
+
+    /// <summary><see cref="Layer.Mask"/>: the picture is drawn only outside the mask set before it (USEMASK).</summary>
+    public const int MaskUse = 2;
 
     /// <summary>What the caller decides each moment: a widget's text or place, and which widgets are hidden.</summary>
     public sealed class Overrides
@@ -39,13 +46,25 @@ public sealed class HudMagmaPage
         /// <summary>A widget's top-left corner moved to this page point (MagmaNode.Widget(...).Pos).</summary>
         public Dictionary<string, (float X, float Y)> Positions { get; } = new(StringComparer.Ordinal);
 
+        /// <summary>Hidden widgets, by name in any area or as "instance/widget" in one instance only.</summary>
         public HashSet<string> Hidden { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// An instance (of the page or inside one) held at this frame in place of its clock (MagmaNode.SetFrame): a clip
+        /// the page logic starts at a frame, or a gauge whose frame is its value.
+        /// </summary>
+        public Dictionary<string, float> Frames { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>A picture's colour in place of its keys' (MagmaNode.Widget(...).Color), 0..1, before the parents' tint.</summary>
+        public Dictionary<string, (float R, float G, float B, float A)> Colours { get; } = new(StringComparer.Ordinal);
 
         public void Clear()
         {
             Texts.Clear();
             Positions.Clear();
             Hidden.Clear();
+            Frames.Clear();
+            Colours.Clear();
         }
     }
 
@@ -79,6 +98,7 @@ public sealed class HudMagmaPage
         public int Area = -1;
         public bool Hidden;
         public int Align;
+        public int Mask;
         public string Text = "";
         public readonly List<Key> Keys = [];
     }
@@ -188,6 +208,7 @@ public sealed class HudMagmaPage
                 Area = Int(w, "area"),
                 Hidden = w.TryGetProperty("hidden", out JsonElement h) && h.ValueKind == JsonValueKind.True,
                 Align = (w.TryGetProperty("align", out JsonElement al) ? al.GetString() : null) switch { "center" => 1, "right" => 2, _ => 0 },
+                Mask = (w.TryGetProperty("mask", out JsonElement mk) && mk.ValueKind == JsonValueKind.String ? mk.GetString() : null) switch { "set" => MaskSet, "use" => MaskUse, _ => 0 },
                 Text = w.TryGetProperty("text", out JsonElement t) ? t.GetString() ?? "" : "",
             };
 
@@ -345,17 +366,21 @@ public sealed class HudMagmaPage
             }
 
             Key k = At(w, 0f);
-            DrawArea(w.Area, seconds, k.PosX, k.PosY, k.State, overrides, into, 0);
+            DrawArea(w.Area, w.Name, seconds, k.PosX, k.PosY, k.State, overrides, into, 0);
         }
     }
 
-    private void DrawArea(int index, float seconds, float originX, float originY, float[] tint, Overrides? overrides, List<Layer> into, int depth)
+    private void DrawArea(int index, string instance, float seconds, float originX, float originY, float[] tint, Overrides? overrides, List<Layer> into, int depth)
     {
         Area area = _areas[index];
-        float frame = HudCoopIcons.FrameAt(seconds, area.FrameRate, area.LoopFrom, area.LoopTo, area.StopAt);
+        float frame = overrides is not null && overrides.Frames.TryGetValue(instance, out float held)
+            ? held
+            : HudCoopIcons.FrameAt(seconds, area.FrameRate, area.LoopFrom, area.LoopTo, area.StopAt);
         foreach (Widget w in area.Widgets)
         {
-            if (w.Keys.Count == 0 || frame < w.Keys[0].Frame || (overrides?.Hidden.Contains(w.Name) ?? false))
+            // A picture or a text the content itself hides stays hidden (MagmaNode.IsWidgetHidden).
+            if (w.Keys.Count == 0 || frame < w.Keys[0].Frame || (w.Hidden && w.Kind != KindInstance)
+                || (overrides is not null && overrides.Hidden.Count > 0 && (overrides.Hidden.Contains(w.Name) || overrides.Hidden.Contains(instance + "/" + w.Name))))
             {
                 continue;
             }
@@ -365,7 +390,7 @@ public sealed class HudMagmaPage
             {
                 if (!w.Hidden && depth < 8 && w.Area >= 0 && w.Area < _areas.Length)
                 {
-                    DrawArea(w.Area, seconds, originX + k.PosX, originY + k.PosY, Mul(tint, k.State), overrides, into, depth + 1);
+                    DrawArea(w.Area, w.Name, seconds, originX + k.PosX, originY + k.PosY, Mul(tint, k.State), overrides, into, depth + 1);
                 }
 
                 continue;
@@ -411,11 +436,14 @@ public sealed class HudMagmaPage
             // region (a negative factor mirrors it) and the offset shifts it.
             float su0 = (k.TilingX >= 0f ? 0f : 1f) + k.OffsetX, su1 = (k.TilingX >= 0f ? k.TilingX : 1f + k.TilingX) + k.OffsetX;
             float sv0 = (k.TilingY >= 0f ? 0f : 1f) + k.OffsetY, sv1 = (k.TilingY >= 0f ? k.TilingY : 1f + k.TilingY) + k.OffsetY;
-            float[] colour = Mul(Mul(k.Colour, k.State), tint);
+            float[] keyed = overrides is not null && overrides.Colours.TryGetValue(w.Name, out (float R, float G, float B, float A) given)
+                ? [given.R, given.G, given.B, given.A]
+                : k.Colour;
+            float[] colour = Mul(Mul(keyed, k.State), tint);
             into.Add(new Layer(false, _package, m.Texture, w.Name, "", l, t, r + 1f, b + 1f, k.Rot,
                 m.U0 + su0 * (m.U1 - m.U0), m.V0 + sv0 * (m.V1 - m.V0), m.U0 + su1 * (m.U1 - m.U0), m.V0 + sv1 * (m.V1 - m.V0),
                 Math.Clamp(colour[0], 0f, 1f), Math.Clamp(colour[1], 0f, 1f), Math.Clamp(colour[2], 0f, 1f), Math.Clamp(colour[3], 0f, 1f),
-                0f, 0, 0f, 0f, 0f, 0f, 0f, 0f, 0f));
+                0f, 0, 0f, 0f, 0f, 0f, 0f, 0f, 0f, w.Mask));
         }
     }
 
