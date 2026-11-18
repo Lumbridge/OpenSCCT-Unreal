@@ -37,7 +37,8 @@ Unreal fails.
 - **OpenSCCT source**: referenced from a sibling checkout of `Lumbridge/OpenSCCT` at a pinned commit, not
   copied in.
 - **Content**: original game content is never committed, as in OpenSCCT. Maps are imported locally from a
-  converted `.content` folder into `Content/Imported/` (ignored by Git). New art made for this project is
+  converted `.content` folder into `Content/Imported/` (ignored by Git). Releases bundle the imported maps, cooked,
+  as the enhanced versions (docs/RELEASING.md); everything else comes from the player's converted content. New art made for this project is
   committed through Git LFS, with source and licence recorded in `docs/ASSETS.md`.
 - **Rendering**: DirectX 12, Lumen with hardware ray tracing, Nanite, virtual shadow maps, Substrate
   materials, fully dynamic lighting (no baked lightmaps). Target hardware: RTX 4070 class.

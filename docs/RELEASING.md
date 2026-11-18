@@ -11,13 +11,20 @@ A release is a zip that the OpenSCCT launcher installs, plus a checksum and a la
   for it.
 - This project's own content, cooked: the front end, materials, the merc rifle and the CC0 texture sets.
   `Config/DefaultGame.ini` lists the front end in `MapsToCook` and always cooks `/Game/OpenSCCT`.
-- **No original game content.** `/Game/Imported` is in `DirectoriesToNeverCook`. The script fails if staging's
-  list of packed files (`Manifest_UFSFiles_Win64.txt`) names anything under `Content/Imported`, or when the paks folder holds a container other than `pakchunk0`: the
-  map packs (docs/MAP-PAKS.md) are cooked with `-CustomConfig=MapPaks`, which a release never passes, and are never
-  shipped with it. The original content includes every playable map, the hub, the characters, the weapons
-  and the effects. So for now a release starts the front end and can do nothing more. Playing needs one of two
-  things: cooked map packs mounted from `%LOCALAPPDATA%\OpenSCCT\unreal-packs` (the
-  [OpenSCCT-Unreal-Content](https://github.com/Lumbridge/OpenSCCT-Unreal-Content) format), or a change to that rule.
+- **The enhanced maps, bundled.** Every level imported on the release machine into
+  `Content/Imported/Maps/<Map>/<Map>.umap` is cooked into the release, with the characters, weapons and effects
+  under `Content/Imported/Chars` and `Content/Imported/Fx`: `Config/DefaultGame.ini` always cooks
+  `/Game/Imported/Maps`, `/Game/Imported/Chars` and `/Game/Imported/Fx` (the game loads characters and effects by
+  path), and since the cooker finds no `.umap` in those folders the script names the levels with `-MapsToCook`
+  (with the front end, which that list replaces). `UScctOnlineSubsystem::IsPlayable` and `LevelOf` prefer such a level, so a bundled map plays
+  as its enhanced version; a map that is not bundled is built at run time from the player's own content. The rule
+  is: bundled in releases, never committed. `Content/Imported` is local import output, ignored by Git, and the
+  release machine must have run the import: the script fails when `Content/Imported/Maps` holds no map, and when
+  staging's list of packed files (`Manifest_UFSFiles_Win64.txt`) lacks any of them. It lists the bundled maps in
+  its output, in `README.txt`, in `version.json` (`bundledMaps`) and in `notes.md`. The rest of the original game
+  (the other maps, characters, sounds) still comes from the player's converted content (the launcher's packs). The
+  script also fails when the paks folder holds a container other than `pakchunk0`: the map packs (docs/MAP-PAKS.md)
+  are cooked with `-CustomConfig=MapPaks`, which a release never passes, and are never shipped with it.
 - The C# bridge, built against the OpenSCCT checkout (`-OpenScct`, default `..\OSC-unreal-bridge`).
 - A private .NET 10 runtime in `Binaries/DotNet`, copied from the newest installed 10.x runtime. Players then need
   no .NET installed. `-NoDotNet` leaves it out.
@@ -25,7 +32,7 @@ A release is a zip that the OpenSCCT launcher installs, plus a checksum and a la
 - `THIRD-PARTY-NOTICES.md`, copied from the repository root: the third-party components a release ships and their
   licences. Update it when the bridge gains a package or the release gains a component.
 - `version.json`, in format 1. It is the Editor's package format with a few more fields: `configuration`,
-  `engineVersion`, `openscctVersion`, `openscctCommit`, `executable` and `gameExecutable`. It lists every file with
+  `engineVersion`, `openscctVersion`, `openscctCommit`, `executable`, `gameExecutable` and `bundledMaps`. It lists every file with
   its size and SHA-256.
 
 ## Updates: what a player downloads
