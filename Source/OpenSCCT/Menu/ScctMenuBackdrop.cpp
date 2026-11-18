@@ -48,6 +48,9 @@ namespace
 
 	const FName ScctMenuBackdropFallbackTag(TEXT("ScctFallback"));
 
+	/** Frames the cover stays after the old level is gone, so the collection of its objects is not in the fade. */
+	constexpr int32 ScctMenuBackdropCollectFrames = 4;
+
 	bool ScctMenuBackdropLevelGone(const ULevelStreamingDynamic* Level)
 	{
 		return !IsValid(Level) || Level->GetLoadedLevel() == nullptr;
@@ -68,7 +71,12 @@ void UScctMenuBackdrop::SetPhase(EPhase NewPhase)
 bool UScctMenuBackdrop::IsWanted(const UWorld& World, const UScctSessionSubsystem* Session, const TCHAR*& OutWhy) const
 {
 	const UScctUserSettings* Settings = UScctUserSettings::Get();
-	if (ForcedOption >= 0 ? ForcedOption == 0 : (Settings != nullptr && !Settings->bLiveMenuBackground))
+	if (ForcedOption == 0)
+	{
+		OutWhy = TEXT("it is off for this run (-ScctMenuLive=0, or an unattended run without -ScctMenuLive=1)");
+		return false;
+	}
+	if (Settings != nullptr && !Settings->bLiveMenuBackground)
 	{
 		OutWhy = TEXT("the option Live menu background is off");
 		return false;
@@ -248,6 +256,7 @@ void UScctMenuBackdrop::StartNext(UWorld& World, const FScctBackdropApi& Api)
 	Api.Begin(*Map);
 	PrepareStarted = Now;
 	bOldDropped = false;
+	FramesSinceOldGone = 0;
 	HideSeconds = ShowSeconds = WarmSeconds = 0.0;
 	LongestLoadingFrameMs = LongestCoveredFrameMs = LongestFadeFrameMs = AdoptMs = 0.0;
 	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: live backdrop: %s is being made ready (%s) while %s stays on screen"), *Map,
@@ -386,7 +395,11 @@ void UScctMenuBackdrop::Tick(AScctFrontEndGameMode& GameMode, float DeltaSeconds
 	{
 		bSwitchesRead = true;
 		CreatedAt = Now;
-		FParse::Value(FCommandLine::Get(), TEXT("ScctMenuLive="), ForcedOption);
+		if (!FParse::Value(FCommandLine::Get(), TEXT("ScctMenuLive="), ForcedOption) && FApp::IsUnattended())
+		{
+			// Unattended checks of the menu keep the still they were written against.
+			ForcedOption = 0;
+		}
 		double Seconds = 0.0;
 		if (FParse::Value(FCommandLine::Get(), TEXT("ScctMenuLiveSwapSeconds="), Seconds) && Seconds > 0.0)
 		{
@@ -550,7 +563,9 @@ void UScctMenuBackdrop::Tick(AScctFrontEndGameMode& GameMode, float DeltaSeconds
 				OldLevel->SetIsRequestingUnloadAndRemoval(true);
 			}
 		}
-		if (bOldDropped && (OldLevel == nullptr || ScctMenuBackdropLevelGone(OldLevel) || Now - OldDroppedAt > 3.0))
+		const bool bOldGone = bOldDropped && (OldLevel == nullptr || ScctMenuBackdropLevelGone(OldLevel) || Now - OldDroppedAt > 3.0);
+		FramesSinceOldGone = bOldGone ? FramesSinceOldGone + 1 : 0;
+		if (bOldGone && (OldLevel == nullptr || FramesSinceOldGone > ScctMenuBackdropCollectFrames))
 		{
 			// The level's own stand-in scene would shine into the map (the game mode removes it for a still).
 			for (TActorIterator<AActor> It(World); It; ++It)

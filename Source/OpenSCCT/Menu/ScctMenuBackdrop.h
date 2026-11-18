@@ -30,7 +30,10 @@ struct FScctBackdropApi;
  * StartToLeaveMap). Coming back to the menu is a new world, which starts again by itself.
  *
  * Unattended switches (off by default):
- *   -ScctMenuLive=0|1                the option "Live menu background" for this run, whatever the settings say
+ *   -ScctMenuLive=0|1                0: no live backdrop this run, whatever the option says. 1: a run with
+ *                                    -unattended has one too (the option still decides); without the switch an
+ *                                    unattended run has none, so the pictures and timings of unattended menu
+ *                                    checks stay what they were.
  *   -ScctMenuLiveSwapSeconds=S       change maps every S seconds instead of every four minutes
  *   -ScctMenuLiveMaps=AquaE,SteeE    the maps in this order (round and round) instead of a shuffle of all of them
  *
@@ -136,6 +139,9 @@ private:
 
 	/** The picture was held because the match went away while the next one was being made ready. */
 	bool bHeldForLoss = false;
+
+	/** Frames since the level shown before was seen gone: its objects are collected in the frames right after. */
+	int32 FramesSinceOldGone = 0;
 	bool bSuspended = false;
 	bool bShutDown = false;
 	bool bSwitchesRead = false;
