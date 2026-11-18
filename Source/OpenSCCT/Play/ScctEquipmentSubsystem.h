@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Play/ScctEquipmentModels.h"
 #include "Play/ScctEquipmentView.h"
+#include "Play/ScctLaserVision.h"
 #include "Runtime/ScctEquipmentApi.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "ScctEquipmentSubsystem.generated.h"
@@ -27,7 +28,9 @@ class UStaticMeshComponent;
  *   - the torch: a shadow-casting spot light with the bridge's cone, range and colour that scatters in the
  *     level's fog. On the merc's head bone for others; at the eye for the player holding it.
  *   - the laser: a thin self-lit beam to the point the bridge's trace hit, a dot and a little red light there.
- *     The local player's beam is traced by the bridge for this frame's camera, so it turns with the view.
+ *     The local player's beam is traced by the bridge for this frame's camera, so it turns with the view. In
+ *     thermal vision both weapon beams are drawn hot and in EMF the merc's sight is a dark grey streak, in place
+ *     of the red beam (FScctLaserVision, Play/ScctLaserVision.h).
  *   - the camo suit: body and attachments turn to bent light by the bridge's amount.
  *   - the local player's first-person view model (AScctFirstPersonView) and its muzzle flash, a flash for every
  *     shot the bridge counts.
@@ -119,6 +122,8 @@ private:
 		int32 ShotCount = -1;
 		int32 WeaponClass = 0;
 		int32 WeaponSlot = 0;
+		/** The stencil the goggles draw this pawn's beam with, 0 while the beam has its plain look or is off. */
+		int32 LaserVisionStencil = 0;
 		bool bSeen = false;
 	};
 
@@ -155,6 +160,9 @@ private:
 
 	FScctEquipmentModels Models;
 	FScctCloakLook CloakLook;
+
+	/** The weapon beams as thermal and EMF vision draw them. */
+	FScctLaserVision LaserVision;
 	TMap<int32, FPawnGear> Gear;
 
 	TArray<FScctEquipment> Equipment;
