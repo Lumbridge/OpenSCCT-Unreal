@@ -39,7 +39,7 @@ namespace
 
 float UScctAudioSubsystem::SettingsGainOf(const FVoice& Voice)
 {
-	return AudioSettingsGain(Voice.bMusic, Voice.AmbientId != 0, Voice.Category == static_cast<uint8>(EScctAudioCategory::Objective));
+	return AudioSettingsGain(Voice.bMusic, Voice.AmbientId != 0 && !Voice.bEquipmentLoop, Voice.Category == static_cast<uint8>(EScctAudioCategory::Objective));
 }
 
 namespace
@@ -682,6 +682,7 @@ void UScctAudioSubsystem::UpdateAmbient()
 
 		FVoice Voice;
 		Voice.AmbientId = Id;
+		Voice.bEquipmentLoop = (Source.Flags & EScctAmbientFlags::Equipment) != 0;
 		Voice.AmbientPass = AmbientPass;
 		Voice.ActorId = Source.Key;
 		Voice.SoundId = Source.SoundId;

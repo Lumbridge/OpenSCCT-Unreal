@@ -150,6 +150,7 @@ private:
 
 		// Ambient voices: the key they are matched by between frames (0: not ambient) and the repeat of a one-shot.
 		int64 AmbientId = 0;
+		bool bEquipmentLoop = false; // A gadget can use AmbientSound for its repeating warning.
 		/** Ambient voices: the UpdateAmbient pass that made the voice (Play/ScctAudioAmbientLoops.cpp). */
 		int32 AmbientPass = 0;
 		float RepeatInterval = 0.0f;

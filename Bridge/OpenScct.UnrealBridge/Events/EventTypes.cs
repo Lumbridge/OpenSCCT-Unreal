@@ -531,6 +531,9 @@ public static class BridgeAmbientFlags
 
     /// <summary>The sound is a sequence: FileId is its first entry only.</summary>
     public const int Sequence = 32;
+
+    /// <summary>An equipment cue carried by AmbientSound. Its volume follows Effects.</summary>
+    public const int Equipment = 64;
 }
 
 /// <summary>

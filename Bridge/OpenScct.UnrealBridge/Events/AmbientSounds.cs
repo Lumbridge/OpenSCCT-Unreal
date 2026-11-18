@@ -92,6 +92,10 @@ internal sealed class AmbientSounds
             if (Record(a.ActorId, sound, at, volume / VolumeUnit * light, radius, pitch, zone,
                     zone && ReferenceEquals(a, listenerZone), mapId, out BridgeAmbientSound record))
             {
+                if (a is SMineProx prox && a.AmbientSound == prox.BipSound)
+                {
+                    record.Flags |= BridgeAmbientFlags.Equipment;
+                }
                 into[count++] = record;
             }
         }

@@ -287,6 +287,7 @@ namespace EScctAmbientFlags
 	constexpr int32 Loop = 8;           // loops; clear: plays once when it becomes audible (again every RepeatInterval)
 	constexpr int32 Stream = 16;        // FileId is an Ogg Vorbis stream
 	constexpr int32 Sequence = 32;      // the sound is a sequence: FileId is only its first entry
+	constexpr int32 Equipment = 64;     // an equipment cue using AmbientSound, mixed with effects
 }
 
 /**
