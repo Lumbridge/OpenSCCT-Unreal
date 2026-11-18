@@ -68,6 +68,9 @@
     'lasers'          = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
     'vision'          = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
     'fog'             = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps') }
+    # One map of the all-maps sweep (Test/ScctMapShotsTest.cpp): load time, missing assets and the black and magenta
+    # share of eight views. Tools/Test/Run-MapSweep.ps1 runs it for every imported map and mode; -All leaves it out.
+    'map-shots'       = @{ Map = 'AquaE'; Timeout = 300; Tags = @('needs-content', 'needs-maps', 'helper') }
     'play-net-listen300'          = @{ Map = 'SteeE'; Timeout = 240; Tags = @('needs-content', 'needs-maps', 'helper') }
     'play-net-dedicated300'       = @{ Map = 'SteeE'; Timeout = 300; Tags = @('needs-content', 'needs-maps', 'helper') }
 }
