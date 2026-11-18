@@ -3,6 +3,8 @@
 #include "Hub/ScctHubActivities.h"
 #include "Hub/ScctHubSubsystem.h"
 #include "OpenSCCT.h"
+#include "Runtime/ScctFeatures.h"
+#include "Runtime/ScctVoiceApi.h"
 
 namespace
 {
@@ -44,13 +46,15 @@ void FScctHubVoice::Tick(UWorld* World, float DeltaSeconds, bool bVerbose)
 	if (!bToldNoTransport)
 	{
 		bToldNoTransport = true;
-		UE_LOG(LogOpenSCCT, Log, TEXT("ScctHubVoice: this client has no voice transport (no microphone capture, codec or relay): each speaker's position, gain and wall muffle are worked out and kept, no voice is played"));
+		UE_LOG(LogOpenSCCT, Log, TEXT("ScctHubVoice: the hub's voices are played by the voice subsystem with the proximity gain and the wall low-pass already in the samples; the player list's volume and mute go to the bridge per talker"));
 	}
 
 	FScctHubVoiceMix Rows[MaxSpeakers];
 	const FVector& Ear = Activities->GetEye();
 	const int32 Count = FMath::Min(Api->GetVoiceMixes(static_cast<float>(Ear.X), static_cast<float>(Ear.Y), static_cast<float>(Ear.Z), Dt, Rows, MaxSpeakers), MaxSpeakers);
 	Speakers.Reset(Count);
+	// The bridge's hub voice (Voice/VoiceBridge.Hub.cs) applies the player list's volume and mute to what it plays.
+	const FScctVoiceApi* VoiceApi = ScctFeature<FScctVoiceApi>();
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
 		const FScctHubVoiceMix& Row = Rows[Index];
@@ -66,6 +70,12 @@ void FScctHubVoice::Tick(UWorld* World, float DeltaSeconds, bool bVerbose)
 		Speaker.LowPassHz = Row.LowPassHz;
 		Speaker.Muffle = FMath::Clamp((OpenHz - Row.LowPassHz) / (OpenHz - OccludedHz), 0.0f, 1.0f);
 		Speaker.bOccluded = (Row.Flags & EScctHubVoiceMixFlags::Occluded) != 0;
+		if (VoiceApi != nullptr && Row.PlayerId >= 0)
+		{
+			// VoiceK.TalkerOf: the talker id is the player id plus one.
+			VoiceApi->SetVolume(Row.PlayerId + 1, Speaker.Volume);
+			VoiceApi->SetMuted(Row.PlayerId + 1, Speaker.bMuted ? 1 : 0);
+		}
 	}
 
 	LogTimer -= Dt;

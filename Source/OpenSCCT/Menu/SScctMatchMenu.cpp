@@ -529,9 +529,11 @@ void SScctMatchMenu::RunResultsUnattended()
 		UE_LOG(LogOpenSCCT, Log, TEXT("-ScctEndMatch: running the local match's clock out on its server: %s"), Queued != 0 ? TEXT("queued") : TEXT("refused (no local match, or no round table)"));
 	}
 
-	// Once a run: a rematch opens the level again, which would end and rematch again for ever.
+	// Offline once a run: a rematch opens the level again, which would end and rematch again for ever. Online the
+	// button is pressed on each results screen (each game of a revenge pair or series has one), and the series ends
+	// in the lobby by itself.
 	static bool bPressedThisRun = false;
-	if (ResultsAction.IsEmpty() || bResultsActionDone || bPressedThisRun || !bResultsReady || ResultsShownFor < ResultsActionAfter)
+	if (ResultsAction.IsEmpty() || bResultsActionDone || (bPressedThisRun && !bOnlineLevel) || !bResultsReady || ResultsShownFor < ResultsActionAfter)
 	{
 		return;
 	}

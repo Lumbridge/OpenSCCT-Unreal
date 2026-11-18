@@ -388,6 +388,7 @@ public sealed partial class HubBridge
         if (Client is { } old)
         {
             Client = null;
+            Voice.VoiceBridge.Existing?.EndHub();
             try
             {
                 old.Session.Disconnect();

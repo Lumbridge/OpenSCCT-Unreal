@@ -2,6 +2,7 @@
 
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformMisc.h"
+#include "Hub/ScctHubSubsystem.h"
 #include "Menu/ScctDashboardCards.h"
 #include "Menu/ScctMenuDriver.h"
 #include "Menu/ScctMenuKit.h"
@@ -179,6 +180,16 @@ void SScctFrontEnd::Construct(const FArguments& InArgs)
 	];
 
 	Open(TEXT("home"));
+
+	// A hub visit that failed brought the player back here: the hub page is opened, and says why (GetNotice).
+	if (const UGameInstance* Instance = Online.IsValid() ? Online->GetGameInstance() : nullptr)
+	{
+		const UScctHubSubsystem* HubVisit = Instance->GetSubsystem<UScctHubSubsystem>();
+		if (HubVisit != nullptr && HubVisit->GetState() == EScctHubState::Failed && !HubVisit->GetNotice().IsEmpty())
+		{
+			Open(TEXT("hub"));
+		}
+	}
 
 	if (UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent())
 	{

@@ -268,8 +268,8 @@ public sealed partial class HubBridge : IDisposable
             InstallGameplayServices = false,
             // The hub places the player once Unreal says its level is up (ReportLoaded).
             AutoReportReady = false,
-            // Proximity voice has no microphone or speaker here yet: the hub sends this visit no voice.
-            Voice = false,
+            // Proximity voice rides on the visit's transport (Voice/VoiceBridge.Hub.cs).
+            Voice = true,
             InstallId = OnlineBridge.Existing?.InstallId ?? string.Empty,
             HostKey = Host?.HostKey,
             // The master's ticket is for the listed hub it was asked about only (a hosted or typed-in hub gets none).
@@ -346,6 +346,7 @@ public sealed partial class HubBridge : IDisposable
         if (Client is { } client)
         {
             Client = null;
+            Voice.VoiceBridge.Existing?.EndHub();
             try
             {
                 client.Session.Disconnect();
@@ -454,6 +455,7 @@ public sealed partial class HubBridge : IDisposable
         }
 
         PumpPadRun(client);
+        WatchDownloads(client);
 
         if (Round is { } drawn)
         {
@@ -510,6 +512,11 @@ public sealed partial class HubBridge : IDisposable
         if (Round is { IsStopped: false } round)
         {
             round.Update();
+        }
+
+        if (Client is { Error: null } talking)
+        {
+            Voice.VoiceBridge.Instance.AfterHubTick(talking);
         }
 
         LogState();

@@ -34,10 +34,10 @@ struct FScctHubVoiceSpeaker
  * proximity gain and the wall muffle, the occlusion traced through the simulation's own collision (the imported level's
  * meshes have none), and multiplies in the player list's volume and mute for him.
  *
- * There is no voice transport in this client: nothing captures the microphone, encodes or relays a voice, or plays one
- * (the Godot client's HubClient.Voice and VoiceClient have no Unreal counterpart yet). The gains are worked out and
- * kept for that transport to apply (UScctHubSubsystem::GetVoiceSpeakers), and with the hub's status lines on they are
- * logged per speaker.
+ * The voices themselves are played by UScctVoiceSubsystem from the bridge's hub voice (Voice/VoiceBridge.Hub.cs, on
+ * the visit's voice transport), with the proximity gain and the low-pass already in the samples; from here the bridge
+ * gets the ear (through GetVoiceMixes) and the player list's volume and mute per talker. The mixes read here are kept
+ * for the HUD (UScctHubSubsystem::GetVoiceSpeakers), and with the hub's status lines on they are logged per speaker.
  */
 class FScctHubVoice : public TSharedFromThis<FScctHubVoice>
 {

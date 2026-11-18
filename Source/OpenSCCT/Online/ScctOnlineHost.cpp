@@ -458,6 +458,7 @@ void UScctOnlineSubsystem::ReadHostSwitches()
 	FParse::Value(CommandLine, TEXT("ScctHostMode="), AutoHostMode);
 	FParse::Value(CommandLine, TEXT("ScctHostName="), AutoHostName, false);
 	FParse::Value(CommandLine, TEXT("ScctHostPassword="), AutoHostPassword);
+	FParse::Value(CommandLine, TEXT("ScctHostPlayers="), AutoHostPlayers);
 	bAutoHostPublic = FParse::Param(CommandLine, TEXT("ScctHostPublic"));
 	bLaunchWhenGiven = FParse::Value(CommandLine, TEXT("ScctLaunchWhen="), LaunchWhen);
 	LaunchWhen = FMath::Max(1, LaunchWhen);
@@ -475,7 +476,7 @@ void UScctOnlineSubsystem::RunUnattendedHost()
 		}
 		Request.Name = AutoHostName.IsEmpty() ? TEXT("Test round") : AutoHostName;
 		Request.Password = AutoHostPassword;
-		Request.MaxPlayers = FMath::Max(Request.MaxPlayers, LaunchWhen);
+		Request.MaxPlayers = FMath::Max(AutoHostPlayers > 0 ? AutoHostPlayers : Request.MaxPlayers, LaunchWhen);
 		Request.SetupOptions = FString::Printf(TEXT("?Mode=%s"), AutoHostMode.IsEmpty() ? TEXT("Story") : *AutoHostMode);
 		if (!AutoHostMap.IsEmpty())
 		{
@@ -519,11 +520,18 @@ void UScctOnlineSubsystem::RunUnattendedHost()
 		return;
 	}
 
-	if (!bAutoLaunched && Status.PlayerCount >= LaunchWhen && HasFlag(EScctOnlineStatusFlags::CanStart))
+	// People only: bots that fill the empty places are in the lobby from the start and always ready, so counting them
+	// would launch before the guests the run waits for have joined.
+	int32 People = 0;
+	for (const FScctOnlinePlayer& Player : Players)
+	{
+		People += (Player.Flags & EScctOnlinePlayerFlags::Bot) == 0 ? 1 : 0;
+	}
+	if (!bAutoLaunched && People >= LaunchWhen && HasFlag(EScctOnlineStatusFlags::CanStart))
 	{
 		bAutoLaunched = true;
-		UE_LOG(LogOpenSCCT, Log, TEXT("Online: -ScctLaunchWhen: launching %s with %d player(s): %s"), *SetupMap, Status.PlayerCount,
-			*GetHostText(EScctHostText::Players));
+		UE_LOG(LogOpenSCCT, Log, TEXT("Online: -ScctLaunchWhen: launching %s with %d player(s), %d of them people: %s"), *SetupMap, Status.PlayerCount,
+			People, *GetHostText(EScctHostText::Players));
 		Launch();
 	}
 }

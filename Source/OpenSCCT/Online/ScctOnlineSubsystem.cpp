@@ -159,6 +159,7 @@ void UScctOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	const TCHAR* CommandLine = FCommandLine::Get();
 	FParse::Value(CommandLine, TEXT("ScctJoin="), AutoJoin);
+	FParse::Value(CommandLine, TEXT("ScctJoinPassword="), AutoJoinPassword);
 	FString Side;
 	if (FParse::Value(CommandLine, TEXT("ScctSide="), Side))
 	{
@@ -254,13 +255,26 @@ void UScctOnlineSubsystem::LoadIdentity()
 		PlayerName = TEXT("Player");
 	}
 
+	// -ScctRunIdentity: a new install id and key for this run only, never saved, so several test processes started from
+	// one folder are several players to a server (a kick or a kept place is then one process's alone).
+	const bool bRunIdentity = FParse::Param(FCommandLine::Get(), TEXT("ScctRunIdentity"));
+	if (bRunIdentity)
+	{
+		InstallId.Reset();
+		PrivateKey.Reset();
+	}
+
 	// Empty id or key: the bridge makes new ones, which are saved so bans and a kept place follow this install.
 	Api->SetIdentity(bRunName ? *RunName : *PlayerName, InstallId.IsEmpty() ? nullptr : *InstallId, PrivateKey.IsEmpty() ? nullptr : *PrivateKey);
 	if (bRunName)
 	{
 		PlayerName = RunName;
 	}
-	if (InstallId.IsEmpty() || PrivateKey.IsEmpty())
+	if (bRunIdentity)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Online: -ScctRunIdentity: this run plays as a new install (not saved)"));
+	}
+	else if (InstallId.IsEmpty() || PrivateKey.IsEmpty())
 	{
 		GConfig->SetString(UserSection, TEXT("InstallId"), *ReadText(EScctOnlineText::InstallId), GGameUserSettingsIni);
 		GConfig->SetString(UserSection, TEXT("PrivateKey"), *ReadText(EScctOnlineText::PrivateKey), GGameUserSettingsIni);
@@ -589,7 +603,6 @@ void UScctOnlineSubsystem::RefreshTexts()
 	MapToLoad = ReadText(EScctOnlineText::MapToLoad);
 	// A name claimed or changed on the Account page is the name signed-in joins use from now on.
 	AccountName = ReadText(EScctOnlineText::AccountName);
-	SetupOptions = ReadText(EScctOnlineText::SetupOptions);
 	Motd = ReadText(EScctOnlineText::MasterMotd);
 
 	// The setup and the lobby's players into the log when they change: what the host set up, and who it un-readied.
@@ -608,9 +621,10 @@ void UScctOnlineSubsystem::RefreshTexts()
 		for (const FScctOnlinePlayer& Player : Players)
 		{
 			static const TCHAR* const MapStates[] = { TEXT("map ?"), TEXT("map ok"), TEXT("map MISSING"), TEXT("map OTHER VERSION") };
-			Roster += FString::Printf(TEXT("%s%s (%s, %s, %s)"), Roster.IsEmpty() ? TEXT("") : TEXT(", "), Player.Name,
+			Roster += FString::Printf(TEXT("%s%s (%s, %s, %s%s)"), Roster.IsEmpty() ? TEXT("") : TEXT(", "), Player.Name,
 				Player.Team == 0 ? TEXT("spy") : Player.Team == 1 ? TEXT("merc") : TEXT("watching"),
-				(Player.Flags & EScctOnlinePlayerFlags::Ready) != 0 ? TEXT("ready") : TEXT("not ready"), MapStates[FMath::Clamp(Player.MapState, 0, 3)]);
+				(Player.Flags & EScctOnlinePlayerFlags::Ready) != 0 ? TEXT("ready") : TEXT("not ready"), MapStates[FMath::Clamp(Player.MapState, 0, 3)],
+				(Player.Flags & EScctOnlinePlayerFlags::Bot) != 0 ? TEXT(", bot") : TEXT(""));
 		}
 	}
 	if (Roster != LoggedRoster)
@@ -895,7 +909,7 @@ void UScctOnlineSubsystem::RunUnattended(float DeltaSeconds)
 	if (!bAutoJoined && !AutoJoin.IsEmpty())
 	{
 		bAutoJoined = true;
-		Join(AutoJoin, FString(), AutoSide);
+		Join(AutoJoin, AutoJoinPassword, AutoSide);
 	}
 	RunUnattendedHost();
 	if (Api == nullptr)
