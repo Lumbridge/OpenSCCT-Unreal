@@ -753,7 +753,7 @@ namespace
 			}
 			if (Lines.IsEmpty() && bHasTeamPlayers)
 			{
-				Lines.Add(FString::Printf(TEXT("Every Spy and Mercenary has %s installed."), *Title));
+				Lines.Add(TEXT("Everyone has this map installed."));
 			}
 			return FString::Join(Lines, TEXT(" "));
 		}
