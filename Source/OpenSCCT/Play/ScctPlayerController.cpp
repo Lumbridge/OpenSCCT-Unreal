@@ -77,6 +77,8 @@ void AScctPlayerController::BeginPlay()
 		Session->ViewOverride.BindUObject(this, &AScctPlayerController::OverrideView);
 	}
 
+	LookStickHold.ReadSwitch();
+
 	FString Script;
 	if (FParse::Value(FCommandLine::Get(), TEXT("ScctAutoplay="), Script, false))
 	{
@@ -281,11 +283,19 @@ void AScctPlayerController::FeedControls(float DeltaSeconds)
 	if (HasPlayInput())
 	{
 		ReadDevices(Raw);
+		LookStickHold.Force(Raw.RightX, Raw.RightY);
 		Raw.Flags = EScctRawInputFlags::Play;
-		if (LookSink.IsBound() && LookSink.Execute(Raw.MouseX, Raw.MouseY, Raw.RightX, Raw.RightY))
+		const bool bLookTaken = LookSink.IsBound() && LookSink.Execute(Raw.MouseX, Raw.MouseY, Raw.RightX, Raw.RightY);
+		if (bLookTaken)
 		{
 			Raw.MouseX = Raw.MouseY = Raw.RightX = Raw.RightY = 0.0f;
 		}
+		// The stick that chose on the ping wheel is still pushed over when the wheel closes (FScctLookStickHold).
+		LookStickHold.Step(bLookTaken, UScctControlSettings::Get()->PadDeadzoneRight, DeltaSeconds, Raw.RightX, Raw.RightY);
+	}
+	else
+	{
+		LookStickHold.Reset();
 	}
 	FrameMouseX = Raw.MouseX;
 	Controls->Frame(&Raw);

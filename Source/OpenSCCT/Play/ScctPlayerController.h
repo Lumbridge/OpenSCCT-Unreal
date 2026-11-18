@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "Play/ScctControlAutoplay.h"
+#include "Play/ScctLookStickHold.h"
 #include "Runtime/ScctBridgeApi.h"
 #include "Runtime/ScctControlsApi.h"
 #include "ScctPlayerController.generated.h"
@@ -205,6 +206,9 @@ private:
 	TMap<int32, FName> CommandNames;
 
 	FScctControlAutoplay Autoplay;
+
+	/** Keeps the look stick from turning the view after the ping wheel closes until it recentres. */
+	FScctLookStickHold LookStickHold;
 
 	/** Another feature's unattended switch plays keys (HoldScriptedAction, TapBoundCommand): the game has the input. */
 	bool bScripted = false;

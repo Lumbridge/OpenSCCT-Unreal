@@ -41,6 +41,10 @@
          pages, both Godot-free models of the Godot pages. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\RoundScoreboardModel.cs" Link="Linked\UI\RoundScoreboardModel.cs" />
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\BriefingPages.cs" Link="Linked\UI\BriefingPages.cs" />
+    <!-- The lobby's line about a changed setup (Online/OnlineBridge.SetupNotice.cs): the Godot lobby's words and its
+         list of the setup rows that differ, both Godot-free. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\UI\LobbyPresentation.cs" Link="Linked\UI\LobbyPresentation.cs" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\UI\LobbyRoomModel.cs" Link="Linked\UI\LobbyRoomModel.cs" />
     <!-- Demo playback's chase camera (Demo/DemoPlayback.cs), Godot-free like the session. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\Play\Demo\DemoChaseCamera.cs" Link="Linked\Demo\DemoChaseCamera.cs" />
     <!-- The first-person weapon of a merc watched in a demo, rebuilt from his recorded third-person one
