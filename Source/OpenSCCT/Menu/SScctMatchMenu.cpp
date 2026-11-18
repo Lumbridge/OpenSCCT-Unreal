@@ -10,6 +10,7 @@
 #include "Menu/ScctMenuDriver.h"
 #include "Menu/ScctMenuKit.h"
 #include "Menu/ScctMenuNav.h"
+#include "Menu/ScctRankIcons.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
@@ -88,6 +89,7 @@ void SScctMatchMenu::Construct(const FArguments& InArgs)
 	Host.bInMatch = true;
 	Host.Open = [this](const FString& Name) { ShowNamed(Name); };
 	Host.Back = [this] { GoBack(); };
+	Host.Resume = [this] { OnResume.ExecuteIfBound(); };
 
 	FParse::Value(FCommandLine::Get(), TEXT("ScctResultsAction="), ResultsAction);
 	FParse::Value(FCommandLine::Get(), TEXT("ScctResultsActionAfter="), ResultsActionAfter);
@@ -784,7 +786,7 @@ TSharedRef<SWidget> SScctMatchMenu::BuildPause()
 		];
 }
 
-bool SScctMatchMenu::ReadResults(int32& OutWinner, FString& OutReason, TArray<TArray<FString>>& OutRows, TArray<int32>& OutTeams, TArray<bool>& OutLocal) const
+bool SScctMatchMenu::ReadResults(int32& OutWinner, FString& OutReason, TArray<TArray<FString>>& OutRows, TArray<int32>& OutTeams, TArray<bool>& OutLocal, TArray<int32>* OutRanks) const
 {
 	OutWinner = 255;
 	if (bOnlineLevel)
@@ -822,8 +824,10 @@ bool SScctMatchMenu::ReadResults(int32& OutWinner, FString& OutReason, TArray<TA
 		for (const FScctOnlineResultRow& Row : Rows)
 		{
 			FString Name = Row.Name;
+			int32 Rank = 0;
 			if (const FScctRoundResultExtra* Extra = ExtraOf.Find(Row.Id))
 			{
+				Rank = Extra->Rank;
 				if (Results.ObjectivesNeeded > 0 && Extra->Objectives > 0)
 				{
 					Name += FString::Printf(TEXT("  · %d obj"), Extra->Objectives);
@@ -836,6 +840,7 @@ bool SScctMatchMenu::ReadResults(int32& OutWinner, FString& OutReason, TArray<TA
 			OutRows.Add({ Name, FString::FromInt(Row.Score), FString::FromInt(Row.Kills), FString::FromInt(Row.Deaths) });
 			OutTeams.Add(Row.Team);
 			OutLocal.Add(Row.Id == Visit->GetStatus().LocalId);
+			if (OutRanks != nullptr) { OutRanks->Add(Rank); }
 		}
 		return true;
 	}
@@ -858,6 +863,7 @@ bool SScctMatchMenu::ReadResults(int32& OutWinner, FString& OutReason, TArray<TA
 		OutRows.Add({ Model.Text(Row.NameId), FString::FromInt(Row.Score), FString::FromInt(Row.Kills), FString::FromInt(Row.Deaths) });
 		OutTeams.Add(Row.Team);
 		OutLocal.Add((Row.Flags & EScctHudScoreFlags::Local) != 0);
+		if (OutRanks != nullptr) { OutRanks->Add(Row.Rank); }
 	}
 	return true;
 }
@@ -869,7 +875,8 @@ TSharedRef<SWidget> SScctMatchMenu::BuildResults()
 	TArray<TArray<FString>> Rows;
 	TArray<int32> Teams;
 	TArray<bool> Local;
-	const bool bHave = ReadResults(Winner, Reason, Rows, Teams, Local);
+	TArray<int32> Ranks;
+	const bool bHave = ReadResults(Winner, Reason, Rows, Teams, Local, &Ranks);
 
 	const bool bDecided = Winner == 0 || Winner == 1;
 	const bool bEnded = bOnlineLevel || bResultsReady;
@@ -887,9 +894,14 @@ TSharedRef<SWidget> SScctMatchMenu::BuildResults()
 	const auto SideTable = [&](int32 Team) -> TSharedRef<SWidget>
 	{
 		const TSharedRef<SVerticalBox> Table = SNew(SVerticalBox);
-		const auto Line = [&Table](const TArray<FString>& Cells, const FLinearColor& Colour, const FSlateFontInfo& Font, bool bHighlight)
+		const auto Line = [&Table](const TArray<FString>& Cells, const FLinearColor& Colour, const FSlateFontInfo& Font, bool bHighlight, int32 Rank = 0)
 		{
 			const TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
+			// The rank's emblem before the name (Menu/ScctRankIcons); none for a guest, a bot and the heading.
+			if (const FSlateBrush* RankBrush = ScctRankIcons::ForPacked(Rank, 20.0f))
+			{
+				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)[ ScctRankIcons::Icon(RankBrush, 20.0f) ];
+			}
 			Row->AddSlot().FillWidth(1.0f).VAlign(VAlign_Center)[ SNew(STextBlock).Font(Font).ColorAndOpacity(Colour).Text(FText::FromString(Cells[0])) ];
 			for (int32 Index = 1; Index < Cells.Num(); ++Index)
 			{
@@ -910,7 +922,7 @@ TSharedRef<SWidget> SScctMatchMenu::BuildResults()
 			if (Teams[Index] == Team)
 			{
 				++Count;
-				Line(Rows[Index], Local[Index] ? ScctHudStyle::Accent(Team) : ScctHudStyle::Text(), ScctUi::Body(Local[Index]), Local[Index]);
+				Line(Rows[Index], Local[Index] ? ScctHudStyle::Accent(Team) : ScctHudStyle::Text(), ScctUi::Body(Local[Index]), Local[Index], Ranks.IsValidIndex(Index) ? Ranks[Index] : 0);
 			}
 		}
 		if (Count == 0)

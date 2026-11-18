@@ -1,5 +1,6 @@
 #include "Hub/SScctHubHud.h"
 
+#include "Menu/ScctRankIcons.h"
 #include "Brushes/SlateColorBrush.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Hub/ScctHubHud.h"
@@ -583,6 +584,17 @@ int32 SScctHubHud::PaintTags(const FGeometry& Geometry, FSlateWindowElementList&
 		{
 			Painter.Text(FVector2f(static_cast<float>(At.X), Y), Line.Key, Line.Value ? NameFont : SmallFont,
 				Line.Value ? Colour : ScctHudStyle::Text(), FScctHudPainter::EAlign::Centre);
+			if (Line.Value)
+			{
+				// The rank's emblem left of the name (HubHud's tag icon, Menu/ScctRankIcons); none for a guest.
+				if (const FSlateBrush* RankBrush = ScctRankIcons::ForPacked(NameTag.Rank, 24.0f))
+				{
+					const float Edge = TagSize * 1.25f * TagScaleNow;
+					const float NameWidth = Painter.Measure(Line.Key, NameFont).X;
+					Painter.Image(FBox2f(FVector2f(static_cast<float>(At.X) - NameWidth * 0.5f - Edge - 4.0f, Y), FVector2f(static_cast<float>(At.X) - NameWidth * 0.5f - 4.0f, Y + Edge)),
+						*RankBrush, FBox2f(FVector2f::ZeroVector, FVector2f::UnitVector), FLinearColor::White);
+				}
+			}
 			Y += LineGap;
 		}
 		++Model->TagsDrawn;
