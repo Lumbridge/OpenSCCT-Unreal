@@ -203,13 +203,13 @@ private:
 		TWeakObjectPtr<ASkeletalMeshActor> Actor;
 		bool bBound = false;
 
-		// As imported: the turn of the mesh's own rotation origin (the importer's rotation less the table's first
-		// one), its scale against the table's first scale, and what it played.
+		// The imported mesh transform relative to the simulation actor's authored placement.
+		FTransform ImportedTransform;
 		FQuat OriginQuat = FQuat::Identity;
 		FVector ScaleRatio = FVector::OneVector;
 		FVector FirstLocation = FVector::ZeroVector;
 		FQuat FirstQuat = FQuat::Identity;
-		/** Where the importer put the actor against the table's first place, in the prop's own unscaled frame. */
+		/** Where the importer put the actor against the actor's authored place, in the prop's own unscaled frame. */
 		FVector LocalOffset = FVector::ZeroVector;
 		TWeakObjectPtr<class UAnimationAsset> OriginalAnimation;
 		bool bOriginalPlaying = false;

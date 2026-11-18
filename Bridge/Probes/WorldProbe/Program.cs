@@ -477,6 +477,24 @@ for (int i = 0; i < Math.Min(3, finalLasers); i++)
 int finalAnimated = Math.Min(world.GetAnimated(animated), animated.Length);
 Console.WriteLine();
 Console.WriteLine($"-- skeletal props ({finalAnimated}):");
+// A fish can move and turn randomly before its first rendered frame. Its bind transform must still
+// describe the authored pose, so the importer correction never contains part of its swimming motion.
+int movedFromPlacement = 0;
+foreach (BridgeWorldAnimated a in animated.Take(finalAnimated))
+{
+    string name = world.NameOf(a.NameId);
+    var placedProp = session.Session.Client.Map?.Loaded?.Gameplay.FindActor(name);
+    if (placedProp is null || !world.TryGetActorInfo(a.NameId, out var info) ||
+        (new FVector(info.X, info.Y, info.Z) - placedProp.Location).Size() > 0.01f ||
+        MathF.Abs(MathF.IEEERemainder(info.Yaw - placedProp.Rotation.Yaw * (360f / 65536f), 360f)) > 0.01f)
+    {
+        Console.WriteLine($"FAILED: skeletal placement for {name} differs from the map");
+        return 1;
+    }
+    if ((new FVector(a.X, a.Y, a.Z) - placedProp.Location).Size() > 1f)
+        movedFromPlacement++;
+}
+Console.WriteLine($"   checked {finalAnimated} authored prop transforms, {movedFromPlacement} props away from their original location");
 foreach (BridgeWorldAnimated a in animated.Take(finalAnimated).Take(4))
 {
     Console.WriteLine($"   {world.NameOf(a.NameId),-20} mesh {world.NameOf(a.MeshId)} sequence '{world.NameOf(a.SequenceId)}' frame {a.Frame:F3} rate {a.Rate:F2} flags {a.Flags} at ({a.X:F0},{a.Y:F0},{a.Z:F0}) yaw {a.Yaw:F0}");

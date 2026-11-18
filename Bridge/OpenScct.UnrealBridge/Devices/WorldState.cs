@@ -610,12 +610,46 @@ public sealed class WorldState
         return _followers.Count;
     }
 
+    private static BridgeWorldActorInfo MakeInfo(WorldState world, Slot slot, string className, string? asset,
+        RenderInstance? instance, FVector scale, FVector pivot, FVector location, FRotator rotation, int flags) => new()
+    {
+        NameId = slot.NameId,
+        ClassId = world.Intern(className),
+        MeshId = world.Intern(asset),
+        RenderMeshId = world.Intern(instance?.Mesh),
+        Flags = flags | (instance is { InLevel: true } ? BridgeWorldActorInfoFlags.InLevel : 0) |
+            (instance is { Hidden: true } ? BridgeWorldActorInfoFlags.HiddenInMap : 0),
+        ScaleX = scale.X,
+        ScaleY = scale.Y,
+        ScaleZ = scale.Z,
+        PrePivotX = pivot.X,
+        PrePivotY = pivot.Y,
+        PrePivotZ = pivot.Z,
+        X = location.X,
+        Y = location.Y,
+        Z = location.Z,
+        Pitch = LerpAxis(rotation.Pitch, rotation.Pitch, 0f),
+        Yaw = LerpAxis(rotation.Yaw, rotation.Yaw, 0f),
+        Roll = LerpAxis(rotation.Roll, rotation.Roll, 0f),
+    };
+
     /// <summary>The fixed facts of a followed actor; false when <paramref name="nameId"/> is not one.</summary>
     public bool TryGetActorInfo(int nameId, out BridgeWorldActorInfo info)
     {
         if (_followerByName.TryGetValue(nameId, out Follower? follower))
         {
             info = follower.Info;
+            return true;
+        }
+
+        string name = NameOf(nameId);
+        if (_slotById.TryGetValue(name, out Slot? slot) && IsSkeletal(slot.Actor) &&
+            _loaded?.Gameplay.FindActor(name) is { } record)
+        {
+            // Match the map importer: the skeletal actor was placed from the record, before its first tick.
+            FVector scale = record.Props.GetVector("DrawScale3D", new FVector(1f, 1f, 1f)) * record.Props.GetFloat("DrawScale", 1f);
+            info = MakeInfo(this, slot, record.ClassName, slot.Actor.Mesh.Path, null, scale, default,
+                record.Location, record.Rotation, BridgeWorldActorInfoFlags.InLevel);
             return true;
         }
 
@@ -934,29 +968,6 @@ public sealed class WorldState
 
         /// <summary>The skin worn in each material slot as a name id, 0 for the mesh's own material.</summary>
         public ReadOnlySpan<int> SkinIds => _skinIds;
-
-        private static BridgeWorldActorInfo MakeInfo(WorldState world, Slot slot, string className, string? asset,
-            RenderInstance? instance, FVector scale, FVector pivot, FVector location, FRotator rotation, int flags) => new()
-        {
-            NameId = slot.NameId,
-            ClassId = world.Intern(className),
-            MeshId = world.Intern(asset),
-            RenderMeshId = world.Intern(instance?.Mesh),
-            Flags = flags | (instance is { InLevel: true } ? BridgeWorldActorInfoFlags.InLevel : 0) |
-                (instance is { Hidden: true } ? BridgeWorldActorInfoFlags.HiddenInMap : 0),
-            ScaleX = scale.X,
-            ScaleY = scale.Y,
-            ScaleZ = scale.Z,
-            PrePivotX = pivot.X,
-            PrePivotY = pivot.Y,
-            PrePivotZ = pivot.Z,
-            X = location.X,
-            Y = location.Y,
-            Z = location.Z,
-            Pitch = LerpAxis(rotation.Pitch, rotation.Pitch, 0f),
-            Yaw = LerpAxis(rotation.Yaw, rotation.Yaw, 0f),
-            Roll = LerpAxis(rotation.Roll, rotation.Roll, 0f),
-        };
 
         /// <summary>Starts following <paramref name="actor"/> from where it is, with no blend from before.</summary>
         private void Start(Actor actor)

@@ -508,13 +508,21 @@ void UScctLevelStateSubsystem::RestoreLevel()
 		}
 	}
 
-	// The props play what the importer gave them again (their transform went back with the actors above).
+	// Restore skeletal props too: most have no static-mesh entry in ActorStates.
 	for (TPair<int32, FPropState>& Pair : PropStates)
 	{
 		FPropState& State = Pair.Value;
 		ASkeletalMeshActor* Actor = State.Actor.Get();
 		USkeletalMeshComponent* Component = Actor != nullptr ? Actor->GetSkeletalMeshComponent() : nullptr;
-		if (Component == nullptr || bTearingDown || !State.bDriven)
+		if (Component == nullptr || bTearingDown)
+		{
+			continue;
+		}
+		if (State.bMoved)
+		{
+			Actor->SetActorTransform(State.ImportedTransform);
+		}
+		if (!State.bDriven)
 		{
 			continue;
 		}
@@ -1452,12 +1460,20 @@ void UScctLevelStateSubsystem::BindProp(FPropState& State, const FScctWorldAnima
 		return;
 	}
 
+	State.ImportedTransform = Actor->GetActorTransform();
+	// A fish has already picked a random position and heading by the first draw. Only the authored
+	// placement separates the mesh's fixed axis correction from the actor's live swimming pose.
+	FScctWorldActorInfo Placement{};
+	if (!World->GetActorInfo(Record.NameId, &Placement))
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Level state: no map placement for skeletal prop '%s'"), *Name);
+		return;
+	}
 	State.Actor = Actor;
-	State.FirstLocation = FVector(Record.X, Record.Y, Record.Z);
-	State.FirstQuat = FScctWorld::ToRotator(Record.Pitch, Record.Yaw, Record.Roll).Quaternion();
-	// The importer turned the mesh by its rotation origin first, then by the actor's rotation.
-	State.OriginQuat = State.FirstQuat.Inverse() * Actor->GetActorQuat();
-	const FVector Scale(Record.ScaleX, Record.ScaleY, Record.ScaleZ);
+	State.FirstLocation = FVector(Placement.X, Placement.Y, Placement.Z);
+	State.FirstQuat = FScctWorld::ToRotator(Placement.Pitch, Placement.Yaw, Placement.Roll).Quaternion();
+	State.OriginQuat = State.FirstQuat.Inverse() * State.ImportedTransform.GetRotation();
+	const FVector Scale(Placement.ScaleX, Placement.ScaleY, Placement.ScaleZ);
 	const FVector Imported = Actor->GetActorScale3D();
 	State.ScaleRatio = FVector(
 		FMath::Abs(Scale.X) > UE_SMALL_NUMBER ? Imported.X / Scale.X : 1.0,
