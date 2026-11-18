@@ -324,11 +324,14 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 
 	int32 ByClass[EScctLightClass::Count] = {};
 	int32 NumWithoutActor = 0, NumAlready = 0, NumCapped = 0, NumOnBodies = 0, NumHaze = 0, NumOff = 0, NumLive = 0;
-	bool bSun = false;
+	bool bUnbakedSun = false;
 	float MostIntensity = 0.0f;
 	for (const FScctLightInfo& Info : Lights)
 	{
-		bSun |= (Info.Flags & EScctLightInfoFlags::Sun) != 0 && (Info.Flags & EScctLightInfoFlags::Hidden) == 0;
+		// Static sunlight is already in the world's baked lighting. Only an unbaked
+		// sun can also light those surfaces through the level's directional light.
+		bUnbakedSun |= (Info.Flags & EScctLightInfoFlags::Sun) != 0 && (Info.Flags & EScctLightInfoFlags::Hidden) == 0
+			&& Info.Class != EScctLightClass::Baked;
 		if ((Info.Flags & EScctLightInfoFlags::Hidden) != 0 || Info.NameId == 0)
 		{
 			continue;
@@ -465,7 +468,7 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 	for (TActorIterator<ADirectionalLight> It(World); It; ++It)
 	{
 		ULightComponent* Light = It->GetLightComponent();
-		if (Light == nullptr || It->Tags.Contains(LightRulesDressedTag) || bSun)
+		if (Light == nullptr || It->Tags.Contains(LightRulesDressedTag) || bUnbakedSun)
 		{
 			continue;
 		}
@@ -536,7 +539,7 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 		ByClass[EScctLightClass::CharactersOnly], ByClass[EScctLightClass::SpecialLit], ByClass[EScctLightClass::None],
 		NumLive, NumOnBodies, NumHaze, NumOff, NumCapped, Cap, MostIntensity, NumWithoutActor, NumAlready);
 	UE_LOG(LogOpenSCCT, Log, TEXT("LightRules: the map %s; %d moons at share %.2f, %d sky lights at share %.2f, %d height fogs with %.2f of their glow; %d of %d level meshes carry no baked light and take the bodies' lamps."),
-		bSun ? TEXT("has a sun light (the level's directional light stays)") : TEXT("has no sun light"), NumMoons, MoonShare, NumSkies, SkyShare, NumFogs, FogShare, NumActorLit, NumMeshes);
+		bUnbakedSun ? TEXT("has unbaked sunlight (the level's directional light stays)") : TEXT("has no unbaked sunlight"), NumMoons, MoonShare, NumSkies, SkyShare, NumFogs, FogShare, NumActorLit, NumMeshes);
 	if (auto* Filter = World->GetSubsystem<UScctEchelonLightFilter>()) Filter->OnLightPlanDressed();
 	return true;
 }
