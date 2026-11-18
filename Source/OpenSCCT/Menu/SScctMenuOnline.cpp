@@ -465,40 +465,39 @@ namespace
 				}
 				return;
 			}
-			// The one password prompt of the menus, with the side asked for on arrival (as joining by address has
-			// them): a protected server's password is typed here, and the side is a button.
-			const bool bLocked = (Server.Flags & EScctOnlineServerFlags::Password) != 0;
-			const FString Name = Server.Name;
-			const TWeakObjectPtr<UScctOnlineSubsystem> Weak = Host.Online;
-			if (!Host.Dialogs.IsValid())
+			if ((Server.Flags & EScctOnlineServerFlags::Password) == 0)
 			{
-				UE_LOG(LogOpenSCCT, Log, TEXT("Menu: joining listed server %s"), *Name);
 				Visit->JoinListed(Index);
 				return;
 			}
-			const auto JoinAs = [Weak, Index, Name](int32 Team)
+			if (!Host.Dialogs.IsValid())
 			{
-				return [Weak, Index, Name, Team](const FString& Password)
+				return;
+			}
+			// The list can refresh while the password is being typed.
+			const auto JoinWithPassword = [Weak = Host.Online, ServerId = FString(Server.Id)](const FString& Password)
+			{
+				if (UScctOnlineSubsystem* Online = Weak.Get())
 				{
-					if (UScctOnlineSubsystem* V = Weak.Get(); V != nullptr && V->GetServers().IsValidIndex(Index))
+					const int32 Current = Online->GetServers().IndexOfByPredicate([&ServerId](const FScctOnlineServerEntry& Entry)
 					{
-						UE_LOG(LogOpenSCCT, Log, TEXT("Menu: joining listed server %s (side %d%s)"), *Name, Team, Password.IsEmpty() ? TEXT("") : TEXT(", with a password"));
-						V->JoinListed(Index, Password, Team);
+						return ServerId == Entry.Id;
+					});
+					if (Current != INDEX_NONE)
+					{
+						Online->JoinListed(Current, Password);
 					}
-				};
+				}
 			};
 			FScctDialog Dialog;
-			Dialog.Title = FString::Printf(TEXT("Join %s"), *Name);
-			Dialog.Body = bLocked ? TEXT("This server asks for a password. Type it, then pick the side you want on arrival; you can change it in the lobby.")
-				: TEXT("Pick the side you want on arrival; you can change it in the lobby.");
-			Dialog.bTextField = bLocked;
-			Dialog.bPassword = bLocked;
+			Dialog.Title = FString::Printf(TEXT("Join %s"), Server.Name);
+			Dialog.Body = TEXT("Enter the server password to join.");
+			Dialog.bTextField = true;
+			Dialog.bPassword = true;
 			Dialog.TextHint = TEXT("Password");
 			Dialog.Buttons.Add({ TEXT("Cancel"), EScctButtonLook::Secondary, nullptr });
-			Dialog.Buttons.Add({ ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), 0, TEXT("Spy")), EScctButtonLook::Secondary, JoinAs(0) });
-			Dialog.Buttons.Add({ ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TeamName"), 1, TEXT("Mercenary")), EScctButtonLook::Secondary, JoinAs(1) });
-			Dialog.Buttons.Add({ TEXT("Smaller side"), EScctButtonLook::Primary, JoinAs(-1) });
-			Dialog.FocusButton = 3;
+			Dialog.Buttons.Add({ TEXT("Join"), EScctButtonLook::Primary, JoinWithPassword });
+			Dialog.FocusButton = 1;
 			Dialog.CancelButton = 0;
 			Host.Dialogs->Show(Dialog);
 		}

@@ -6,12 +6,15 @@
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Menu/ScctBotNavPrompt.h"
+#include "Menu/ScctMapFamilies.h"
+#include "Menu/ScctMenuNav.h"
 #include "Menu/SScctGearPage.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
@@ -77,6 +80,7 @@ namespace
 				return;
 			}
 
+			const TArray<FScctMapFamily> Families = ScctMapFamilies::Build(Maps);
 			TSharedPtr<SScctButton> StartButton;
 			ChildSlot
 			[
@@ -86,7 +90,7 @@ namespace
 				[
 					SNew(SBox).WidthOverride(390.0f)
 					[
-						ScctUi::Card(FString::Printf(TEXT("Maps · %d"), MapIds.Num()), BuildMapList(), FMargin(12.0f, 18.0f, 6.0f, 12.0f))
+						ScctUi::Card(FString::Printf(TEXT("Maps · %d"), Families.Num()), BuildMapList(Families), FMargin(12.0f, 18.0f, 6.0f, 12.0f))
 					]
 				]
 				// The chosen map.
@@ -134,6 +138,16 @@ namespace
 		virtual FString GetTitle() const override { return TEXT("Play offline"); }
 		virtual FString GetKicker() const override { return TEXT("Skirmish · against bots"); }
 
+		virtual TSharedPtr<SWidget> GetDefaultFocus() const override
+		{
+			if (!MapRows.IsValidIndex(MapIndex))
+			{
+				return SScctMenuPage::GetDefaultFocus();
+			}
+			const TSharedPtr<SExpandableArea> Family = MapRows[MapIndex].Family.Pin();
+			return Family.IsValid() && !Family->IsExpanded() ? ScctMenuNav::FindFirstFocusable(Family) : MapRows[MapIndex].Item.Pin();
+		}
+
 		virtual void ShowSub(const FString& Sub) override
 		{
 			if (Sub.Equals(TEXT("start"), ESearchCase::IgnoreCase))
@@ -146,15 +160,14 @@ namespace
 				const int32 Found = MapIds.IndexOfByPredicate([&Sub](const FString& Id) { return Id.Equals(Sub, ESearchCase::IgnoreCase); });
 				if (Found != INDEX_NONE)
 				{
-					SelectMap(Found);
-					// The map's own row takes the focus, so the saved map's row taking it later does not choose that one again.
-					if (MapItems.IsValidIndex(Found) && MapItems[Found].IsValid())
+					if (const TSharedPtr<SExpandableArea> Family = MapRows[Found].Family.Pin())
 					{
-						DefaultFocus = MapItems[Found].Pin();
-						if (HasFocusedDescendants())
-						{
-							FSlateApplication::Get().SetKeyboardFocus(DefaultFocus.Pin(), EFocusCause::SetDirectly);
-						}
+						Family->SetExpanded(true);
+					}
+					SelectMap(Found);
+					if (HasFocusedDescendants())
+					{
+						FSlateApplication::Get().SetKeyboardFocus(GetDefaultFocus(), EFocusCause::SetDirectly);
 					}
 				}
 			}
@@ -175,9 +188,9 @@ namespace
 			{
 				return FNavigationReply::Explicit(FirstOption.Pin());
 			}
-			if (Type == EUINavigation::Left && !bInList && MapItems.IsValidIndex(MapIndex) && MapItems[MapIndex].IsValid())
+			if (Type == EUINavigation::Left && !bInList && MapRows.IsValidIndex(MapIndex))
 			{
-				return FNavigationReply::Explicit(MapItems[MapIndex].Pin());
+				return FNavigationReply::Explicit(GetDefaultFocus());
 			}
 			return SScctMenuPage::OnNavigation(MyGeometry, InNavigationEvent);
 		}
@@ -239,71 +252,95 @@ namespace
 
 		// ---- the map list -----------------------------------------------------------------------------------------
 
-		TSharedRef<SWidget> BuildMapList()
+		TSharedRef<SWidget> MapRowContent(int32 Index, const FString& Title, const FString& Detail, bool bShowPicture) const
+		{
+			const TSharedRef<SVerticalBox> Label = SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Text(FText::FromString(Title), ScctUi::Body(true), FSlateColor(ScctHudStyle::Text()), true) ]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 3.0f, 0.0f, 0.0f)
+				[ ScctUi::Text(FText::FromString(Detail), ScctUi::Small(), FSlateColor(ScctHudStyle::TextDim()), true) ];
+			if (!bShowPicture)
+			{
+				return Label;
+			}
+			UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
+			const FSlateBrush* Thumb = Menu->GetPicture(Menu->GetMapText(MapIds[Index], EScctMenuMapText::PreviewImage));
+			return SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 12.0f, 0.0f)
+				[ ScctUi::Picture(Thumb != nullptr ? Thumb : Menu->GetMapPicture(MapIds[Index], false), 88.0f, 50.0f) ]
+				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)[ Label ];
+		}
+
+		TSharedRef<SWidget> BuildMapItem(int32 Index, const FString& Title, bool bShowPicture)
 		{
 			UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
-			const TSharedRef<SVerticalBox> List = SNew(SVerticalBox);
-			for (int32 Index = 0; Index < MapIds.Num(); ++Index)
+			const FScctMenuMapInfo* Map = Menu->FindMap(MapIds[Index]);
+			TArray<FString> PlayableModeNames;
+			for (int32 Mode = 0; Map != nullptr && Mode < 4; ++Mode)
 			{
-				const FScctMenuMapInfo* Map = Menu->FindMap(MapIds[Index]);
-				// Under the name: the modes (most maps play all four, which needs no list) and the players it is made for.
-				TArray<FString> PlayableModeNames;
-				for (int32 Mode = 0; Map != nullptr && Mode < 4; ++Mode)
+				if (Map->Plays(Mode))
 				{
-					if (Map->Plays(Mode))
+					PlayableModeNames.Add(Menu->GetModeName(Mode));
+				}
+			}
+			FString Modes = PlayableModeNames.Num() == 4 ? FString(TEXT("Every mode")) : FString::Join(PlayableModeNames, TEXT(" · "));
+			if (Map != nullptr && Map->Data.RecommendedPlayers > 0)
+			{
+				Modes += FString::Printf(TEXT("%s%d players"), Modes.IsEmpty() ? TEXT("") : TEXT("  ·  "), Map->Data.RecommendedPlayers);
+			}
+			const TSharedRef<SScctListItem> Item = SNew(SScctListItem)
+				.Padding(FMargin(8.0f, 6.0f))
+				.Selected_Lambda([this, Index] { return MapIndex == Index; })
+				.OnFocused(FSimpleDelegate::CreateLambda([this, Index]
+				{
+					SelectMap(Index);
+					ScctUi::Describe(FText::FromString(MapTitle()), FText::FromString(TEXT("Enter or A: on to the match settings.")));
+				}))
+				.OnActivated(FSimpleDelegate::CreateLambda([this] { if (FirstOption.IsValid()) { FSlateApplication::Get().SetKeyboardFocus(FirstOption.Pin(), EFocusCause::Navigation); } }))
+				[ MapRowContent(Index, Title, Modes, bShowPicture) ];
+			MapRows[Index].Item = Item;
+			return Item;
+		}
+
+		TSharedRef<SWidget> BuildMapList(const TArray<FScctMapFamily>& Families)
+		{
+			MapRows.SetNum(MapIds.Num());
+			const TSharedRef<SVerticalBox> List = SNew(SVerticalBox);
+			for (const FScctMapFamily& Family : Families)
+			{
+				const int32 First = Family.Variants[0].MapIndex;
+				const FMargin Spacing(0.0f, 0.0f, 6.0f, 4.0f);
+				if (Family.Variants.Num() == 1)
+				{
+					List->AddSlot().AutoHeight().Padding(Spacing)[ BuildMapItem(First, Family.Title, true) ];
+					continue;
+				}
+
+				const TSharedRef<SVerticalBox> Variants = SNew(SVerticalBox);
+				for (const FScctMapVariant& Variant : Family.Variants)
+				{
+					Variants->AddSlot().AutoHeight().Padding(0.0f, 2.0f, 0.0f, 0.0f)
+					[ BuildMapItem(Variant.MapIndex, Variant.Label, false) ];
+				}
+				const TSharedRef<SExpandableArea> Area = SNew(SExpandableArea)
+					.InitiallyCollapsed(true)
+					.AllowAnimatedTransition(false)
+					.BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+					.BorderBackgroundColor_Lambda([this, First]
 					{
-						PlayableModeNames.Add(Menu->GetModeName(Mode));
-					}
-				}
-				FString Modes = PlayableModeNames.Num() == 4 ? FString(TEXT("Every mode")) : FString::Join(PlayableModeNames, TEXT(" · "));
-				if (Map != nullptr && Map->Data.RecommendedPlayers > 0)
+						return FSlateColor(MapRows[MapIndex].Family == MapRows[First].Family
+							? ScctHudStyle::Fade(ScctUi::Accent(), 0.16f) : ScctUi::White(0.035f));
+					})
+					.BodyBorderImage(FStyleDefaults::GetNoBrush())
+					.HeaderPadding(FMargin(8.0f, 6.0f))
+					.AreaTitlePadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f))
+					.Padding(FMargin(28.0f, 0.0f, 0.0f, 2.0f))
+					.HeaderContent()[ MapRowContent(First, Family.Title, FString::Printf(TEXT("%d variants"), Family.Variants.Num()), true) ]
+					.BodyContent()[ Variants ];
+				for (const FScctMapVariant& Variant : Family.Variants)
 				{
-					Modes += FString::Printf(TEXT("%s%d players"), Modes.IsEmpty() ? TEXT("") : TEXT("  ·  "), Map->Data.RecommendedPlayers);
+					MapRows[Variant.MapIndex].Family = Area;
 				}
-				const FSlateBrush* Thumb = Menu->GetPicture(Menu->GetMapText(MapIds[Index], EScctMenuMapText::PreviewImage));
-				if (Thumb == nullptr)
-				{
-					Thumb = Menu->GetMapPicture(MapIds[Index], false);
-				}
-				TSharedPtr<SWidget> Item;
-				List->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 6.0f, 4.0f)
-				[
-					SAssignNew(Item, SScctListItem)
-					.Padding(FMargin(8.0f, 6.0f))
-					.Selected(TAttribute<bool>::CreateLambda([this, Index] { return MapIndex == Index; }))
-					.OnFocused(FSimpleDelegate::CreateLambda([this, Index]
-					{
-						SelectMap(Index);
-						ScctUi::Describe(FText::FromString(MapTitle()), FText::FromString(TEXT("Enter or A: on to the match settings.")));
-					}))
-					.OnActivated(FSimpleDelegate::CreateLambda([this] { if (FirstOption.IsValid()) { FSlateApplication::Get().SetKeyboardFocus(FirstOption.Pin(), EFocusCause::Navigation); } }))
-					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 12.0f, 0.0f)
-						[
-							ScctUi::Picture(Thumb, 88.0f, 50.0f)
-						]
-						+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-						[
-							SNew(SVerticalBox)
-							+ SVerticalBox::Slot().AutoHeight()
-							[
-								SNew(STextBlock).Font(ScctUi::Body(true)).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true)
-								.Text(FText::FromString(Map != nullptr ? Map->Title : MapIds[Index]))
-							]
-							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 3.0f, 0.0f, 0.0f)
-							[
-								SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
-								.Text(FText::FromString(Modes))
-							]
-						]
-					]
-				];
-				MapItems.Add(Item);
-				if (Index == MapIndex)
-				{
-					DefaultFocus = Item;
-				}
+				List->AddSlot().AutoHeight().Padding(Spacing)[ Area ];
 			}
 			const TSharedRef<SScrollBox> Scroll = SNew(SScrollBox).ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll) + SScrollBox::Slot()[ List ];
 			MapList = Scroll;
@@ -655,7 +692,12 @@ namespace
 		TSharedPtr<SBox> HeroBox;
 		TWeakPtr<SWidget> FirstOption;
 		TWeakPtr<SWidget> MapList;
-		TArray<TWeakPtr<SWidget>> MapItems;
+		struct FMapRow
+		{
+			TWeakPtr<SWidget> Item;
+			TWeakPtr<SExpandableArea> Family;
+		};
+		TArray<FMapRow> MapRows;
 	};
 }
 

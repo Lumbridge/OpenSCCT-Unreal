@@ -220,8 +220,8 @@ public static unsafe class ArmouryPreviewExports
                 return 0;
             }
 
-            string path = Path.Combine(shared, "chars", folder, "textures", "cosmetic_" + p + "_" + r + ".png");
-            return File.Exists(path) ? OnlineTextCopy.Buffer(into, capacity, path) : 0;
+            string? path = PawnLooks.FindCosmeticTexture(Path.Combine(shared, "chars", folder, "textures"), p, r);
+            return path is null ? 0 : OnlineTextCopy.Buffer(into, capacity, path);
         }
         catch (Exception e)
         {

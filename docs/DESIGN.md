@@ -92,11 +92,17 @@ controller buttons depending on the last input.
 **Pages and navigation.** The front end is a stack of pages over the backdrop (`Menu/SScctFrontEnd`); Back pops it.
 
 ```
-Main menu ─┬─ Play offline (map browser, mode, side, bots, rules) ── START ─> match
-           ├─ Online ─┬─ Server list (sort, filter, details) ── JOIN ─> Connecting ─> Lobby
-           │          └─ Join by address (name, address, password, recent servers)
-           ├─ Settings (Video, Audio, Controls, Bindings, Game, Profile)
-           ├─ Credits (licences from docs/ASSETS.md)
+Main menu ─┬─ Play ─┬─ Play online (server list, join by address, LAN and saved servers) ── JOIN ─> Lobby
+           │        ├─ Play offline (map and variant, mode, side, bots, rules) ── START ─> match
+           │        ├─ Host game
+           │        └─ Hub
+           ├─ Practice ─┬─ Practice as a spy
+           │            ├─ Practice as a mercenary
+           │            └─ Tutorials
+           ├─ Profile (Account, Armoury, Demos)
+           ├─ Maps & Content
+           ├─ Options
+           ├─ More (Help & feedback, Credits)
            └─ Quit (confirm)
 Lobby ─ teams, chat, match settings (host), ready/start, leave (confirm) ─> round ─> results ─> lobby
 Match ─ pause menu: resume, settings, leave (confirm) ; end of round: results (offline and online)

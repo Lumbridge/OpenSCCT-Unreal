@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using OpenScct.Content;
 using OpenScct.Core.Engine;
 using OpenScct.Game.SBase;
@@ -324,13 +325,23 @@ public sealed class PawnLooks
         string? folder = package.StartsWith("outfit:", StringComparison.Ordinal) && int.TryParse(package[7..], out int kind)
             ? _session.Outfits.ModelTextureFolder(kind)
             : _session.Outfits.SharedRoot is { } shared ? Path.Combine(shared, "chars", package, "textures") : null;
-        if (folder is null)
+        return folder is null ? null : FindCosmeticTexture(folder, pattern, retail);
+    }
+
+    internal static string? FindCosmeticTexture(string folder, string pattern, string retail)
+    {
+        string prefix = Path.Combine(folder, "cosmetic_" + pattern + "_");
+        string path = prefix + retail + ".png";
+        if (File.Exists(path))
         {
-            return null;
+            return path;
         }
 
-        string path = Path.Combine(folder, "cosmetic_" + pattern + "_" + retail + ".png");
-        return File.Exists(path) ? path : null;
+        // Unreal replaces the dot in Blender's numbered names on import (e.g. g18.001_baseColor).
+        // The loose colour texture and its finish mask keep the original name.
+        string original = Regex.Replace(retail, @"_([0-9]{3})(?=_|$)", ".$1");
+        string originalPath = prefix + original + ".png";
+        return original != retail && File.Exists(originalPath) ? originalPath : null;
     }
 
     /// <summary>

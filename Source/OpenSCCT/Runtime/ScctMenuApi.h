@@ -52,6 +52,8 @@ enum class EScctMenuMapText : int32
 	BriefSpy = 6,
 	BriefMerc = 7,
 	Places = 8,
+	Family = 9,           // offline map family (e.g. "Aquarius")
+	Variant = 10,         // edition within that family (empty for the base map)
 };
 
 namespace EScctMenuSides

@@ -106,28 +106,30 @@ namespace
 				return Index;
 			};
 
-			const int32 Play = AddGroup(TEXT("Play"), TEXT("Offline, practice, online, host, hub, tutorials"),
-				TEXT("Everything that starts or joins a game: a match against bots, quick practice as either side, the servers online, hosting a session, the hubs and the tutorials."));
-			Add(Groups[Play].Entries, TEXT("Play offline"), TEXT("A match against bots on any map installed here"),
-				TEXT("Pick a map, a mode and a side, set the bots and the rules, and play at once. Nothing is sent over the network."),
-				[this] { Host.Open(TEXT("play")); });
-			// Quick practice with three bots, as the Godot dashboard's PRACTICE AS A SPY / A MERCENARY (Menu/ScctDashboardCards.h).
-			Add(Groups[Play].Entries, TEXT("Practice as a spy"), ScctDashboard::PracticeLine(false),
-				TEXT("Straight into an offline match as a spy against three bots, on the map you last played offline, with the practice rules."),
-				[this] { ScctDashboard::StartPractice(Host, false); });
-			Add(Groups[Play].Entries, TEXT("Practice as a mercenary"), ScctDashboard::PracticeLine(true),
-				TEXT("Straight into an offline match as a mercenary against three bots, on the map you last played offline, with the practice rules."),
-				[this] { ScctDashboard::StartPractice(Host, true); });
+			const int32 Play = AddGroup(TEXT("Play"), TEXT("Online, offline, host, hub"),
+				TEXT("Join an online server, play against bots, host a session or visit a hub."));
 			Add(Groups[Play].Entries, TEXT("Play online"), TEXT("Find a session the master lists, or join by address"),
 				TEXT("The servers the master lists, with their maps, modes and players, and joining a server by its address."),
 				[this] { Host.Open(TEXT("online")); });
+			Add(Groups[Play].Entries, TEXT("Play offline"), TEXT("A match against bots on any map installed here"),
+				TEXT("Pick a map, a mode and a side, set the bots and the rules, and play at once. Nothing is sent over the network."),
+				[this] { Host.Open(TEXT("play")); });
 			Add(Groups[Play].Entries, TEXT("Host game"), TEXT("Create a session on this PC for others to join"),
 				TEXT("Pick a map and the rules, choose how the server is reached and listed, and start a listen server that you play on."),
 				[this] { Host.Open(TEXT("host")); });
 			Add(Groups[Play].Entries, TEXT("Hub"), TEXT("Meet other players between matches"),
 				TEXT("The hubs the master lists, joining one by its address, or hosting a hub on this PC."),
 				[this] { Host.Open(TEXT("hub")); });
-			Add(Groups[Play].Entries, ScctUi::GameText(TEXT("Tutorials_Page"), TEXT("TitlePage"), TEXT("Tutorials")), TEXT("The HUD, tips, gadgets and the tutorial maps"),
+
+			const int32 Practice = AddGroup(TEXT("Practice"), TEXT("Spy practice, mercenary practice, tutorials"),
+				TEXT("Practise either role against bots or learn it on the tutorial maps."));
+			Add(Groups[Practice].Entries, TEXT("Practice as a spy"), ScctDashboard::PracticeLine(false),
+				TEXT("Straight into an offline match as a spy against three bots, on the map you last played offline, with the practice rules."),
+				[this] { ScctDashboard::StartPractice(Host, false); });
+			Add(Groups[Practice].Entries, TEXT("Practice as a mercenary"), ScctDashboard::PracticeLine(true),
+				TEXT("Straight into an offline match as a mercenary against three bots, on the map you last played offline, with the practice rules."),
+				[this] { ScctDashboard::StartPractice(Host, true); });
+			Add(Groups[Practice].Entries, ScctUi::GameText(TEXT("Tutorials_Page"), TEXT("TitlePage"), TEXT("Tutorials")), TEXT("The HUD, tips, gadgets and the tutorial maps"),
 				TEXT("The HUD and keyboard pictures, every tip and gadget of both sides, the spy and mercenary tutorial maps with your progress, and visiting a map alone with its help paths."),
 				[this] { Host.Open(TEXT("tutorials")); });
 

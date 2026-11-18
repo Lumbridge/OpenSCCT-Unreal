@@ -71,6 +71,8 @@ public enum BridgeMenuMapText
     BriefSpy = 6,         // the map's briefing for the spies
     BriefMerc = 7,
     Places = 8,           // the numbered places of the plan, one per line
+    Family = 9,
+    Variant = 10,
 }
 
 /// <summary>An action a key or pad control can be bound to (OpenSCCT's ControlActions).</summary>
@@ -279,6 +281,8 @@ public static unsafe class MenuExports
                 BridgeMenuMapText.BriefSpy => settings?.ExpliMapInBriefSpy ?? "",
                 BridgeMenuMapText.BriefMerc => settings?.ExpliMapInBriefSentry ?? "",
                 BridgeMenuMapText.Places => string.Join('\n', entry.Places.Select(static p => p.ToString())),
+                BridgeMenuMapText.Family => MenuMapFamily.Of(entry).Family,
+                BridgeMenuMapText.Variant => MenuMapFamily.Of(entry).Variant,
                 _ => "",
             };
             return Copy(text, buffer, capacity);
