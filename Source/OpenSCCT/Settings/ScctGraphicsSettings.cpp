@@ -4,9 +4,7 @@
 #include "GameFramework/GameUserSettings.h"
 #include "Menu/ScctUserSettings.h"
 #include "Misc/App.h"
-#include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
-#include "Misc/Parse.h"
 #include "RHIGlobals.h"
 #include "Settings/ScctVideoOptions.h"
 
@@ -74,8 +72,7 @@ bool ScctGraphicsSettings::Owns(FName Key)
 
 void ScctGraphicsSettings::DetectFirstLaunch()
 {
-	if (GIsEditor || FApp::IsUnattended() || !FApp::CanEverRender() || !GIsRHIInitialized || GUsingNullRHI
-		|| FParse::Param(FCommandLine::Get(), TEXT("RenderOffscreen")))
+	if (GIsEditor || FApp::IsUnattended() || !FApp::CanEverRender() || !GIsRHIInitialized || GUsingNullRHI)
 	{
 		return;
 	}
@@ -101,8 +98,13 @@ void ScctGraphicsSettings::DetectFirstLaunch()
 	{
 		Engine->SetOverallScalabilityLevel(0);
 	}
-	const int32 Scale = bBudgetIntegrated ? 50 : FMath::Clamp(FMath::RoundToInt(Engine->ScalabilityQuality.ResolutionQuality), 50, 100);
-	UScctUserSettings::Get()->RenderScale = Scale;
+	// 0 means "use the project's default" in sg.ResolutionQuality. OpenSCCT owns an explicit 50..100 slider.
+	UScctUserSettings* User = UScctUserSettings::Get();
+	const float Recommended = Engine->ScalabilityQuality.ResolutionQuality;
+	int32 Scale = User->RenderScale;
+	if (bBudgetIntegrated) { Scale = 50; }
+	else if (FMath::IsFinite(Recommended) && Recommended > 0.f) { Scale = FMath::Clamp(FMath::RoundToInt(Recommended), 50, 100); }
+	User->RenderScale = Scale;
 	GConfig->SetInt(Section, TEXT("RenderScale"), Scale, GGameUserSettingsIni);
 	Engine->ApplyHardwareBenchmarkResults();
 	SetCVar(TEXT("r.ScreenPercentage"), Scale);
