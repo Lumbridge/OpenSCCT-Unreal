@@ -8,6 +8,7 @@
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Play/ScctExposure.h"
+#include "Play/ScctLightAudit.h"
 #include "Play/ScctLightPlan.h"
 #include "Social/ScctLaunchOptions.h"
 
@@ -51,6 +52,7 @@ void FOpenSCCTModule::StartupModule()
 	FDefaultGameModuleImpl::StartupModule();
 	ScctLaunchOptions::Apply();
 	FScctLightPlan::Start();
+	FScctLightAudit::Start();
 
 	// The game module is loaded before the engine object exists.
 	if (GEngine != nullptr)
@@ -71,6 +73,7 @@ FOpenSCCTModule& FOpenSCCTModule::Get()
 void FOpenSCCTModule::ShutdownModule()
 {
 	FScctExposure::Stop();
+	FScctLightAudit::Stop();
 
 	if (bTableReady && Api.Shutdown != nullptr)
 	{

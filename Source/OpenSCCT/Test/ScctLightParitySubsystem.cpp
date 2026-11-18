@@ -21,6 +21,7 @@
 #include "Misc/Paths.h"
 #include "OpenSCCT.h"
 #include "Play/ScctExposure.h"
+#include "Play/ScctLightAudit.h"
 #include "Play/ScctLightPlan.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
@@ -179,6 +180,7 @@ bool UScctLightParitySubsystem::Begin()
 	{
 		return false;
 	}
+	CheckPlanExports();
 
 	for (const FScctLightSpot& Spot : Found)
 	{
@@ -249,7 +251,84 @@ void UScctLightParitySubsystem::PrepareSpot(FSpot& Entry)
 	const FVector Eye = Chest + BestSide * Entry.CameraDistance + FVector(0.0, 0.0, 0.1 * Entry.CameraDistance);
 	Entry.Camera = FTransform((Entry.Centre - Eye).Rotation(), Eye);
 	Api->Read(Entry.Centre.X, Entry.Centre.Y, Entry.Centre.Z, LightPawnRadius, Eye.X, Eye.Y, Eye.Z, &Entry.Reading);
+	if (PlanApi != nullptr)
+	{
+		const int32 AsField = EScctLightRigOptions::NoRuntimeLights | EScctLightRigOptions::PlacedOnly;
+		Entry.bRig = PlanApi->GetPointRig(Entry.Centre.X, Entry.Centre.Y, Entry.Centre.Z, LightPawnRadius, Eye.X, Eye.Y, Eye.Z, AsField, &Entry.Rig) != 0 &&
+			PlanApi->GetPointRig(Entry.Centre.X, Entry.Centre.Y, Entry.Centre.Z, LightPawnRadius, Eye.X, Eye.Y, Eye.Z, 0, &Entry.RigLive) != 0;
+	}
 	Entry.Predicted = Predict(Entry);
+}
+
+void UScctLightParitySubsystem::CheckPlanExports()
+{
+	// The lighting plan's exports: how the plan classes the map's lights, the table of them, and the rig against the
+	// simulation's field on every sampled floor node (the same rules on the same file: the difference should be 0).
+	PlanApi = ScctFeature<FScctLightPlanApi>();
+	if (PlanApi == nullptr)
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("LightParity: the bridge has no light plan exports; the rig is not checked."));
+		return;
+	}
+	FScctLightLevel Level = {};
+	if (PlanApi->GetLevel(&Level) != 0)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT_CLASSES %s %s"), *Name, *FScctLightAudit::DescribeLevel(Level));
+	}
+
+	TArray<FScctLightInfo> Lights;
+	Lights.SetNumZeroed(FMath::Max(PlanApi->GetLights(nullptr, 0), 0));
+	PlanApi->GetLights(Lights.GetData(), Lights.Num());
+	const FScctWorldApi* World = ScctFeature<FScctWorldApi>();
+	auto NameOf = [World](int32 Id)
+	{
+		TCHAR Buffer[128] = {};
+		if (World != nullptr && Id != 0)
+		{
+			World->GetName(Id, Buffer, UE_ARRAY_COUNT(Buffer));
+		}
+		return FString(Buffer);
+	};
+	FString Table = TEXT("index,name,class,flags,effect,light_type,brightness,hue,saturation,light_radius,cone,world_radius,cone_degrees,zone,x,y,z,pitch,yaw,roll,")
+		TEXT("r,g,b,gain,echelon_range,spot_width,spot_height,near_plane_ratio,normal_influence,apex_distance,attenuation,cookie,period,phase\n");
+	for (int32 Light = 0; Light < Lights.Num(); ++Light)
+	{
+		const FScctLightInfo& L = Lights[Light];
+		Table += FString::Printf(TEXT("%d,%s,%d,%d,%d,%d,%.1f,%d,%d,%.1f,%d,%.1f,%.2f,%d,%.1f,%.1f,%.1f,%.2f,%.2f,%.2f,%.4f,%.4f,%.4f,%.2f,%.1f,%.1f,%.1f,%.4f,%.2f,%.1f,%d,%s,%.1f,%.1f\n"),
+			Light, *NameOf(L.NameId), L.Class, L.Flags, L.Effect, L.LightType, L.Brightness, L.Hue, L.Saturation, L.LightRadius, L.Cone, L.WorldRadius,
+			L.ConeDegrees, L.Zone, L.X, L.Y, L.Z, L.Pitch, L.Yaw, L.Roll, L.R, L.G, L.B, L.Gain, L.EchelonRange, L.SpotWidth, L.SpotHeight,
+			L.NearPlaneRatio, L.NormalInfluence, L.ApexDistance, L.Attenuation, *NameOf(L.CookieNameId), L.Period, L.Phase);
+	}
+	FFileHelper::SaveStringToFile(Table, *(Directory / (Name + TEXT("_lights.csv"))));
+
+	TArray<FScctLightZone> Zones;
+	Zones.SetNumZeroed(FMath::Max(PlanApi->GetZones(nullptr, 0), 0));
+	PlanApi->GetZones(Zones.GetData(), Zones.Num());
+	int32 Lit = 0;
+	float Most = 0.0f;
+	for (const FScctLightZone& Zone : Zones)
+	{
+		const float Ambient = 0.3f * Zone.R + 0.59f * Zone.G + 0.11f * Zone.B;
+		Lit += Ambient > 0.0f && (Zone.Flags & 1) == 0 ? 1 : 0;
+		Most = (Zone.Flags & 1) == 0 ? FMath::Max(Most, Ambient) : Most;
+	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT_ZONES %s zones=%d with_ambient=%d most_ambient=%.3f (the sky zone left out)"), *Name, Zones.Num(), Lit, Most);
+
+	FScctLightRigCheck Check = {};
+	const double Before = FPlatformTime::Seconds();
+	if (Api->CheckRig != nullptr && Api->CheckRig(&Check) != 0)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT_RIGCHECK %s nodes=%d max_level=%.6f max_facing=%.6f differ=%d live_max_level=%.6f live_differ=%d full=%d occluded=%d (%.1f s)"),
+			*Name, Check.Nodes, Check.MaxLevel, Check.MaxFacing, Check.Differ, Check.LiveMaxLevel, Check.LiveDiffer, Check.Full, Check.Occluded,
+			FPlatformTime::Seconds() - Before);
+	}
+
+	FScctLightSquint Squint = {};
+	FScctShadowLighting Shadow = {};
+	PlanApi->GetSquint(&Squint);
+	PlanApi->GetShadowLighting(&Shadow);
+	UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT_LOCAL %s squint=%d:%.3f/%.4f shadow=%d:%d dir=%.2f,%.2f,%.2f"), *Name, Squint.Valid, Squint.Factor, Squint.Term,
+		Shadow.Valid, Shadow.Darkness, Shadow.DirX, Shadow.DirY, Shadow.DirZ);
 }
 
 float UScctLightParitySubsystem::Predict(const FSpot& At) const
@@ -777,7 +856,10 @@ void UScctLightParitySubsystem::Finish()
 {
 	Phase = EPhase::Done;
 	FString Table = TEXT("name,index,kind,x,y,z,camera_cm,zone,sim,sim_facing,ambient,has_baked,baked,baked_r,baked_g,baked_b,")
-		TEXT("sphere_raw,ground_raw,sphere_pic,ground_pic,sphere_exposure,sphere_scene,body_raw,behind_raw,body_pic,behind_pic,body_exposure,body_scene,pred,plan,play_floor,sphere_seen,body_seen\n");
+		TEXT("sphere_raw,ground_raw,sphere_pic,ground_pic,sphere_exposure,sphere_scene,body_raw,behind_raw,body_pic,behind_pic,body_exposure,body_scene,pred,plan,play_floor,sphere_seen,body_seen,")
+		TEXT("rig_level,rig_facing,rig_lights,rig_occluded,rig_spots,rig_live_level,rig_live_facing\n");
+	float RigLevelOff = 0.0f, RigFacingOff = 0.0f, RigLiveOff = 0.0f;
+	int32 RigSpots = 0;
 	const int32 Plan = FScctLightPlan::Active();
 	for (int32 Spot = 0; Spot < OrdinarySpots; ++Spot)
 	{
@@ -790,13 +872,24 @@ void UScctLightParitySubsystem::Finish()
 			At.Sphere.Raw, At.Sphere.Picture, At.Sphere.RawAround, At.Sphere.PictureAround,
 			At.Body.Raw, At.Body.Picture, At.Body.RawAround, At.Body.PictureAround,
 			Exposure, Exposure > 0.0f ? FMath::Log2(1.0f / (1.2f * Exposure)) : 0.0f, At.Sphere.bSeen ? 1 : 0, At.Body.bSeen ? 1 : 0);
-		Table += FString::Printf(TEXT("%s,%d,%s,%.1f,%.1f,%.1f,%.0f,%d,%.4f,%.4f,%.4f,%d,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.2f,%.2f,%.4f,%.6f,%.6f,%.6f,%.2f,%.2f,%.4f,%.6f,%.2f,%d,%d,%d,%d\n"),
+		Table += FString::Printf(TEXT("%s,%d,%s,%.1f,%.1f,%.1f,%.0f,%d,%.4f,%.4f,%.4f,%d,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.2f,%.2f,%.4f,%.6f,%.6f,%.6f,%.2f,%.2f,%.4f,%.6f,%.2f,%d,%d,%d,%d,%s\n"),
 			*Name, Spot, LightKindName(At.Spot.Kind), At.Spot.X, At.Spot.Y, At.Spot.Z, At.CameraDistance, R.Zone, R.Level, R.LevelFacing, R.Ambient,
 			R.HasBaked, R.Baked, R.BakedR, R.BakedG, R.BakedB,
 			At.Sphere.Raw, At.Sphere.RawAround, At.Sphere.Picture, At.Sphere.PictureAround, At.Sphere.Exposure, At.Sphere.SceneLuminance,
 			At.Body.Raw, At.Body.RawAround, At.Body.Picture, At.Body.PictureAround, At.Body.Exposure, At.Body.SceneLuminance,
-			At.Predicted, Plan, Floor.PlayRule, At.Sphere.bSeen ? 1 : 0, At.Body.bSeen ? 1 : 0);
+			At.Predicted, Plan, Floor.PlayRule, At.Sphere.bSeen ? 1 : 0, At.Body.bSeen ? 1 : 0,
+			At.bRig ? *FString::Printf(TEXT("%.6f,%.6f,%d,%d,%d,%.6f,%.6f"), At.Rig.Level, At.Rig.LevelFacing, At.RigLive.Count, At.RigLive.Occluded,
+				At.RigLive.SpotCount, At.RigLive.Level, At.RigLive.LevelFacing) : TEXT(",,,,,,"));
+		if (At.bRig)
+		{
+			++RigSpots;
+			RigLevelOff = FMath::Max(RigLevelOff, FMath::Abs(At.Rig.Level - R.Level));
+			RigFacingOff = FMath::Max(RigFacingOff, FMath::Abs(At.Rig.LevelFacing - R.LevelFacing));
+			RigLiveOff = FMath::Max(RigLiveOff, FMath::Abs(At.RigLive.Level - R.Level));
+		}
 	}
+	UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT_RIG %s spots=%d of %d, rig level against the simulation's: largest difference %.6f, facing %.6f, as the game asks the rig %.6f"),
+		*Name, RigSpots, OrdinarySpots, RigLevelOff, RigFacingOff, RigLiveOff);
 	WriteSwitches();
 	const FString File = Directory / (Name + TEXT(".csv"));
 	FFileHelper::SaveStringToFile(Table, *File);

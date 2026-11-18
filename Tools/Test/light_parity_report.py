@@ -97,7 +97,7 @@ def table(path):
     for r in rows:
         for k, v in list(r.items()):
             if k not in ("name", "kind", "light", "role"):
-                r[k] = float(v)
+                r[k] = float(v) if v != "" else -1.0
     return rows
 
 
@@ -223,10 +223,31 @@ def report(path, shots, worst):
                     if os.path.exists(source):
                         shutil.copy2(source, os.path.join(shots, "%s_%s_%02d_%s.png" % (
                             name, "dark-shown-lit" if group is too_lit else "lit-shown-dark", r["index"], part)))
+    rig_report(rows)
     switches = switch_report(os.path.splitext(path)[0] + "_switch.csv")
     tone = tone_report(os.path.splitext(path)[0] + "_tone.csv")
     targets(rows, dark, lit, pairs, switches, tone)
     print()
+
+
+def rig_report(rows):
+    """The lighting plan's actor light rig against the simulation's level at the spots (the same rules: 0 is expected)."""
+    rig = [r for r in rows if r.get("rig_lights", -1.0) >= 0]
+    if not rig:
+        return
+    # The table has the simulation's levels to four places.
+    level = max(abs(round(r["rig_level"], 4) - r["sim"]) for r in rig)
+    facing = max(abs(round(r["rig_facing"], 4) - r["sim_facing"]) for r in rig)
+    live = max(abs(round(r["rig_live_level"], 4) - r["sim"]) for r in rig)
+    print()
+    print(" ACTOR LIGHT RIG (the bridge's export the plan lights characters by), %d spots" % len(rig))
+    print("  rig level against the simulation's level: largest difference %.4f; facing the camera %.4f (target 0)" % (level, facing))
+    print("  as the game asks the rig (lights where they are now, runtime lights in): largest difference %.4f" % live)
+    print("  lights in the rig: %s; spots with all four %d; spots where a chosen light has a blocked line %d; spots a projector reaches %d" % (
+        " ".join("%d:%d" % (n, sum(1 for r in rig if r["rig_lights"] == n)) for n in range(5)),
+        sum(1 for r in rig if r["rig_lights"] >= 4), sum(1 for r in rig if r["rig_occluded"] > 0), sum(1 for r in rig if r["rig_spots"] > 0)))
+    lit_blocked = [r for r in rig if r["rig_occluded"] > 0 and r["rig_occluded"] >= r["rig_lights"] and r["sim"] >= 0.15]
+    print("  lit by the original (level 0.15 or more) with every chosen light behind something: %d spots" % len(lit_blocked))
 
 
 def switch_report(path):
@@ -368,7 +389,7 @@ def main():
     parser.add_argument("--worst", type=int, default=3, help="how many disagreements to list each way (default 3)")
     args = parser.parse_args()
     for entry in args.tables:
-        files = sorted(os.path.join(entry, f) for f in os.listdir(entry) if f.endswith(".csv") and not f.endswith(("_switch.csv", "_tone.csv"))) \
+        files = sorted(os.path.join(entry, f) for f in os.listdir(entry) if f.endswith(".csv") and not f.endswith(("_switch.csv", "_tone.csv", "_lights.csv"))) \
             if os.path.isdir(entry) else [entry]
         for path in files:
             report(path, args.shots, args.worst)

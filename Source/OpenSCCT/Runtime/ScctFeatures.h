@@ -29,6 +29,7 @@
 #include "Runtime/ScctHubPadsApi.h"
 #include "Runtime/ScctHubSocialApi.h"
 #include "Runtime/ScctHudApi.h"
+#include "Runtime/ScctLightPlanApi.h"
 #include "Runtime/ScctLobbyApi.h"
 #include "Runtime/ScctMapsApi.h"
 #include "Runtime/ScctMenuApi.h"
@@ -103,6 +104,7 @@ SCCT_FEATURE_TABLE(FScctHubSocialApi, "HubSocialExports", ScctHubSocialApiVersio
 SCCT_FEATURE_TABLE(FScctHubPadsApi, "HubPadsExports", ScctHubPadsApiVersion);
 SCCT_FEATURE_TABLE(FScctHubActivityApi, "HubActivityExports", ScctHubActivityApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
+SCCT_FEATURE_TABLE(FScctLightPlanApi, "LightPlanExports", ScctLightPlanApiVersion);
 SCCT_FEATURE_TABLE(FScctLobbyApi, "LobbyExports", ScctLobbyApiVersion);
 SCCT_FEATURE_TABLE(FScctMapsApi, "MapsExports", ScctMapsApiVersion);
 SCCT_FEATURE_TABLE(FScctMenuApi, "MenuExports", ScctMenuApiVersion);

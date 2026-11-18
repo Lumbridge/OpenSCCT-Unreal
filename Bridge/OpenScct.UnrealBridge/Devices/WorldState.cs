@@ -666,6 +666,23 @@ public sealed class WorldState
     }
 
     /// <summary>
+    /// The same rows as <see cref="GetLights"/> without drawing a frame: the strobe's shared switch is read, not
+    /// flipped, so a second reader in a frame (the lighting plan's actor light rig) does not change what is drawn.
+    /// </summary>
+    public int PeekLights(Span<BridgeWorldLight> lights)
+    {
+        float alpha = Math.Clamp(_session.Alpha, 0f, 1f);
+        float time = _time + (alpha * TickSeconds);
+        int count = Math.Min(lights.Length, _lights.Count);
+        for (int i = 0; i < count; i++)
+        {
+            lights[i] = _lights[i].Draw(time, _strobeOff, alpha);
+        }
+
+        return _lights.Count;
+    }
+
+    /// <summary>
     /// Writes the laser beams to draw this frame: every working tripwire's beam and every mine beam with a length.
     /// Returns how many there are. LaserTriggerView.Draw.
     /// </summary>

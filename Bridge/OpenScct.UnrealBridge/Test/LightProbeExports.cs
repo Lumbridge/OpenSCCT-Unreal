@@ -94,6 +94,28 @@ public unsafe struct BridgeLightSwitch
     public int Effect;
 }
 
+/// <summary>How the lighting plan's actor light rig agrees with the bots' light field over the sampled floor (LightProbe.CheckRig).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct BridgeLightRigCheck
+{
+    /// <summary>Floor nodes compared (a standing pawn's centre over each).</summary>
+    public int Nodes;
+
+    /// <summary>
+    /// The rig asked as the field is built (map lights only, where the map placed them): the largest difference of the
+    /// level and of the level facing a viewer, and how many nodes differ at all. Both run the same rules: 0 is expected.
+    /// </summary>
+    public float MaxLevel, MaxFacing;
+    public int Differ;
+
+    /// <summary>The rig as the game asks it (lights where they are now, runtime lights in): the largest difference of the level, and how many nodes differ.</summary>
+    public float LiveMaxLevel;
+    public int LiveDiffer;
+
+    /// <summary>Nodes whose rig is full (four lights), and nodes where a chosen light has a blocked line to the pawn.</summary>
+    public int Full, Occluded;
+}
+
 /// <summary>
 /// The light parity measurement's entry points (Source/OpenSCCT/Test/ScctLightParitySubsystem.h): how lit the simulation
 /// believes a pawn at a point is (the bots' light field, the only light rule the simulation has), the original's baked
@@ -110,12 +132,14 @@ public unsafe struct LightProbeApi
     public delegate* unmanaged[Cdecl]<float, float, float, int> PlacePlayer;
     public delegate* unmanaged[Cdecl]<float, float, float, float, float, float, float, float, float, float*, int> PredictSphere;
     public delegate* unmanaged[Cdecl]<BridgeLightSwitch*, int, int> FindSwitchSpots;
+    public delegate* unmanaged[Cdecl]<BridgeLightRigCheck*, int> CheckRig;
 }
 
 public static unsafe class LightProbeExports
 {
     // 2: FindSpots takes the floor rule and says what it sampled; PredictSphere and FindSwitchSpots added.
-    public const int ApiVersion = 2;
+    // 3: CheckRig added.
+    public const int ApiVersion = 3;
 
     /// <summary>Fills <paramref name="api"/>. Returns the API version.</summary>
     [UnmanagedCallersOnly]
@@ -128,7 +152,37 @@ public static unsafe class LightProbeExports
         api->PlacePlayer = &PlacePlayer;
         api->PredictSphere = &PredictSphere;
         api->FindSwitchSpots = &FindSwitchSpots;
+        api->CheckRig = &CheckRig;
         return ApiVersion;
+    }
+
+    /// <summary>
+    /// Compares the lighting plan's actor light rig with the bots' light field on every floor node the last FindSpots
+    /// sampled (call that first). Returns 1 when written.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int CheckRig(BridgeLightRigCheck* check)
+    {
+        try
+        {
+            if (check == null || Probe is not { } probe)
+            {
+                return 0;
+            }
+
+            LightProbeRigCheck c = probe.CheckRig();
+            *check = new BridgeLightRigCheck
+            {
+                Nodes = c.Nodes, MaxLevel = c.MaxLevel, MaxFacing = c.MaxFacing, Differ = c.Differ, LiveMaxLevel = c.LiveMaxLevel,
+                LiveDiffer = c.LiveDiffer, Full = c.Full, Occluded = c.Occluded,
+            };
+            return 1;
+        }
+        catch (Exception e)
+        {
+            Exports.ReportFailure(e.ToString());
+            return 0;
+        }
     }
 
     private static LightProbe? Probe =>

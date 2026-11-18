@@ -11,7 +11,8 @@
 // match plays. Simulation units are Unreal centimetres, in Unreal's axes.
 
 // Version 2: FindSpots takes the floor rule and says what it sampled; PredictSphere and FindSwitchSpots added.
-constexpr int32 ScctLightProbeApiVersion = 2;
+// Version 3: CheckRig added.
+constexpr int32 ScctLightProbeApiVersion = 3;
 
 namespace EScctLightSpotKind
 {
@@ -91,6 +92,26 @@ struct FScctLightSwitch
 
 static_assert(sizeof(FScctLightSwitch) == 116, "FScctLightSwitch must match BridgeLightSwitch");
 
+/** How the lighting plan's actor light rig (Runtime/ScctLightPlanApi.h) agrees with the bots' light field over the sampled floor. */
+struct FScctLightRigCheck
+{
+	/** Floor nodes compared (a standing pawn's centre over each). */
+	int32 Nodes;
+	/**
+	 * The rig asked as the field is built (map lights only, where the map placed them): the largest difference of the
+	 * level and of the level facing a viewer, and how many nodes differ at all. Both run the same rules: 0 is expected.
+	 */
+	float MaxLevel, MaxFacing;
+	int32 Differ;
+	/** The rig as the game asks it (lights where they are now, runtime lights in): the largest difference of the level, and how many nodes differ. */
+	float LiveMaxLevel;
+	int32 LiveDiffer;
+	/** Nodes whose rig is full (four lights), and nodes where a chosen light has a blocked line to the pawn. */
+	int32 Full, Occluded;
+};
+
+static_assert(sizeof(FScctLightRigCheck) == 32, "FScctLightRigCheck must match BridgeLightRigCheck");
+
 struct FScctLightProbeApi
 {
 	int32 Version;
@@ -122,4 +143,7 @@ struct FScctLightProbeApi
 
 	/** The switched lights of the map with the spots of the switch test, on the floor the last FindSpots sampled; how many were written. */
 	int32 (__cdecl* FindSwitchSpots)(FScctLightSwitch* OutSwitches, int32 Capacity);
+
+	/** Compares the plan's actor light rig with the bots' light field on every floor node the last FindSpots sampled; 1 when written. */
+	int32 (__cdecl* CheckRig)(FScctLightRigCheck* OutCheck);
 };

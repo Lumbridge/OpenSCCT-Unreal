@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "Runtime/ScctLightPlanApi.h"
 #include "Test/ScctLightProbeApi.h"
 #include "ScctLightParitySubsystem.generated.h"
 
@@ -115,6 +116,13 @@ private:
 	{
 		FScctLightSpot Spot;
 		FScctLightReading Reading;
+		/**
+		 * The plan's actor light rig at the spot, read with the reading: asked as the simulation's field is built (map
+		 * lights only, where the map placed them), and as the game asks it. Count -1: the bridge gave none.
+		 */
+		FScctLightRig Rig = {};
+		FScctLightRig RigLive = {};
+		bool bRig = false;
 		FVector Centre = FVector::ZeroVector;
 		FTransform Camera;
 		float CameraDistance = 0.0f;
@@ -142,6 +150,8 @@ private:
 
 	/** Places the camera for a spot (the side with the most room) and takes the simulation's reading and prediction there. */
 	void PrepareSpot(FSpot& Entry);
+	/** Logs how the plan classes the map's lights, writes their table and checks the actor light rig against the simulation's field. */
+	void CheckPlanExports();
 	float Predict(const FSpot& At) const;
 	FMeasure& MeasureOf(FSpot& At);
 	const TCHAR* PassName() const;
@@ -175,6 +185,7 @@ private:
 		TLuminance Luminance, float& OutReference, float& OutAround);
 
 	const FScctLightProbeApi* Api = nullptr;
+	const FScctLightPlanApi* PlanApi = nullptr;
 	TArray<FSpot> Spots;
 	EPhase Phase = EPhase::WaitMatch;
 	int32 Index = 0;
