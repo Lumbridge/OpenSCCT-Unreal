@@ -84,4 +84,19 @@ namespace FScctExposure
 
 	/** The same factor with the caller's own bounds, for a light that must keep up over the whole exposure range. */
 	OPENSCCT_API float PictureScale(float Least, float Most);
+
+	/**
+	 * The lighting plan's picture (scct.Light.Plan 1, Play/ScctLightPlan.h): the exposure is manual and one scale for
+	 * every map and place (scct.Light.ExposureScale, 1 by default: no eye, as the original), with no local exposure.
+	 * FlashExposure, FlashScale, PictureScale and WallHold then go by that scale as a constant instead of a reading,
+	 * and the sky dome is not dimmed. Get() is still the reading of the last frame (it should say the same), and
+	 * PictureLevel() is not to be relied on: the engine measures no scene luminance for a manual exposure.
+	 */
+	OPENSCCT_API bool IsFixed();
+
+	/** The fixed scale itself, whether or not the plan is on. */
+	OPENSCCT_API float FixedScale();
+
+	/** The night vision's gain under the plan (scct.Light.NightGain): fixed, where the released picture follows PictureLevel. */
+	OPENSCCT_API float FixedNightGain();
 }

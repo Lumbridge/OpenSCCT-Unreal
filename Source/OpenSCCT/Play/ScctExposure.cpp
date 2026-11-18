@@ -11,6 +11,7 @@
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "OpenSCCT.h"
+#include "Play/ScctLightPlan.h"
 #include "Runtime/ScctFeatures.h"
 #include "SceneView.h"
 #include "SceneViewExtension.h"
@@ -150,7 +151,37 @@ namespace
 		}
 	}
 
+	// ---- the lighting plan's picture (scct.Light.Plan 1): no eye at all ---------------------------------------
+	// The original has no eye: a surface of a given light is the same display value in a cellar and in a lit hall.
+	// Measured with the automatic exposure (light parity, 64 spots a map): the scale ran from 0.48 to 4.76 and
+	// brought lit over dark on AquaE down from 7.7 times in the scene to 2.7 times in the picture. Under the plan
+	// the exposure is manual and one number for every map and every place, the local exposure (which lifts dark
+	// parts of a picture beside bright ones) is off, and what followed the eye (the sky dome's dimming, the flash
+	// lights' scale, the body lights' scale, the wall hold) goes by that one number instead of a reading.
+	TAutoConsoleVariable<float> CVarLightExposureScale(TEXT("scct.Light.ExposureScale"), 1.0f,
+		TEXT("With scct.Light.Plan 1: the fixed exposure scale of every map (scene light times this is the picture before the tone curve). ")
+		TEXT("1 is as dark as the original; more brightens the whole picture alike."));
+	TAutoConsoleVariable<float> CVarLightNightGain(TEXT("scct.Light.NightGain"), 4.0f,
+		TEXT("With scct.Light.Plan 1: the night vision's gain, fixed (the released picture moves it with the exposure's reading)."));
+
+	// A manual exposure without the camera's own settings comes out as 2^bias, measured: with a bias of log2(1.2)
+	// (what the automatic exposure's rule, scale = 1 / (1.2 x 2^EV100), suggests for the project's extended luminance
+	// range) the view's exposure read 1.2000 on every spot of AquaE and the tone ramp agreed. The manual mode leaves
+	// that 1.2 out.
+	constexpr float ExposureManualWhite = 1.0f;
+
+	float ExposureFixedScale()
+	{
+		return FMath::Clamp(CVarLightExposureScale.GetValueOnAnyThread(), 0.05f, 16.0f);
+	}
+
 	// Above the level's own volume (0), below the goggles' (1000, which sets no exposure).
+	// Measured (Test/ScctLightEngineChecks lists the view's volumes): the world places a volume by the priority it has
+	// when it is added and never sorts again, and this one is added with 0 and given its 10 afterwards, so volumes
+	// added later go in front of it whatever their priority: it is applied last and what it sets wins over every
+	// other volume. Left as it is (the released picture depends on it, and the plan's fixed exposure is the safer for
+	// it); a volume that must win over this one has to be added after its priority is set, with a priority above 10,
+	// and still will not, until this one is taken out of the world's list and added again.
 	constexpr float ExposureRangePriority = 10.0f;
 
 	TWeakObjectPtr<APostProcessVolume> ExposureRangeVolume;
@@ -202,15 +233,36 @@ namespace
 			Volume->BlendWeight = 1.0f;
 			Volume->Priority = ExposureRangePriority;
 		}
+		const bool bFixed = FScctLightPlan::IsOn();
 		const float MinEV = CVarExposureMinEV.GetValueOnGameThread();
 		const float MaxEV = FMath::Max(CVarExposureMaxEV.GetValueOnGameThread(), MinEV);
 		FPostProcessSettings& Settings = Volume->Settings;
-		Settings.bOverride_AutoExposureMinBrightness = true;
-		Settings.AutoExposureMinBrightness = MinEV;
-		Settings.bOverride_AutoExposureMaxBrightness = true;
-		Settings.AutoExposureMaxBrightness = MaxEV;
-		Settings.bOverride_AutoExposureBias = true;
-		Settings.AutoExposureBias = CVarExposureBias.GetValueOnGameThread();
+		if (bFixed)
+		{
+			// One exposure for every place: manual, by the bias alone.
+			Settings.bOverride_AutoExposureMethod = true;
+			Settings.AutoExposureMethod = AEM_Manual;
+			Settings.bOverride_AutoExposureApplyPhysicalCameraExposure = true;
+			Settings.AutoExposureApplyPhysicalCameraExposure = false;
+			Settings.bOverride_AutoExposureBias = true;
+			Settings.AutoExposureBias = FMath::Log2(ExposureManualWhite * ExposureFixedScale());
+			// No local exposure: contrast scales of 1 leave every part of the picture at the one exposure.
+			Settings.bOverride_LocalExposureHighlightContrastScale = true;
+			Settings.LocalExposureHighlightContrastScale = 1.0f;
+			Settings.bOverride_LocalExposureShadowContrastScale = true;
+			Settings.LocalExposureShadowContrastScale = 1.0f;
+			Settings.bOverride_LocalExposureDetailStrength = true;
+			Settings.LocalExposureDetailStrength = 1.0f;
+		}
+		else
+		{
+			Settings.bOverride_AutoExposureMinBrightness = true;
+			Settings.AutoExposureMinBrightness = MinEV;
+			Settings.bOverride_AutoExposureMaxBrightness = true;
+			Settings.AutoExposureMaxBrightness = MaxEV;
+			Settings.bOverride_AutoExposureBias = true;
+			Settings.AutoExposureBias = CVarExposureBias.GetValueOnGameThread();
+		}
 
 		// The sky dome, held as dark in the picture as it is at the reference exposure.
 		if (ExposureSky.World.Get() != MapWorld)
@@ -221,7 +273,8 @@ namespace
 		{
 			const float SkyScale = CVarExposureSkyScale.GetValueOnGameThread();
 			const float Scale = LastExposure.load(std::memory_order_relaxed);
-			const float Share = SkyScale > 0.0f && Scale > 0.0f ? FMath::Clamp(SkyScale / Scale, ExposureSkyLeastShare, 1.0f) : 1.0f;
+			// Under the plan the dome is never dimmed: the exposure does not move, so neither does the sky.
+			const float Share = !bFixed && SkyScale > 0.0f && Scale > 0.0f ? FMath::Clamp(SkyScale / Scale, ExposureSkyLeastShare, 1.0f) : 1.0f;
 			if (!FMath::IsNearlyEqual(Share, ExposureSky.Share, 0.002f))
 			{
 				ExposureSky.Share = Share;
@@ -236,9 +289,18 @@ namespace
 			const float Exposure = LastExposure.load(std::memory_order_relaxed);
 			const float Luminance = LastLuminance.load(std::memory_order_relaxed);
 			// With the project's extended luminance range the scale is 1 / (1.2 * 2^EV100).
-			UE_LOG(LogOpenSCCT, Log, TEXT("Exposure: scale %.4f (EV100 %.2f), scene luminance %.5f, picture level %.3f, range %.1f..%.1f, bias %.2f, sky share %.2f"),
-				Exposure, Exposure > 0.0f ? FMath::Log2(1.0f / (1.2f * Exposure)) : 0.0f, Luminance, Exposure * Luminance, MinEV, MaxEV,
-				CVarExposureBias.GetValueOnGameThread(), ExposureSky.Share);
+			if (bFixed)
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("Exposure: scale %.4f (EV100 %.2f), fixed at %.4f by scct.Light.Plan %d (manual, bias %.3f, no local exposure), scene luminance read %.5f, flash scale %.3f, sky share %.2f"),
+					Exposure, Exposure > 0.0f ? FMath::Log2(1.0f / (1.2f * Exposure)) : 0.0f, ExposureFixedScale(), FScctLightPlan::Active(),
+					Settings.AutoExposureBias, Luminance, FScctExposure::FlashScale(), ExposureSky.Share);
+			}
+			else
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("Exposure: scale %.4f (EV100 %.2f), scene luminance %.5f, picture level %.3f, range %.1f..%.1f, bias %.2f, sky share %.2f"),
+					Exposure, Exposure > 0.0f ? FMath::Log2(1.0f / (1.2f * Exposure)) : 0.0f, Luminance, Exposure * Luminance, MinEV, MaxEV,
+					CVarExposureBias.GetValueOnGameThread(), ExposureSky.Share);
+			}
 		}
 		return true;
 	}
@@ -285,8 +347,28 @@ float FScctExposure::SettledPictureLevel()
 	return 0.18f * FMath::Pow(2.0f, CVarExposureBias.GetValueOnGameThread());
 }
 
+bool FScctExposure::IsFixed()
+{
+	return FScctLightPlan::IsOn();
+}
+
+float FScctExposure::FixedScale()
+{
+	return ExposureFixedScale();
+}
+
+float FScctExposure::FixedNightGain()
+{
+	return FMath::Max(CVarLightNightGain.GetValueOnAnyThread(), 0.0f);
+}
+
 float FScctExposure::FlashExposure()
 {
+	if (FScctLightPlan::IsOn())
+	{
+		// The plan's exposure does not move, so there is nothing to settle on: the one number.
+		return ExposureFixedScale();
+	}
 	const float Exposure = LastExposure.load(std::memory_order_relaxed);
 	if (Exposure > 0.0f && (SettledExposure <= 0.0f || FPlatformTime::Seconds() - LastFlashSeconds > FlashSettleSeconds))
 	{
@@ -374,6 +456,10 @@ float FScctExposure::WallHold(const FVector& At, float Candelas, float Radius, f
 
 float FScctExposure::PictureScale(float Least, float Most)
 {
+	if (FScctLightPlan::IsOn())
+	{
+		return FMath::Clamp(ReferenceExposure / ExposureFixedScale(), Least, Most);
+	}
 	const float Exposure = LastExposure.load(std::memory_order_relaxed);
 	return Exposure > 0.0f ? FMath::Clamp(ReferenceExposure / Exposure, Least, Most) : 1.0f;
 }

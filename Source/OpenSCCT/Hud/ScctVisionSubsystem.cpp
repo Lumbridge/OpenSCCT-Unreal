@@ -173,7 +173,11 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 		if (Index == NightIndex && Amount > 0.0f)
 		{
 			const float Level = FScctExposure::PictureLevel();
-			const float Wanted = Level > 0.0f
+			// With the lighting plan's fixed exposure there is no reading to follow (the engine measures no scene
+			// luminance for a manual exposure): the gain is one number.
+			const float Wanted = FScctExposure::IsFixed()
+				? FMath::Clamp(FScctExposure::FixedNightGain(), NightGainLeast, NightGainMost)
+				: Level > 0.0f
 				? FMath::Clamp(NightGainSettled * FMath::Pow(FScctExposure::SettledPictureLevel() / FMath::Max(Level, 0.002f), NightGainSlope), NightGainLeast, NightGainMost)
 				: NightGainSettled;
 			// In the logarithm: the tube opens as fast as it closes.
