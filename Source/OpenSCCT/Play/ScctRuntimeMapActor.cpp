@@ -1,4 +1,5 @@
 #include "Play/ScctRuntimeMapActor.h"
+#include "Play/ScctAuthoredMaterial.h"
 
 #include "Components/PointLightComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -833,6 +834,10 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 					Instance->SetTextureParameterValue(TEXT("Lightmap"), Lightmap);
 				}
 			}
+		}
+		if (Flags && Flags->HasField(TEXT("authored")))
+		{
+			Instance = ScctAuthored::MaterialFor(this, Flags, LightmapOf.FindRef(Key(Name)), RenderFolder, Textures, Name, Instance);
 		}
 		Materials.Add(Instance);
 	}

@@ -337,6 +337,7 @@ def build_materials(material_doc):
         animated["sequences"] += 1
 
     instances = {}
+    authored_import = None
     counts = {}
     folder = DEST + "/Materials"
     for material_name, record in material_doc["materials"].items():
@@ -351,6 +352,17 @@ def build_materials(material_doc):
         lib_clear = getattr(materials_lib, "clear_all_material_instance_parameters", None)
         if lib_clear:
             lib_clear(instance)   # a re-import starts from the parent's defaults, not last time's values
+
+        if "authored" in flags:
+            if authored_import is None:
+                authored_import = unreal.ScctAuthoredMapImport()
+            error = authored_import.apply_definition(instance, json.dumps(flags), lightmap_of.get(key(imported), ""),
+                                                     RENDER, DEST + "/AuthoredTextures")
+            if error:
+                raise RuntimeError("%s: invalid authored material: %s" % (material_name, error))
+            materials_lib.update_material_instance(instance)
+            instances[key(imported)] = instance
+            continue
 
         class_name, look = look_of(record.get("source") or material_name)
         is_additive = key(imported) in additive

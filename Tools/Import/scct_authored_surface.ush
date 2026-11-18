@@ -1,0 +1,178 @@
+// Embedded in the UE custom expression by scct_authored_materials.py.
+// Coordinates in this evaluator are the authored format's Y-up metres.
+struct AuthoredMapping
+{
+    float2 scale, offset, grid, cell;
+    float angle;
+    float2 uv, dx, dy;
+    float3 p, n, weights;
+    bool triplanar;
+
+    float2 Map(float2 original)
+    {
+        float2 q = original * scale + offset - 0.5;
+        float s, c;
+        sincos(angle, s, c);
+        return float2(c*q.x - s*q.y, s*q.x + c*q.y) + 0.5;
+    }
+
+    // Wrap bilinear taps inside this individual frame, even across the repeat seam.
+    float4 Frame(Texture2D tex, float2 coord, int2 size, int level)
+    {
+        float2 pixel = frac(coord) * size - 0.5;
+        int2 base = int2(floor(pixel));
+        int2 a = (base + size) % size;
+        int2 b = (a + 1) % size;
+        int2 origin = int2(cell) * size;
+        float2 f = frac(pixel);
+        return lerp(lerp(tex.Load(int3(origin + a, level)), tex.Load(int3(origin + int2(b.x,a.y), level)), f.x),
+                    lerp(tex.Load(int3(origin + int2(a.x,b.y), level)), tex.Load(int3(origin + b, level)), f.x), f.y);
+    }
+
+    float4 Image(Texture2D tex, SamplerState samp, float2 coord, float2 gx, float2 gy)
+    {
+        if (all(grid == 1)) return tex.SampleGrad(samp, coord, gx, gy);
+        uint w, h, levels;
+        tex.GetDimensions(0, w, h, levels);
+        int2 size = max(int2(1,1), int2(float2(w,h) / grid));
+        // Only aligned power-of-two frame chains have independent cell mips.
+        float last = any((size & (size-1)) != 0) ? 0 : min(log2((float)min(size.x,size.y)), (float)levels-1);
+        float2 sx = gx * size, sy = gy * size;
+        float lod = clamp(0.5 * log2(max(1.0, max(dot(sx,sx),dot(sy,sy)))), 0.0, last);
+        int lo = (int)floor(lod), hi = (int)ceil(lod);
+        return lerp(Frame(tex,coord,size >> lo,lo), Frame(tex,coord,size >> hi,hi), frac(lod));
+    }
+
+    float4 Plane(Texture2D tex, SamplerState samp, float2 plane)
+    {
+        float2 coord = Map(plane);
+        return Image(tex, samp, coord, ddx(coord), ddy(coord));
+    }
+
+    float4 Sample(Texture2D tex, SamplerState samp)
+    {
+        if (!triplanar) return Image(tex, samp, uv, dx, dy);
+        return Plane(tex,samp,p.zy)*weights.x + Plane(tex,samp,p.xz)*weights.y + Plane(tex,samp,p.xy)*weights.z;
+    }
+
+    float Value(float4 sampleValue, float4 binding)
+    {
+        float v = binding.y == 4 ? dot(sampleValue.rgb, float3(0.2126,0.7152,0.0722)) : sampleValue[(int)min(binding.y,3)];
+        return binding.z > 0 ? 1-v : v;
+    }
+
+    float Scalar(Texture2D tex, SamplerState samp, float4 binding)
+    {
+        return binding.x > 0 ? Value(Sample(tex,samp), binding) : 1;
+    }
+
+    float3 Normal(Texture2D tex, SamplerState samp, float2 strength)
+    {
+        if (!triplanar) return (Image(tex,samp,uv,dx,dy).rgb*2-1) * float3(strength,1);
+        float3 x = (Plane(tex,samp,p.zy).rgb*2-1)*float3(strength,1);
+        float3 y = (Plane(tex,samp,p.xz).rgb*2-1)*float3(strength,1);
+        float3 z = (Plane(tex,samp,p.xy).rgb*2-1)*float3(strength,1);
+        return normalize(float3(x.z*sign(n.x),x.y,x.x)*weights.x + float3(y.x,y.z*sign(n.y),y.y)*weights.y
+            + float3(z.x,z.y,z.z*sign(n.z))*weights.z);
+    }
+
+    float Height(Texture2D tex, SamplerState samp, float4 binding, float2 coord)
+    {
+        return Value(Image(tex,samp,coord,dx,dy), binding);
+    }
+
+    void Parallax(Texture2D tex, SamplerState samp, float4 binding, float3 view, float depth, float steps)
+    {
+        int count = min(64, (int)(steps * (2-saturate(abs(view.z)))));
+        float stepDepth = 1.0/count;
+        float2 shift = view.xy / max(abs(view.z),0.15) * depth;
+        float low = 0, high = 0;
+        float gap = 1-Height(tex,samp,binding,uv), previousGap = gap;
+        [loop] for (int i=0; i<count && gap>0; ++i)
+        {
+            low = high; previousGap = gap; high += stepDepth;
+            gap = 1-Height(tex,samp,binding,uv-shift*high)-high;
+        }
+        [unroll] for (int j=0; j<4; ++j)
+        {
+            float mid = (low+high)*0.5;
+            float g = 1-Height(tex,samp,binding,uv-shift*mid)-mid;
+            if (g>0) { low=mid; previousGap=g; } else { high=mid; gap=g; }
+        }
+        uv -= shift * lerp(low,high,saturate(previousGap/max(previousGap-gap,1e-6)));
+    }
+};
+
+// All authored images use repeat + trilinear filtering. Share a sampler across the twelve slots.
+AuthoredMapping m;
+m.scale = Mapping.xy;
+m.offset = Mapping.zw + Motion.xy*Clock;
+m.angle = Rotation + Motion.z*Clock;
+m.grid = Atlas.xy;
+float period = PingPong && Atlas.z>1 ? 2*Atlas.z-2 : Atlas.z;
+float tick = max(0.0, floor(Clock*Atlas.w + Motion.w));
+float frame = Looping ? fmod(tick,period) : min(tick, PingPong && Atlas.z>1 ? period : period-1);
+if (frame>=Atlas.z) frame = period-frame;
+m.cell = float2(fmod(frame,Atlas.x),floor(frame/Atlas.x));
+m.triplanar = Triplanar > 0;
+m.p = Position.xzy * 0.01;
+m.n = normalize(Parameters.TangentToWorld[2].xzy);
+m.weights = pow(abs(m.n),4);
+m.weights /= max(dot(m.weights,float3(1,1,1)),1e-6);
+m.uv = m.Map(UV);
+m.dx = ddx(m.uv); m.dy = ddy(m.uv);
+float3 dp = ddx(m.p), dq = ddy(m.p);
+float handed = m.dx.x*m.dy.y-m.dx.y*m.dy.x < 0 ? -1 : 1;
+float3 t = dp*m.dy.y - dq*m.dx.y;
+if (dot(t,t)<1e-12) t = Parameters.TangentToWorld[0].xzy;
+t = normalize(t)*handed;
+float3 b = normalize(cross(m.n,t))*handed;
+float3 view = normalize(Eye.xzy);
+if (B_height.x && ParallaxDepth>0 && !m.triplanar)
+    m.Parallax(T_height,T_baseColorSampler,B_height,float3(dot(view,t),dot(view,b),dot(view,m.n)),ParallaxDepth,ParallaxSteps);
+
+float4 base = B_baseColor.x ? m.Sample(T_baseColor,T_baseColorSampler) : float4(1,1,1,1);
+base.rgb *= BaseFactor;
+if (B_detailColor.x) base.rgb *= lerp(1,2*m.Sample(T_detailColor,T_baseColorSampler).rgb,DetailStrength);
+Alpha = saturate(base.a * Opacity * m.Scalar(T_opacity,T_baseColorSampler,B_opacity));
+float ySign = NormalDirectX ? -1 : 1;
+float3 normal = m.triplanar ? m.n : float3(0,0,1);
+if (B_normal.x) normal = m.Normal(T_normal,T_baseColorSampler, NormalStrength*float2(1,ySign));
+else if (B_height.x && BumpFromHeight)
+{
+    if (m.triplanar)
+    {
+        float h = m.Scalar(T_height,T_baseColorSampler,B_height);
+        float3 r1 = cross(dq,m.n), r2 = cross(m.n,dp);
+        float det = dot(dp,r1);
+        normal = normalize(m.n - (r1*ddx(h)+r2*ddy(h))*sign(det)*NormalStrength/max(abs(det),1e-6));
+    }
+    else
+    {
+        uint w,h; T_height.GetDimensions(w,h);
+        float2 texel = m.grid/float2(w,h);
+        float center = m.Height(T_height,T_baseColorSampler,B_height,m.uv);
+        normal.xy = NormalStrength*(center-float2(m.Height(T_height,T_baseColorSampler,B_height,m.uv+float2(texel.x,0)),
+                                                   m.Height(T_height,T_baseColorSampler,B_height,m.uv+float2(0,texel.y))));
+    }
+}
+if (B_detailNormal.x && DetailStrength>0)
+{
+    float3 d = m.Normal(T_detailNormal,T_baseColorSampler,float2(1,ySign));
+    normal = m.triplanar ? normal+(d-m.n)*DetailStrength : float3(normal.xy+d.xy*DetailStrength,normal.z*d.z);
+}
+normal = normalize(m.triplanar ? normal : normal.x*t + normal.y*b + normal.z*m.n);
+WorldNormal = normal.xzy;
+Rough = clamp(Roughness*m.Scalar(T_roughness,T_baseColorSampler,B_roughness),0.04,1);
+float metal = Metallic*m.Scalar(T_metallic,T_baseColorSampler,B_metallic);
+F0 = lerp(0.08*SpecularColor*Specular*m.Scalar(T_specular,T_baseColorSampler,B_specular), base.rgb, metal);
+AO = lerp(1,m.Scalar(T_ao,T_baseColorSampler,B_ao),AoStrength);
+Light = EmissionColor*EmissionEnergy*(B_emission.x ? m.Sample(T_emission,T_baseColorSampler).rgb : 1);
+if (B_environment.x)
+{
+    float3 r = reflect(-view,normal);
+    float2 envUV = float2(atan2(r.z,r.x)/6.2831853+0.5,acos(clamp(r.y,-1,1))/3.14159265);
+    Light += T_environment.SampleLevel(T_baseColorSampler,envUV,Rough*7).rgb
+        * (F0+(1-F0)*pow(1-saturate(dot(view,normal)),5))*AO;
+}
+return Unlit ? base.rgb*AO : base.rgb*(1-metal);
