@@ -101,7 +101,7 @@ TSharedPtr<SScctStrategicMapPage> SScctMatchMenu::ShowStrategicMap(bool bOnly)
 	}
 	bPageOnly = bOnly;
 	const TSharedPtr<SScctStrategicMapPage> Page = SScctStrategicMapPage::Open(PageLayer.ToSharedRef(), EScctMapContext::Match, FString(), true,
-		FSimpleDelegate::CreateLambda([this] { if (bPageOnly && bOpen) { OnResume.ExecuteIfBound(); } bPageOnly = false; FocusDefault(); }));
+		FSimpleDelegate::CreateLambda([this] { if (bPageOnly && bOpen) { OnResume.ExecuteIfBound(); } bPageOnly = false; FocusDefault(); }), World);
 	if (!Page.IsValid())
 	{
 		bPageOnly = false;

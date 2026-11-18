@@ -1,5 +1,12 @@
 #include "Menu/SScctStrategicMapPage.h"
 #include "Menu/ScctMenuNav.h"
+#include "Menu/SScctStrategicMap3D.h"
+#include "Menu/ScctMenuKit.h"
+#include "Engine/World.h"
+#include "Play/ScctPlayerController.h"
+#include "Widgets/Layout/SScaleBox.h"
+#include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
 
 #include "Brushes/SlateColorBrush.h"
 #include "Brushes/SlateDynamicImageBrush.h"
@@ -35,7 +42,7 @@ namespace
 	constexpr float StrategicMapYouUnits = 20.0f;
 	constexpr float StrategicMapMateUnits = 32.0f;
 	constexpr float StrategicMapLegendWidth = 300.0f;
-	constexpr float StrategicMapFloorsWidth = 150.0f;
+	constexpr float StrategicMapFloorsWidth = 128.0f;
 
 	/** GUI.StrategicMap defaults ShowSpotColor, HideSpotColor, ShowTeamMateColor, HideTeamMateColor. */
 	FLinearColor StrategicMapSpot(bool bBright)
@@ -270,7 +277,7 @@ private:
 };
 
 TSharedPtr<SScctStrategicMapPage> SScctStrategicMapPage::Open(const TSharedRef<SOverlay>& Host, int32 Context, const FString& Map, bool bOwnKeys,
-	FSimpleDelegate OnClosed)
+	FSimpleDelegate OnClosed, TWeakObjectPtr<UWorld> MatchWorld)
 {
 	if (const TSharedPtr<SScctStrategicMapPage> Already = FindOpen(Host))
 	{
@@ -286,6 +293,7 @@ TSharedPtr<SScctStrategicMapPage> SScctStrategicMapPage::Open(const TSharedRef<S
 
 	TSharedRef<SScctStrategicMapPage> Page = SNew(SScctStrategicMapPage)
 		.bOwnKeys(bOwnKeys)
+		.MatchWorld(MatchWorld)
 		.OnClosed(OnClosed);
 	Page->Host = Host;
 	if (FSlateApplication::IsInitialized())
@@ -326,6 +334,14 @@ void SScctStrategicMapPage::Construct(const FArguments& InArgs)
 		Places.SetNumZeroed(Api->ListPlaces(nullptr, 0));
 		Api->ListPlaces(Places.GetData(), Places.Num());
 	}
+	SAssignNew(Iso, SScctStrategicMap3D, &State, &Places, InArgs._MatchWorld);
+	if (InArgs._MatchWorld.IsValid())
+	{
+		if (const AScctPlayerController* PC = Cast<AScctPlayerController>(InArgs._MatchWorld->GetFirstPlayerController()))
+		{
+			MapKeys = PC->FindKeysBoundTo(TEXT("DisplayStrategicMap"));
+		}
+	}
 	Refresh();
 
 	const auto FloorButton = [this](const TCHAR* Caption, bool bUp)
@@ -345,83 +361,114 @@ void SScctStrategicMapPage::Construct(const FArguments& InArgs)
 			.Image(&Dim)
 			.ColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.6f))
 		]
-		+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center).Padding(24.0f)
+		+ SOverlay::Slot().Padding(20.0f)
 		[
-			Ui::Glass(
-				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 24.0f, 0.0f)
+			SNew(SScaleBox).Stretch(EStretch::ScaleToFit).StretchDirection(EStretchDirection::DownOnly)
+			.HAlign(HAlign_Center).VAlign(VAlign_Center)
+			[
+				Ui::Glass(
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
 					[
-						Ui::Title(Ui::ToText(TEXT("STRATEGIC MAP")), 26.0f)
-					]
-					+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right).VAlign(VAlign_Center)
-					[
-						SNew(STextBlock)
-						.Font(ScctHudStyle::Label(10.0f))
-						.ColorAndOpacity(ScctHudStyle::TextDim())
-						.Text(Ui::ToText(FString(State.Map).ToUpper()))
-					]
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 16.0f)[ Ui::Rule() ]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(SHorizontalBox)
-					// GUI.StrategicMap: Up above Down, at the picture's lower left, for a map with more than one floor.
-					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom).Padding(0.0f, 0.0f, 24.0f, 0.0f)
-					[
-						SNew(SBox)
-						.WidthOverride(StrategicMapFloorsWidth)
-						.Visibility(State.FloorCount > 1 ? EVisibility::Visible : EVisibility::Hidden)
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 24.0f, 0.0f)
 						[
-							SNew(SVerticalBox)
-							+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 0.0f, 0.0f, 10.0f)
+							Ui::Title(Ui::ToText(TEXT("STRATEGIC MAP")), 26.0f)
+						]
+						+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right).VAlign(VAlign_Center)
+						[
+							SNew(STextBlock)
+							.Font(ScctHudStyle::Label(10.0f))
+							.ColorAndOpacity(ScctHudStyle::TextDim())
+							.Text(Ui::ToText(FString(State.Map).ToUpper()))
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 16.0f)[ Ui::Rule() ]
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 20, 0)
+						[
+							SNew(SWidgetSwitcher).WidgetIndex_Lambda([this] { return Shows3D() ? 0 : 1; })
+							+ SWidgetSwitcher::Slot()[ Iso.ToSharedRef() ]
+							+ SWidgetSwitcher::Slot()[ SNew(SScctStrategicMapView, &State, &Places) ]
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Fill)
+						[
+							SNew(SBox).WidthOverride(StrategicMapLegendWidth).MaxDesiredHeight(StrategicMapSide)
 							[
-								Ui::Text(TAttribute<FText>::CreateLambda([this]
-								{
-									return Ui::ToText(FString::Printf(TEXT("Floor %d / %d"), State.Floor + 1, State.FloorCount));
-								}), 13.0f, FSlateColor(ScctHudStyle::Text()))
-							]
-							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ FloorButton(TEXT("UP"), true) ]
-							+ SVerticalBox::Slot().AutoHeight()[ FloorButton(TEXT("DOWN"), false) ]
-						]
-					]
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 24.0f, 0.0f)
-					[
-						SNew(SScctStrategicMapView, &State, &Places)
-					]
-					// The legend beside the picture.
-					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top)
-					[
-						SNew(SBox)
-						.WidthOverride(StrategicMapLegendWidth)
-						[
-							Ui::Glass(
 								SNew(SVerticalBox)
-								+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ Ui::Label(TEXT("LEGEND")) ]
-								+ SVerticalBox::Slot().AutoHeight()
+								+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
 								[
-									Ui::Text(Ui::ToText(Legend.IsEmpty() ? FString(TEXT("This map has no legend.")) : Legend), 12.5f,
-										FSlateColor(Legend.IsEmpty() ? ScctHudStyle::TextDim() : ScctHudStyle::Text()), ScctHudStyle::EWeight::Regular, true)
-								], FMargin(18.0f), 0.5f)
+									Ui::Text(TAttribute<FText>::CreateLambda([this]
+									{
+										return Ui::ToText(State.FloorCount > 0 ? FString::Printf(TEXT("Floor %d / %d"), State.Floor + 1, State.FloorCount) : FString(State.Map));
+									}), 18)
+								]
+								+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
+								[
+									SNew(SHorizontalBox).Visibility(State.FloorCount > 1 ? EVisibility::Visible : EVisibility::Collapsed)
+									+ SHorizontalBox::Slot().AutoWidth().Padding(0,0,8,0)[ FloorButton(TEXT("DOWN"), false) ]
+									+ SHorizontalBox::Slot().AutoWidth()[ FloorButton(TEXT("UP"), true) ]
+								]
+								+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
+								[
+									SNew(SBox).Visibility_Lambda([this] { return Iso->HasGeometry() && State.HasPicture ? EVisibility::Visible : EVisibility::Collapsed; })
+									[
+										Ui::Button(TAttribute<FText>::CreateLambda([this] { return Ui::ToText(Shows3D() ? TEXT("FLOOR PLAN") : TEXT("3D MAP")); }),
+											FOnClicked::CreateSP(this, &SScctStrategicMapPage::ToggleView))
+									]
+								]
+								+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
+								[
+									SNew(SBox).Visibility_Lambda([this] { return Shows3D() ? EVisibility::Visible : EVisibility::Collapsed; })
+									[
+										SNew(SVerticalBox)
+										+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+										[
+											Ui::Text(TAttribute<FText>::CreateLambda([]
+											{
+												return Ui::ToText(ScctUi::IsPadActive()
+													? TEXT("D-pad to pan, bumpers to orbit\nTriggers to zoom, Y / X for floors\nPress left stick for floor plan, right to reset")
+													: TEXT("Drag to orbit, Shift-drag to pan\nScroll to zoom, PgUp / PgDn for floors"));
+											}), 12, FSlateColor(ScctHudStyle::TextDim()))
+										]
+										+ SVerticalBox::Slot().AutoHeight()
+										[
+											Ui::Button(Ui::ToText(TEXT("RESET VIEW")), FOnClicked::CreateLambda([this]{ Iso->ResetCamera(); return FReply::Handled(); }))
+										]
+									]
+								]
+								+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)[ Ui::Rule() ]
+								+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)[ Ui::Label(TEXT("LEGEND")) ]
+								+ SVerticalBox::Slot().FillHeight(1)
+								[
+									SNew(SScrollBox)
+									+ SScrollBox::Slot()
+									[
+										Ui::Text(Ui::ToText(Legend.IsEmpty() ? FString(TEXT("This map has no legend.")) : Legend), 12.5f,
+											FSlateColor(ScctHudStyle::Text()), ScctHudStyle::EWeight::Regular, true)
+									]
+								]
+							]
 						]
 					]
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 16.0f, 0.0f, 12.0f)[ Ui::Rule() ]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth()
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 16.0f, 0.0f, 12.0f)[ Ui::Rule() ]
+					+ SVerticalBox::Slot().AutoHeight()
 					[
-						Ui::Button(Ui::ToText(TEXT("BACK")), FOnClicked::CreateLambda([this] { Close(); return FReply::Handled(); }), false, Ui::Accent(), 150.0f)
-					]
-					+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right).VAlign(VAlign_Center)
-					[
-						Ui::Text(Ui::ToText(State.Live != 0 ? TEXT("You are the white marker; your team mates are orange.") : TEXT("The lobby's map, before the round.")),
-							11.5f, FSlateColor(ScctHudStyle::TextDim()))
-					]
-				], FMargin(30.0f, 26.0f), 0.82f)
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth()
+						[
+							Ui::Button(Ui::ToText(TEXT("BACK")), FOnClicked::CreateLambda([this] { Close(); return FReply::Handled(); }), false, Ui::Accent(), 150.0f)
+						]
+						+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right).VAlign(VAlign_Center)
+						[
+							Ui::Text(TAttribute<FText>::CreateLambda([this] { return Ui::ToText(Shows3D() ? TEXT("White arrow  �  You       Orange ring  �  Teammate       Diamond  �  Objective")
+								: (State.Live ? TEXT("White  �  You       Orange  �  Teammate") : TEXT("Lobby overview"))); }),
+								11.5f, FSlateColor(ScctHudStyle::TextDim()))
+						]
+					], FMargin(30.0f, 26.0f), 0.82f)
+			]
 		]
 	];
 }
@@ -448,6 +495,33 @@ void SScctStrategicMapPage::Tick(const FGeometry& AllottedGeometry, const double
 		Api->Tick();
 	}
 	Refresh();
+}
+
+bool SScctStrategicMapPage::Shows3D() const
+{
+	return Iso.IsValid() && Iso->HasGeometry() && (!bFloorPlan || !State.HasPicture);
+}
+
+FReply SScctStrategicMapPage::ToggleView()
+{
+	if (State.HasPicture && Iso->HasGeometry()) bFloorPlan = !bFloorPlan;
+	return FReply::Handled().SetUserFocus(SharedThis(this), EFocusCause::SetDirectly);
+}
+
+FReply SScctStrategicMapPage::OnPreviewKeyDown(const FGeometry&, const FKeyEvent& Event)
+{
+	const FKey Key = Event.GetKey();
+	ScctUi::NoteInput(Key);
+	if (MapKeys.Contains(Key))
+	{
+		if (!Event.IsRepeat()) Close();
+		return FReply::Handled();
+	}
+	if (Key == EKeys::PageUp || Key == EKeys::Gamepad_FaceButton_Top) { FloorUp(); return FReply::Handled(); }
+	if (Key == EKeys::PageDown || Key == EKeys::Gamepad_FaceButton_Left) { FloorDown(); return FReply::Handled(); }
+	if (Key == EKeys::Gamepad_LeftThumbstick && State.Live) return ToggleView();
+	if (Shows3D() && Iso->Navigate(Key)) return FReply::Handled();
+	return FReply::Unhandled();
 }
 
 FReply SScctStrategicMapPage::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
@@ -545,5 +619,8 @@ void SScctStrategicMapPage::Refresh()
 	if (const FScctMapApi* Api = ScctFeature<FScctMapApi>())
 	{
 		Api->GetState(&State);
+		Iso->ReadFloor(*Api);
+		Iso->Invalidate(EInvalidateWidgetReason::Paint);
+		Invalidate(EInvalidateWidgetReason::Paint);
 	}
 }

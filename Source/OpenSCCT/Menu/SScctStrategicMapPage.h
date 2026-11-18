@@ -7,25 +7,10 @@
 
 class SOverlay;
 
-/**
- * The Strategic map page (gaps 45 and 131), as the Godot client's StrategicMapScreen lays it out (GUI.StrategicMap):
- *
- *   Picture   the shown floor's picture (svmap/<map>/ui/strategicmap/floor<n>.png, read from the converted content
- *             when the page first shows it), the map's numbered places on it, and in a round the "you are here"
- *             marker (a dot with a view cone the way the player faces) and a marker for each team mate on that floor,
- *             blinking bright and dim every half second; "No map picture" when the floor is not converted
- *   Floors    "Floor n / m" with Up and Down, for a map with more than one floor; the page opens on the player's
- *   Legend    the map's legend (its rooms by number), beside the picture
- *   Back      closes it
- *
- * The rules are the bridge's (Runtime/ScctMapApi.h over the Godot StrategicMapModel). In a match it opens on the
- * DisplayStrategicMap binding (F7 by default; Menu/ScctMatchCommands.h, when the player's state allows it), from
- * STRATEGIC MAP in the in-match menu, and closes on the same key, Escape or Back. In a lobby it opens from the
- * lobby's STRATEGIC MAP as a plain overview of the lobby's map, without markers; Escape and the right mouse button
- * close it there.
- *
- * It opens over a host overlay, dimming what is behind, like the Equipment page (Menu/SScctGearPage.h).
- */
+class SScctStrategicMap3D;
+class UWorld;
+
+/** The lobby floor plan and the match's interactive cutaway. Both views share the page's floor and team samples. */
 class SScctStrategicMapPage : public SCompoundWidget
 {
 public:
@@ -34,6 +19,7 @@ public:
 	{}
 		/** The page takes the keyboard and closes itself on Escape and the right mouse button (the lobby). In a match the viewport keeps the keyboard: Escape comes through Close. */
 		SLATE_ARGUMENT(bool, bOwnKeys)
+		SLATE_ARGUMENT(TWeakObjectPtr<UWorld>, MatchWorld)
 		/** Raised whenever the page closes. */
 		SLATE_EVENT(FSimpleDelegate, OnClosed)
 	SLATE_END_ARGS()
@@ -43,7 +29,7 @@ public:
 	 * played, EScctMapContext::Lobby for Map (empty: the lobby's own). Null when the bridge cannot open it (logged).
 	 */
 	static TSharedPtr<SScctStrategicMapPage> Open(const TSharedRef<SOverlay>& Host, int32 Context, const FString& Map, bool bOwnKeys,
-		FSimpleDelegate OnClosed = FSimpleDelegate());
+		FSimpleDelegate OnClosed = FSimpleDelegate(), TWeakObjectPtr<UWorld> MatchWorld = {});
 
 	/** The page open over Host, if any. */
 	static TSharedPtr<SScctStrategicMapPage> FindOpen(const TSharedRef<SOverlay>& Host);
@@ -51,6 +37,7 @@ public:
 	void Construct(const FArguments& InArgs);
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 	virtual bool SupportsKeyboardFocus() const override { return bOwnKeys; }
+	virtual FReply OnPreviewKeyDown(const FGeometry&, const FKeyEvent& KeyEvent) override;
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
 	/** The D-pad and the stick stay on this page: the menu's entries under it are not where they go. */
 	virtual FNavigationReply OnNavigation(const FGeometry& MyGeometry, const FNavigationEvent& InNavigationEvent) override { return FNavigationReply::Stop(); }
@@ -72,6 +59,11 @@ public:
 
 private:
 	void Refresh();
+	bool Shows3D() const;
+	FReply ToggleView();
+	TSharedPtr<SScctStrategicMap3D> Iso;
+	TArray<FKey> MapKeys;
+	bool bFloorPlan = false;
 
 	TWeakPtr<SOverlay> Host;
 	TWeakPtr<SWidget> FocusBefore;
