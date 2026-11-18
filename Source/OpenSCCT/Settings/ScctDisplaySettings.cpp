@@ -127,8 +127,10 @@ TArray<FIntPoint> UScctDisplaySettings::ResolutionChoices(const UGameUserSetting
 	TArray<FIntPoint> Sizes;
 	const FMonitorInfo* Info = TargetMonitor(Settings);
 	FScreenResolutionArray Modes;
-	if (GDynamicRHI && Info && RHIGetAvailableResolutionsForDisplay(Modes, true, Info->NativeHandle))
+	if (GDynamicRHI)
 	{
+		if (Info && Info->NativeHandle) { RHIGetAvailableResolutionsForDisplay(Modes, true, Info->NativeHandle); }
+		else { RHIGetAvailableResolutions(Modes, true); }
 		for (const FScreenResolutionRHI& Available : Modes)
 		{
 			if (Available.Width > 0 && Available.Height > 0)
@@ -161,7 +163,23 @@ void UScctDisplaySettings::ApplyResolution(UGameUserSettings& Settings)
 		// The requested mode can already match r.SetRes even though the actual window was created at another size.
 		if (!FApp::IsUnattended()) { GSystemResolution.ForceRefresh(); }
 	}
-	if (!FApp::IsUnattended()) { Settings.ApplyResolutionSettings(false); }
+	if (!FApp::IsUnattended())
+	{
+		// With no explicit monitor, UE selects the primary for exclusive fullscreen. Use the display
+		// whose modes the dropdown offered even if the window was dragged to a secondary screen.
+		const bool bFollowWindow = Settings.GetFullscreenMode() == EWindowMode::Fullscreen
+			&& Settings.GetDisplayIndex() == INDEX_NONE && Settings.GetDisplayID().IsEmpty();
+		if (bFollowWindow)
+		{
+			if (const FMonitorInfo* Info = TargetMonitor(Settings))
+			{
+				const auto& Monitors = FSlateApplication::Get().GetCachedDisplayMetricsByRef().MonitorInfo;
+				Settings.SetDisplayProperties(Info->ID, static_cast<int32>(Info - Monitors.GetData()));
+			}
+		}
+		Settings.ApplyResolutionSettings(false);
+		if (bFollowWindow) { Settings.SetDisplayProperties(FString(), INDEX_NONE); }
+	}
 }
 
 void UScctDisplaySettings::Initialize(FSubsystemCollectionBase& Collection)

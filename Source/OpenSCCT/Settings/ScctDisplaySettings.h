@@ -2,9 +2,9 @@
 
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
+#include "GenericPlatform/GenericWindow.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "ScctDisplaySettings.generated.h"
-
 class UGameUserSettings;
 
 /**

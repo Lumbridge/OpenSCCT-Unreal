@@ -139,6 +139,28 @@ namespace
 
 	FString Percent(float Value) { return FString::Printf(TEXT("%d %%"), FMath::RoundToInt32(Value)); }
 	FText ResolutionText(FIntPoint Size) { return FText::FromString(FString::Printf(TEXT("%d x %d"), Size.X, Size.Y)); }
+	FText ResolutionLabel() { return FText::FromString(ScctUi::GameLabel(TEXT("Video_Settings"), TEXT("NUMResolution.Caption"), TEXT("Screen Resolution"))); }
+
+	class SScctResolutionCombo : public SComboBox<TSharedPtr<FIntPoint>>
+	{
+		using Super = SComboBox<TSharedPtr<FIntPoint>>;
+	public:
+		virtual FReply OnFocusReceived(const FGeometry& Geometry, const FFocusEvent& Event) override
+		{
+			DescribeResolution();
+			return Super::OnFocusReceived(Geometry, Event);
+		}
+		virtual void OnMouseEnter(const FGeometry& Geometry, const FPointerEvent& Event) override
+		{
+			Super::OnMouseEnter(Geometry, Event);
+			DescribeResolution();
+		}
+	private:
+		static void DescribeResolution()
+		{
+			ScctUi::Describe(ResolutionLabel(), FText::FromString(TEXT("Choose a size in pixels, then select Apply display. Borderless uses the desktop size.")));
+		}
+	};
 	FString Times(float Value) { return FString::Printf(TEXT("%.2f x"), Value); }
 }
 
@@ -543,13 +565,13 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 		SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(18, 4, 12, 4)
 		[
-			ScctUi::Text(FText::FromString(ScctUi::GameLabel(TEXT("Video_Settings"), TEXT("NUMResolution.Caption"), TEXT("Screen Resolution"))), ScctUi::Body())
+			ScctUi::Text(ResolutionLabel(), ScctUi::Body())
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 16, 0)
 		[
 			SNew(SBox).WidthOverride(SScctOptionRow::ControlWidth)
 			[
-				SAssignNew(ResolutionCombo, SComboBox<TSharedPtr<FIntPoint>>)
+				SAssignNew(ResolutionCombo, SScctResolutionCombo)
 				.OptionsSource(&Sizes)
 				.Method(EPopupMethod::UseCurrentWindow)
 				.EnableGamepadNavigationMode(true)
