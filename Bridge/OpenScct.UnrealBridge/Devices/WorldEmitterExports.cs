@@ -8,6 +8,8 @@ using OpenScct.Core;
 using OpenScct.Core.Engine;
 using OpenScct.Game.SBase;
 using OpenScct.UnrealBridge.Devices;
+using OpenScct.UnrealBridge.Pose;
+using System.Numerics;
 
 namespace OpenScct.UnrealBridge;
 
@@ -67,8 +69,7 @@ public static class BridgeWorldEmitterFlags
 /// game/Scripts/Views/AttachedEffects.cs for emitters (the lights are in <see cref="WorldState"/>). Each map Emitter
 /// is followed after every tick; one based on a mover is handed out at its place blended between the last two ticks
 /// (the simulation carries a soft rider with its base), one hung on a bone goes out as the bone and its relative
-/// transform, because the simulation has no posed skeleton and Unreal hangs it on the drawn bone. Not ported: the
-/// bHardAttach frame (HardRelMatrix), which no Enhanced map sets. It reads the simulation and never writes it.
+/// transform, because the simulation has no posed skeleton and Unreal hangs it on the drawn bone. A hard rider without a bone retains its transform in the interpolated base frame. It reads the simulation and never writes it.
 /// </summary>
 public sealed class WorldEmitters
 {
@@ -172,6 +173,11 @@ public sealed class WorldEmitters
         private FVector _location = actor.Location;
         private FRotator _prevRotation = actor.Rotation;
         private FRotator _rotation = actor.Rotation;
+        private Actor? _hardBase;
+        private Xform _relative, _previousBase, _currentBase;
+
+        private static Xform Frame(Actor a) => new(RenderSpace.Rotation(a.Rotation), RenderSpace.Direction(a.Location));
+
         private Name _boneName;
         private int _boneId;
 
@@ -184,6 +190,22 @@ public sealed class WorldEmitters
             _prevRotation = _rotation;
             _location = actor.Location;
             _rotation = actor.Rotation;
+            Actor? parent = actor.bHardAttach && actor.AttachmentBone.IsNone ? actor.Base : null;
+            if (parent is not { bWorldGeometry: false, bDeleteMe: false })
+            {
+                _hardBase = null;
+                return;
+            }
+
+            Xform now = Frame(parent);
+            _previousBase = _currentBase;
+            if (!ReferenceEquals(parent, _hardBase))
+            {
+                _hardBase = parent;
+                _relative = now.AffineInverse() * Frame(actor);
+                _previousBase = now;
+            }
+            _currentBase = now;
         }
 
         public BridgeWorldEmitter Draw(WorldState world, float alpha)
@@ -229,6 +251,20 @@ public sealed class WorldEmitters
                 drawn.Pitch = actor.RelativeRotation.Pitch * RotatorToDegrees;
                 drawn.Yaw = actor.RelativeRotation.Yaw * RotatorToDegrees;
                 drawn.Roll = actor.RelativeRotation.Roll * RotatorToDegrees;
+                return drawn;
+            }
+
+            if (ReferenceEquals(based, _hardBase))
+            {
+                Quaternion turn = Quat.Slerp(_previousBase.Basis.GetRotationQuaternion(), _currentBase.Basis.GetRotationQuaternion(), alpha);
+                Xform parent = new(Basis3.FromQuaternion(turn), Vector3.Lerp(_previousBase.Origin, _currentBase.Origin, alpha));
+                Xform frame = parent * _relative;
+                FVector at = RenderSpace.DirectionToUe(frame.Origin);
+                FRotator rotation = PoseCameraBones.OrthoRotation(RenderSpace.DirectionToUe(frame.Basis.X),
+                    RenderSpace.DirectionToUe(frame.Basis.Z), RenderSpace.DirectionToUe(frame.Basis.Y));
+                (drawn.X, drawn.Y, drawn.Z) = (at.X, at.Y, at.Z);
+                (drawn.Pitch, drawn.Yaw, drawn.Roll) = (rotation.Pitch * RotatorToDegrees,
+                    rotation.Yaw * RotatorToDegrees, rotation.Roll * RotatorToDegrees);
                 return drawn;
             }
 

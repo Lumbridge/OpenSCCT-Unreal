@@ -145,7 +145,7 @@ public sealed class MapRenderIndex
         return index;
     }
 
-    private void ReadInstances(string path)
+    internal static JsonDocument ReadGlbJson(string path)
     {
         using FileStream file = File.OpenRead(path);
         Span<byte> header = stackalloc byte[20];
@@ -164,7 +164,12 @@ public sealed class MapRenderIndex
 
         byte[] json = new byte[length];
         file.ReadExactly(json);
-        using JsonDocument doc = JsonDocument.Parse(json);
+        return JsonDocument.Parse(json);
+    }
+
+    private void ReadInstances(string path)
+    {
+        using JsonDocument doc = ReadGlbJson(path);
         if (!doc.RootElement.TryGetProperty("extras", out JsonElement extras) ||
             !extras.TryGetProperty("svmap", out JsonElement svmap) ||
             !svmap.TryGetProperty("instances", out JsonElement instances))

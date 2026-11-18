@@ -9,6 +9,8 @@ public class OpenSCCT : ModuleRules
 
 		// Headers are included by their path from the module folder ("Play/ScctGameMode.h").
 		PublicIncludePaths.Add(ModuleDirectory);
+		// The runtime level and the editor importer use the same panorama, moon and fog definitions.
+		RuntimeDependencies.Add("$(ProjectDir)/Tools/Import/map_skies.json", StagedFileType.UFS);
 
 		PublicDependencyModuleNames.AddRange(new[]
 		{

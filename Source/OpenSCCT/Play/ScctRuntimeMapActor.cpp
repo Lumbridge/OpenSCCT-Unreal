@@ -5,6 +5,17 @@
 #include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Dom/JsonObject.h"
+#include "Camera/PlayerCameraManager.h"
+#include "EngineUtils.h"
+#include "Engine/DirectionalLight.h"
+#include "Engine/SkyLight.h"
+#include "Engine/ExponentialHeightFog.h"
+#include "Engine/TextureCube.h"
+#include "Components/DirectionalLightComponent.h"
+#include "Components/SkyLightComponent.h"
+#include "Components/ExponentialHeightFogComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "StaticMeshOperations.h"
 #include "Engine/Level.h"
 #include "Engine/LevelStreaming.h"
 #include "Engine/PointLight.h"
@@ -355,8 +366,241 @@ void UScctRuntimeMapSubsystem::Deinitialize()
 
 AScctRuntimeMapActor::AScctRuntimeMapActor()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
+	PrimaryActorTick.TickGroup = TG_PostUpdateWork;
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+}
+
+namespace
+{
+	UStaticMesh* BuildMapMesh(UObject* Outer, const GLTF::FMesh& SourceMesh, const TArray<TSharedPtr<FJsonValue>>& JsonPrims,
+		bool bDevice, TFunctionRef<UMaterialInterface*(int32)> MaterialFor, int32& NumSections, int32& NumTriangles)
+	{
+		UStaticMesh* Mesh = nullptr;
+		FMeshDescription Description;
+		FStaticMeshAttributes Attributes(Description);
+		Attributes.Register();
+		GLTF::FMeshFactory Factory;
+		// Metres to centimetres; the reader already turned glTF's Y up into Unreal's Z up.
+		Factory.SetUniformScale(100.0f);
+		// GLTFCore expands normalized COLOR_0 per corner and linearizes RGB. The fast static-mesh build
+		// packs it back to sRGB bytes (alpha stays linear), preserving the original vertex mask.
+		const auto& Primitives = SourceMesh.Primitives;
+		bDevice &= JsonPrims.Num() == Primitives.Num();
+		TMap<int32, int32> SourceByMaterial;
+		bool bSplit = false;
+		if (bDevice)
+		{
+			for (int32 P = 0; P < Primitives.Num(); ++P)
+			{
+				const int32 Source = NumberOf(ObjectOf(JsonPrims[P]->AsObject(), TEXT("extras")), TEXT("scctSection"), P);
+				const int32 Material = Primitives[P].MaterialIndex;
+				if (const int32* Prior = SourceByMaterial.Find(Material); Prior && *Prior != Source) bSplit = true;
+				SourceByMaterial.Add(Material, Source);
+			}
+		}
+		if (bSplit)
+		{
+			// GLTFCore normally merges primitives using the same material. They must remain independently
+			// skinnable even when the intact model happens to draw them with the same texture.
+			FStaticMeshOperations::FAppendSettings Append;
+			for (bool& Channel : Append.bMergeUVChannels) Channel = true;
+			for (int32 P = 0; P < Primitives.Num(); ++P)
+			{
+				GLTF::FMesh Part;
+				Part.Primitives.Add(Primitives[P]);
+				FMeshDescription Section;
+				FStaticMeshAttributes SectionAttrs(Section);
+				SectionAttrs.Register();
+				Factory.FillMeshDescription(Part, FTransform::Identity, &Section);
+				if (!Section.Triangles().Num()) continue;
+				const int32 SourceSection = NumberOf(ObjectOf(JsonPrims[P]->AsObject(), TEXT("extras")), TEXT("scctSection"), P);
+				for (const auto Group : Section.PolygonGroups().GetElementIDs())
+				{
+					SectionAttrs.GetPolygonGroupMaterialSlotNames()[Group] = FName(*FString::Printf(TEXT("%d:ScctSection:%d"), Primitives[P].MaterialIndex, SourceSection));
+				}
+				FStaticMeshOperations::AppendMeshDescription(Section, Description, Append);
+			}
+		}
+		else
+		{
+			Factory.FillMeshDescription(SourceMesh, FTransform::Identity, &Description);
+			if (bDevice)
+			{
+				auto Names = Attributes.GetPolygonGroupMaterialSlotNames();
+				for (const auto Group : Description.PolygonGroups().GetElementIDs())
+				{
+					const int32 Id = FCString::Atoi(*Names[Group].ToString());
+					Names[Group] = FName(*FString::Printf(TEXT("%d:ScctSection:%d"), Id, SourceByMaterial.FindChecked(Id)));
+				}
+			}
+		}
+		if (Description.Triangles().Num() > 0)
+		{
+			Mesh = NewObject<UStaticMesh>(Outer, NAME_None, RF_Transient);
+			const TPolygonGroupAttributesRef<FName> SlotNames = Attributes.GetPolygonGroupMaterialSlotNames();
+			for (const FPolygonGroupID Group : Description.PolygonGroups().GetElementIDs())
+			{
+				// The engine's mesh factory names each slot after the glTF material index.
+				const FName Slot = SlotNames[Group];
+				// The imported slot name exists only in editor builds (FStaticMaterial's WITH_EDITORONLY_DATA argument).
+#if WITH_EDITORONLY_DATA
+				Mesh->GetStaticMaterials().Add(FStaticMaterial(MaterialFor(FCString::Atoi(*Slot.ToString())), Slot, Slot));
+#else
+				Mesh->GetStaticMaterials().Add(FStaticMaterial(MaterialFor(FCString::Atoi(*Slot.ToString())), Slot));
+#endif
+			}
+			UStaticMesh::FBuildMeshDescriptionsParams Params;
+			Params.bFastBuild = true;
+			Params.bMarkPackageDirty = false;
+			Params.bCommitMeshDescription = false;
+			Params.bBuildSimpleCollision = false;
+			Mesh->BuildFromMeshDescriptions({ &Description }, Params);
+			NumSections += Description.PolygonGroups().Num();
+			NumTriangles += Description.Triangles().Num();
+		}
+		return Mesh;
+	}
+}
+
+void AScctRuntimeMapActor::ReadSectionIndex(const FString& MapFolder, TMap<FName, TMap<FName, int32>>& Sections)
+{
+	if (MapFolder.IsEmpty()) return;
+	const auto Doc = ReadGlbJson(MapFolder / TEXT("render/world.glb"));
+	const auto& Mats = ArrayOf(Doc, TEXT("materials"));
+	const auto& MeshList = ArrayOf(Doc, TEXT("meshes"));
+	for (const auto& NodeValue : ArrayOf(Doc, TEXT("nodes")))
+	{
+		const auto Node = NodeValue->AsObject();
+		const int32 Index = NumberOf(Node, TEXT("mesh"), -1);
+		if (!MeshList.IsValidIndex(Index)) continue;
+		const auto Mesh = MeshList[Index]->AsObject();
+		const auto& Parts = ArrayOf(Mesh, TEXT("primitives"));
+		if (Parts.Num() < 1) continue;
+		auto& Slots = Sections.FindOrAdd(FName(*Key(StringOf(Node, TEXT("name")))));
+		for (int32 P = 0; P < Parts.Num(); ++P)
+		{
+			const auto Part = Parts[P]->AsObject();
+			const int32 Material = NumberOf(Part, TEXT("material"), -1);
+			if (Mats.IsValidIndex(Material))
+			{
+				const int32 Section = NumberOf(ObjectOf(Part, TEXT("extras")), TEXT("scctSection"), P);
+				const FName MatKey(*Key(StringOf(Mats[Material]->AsObject(), TEXT("name"))));
+				if (const int32* Prior = Slots.Find(MatKey); Prior && *Prior != Section) Slots.Add(TEXT("#split"), Index);
+				Slots.FindOrAdd(MatKey, Section);
+				Slots.Add(FName(*FString::Printf(TEXT("#%d"), P)), Section);
+			}
+		}
+	}
+}
+
+// An older cooked mesh can have a single material slot shared by two different source sections.
+// Rebuild just that mesh, on its first skin change, retaining the cooked materials and authored vertices.
+UStaticMesh* AScctRuntimeMapActor::SplitSkinMesh(UObject* Outer, UStaticMesh* Imported, const FString& MapFolder, int32 Index)
+{
+	const FString File = MapFolder / TEXT("render/world.glb");
+	const auto Doc = ReadGlbJson(File);
+	const auto& MeshList = ArrayOf(Doc, TEXT("meshes"));
+	if (!MeshList.IsValidIndex(Index)) return nullptr;
+	GLTF::FFileReader Reader;
+	GLTF::FAsset Asset;
+	Reader.ReadFile(File, false, false, Asset);
+	if (!Asset.Meshes.IsValidIndex(Index)) return nullptr;
+	const auto& Mats = ArrayOf(Doc, TEXT("materials"));
+	TMap<FString, UMaterialInterface*> ByName;
+	for (const auto& Slot : Imported->GetStaticMaterials())
+	{
+		ByName.Add(Key(Slot.MaterialSlotName.ToString()), Slot.MaterialInterface);
+		if (Slot.MaterialInterface)
+		{
+			FString Name = Slot.MaterialInterface->GetName();
+			Name.RemoveFromStart(TEXT("MI_"));
+			ByName.Add(Key(Name), Slot.MaterialInterface);
+		}
+	}
+	int32 Sections = 0, Triangles = 0;
+	return BuildMapMesh(Outer, Asset.Meshes[Index], ArrayOf(MeshList[Index]->AsObject(), TEXT("primitives")), true,
+		[&](int32 M) -> UMaterialInterface*
+		{
+			if (Mats.IsValidIndex(M))
+			{
+				const auto* Found = ByName.Find(Key(StringOf(Mats[M]->AsObject(), TEXT("name"))));
+				if (Found) return *Found;
+			}
+			return Imported->GetMaterial(0);
+		}, Sections, Triangles);
+}
+
+void AScctRuntimeMapActor::ConfigureSky(const FString& Map)
+{
+	const auto Rules = ReadJsonFile(FPaths::ProjectDir() / TEXT("Tools/Import/map_skies.json"));
+	FString Kind = StringOf(ObjectOf(Rules, TEXT("maps")), *Map);
+	if (Kind.IsEmpty()) Kind = StringOf(Rules, TEXT("default"));
+	const auto Look = ObjectOf(ObjectOf(Rules, TEXT("kinds")), *Kind);
+	if (!Look) return;
+	const FString Panorama = TEXT("/Game/OpenSCCT/ThirdParty/PolyHaven/") + StringOf(Look, TEXT("panorama"));
+	auto Colour = [](const FVector& RGB) { return FLinearColor(RGB.X, RGB.Y, RGB.Z); };
+	const FLinearColor Tint = Colour(VectorOf(Look, TEXT("tint"), FVector::OneVector));
+	const float Angle = NumberOf(Look, TEXT("rotation"));
+	for (TActorIterator<AStaticMeshActor> It(GetWorld()); It; ++It)
+	{
+		auto* Dome = It->GetStaticMeshComponent();
+		auto* Base = Dome->GetMaterial(0);
+		if (!Base || Base->GetName() != TEXT("MI_ScctRuntimeSky")) continue;
+		if (auto* Mid = Dome->CreateDynamicMaterialInstance(0, Base))
+		{
+			if (auto* Image = LoadObject<UTexture2D>(nullptr, *Panorama)) Mid->SetTextureParameterValue(TEXT("Panorama"), Image);
+			Mid->SetVectorParameterValue(TEXT("Tint"), Tint);
+			Mid->SetScalarParameterValue(TEXT("Rotation"), Angle);
+			Mid->SetScalarParameterValue(TEXT("Brightness"), NumberOf(Look, TEXT("brightness")));
+			Mid->SetScalarParameterValue(TEXT("StarBrightness"), NumberOf(Look, TEXT("stars")));
+		}
+		// The fallback dome belongs behind the complete authored sky diorama.
+		if (SkyRoot)
+		{
+			Dome->SetMobility(EComponentMobility::Movable);
+			It->SetActorScale3D(FVector(1000000.0));
+		}
+		break;
+	}
+	for (TActorIterator<ASkyLight> It(GetWorld()); It; ++It)
+	{
+		auto* Light = It->GetLightComponent();
+		if (auto* Cube = LoadObject<UTextureCube>(nullptr, *(Panorama + TEXT("_light")))) Light->SetCubemap(Cube);
+		Light->SetSourceCubemapAngle(Angle);
+		Light->SetIntensity(NumberOf(Look, TEXT("sky_light")));
+		Light->SetLightColor(Tint);
+	}
+	if (const auto Moon = ObjectOf(Look, TEXT("moon")))
+	{
+		const FRotator Rotation(NumberOf(Moon, TEXT("pitch")), NumberOf(Moon, TEXT("yaw")), 0);
+		if (auto* Actor = GetWorld()->SpawnActor<ADirectionalLight>(FVector(0, 0, 4000), Rotation))
+		{
+			auto* Light = CastChecked<UDirectionalLightComponent>(Actor->GetLightComponent());
+			Light->SetMobility(EComponentMobility::Movable);
+			Light->SetIntensity(NumberOf(Moon, TEXT("lux")));
+			Light->SetLightColor(Colour(VectorOf(Moon, TEXT("colour"), FVector::OneVector)));
+			Light->SetLightSourceAngle(2.f);
+		}
+	}
+	const auto Fog = ObjectOf(Look, TEXT("fog"));
+	for (TActorIterator<AExponentialHeightFog> It(GetWorld()); It; ++It)
+	{
+		auto* Component = It->GetComponent();
+		Component->SetFogDensity(NumberOf(Fog, TEXT("density"), 0.006));
+		Component->SetFogInscatteringColor(Colour(VectorOf(Fog, TEXT("colour"), FVector(0.02, 0.03, 0.05))));
+	}
+}
+
+void AScctRuntimeMapActor::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	const APlayerController* PC = GetWorld()->GetFirstPlayerController();
+	if (SkyRoot && PC && PC->PlayerCameraManager)
+	{
+		SkyRoot->SetWorldLocation(PC->PlayerCameraManager->GetCameraLocation());
+	}
 }
 
 bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
@@ -417,7 +661,11 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 
 	// The library meshes by their node names (an asset path, with "#variant" for differently lit copies).
 	TMap<FString, int32> MeshOfNode;
-	TArray<int32> LevelMeshes;
+	TArray<int32> LevelMeshes, SkyMeshes;
+	const auto Lighting = ReadJsonFile(RenderFolder / TEXT("lighting.json"));
+	const auto Sky = ObjectOf(Lighting, TEXT("sky"));
+	const FVector SkyEye = VectorOf(Sky, TEXT("location"), FVector::ZeroVector);
+	TSet<int32> LibraryIndices;
 	for (const TSharedPtr<FJsonValue>& NodeValue : ArrayOf(Gltf, TEXT("nodes")))
 	{
 		const TSharedPtr<FJsonObject> Node = NodeValue->AsObject();
@@ -431,15 +679,15 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 		if (RoleName == TEXT("bsp") || RoleName == TEXT("world"))
 		{
 			// The level's own surfaces: under the World node, or on it in the older layout (the synthetic maps).
-			// The sky zone's own surfaces are not drawn: the level has a real sky.
-			if (!BoolOf(NodeRole, TEXT("sky")))
-			{
-				LevelMeshes.Add(static_cast<int32>(MeshIndex));
-			}
+			(BoolOf(NodeRole, TEXT("sky")) ? SkyMeshes : LevelMeshes).Add(static_cast<int32>(MeshIndex));
 		}
 		else
 		{
 			MeshOfNode.Add(StringOf(Node, TEXT("name")), static_cast<int32>(MeshIndex));
+			if (RoleName == TEXT("libraryMesh"))
+			{
+				LibraryIndices.Add(static_cast<int32>(MeshIndex));
+			}
 		}
 	}
 
@@ -456,40 +704,11 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 		UStaticMesh* Mesh = nullptr;
 		if (Asset.Meshes.IsValidIndex(Index))
 		{
-			FMeshDescription Description;
-			FStaticMeshAttributes Attributes(Description);
-			Attributes.Register();
-			GLTF::FMeshFactory Factory;
-			// Metres to centimetres; the reader already turned glTF's Y up into Unreal's Z up.
-			Factory.SetUniformScale(100.0f);
-			// GLTFCore expands normalized COLOR_0 per corner and linearizes RGB. The fast static-mesh build
-			// packs it back to sRGB bytes (alpha stays linear), preserving the original vertex mask.
-			Factory.FillMeshDescription(Asset.Meshes[Index], FTransform::Identity, &Description);
-			if (Description.Triangles().Num() > 0)
-			{
-				Mesh = NewObject<UStaticMesh>(this, NAME_None, RF_Transient);
-				const TPolygonGroupAttributesRef<FName> SlotNames = Attributes.GetPolygonGroupMaterialSlotNames();
-				for (const FPolygonGroupID Group : Description.PolygonGroups().GetElementIDs())
-				{
-					// The engine's mesh factory names each slot after the glTF material index.
-					const FName Slot = SlotNames[Group];
-					// The imported slot name exists only in editor builds (FStaticMaterial's WITH_EDITORONLY_DATA argument).
-#if WITH_EDITORONLY_DATA
-					Mesh->GetStaticMaterials().Add(FStaticMaterial(MaterialFor(FCString::Atoi(*Slot.ToString())), Slot, Slot));
-#else
-					Mesh->GetStaticMaterials().Add(FStaticMaterial(MaterialFor(FCString::Atoi(*Slot.ToString())), Slot));
-#endif
-				}
-				UStaticMesh::FBuildMeshDescriptionsParams Params;
-				Params.bFastBuild = true;
-				Params.bMarkPackageDirty = false;
-				Params.bCommitMeshDescription = false;
-				Params.bBuildSimpleCollision = false;
-				Mesh->BuildFromMeshDescriptions({ &Description }, Params);
-				Meshes.Add(Mesh);
-				NumSections += Description.PolygonGroups().Num();
-				NumTriangles += Description.Triangles().Num();
-			}
+			const auto& JsonMeshes = ArrayOf(Gltf, TEXT("meshes"));
+			const auto& Prims = ArrayOf(JsonMeshes[Index]->AsObject(), TEXT("primitives"));
+			Mesh = BuildMapMesh(this, Asset.Meshes[Index], Prims, !LevelMeshes.Contains(Index) && !SkyMeshes.Contains(Index),
+				[this](int32 M) { return MaterialFor(M); }, NumSections, NumTriangles);
+			if (Mesh) Meshes.Add(Mesh);
 		}
 		Built.Add(Index, Mesh);
 		return Mesh;
@@ -504,15 +723,93 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 		}
 	}
 
+	// Keep the sky zone at its authored viewing direction as the player moves. Uniform enlargement
+	// preserves perspective about the SkyZoneInfo while putting the diorama beyond playable geometry.
+	constexpr double SkyScale = 256.0;
+	TSharedPtr<FJsonObject> SkyZone;
+	for (const auto& Value : ArrayOf(Lighting, TEXT("zones")))
+	{
+		const auto Zone = Value->AsObject();
+		if (Sky && NumberOf(Zone, TEXT("zoneIndex"), -2) == NumberOf(Sky, TEXT("zone"), -1))
+			SkyZone = Zone;
+	}
+	// Fog distances are measured from the source eye before the diorama is enlarged. In maps
+	// such as Aquarius the box is entirely behind the end of the fog and supplies a solid sky.
+	const double FogEnd = FMath::Max(NumberOf(SkyZone, TEXT("fog_end")), NumberOf(SkyZone, TEXT("fog_start")));
+	const FVector FogRGB = VectorOf(SkyZone, TEXT("fog_color"), FVector::ZeroVector);
+	const FLinearColor FogTint(FColor(uint8(FogRGB.X), uint8(FogRGB.Y), uint8(FogRGB.Z)));
+	auto PlaceSky = [&](int32 Index, UStaticMesh* Mesh, FTransform Frame)
+	{
+		if (!SkyRoot)
+		{
+			SkyRoot = NewObject<USceneComponent>(this, TEXT("SkyZone"));
+			SkyRoot->SetupAttachment(GetRootComponent());
+			SkyRoot->RegisterComponent();
+			SetActorTickEnabled(true);
+		}
+		TSet<int32> ClearMaterials;
+		if (BoolOf(SkyZone, TEXT("fog")) && FogEnd > 0)
+		{
+			for (const auto& Prim : Asset.Meshes[Index].Primitives)
+			{
+				if (!Prim.IsValid()) continue;
+				TArray<FVector3f> Points;
+				TArray<uint32> Triangles;
+				Prim.GetPositions(Points);
+				Prim.GetTriangleIndices(Triangles);
+				for (int32 T = 0; T + 2 < Triangles.Num(); T += 3)
+				{
+					auto At = [&](int32 Corner) { return Frame.TransformPosition(FVector(Points[Triangles[Corner]]) * 100.0); };
+					if (FVector::DistSquared(SkyEye, FMath::ClosestPointOnTriangleToPoint(SkyEye, At(T), At(T+1), At(T+2))) <= FMath::Square(FogEnd))
+					{
+						ClearMaterials.Add(Prim.MaterialIndex);
+						break;
+					}
+				}
+			}
+		}
+		Frame.SetTranslation((Frame.GetTranslation() - SkyEye) * SkyScale);
+		Frame.SetScale3D(Frame.GetScale3D() * SkyScale);
+		auto* Part = NewObject<UStaticMeshComponent>(this);
+		Part->SetupAttachment(SkyRoot);
+		Part->SetRelativeTransform(Frame);
+		Part->SetStaticMesh(Mesh);
+		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Part->SetCastShadow(false);
+		Part->bAffectDistanceFieldLighting = false;
+		Part->bAffectDynamicIndirectLighting = false;
+		Part->SetVisibleInRayTracing(false);
+		for (int32 S = 0; S < Mesh->GetStaticMaterials().Num(); ++S)
+		{
+			const int32 Material = FCString::Atoi(*Mesh->GetStaticMaterials()[S].MaterialSlotName.ToString());
+			if (auto* Mid = Part->CreateDynamicMaterialInstance(S))
+			{
+				Mid->SetScalarParameterValue(TEXT("Emissive"), 1.f);
+				if (BoolOf(SkyZone, TEXT("fog")) && FogEnd > 0 && !ClearMaterials.Contains(Material) && Mid->GetBlendMode() == BLEND_Opaque)
+				{
+					auto* White = LoadObject<UTexture2D>(nullptr, TEXT("/Engine/EngineResources/WhiteSquareTexture"));
+					if (White) Mid->SetTextureParameterValue(TEXT("BaseColor"), White);
+					Mid->SetVectorParameterValue(TEXT("Tint"), FogTint);
+					Mid->SetScalarParameterValue(TEXT("SelfIllum"), 0.f);
+					Mid->SetScalarParameterValue(TEXT("BakedFill"), 0.f);
+				}
+			}
+		}
+		Part->RegisterComponent();
+	};
+	for (int32 Index : SkyMeshes)
+	{
+		if (Sky && MeshFor(Index)) PlaceSky(Index, MeshFor(Index), FTransform::Identity);
+	}
+
 	// ---- every placed mesh: world = ((local - PrePivot) * Scale) rotated + Location
 	int32 NumWithoutMesh = 0;
 	int32 NumSkipped = 0;
 	for (const TSharedPtr<FJsonValue>& Value : ArrayOf(ObjectOf(ObjectOf(Gltf, TEXT("extras")), TEXT("svmap")), TEXT("instances")))
 	{
 		const TSharedPtr<FJsonObject> Instance = Value->AsObject();
-		// Hidden actors, the sky zone's dioramas and the copies of surfaces that carry a projected texture (the
-		// importer brings those back as decals) are not placed.
-		if (!Instance.IsValid() || BoolOf(Instance, TEXT("hidden")) || BoolOf(Instance, TEXT("skyZone")) || Instance->HasField(TEXT("projectorOf")))
+		// Hidden actors and projector copies are not ordinary scene geometry.
+		if (!Instance.IsValid() || BoolOf(Instance, TEXT("hidden")) || Instance->HasField(TEXT("projectorOf")))
 		{
 			++NumSkipped;
 			continue;
@@ -533,8 +830,18 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 		const FVector Pivot = VectorOf(Instance, TEXT("prePivot"), FVector::ZeroVector);
 		Location -= Rotator.RotateVector(Pivot * Scale);
 
+		if (BoolOf(Instance, TEXT("skyZone")))
+		{
+			if (Sky) PlaceSky(*Index, Mesh, FTransform(Rotator, Location, Scale));
+			continue;
+		}
 		const bool bMovable = StringOf(Instance, TEXT("kind")) == TEXT("mover") || BoolOf(Instance, TEXT("gameplay"));
-		PlaceMesh(Mesh, StringOf(Instance, TEXT("actor")), FTransform(Rotator, Location, Scale), bMovable, VertexLightKind(MeshName, Instance));
+		AActor* Placed = PlaceMesh(Mesh, StringOf(Instance, TEXT("actor")), FTransform(Rotator, Location, Scale), bMovable, VertexLightKind(MeshName, Instance));
+		if (const auto Soft = ObjectOf(Instance, TEXT("softBody")); Soft && Placed)
+		{
+			const FString Kind = StringOf(Soft, TEXT("kind"));
+			Placed->Tags.Add(FName(*(TEXT("ScctSoftBody:") + (Kind.IsEmpty() ? FString(TEXT("patch")) : Kind))));
+		}
 	}
 
 	// A render file without placed instances (the older layout of the synthetic maps): the static meshes of the
@@ -573,9 +880,21 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 		}
 	}
 
-	PlaceLights(ReadJsonFile(RenderFolder / TEXT("lighting.json")));
+	for (const auto& Entry : MeshOfNode)
+	{
+		// Particle and conveyor item meshes can be referenced without a placed instance.
+		if (Built.Contains(Entry.Value) || LibraryIndices.Contains(Entry.Value))
+		{
+			UStaticMesh* Mesh = MeshFor(Entry.Value);
+			Library.Add(FName(*Entry.Key), Mesh);
+			FString Plain, Variant;
+			if (Entry.Key.Split(TEXT("#"), &Plain, &Variant)) Library.FindOrAdd(FName(*Plain), Mesh);
+		}
+	}
+	ConfigureSky(Map);
+	PlaceLights(Lighting);
 
-	UE_LOG(LogOpenSCCT, Log, TEXT("Runtime map %s: built %d meshes (%d sections, %d triangles) from %s with the engine's glTF reader (%d reader errors), %d materials, %d textures loaded (%d missing), placed %d meshes (%d level surfaces; %d instances skipped as hidden, sky zone or projector copies, %d without a mesh), %d lights; read in %.2f s, built in %.2f s"),
+	UE_LOG(LogOpenSCCT, Log, TEXT("Runtime map %s: built %d meshes (%d sections, %d triangles) from %s with the engine's glTF reader (%d reader errors), %d materials, %d textures loaded (%d missing), placed %d meshes (%d level surfaces; %d instances skipped as hidden or projector copies, %d without a mesh), %d lights; read in %.2f s, built in %.2f s"),
 		*Map, Meshes.Num(), NumSections, NumTriangles, *GlbPath, NumReaderErrors, Materials.Num(), Textures.Num(), NumTexturesMissing,
 		NumPlaced, LevelMeshes.Num(), NumSkipped, NumWithoutMesh, NumLights, ReadSeconds, FPlatformTime::Seconds() - Start);
 	return true;
@@ -840,6 +1159,8 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 			Instance = ScctAuthored::MaterialFor(this, Flags, LightmapOf.FindRef(Key(Name)), RenderFolder, Textures, Name, Instance);
 		}
 		Materials.Add(Instance);
+		SurfaceByName.Add(FName(*Name), Instance);
+		SurfaceByName.FindOrAdd(FName(*Source), Instance);
 	}
 
 	TArray<FString> Summary;

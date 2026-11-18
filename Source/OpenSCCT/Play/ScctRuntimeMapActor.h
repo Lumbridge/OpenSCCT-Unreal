@@ -24,9 +24,8 @@ class FJsonObject;
  *
  * What it lacks against an import in the editor: no baked lighting of Unreal's own (the original's lightmaps and
  * vertex colours are given back as the importer's faint fill), no Nanite, no derived normal maps or detail layer of
- * a surface class (every surface gets the plain class), no glass or water materials, no skyline backdrop, no
- * emitters, coronas, beams, projectors or rain (the Niagara and decal dressing of import_map.py), and one sky for
- * every map. Collision is the simulation's either way.
+ * a surface class (every surface gets the plain class), no glass or water materials, no
+ * emitters, coronas, beams, projectors or rain (the Niagara and decal dressing of import_map.py), or baked light probes. Collision is the simulation's either way.
  */
 UCLASS()
 class OPENSCCT_API AScctRuntimeMapActor : public AActor
@@ -35,6 +34,11 @@ class OPENSCCT_API AScctRuntimeMapActor : public AActor
 
 public:
 	AScctRuntimeMapActor();
+	virtual void Tick(float DeltaSeconds) override;
+	static UStaticMesh* SplitSkinMesh(UObject* Outer, UStaticMesh* Imported, const FString& MapFolder, int32 Index);
+	static void ReadSectionIndex(const FString& MapFolder, TMap<FName, TMap<FName, int32>>& Sections);
+	UStaticMesh* LibraryMesh(const FString& Name) const { return Library.FindRef(FName(*Name)); }
+	UMaterialInterface* LibraryMaterial(const FString& Name) const { return SurfaceByName.FindRef(FName(*Name)); }
 
 	/** Builds the map whose folder (holding render/) is MapFolder. Returns false, having logged why, when it cannot. */
 	bool Build(const FString& Map, const FString& MapFolder);
@@ -43,10 +47,20 @@ private:
 	UMaterialInterface* MaterialFor(int32 GltfMaterial);
 	UTexture2D* TextureFor(const FString& RelativePath, bool bSRGB = true);
 	void BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, const TSharedPtr<FJsonObject>& MaterialDoc);
+	void ConfigureSky(const FString& Map);
 	void PlaceLights(const TSharedPtr<FJsonObject>& Lighting);
 	AActor* PlaceMesh(UStaticMesh* Mesh, const FString& Name, const FTransform& Transform, bool bMovable, float VertexLightKind);
 
 	FString RenderFolder;
+
+	UPROPERTY(Transient)
+	TMap<FName, TObjectPtr<UStaticMesh>> Library;
+
+	UPROPERTY(Transient)
+	TMap<FName, TObjectPtr<UMaterialInterface>> SurfaceByName;
+
+	UPROPERTY(Transient)
+	TObjectPtr<USceneComponent> SkyRoot;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UStaticMesh>> Meshes;

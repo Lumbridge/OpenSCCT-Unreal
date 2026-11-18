@@ -20,9 +20,8 @@ namespace OpenScct.UnrealBridge.Devices;
 /// Views/CameraMountViews.cs, Views/GlassBreakViews.cs (when a pane breaks), Fx/LaserTriggerView.cs and
 /// Render/WorldLights.cs (Modulation) and, for lights only, Views/AttachedEffects.cs (a light that rides a mover or
 /// hangs on a prop's bone). The emitters that ride a mover or a bone (AttachedEffects) are in
-/// <see cref="WorldEmitters"/> (Devices/WorldEmitterExports.cs). Not ported: conveyors (Views/ConveyorViews.cs, an
-/// OpenSCCT addition the stock maps do not use), the bHardAttach frame of a rider (no Enhanced map sets it), the PS2
-/// objective computers' own animation, and the animation studio's poses.</para>
+/// <see cref="WorldEmitters"/> (Devices/WorldEmitterExports.cs). WorldGeometryExports supplies the moving conveyor geometry and
+/// the PS2 objective consoles from their authored clips and skins.</para>
 /// </summary>
 public sealed class WorldState
 {

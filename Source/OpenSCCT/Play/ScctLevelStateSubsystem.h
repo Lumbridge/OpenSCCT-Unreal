@@ -5,6 +5,7 @@
 #include "Runtime/ScctWorldApi.h"
 #include "Runtime/ScctWorldEmitterApi.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "Runtime/ScctWorldGeometryApi.h"
 #include "ScctLevelStateSubsystem.generated.h"
 
 class ASkeletalMeshActor;
@@ -129,6 +130,7 @@ private:
 		bool bLevelActor = false;   // Actor is the level's own, not spawned here
 		bool bVisibilityOnly = false; // a skeletal prop: shown and hidden, never placed
 		bool bSpawnTried = false;   // a stand-in was looked for (it is looked for once)
+		TArray<int32> WornSkins;
 		bool bSkinned = false;      // a material was replaced on it
 		bool bMobilityChanged = false;
 	};
@@ -245,14 +247,11 @@ private:
 			FTransform InEmitter;
 		};
 		TArray<FPart> Parts;
-		/** On a bone: the bone's turn when first seen, so the Emitter keeps its placed turn against the bone's axes. */
-		FQuat FirstBoneQuat = FQuat::Identity;
 		FVector FirstLocation = FVector::ZeroVector;
 		FVector LastLogged = FVector::ZeroVector;
 		float LastLogSeconds = -100.0f;
 		float MaxTravel = 0.0f;
 		bool bBound = false;
-		bool bBoneSeen = false;
 		bool bMoved = false;
 	};
 
@@ -308,7 +307,7 @@ private:
 	/** Spawns an actor for a followed actor the level has none for; false when no imported mesh fits. */
 	bool SpawnStandIn(FActorState& State, const FScctWorldActor& Record);
 	void ApplyMesh(FActorState& State, int32 MeshId);
-	void ApplySkin(FActorState& State, int32 Slot, int32 SkinId);
+	void ApplySkins(FActorState& State);
 	/** Emitter.Trigger on the importer's Niagara actors of that map Emitter; returns how many it reached. */
 	int32 TriggerEmitters(const FString& Name);
 	void BindLight(FLightState& State, const FScctWorldLight& Record);
@@ -364,6 +363,49 @@ private:
 	TSet<FName> MovableTags;
 	TSet<FName> MentionedTags;
 
+	void DrawWorldGeometry();
+	void RestoreWorldGeometry();
+	void ScrollConveyor(const struct FScctGeometryRow& Row);
+	struct FScrollSlot
+	{
+		TWeakObjectPtr<UStaticMeshComponent> Mesh;
+		int32 Slot;
+		TWeakObjectPtr<UMaterialInterface> Original;
+		TWeakObjectPtr<class UMaterialInstanceDynamic> Material;
+	};
+	struct FDynamicSection
+	{
+		TWeakObjectPtr<class UProceduralMeshComponent> Mesh;
+		float Phase = -FLT_MAX;
+		int32 Material = INDEX_NONE;
+		int32 Picture = INDEX_NONE;
+	};
+	const struct FScctWorldGeometryApi* GeometryApi = nullptr;
+	bool bGeometryApiTried = false;
+	TArray<struct FScctGeometryRow> GeometryRows;
+	TArray<struct FScctGeometryVertex> GeometryVertices;
+	TWeakObjectPtr<AActor> GeometryOwner;
+	TMap<uint64, TArray<FScrollSlot>> ConveyorScrolls;
+	TMap<uint64, FDynamicSection> DynamicSections;
+	TArray<TWeakObjectPtr<UStaticMeshComponent>> ConveyorCargo;
+	TMap<TWeakObjectPtr<AActor>, bool> GeometryHidden;
+	UPROPERTY(Transient)
+	TMap<int32, TObjectPtr<UMaterialInterface>> ConsolePictures;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInterface>> ConveyorOriginals;
+	TWeakObjectPtr<class AScctRuntimeMapActor> RuntimeMap;
+	TMap<FName, TMap<FName, int32>> SourceSections;
+	UPROPERTY(Transient)
+	TMap<TObjectPtr<UStaticMesh>, TObjectPtr<UStaticMesh>> SplitSkinMeshes;
+	TSharedPtr<class FJsonObject> GameplayMaterials;
+	FString GameplayMaterialFolder;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UTexture2D>> BombFrames;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> BombGhost;
+	int32 BombFrame = INDEX_NONE;
+	UMaterialInterface* GameplaySkin(const FString& Name);
+	int32 SourceSlot(const UStaticMesh* Mesh, int32 Slot) const;
 	TMap<FString, FSoftObjectPath> MeshAssets;
 	TMap<FString, FSoftObjectPath> MaterialAssets;
 

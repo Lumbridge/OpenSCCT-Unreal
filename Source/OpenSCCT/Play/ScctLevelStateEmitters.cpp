@@ -133,16 +133,7 @@ void UScctLevelStateSubsystem::UpdateAttachedEmitters()
 				BoneNow = Component->GetBoneTransform(Bone);
 			}
 			BoneNow.SetScale3D(FVector::OneVector);
-			if (!State.bBoneSeen)
-			{
-				State.bBoneSeen = true;
-				State.FirstBoneQuat = BoneNow.GetRotation();
-			}
-			// AttachedEffects.BonePlace: on the bone, moved by RelativeLocation in its frame. The imported bone's axes
-			// need not be the original's, so the Emitter keeps its placed turn and turns as far as the bone has
-			// turned since it was first seen (both are the same when the map's attachment has no relative turn).
-			Frame.SetLocation(BoneNow.TransformPosition(Relative.GetLocation()));
-			Frame.SetRotation(BoneNow.GetRotation() * State.FirstBoneQuat.Inverse() * Placed.GetRotation() * Relative.GetRotation());
+			Frame = Relative * BoneNow;
 		}
 		else
 		{

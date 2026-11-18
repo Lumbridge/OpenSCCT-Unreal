@@ -1,6 +1,7 @@
 #include "Play/ScctLevelStateSubsystem.h"
 #include "Play/ScctStudioProp.h"
 
+#include "Algo/AnyOf.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Animation/AnimSequenceBase.h"
 #include "Animation/SkeletalMeshActor.h"
@@ -22,6 +23,8 @@
 #include "NiagaraComponent.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
+#include "Play/ScctRuntimeMapActor.h"
+#include "Online/ScctMapFolders.h"
 #include "Play/ScctEffectsSubsystem.h"
 #include "Play/ScctLevelStateDebug.h"
 #include "Play/ScctLightPlan.h"
@@ -219,6 +222,7 @@ void UScctLevelStateSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UScctLevelStateSubsystem::Deinitialize()
 {
+	RestoreWorldGeometry();
 	MeshParticles.Reset();
 	if (Session != nullptr)
 	{
@@ -322,6 +326,20 @@ void UScctLevelStateSubsystem::IndexLevel()
 		return;
 	}
 	bIndexed = true;
+	LoadedMeshes.Reset();
+	LoadedMaterials.Reset();
+	RuntimeMap.Reset();
+	for (TActorIterator<AScctRuntimeMapActor> It(GetWorld()); It; ++It)
+	{
+		RuntimeMap = *It;
+		break;
+	}
+	SourceSections.Reset();
+	SplitSkinMeshes.Reset();
+	if (!RuntimeMap.IsValid() && Session)
+	{
+		AScctRuntimeMapActor::ReadSectionIndex(ScctMapFolders::FolderOf(Session->GetSessionInfo().Map), SourceSections);
+	}
 
 	int32 NumLights = 0;
 	int32 NumNaniteAvoided = 0;
@@ -556,6 +574,7 @@ void UScctLevelStateSubsystem::RestoreLevel()
 	}
 	Spawned.Reset();
 
+	RestoreWorldGeometry();
 	RestoreAttachedEmitters(bTearingDown);
 
 	// The map's emitters as imported: the running ones run, the waiting ones wait, the ground under the rain is wet.
@@ -667,6 +686,10 @@ UStaticMesh* UScctLevelStateSubsystem::FindMesh(const FString& Name)
 	{
 		return nullptr;
 	}
+	if (RuntimeMap.IsValid())
+	{
+		if (UStaticMesh* Mesh = RuntimeMap->LibraryMesh(Name)) return Mesh;
+	}
 	const FString Key = LevelKey(Name);
 	if (const TObjectPtr<UStaticMesh>* Known = LoadedMeshes.Find(Key))
 	{
@@ -690,6 +713,10 @@ UMaterialInterface* UScctLevelStateSubsystem::FindMaterial(const FString& Name)
 	{
 		return nullptr;
 	}
+	if (RuntimeMap.IsValid())
+	{
+		if (UMaterialInterface* M = RuntimeMap->LibraryMaterial(Name)) return M;
+	}
 	const FString Key = LevelKey(Name);
 	if (const TObjectPtr<UMaterialInterface>* Known = LoadedMaterials.Find(Key))
 	{
@@ -702,6 +729,7 @@ UMaterialInterface* UScctLevelStateSubsystem::FindMaterial(const FString& Name)
 		Path = MaterialAssets.Find(LevelPackageKey(Name));
 	}
 	UMaterialInterface* Material = Path != nullptr ? Cast<UMaterialInterface>(Path->TryLoad()) : nullptr;
+	if (!Material) Material = GameplaySkin(Name);
 	LoadedMaterials.Add(Key, Material);
 	return Material;
 }
@@ -718,11 +746,21 @@ void UScctLevelStateSubsystem::HandleFrame(float DeltaSeconds)
 	}
 
 	MatchSeconds += DeltaSeconds;
+	if (BombGhost && BombFrames.Num() > 1)
+	{
+		const int32 Frame = FMath::FloorToInt(MatchSeconds * 3.0f) % BombFrames.Num();
+		if (Frame != BombFrame)
+		{
+			BombGhost->SetTextureParameterValue(TEXT("BaseColor"), BombFrames[Frame]);
+			BombFrame = Frame;
+		}
+	}
 	FScctLightRules::Tick(GetWorld());
 	RefreshNames();
 	RunDebugActions();
 	UpdateActors();
 	UpdateProps();
+	DrawWorldGeometry();
 	UpdateAttachedEmitters();
 	DressForLightPlan();
 	UpdateLights(DeltaSeconds);
@@ -1009,17 +1047,7 @@ void UScctLevelStateSubsystem::FirstSight(FActorState& State, const FScctWorldAc
 		PlacementTurnError = FMath::Max(PlacementTurnError, static_cast<float>(FMath::RadiansToDegrees(Found->GetActorQuat().AngularDistance(State.FirstRotation))));
 	}
 
-	int32 Skins[ScctWorldSkinSlots] = {};
-	if (World->GetActorSkins(Record.NameId, Skins, ScctWorldSkinSlots) > 0)
-	{
-		for (int32 Slot = 0; Slot < ScctWorldSkinSlots; ++Slot)
-		{
-			if (Skins[Slot] != 0)
-			{
-				ApplySkin(State, Slot, Skins[Slot]);
-			}
-		}
-	}
+	ApplySkins(State);
 }
 
 bool UScctLevelStateSubsystem::SpawnStandIn(FActorState& State, const FScctWorldActor& Record)
@@ -1079,17 +1107,7 @@ bool UScctLevelStateSubsystem::SpawnStandIn(FActorState& State, const FScctWorld
 	TaggedActors.Add(FScctWorld::LevelTag(*Name), Actor);
 	++NumStandIns;
 
-	int32 Skins[ScctWorldSkinSlots] = {};
-	if (World->GetActorSkins(Record.NameId, Skins, ScctWorldSkinSlots) > 0)
-	{
-		for (int32 Slot = 0; Slot < ScctWorldSkinSlots; ++Slot)
-		{
-			if (Skins[Slot] != 0)
-			{
-				ApplySkin(State, Slot, Skins[Slot]);
-			}
-		}
-	}
+	ApplySkins(State);
 
 	if (bLog)
 	{
@@ -1121,35 +1139,68 @@ void UScctLevelStateSubsystem::ApplyMesh(FActorState& State, int32 MeshId)
 		return;
 	}
 	Component->SetStaticMesh(Mesh);
+	if (State.bSkinned) Component->EmptyOverrideMaterials();
+	State.WornSkins.Reset();
+	ApplySkins(State);
 	LevelAvoidNanite(Component);
 }
 
-void UScctLevelStateSubsystem::ApplySkin(FActorState& State, int32 Slot, int32 SkinId)
+int32 UScctLevelStateSubsystem::SourceSlot(const UStaticMesh* Mesh, int32 Slot) const
+{
+	const FString SlotName = Mesh->GetStaticMaterials()[Slot].MaterialSlotName.ToString();
+	FString Ignored, Section;
+	if (SlotName.Split(TEXT(":ScctSection:"), &Ignored, &Section)) return FCString::Atoi(*Section);
+	if (const auto* ByMaterial = SourceSections.Find(FName(*LevelKey(Mesh->GetName()))))
+	{
+		if (const int32* Id = ByMaterial->Find(FName(*LevelKey(SlotName)))) return *Id;
+		if (const int32* Id = ByMaterial->Find(FName(*FString::Printf(TEXT("#%d"), Slot)))) return *Id;
+	}
+	return Slot;
+}
+
+void UScctLevelStateSubsystem::ApplySkins(FActorState& State)
 {
 	UStaticMeshComponent* Component = State.Mesh.Get();
-	if (Component == nullptr || Slot < 0 || Slot >= Component->GetNumMaterials())
+	UStaticMesh* Mesh = Component ? Component->GetStaticMesh() : nullptr;
+	int32 Skins[ScctWorldSkinSlots] = {};
+	if (!Mesh || !World->GetActorSkins(State.Info.NameId, Skins, ScctWorldSkinSlots)) return;
+	// The bomb socket ghost covers the entire model, including sections absent from the actor's skin array.
+	if (State.WornSkins.IsEmpty() && !Algo::AnyOf(Skins, [](int32 Id) { return Id != 0; })) return;
+	if (const auto* Sections = SourceSections.Find(FName(*LevelKey(Mesh->GetName()))))
 	{
-		return;
+		if (const int32* Source = Sections->Find(TEXT("#split")))
+		{
+			if (!SplitSkinMeshes.Contains(Mesh))
+			{
+				auto* Split = AScctRuntimeMapActor::SplitSkinMesh(this, Mesh, ScctMapFolders::FolderOf(Session->GetSessionInfo().Map), *Source);
+				SplitSkinMeshes.Add(Mesh, Split);
+			}
+			if (UStaticMesh* Split = SplitSkinMeshes.FindRef(Mesh))
+			{
+				Component->SetStaticMesh(Split);
+				Mesh = Split;
+			}
+		}
 	}
-	if (SkinId == 0)
+	const bool bGhost = Skins[0] && GetName(Skins[0]).Equals(TEXT("SGameplayObjectsTex.Object.FX_pose_bomb_heat"), ESearchCase::IgnoreCase);
+	State.WornSkins.SetNumZeroed(Mesh->GetStaticMaterials().Num());
+	for (int32 Surface = 0; Surface < State.WornSkins.Num(); ++Surface)
 	{
-		// Back to the mesh's own material, or to the glowing copy of it a switched light keeps in this slot.
-		Component->SetMaterial(Slot, FindFixtureMaterial(Component, Slot));
-		return;
-	}
-
-	const FString& Name = GetName(SkinId);
-	if (UMaterialInterface* Material = FindMaterial(Name))
-	{
-		Component->SetMaterial(Slot, Material);
+		const int32 Source = SourceSlot(Mesh, Surface);
+		const int32 SkinId = bGhost ? Skins[0] : Source >= 0 && Source < ScctWorldSkinSlots ? Skins[Source] : 0;
+		if (State.WornSkins[Surface] == SkinId) continue;
+		State.WornSkins[Surface] = SkinId;
+		const FString& Name = GetName(SkinId);
+		UMaterialInterface* Material = SkinId ? FindMaterial(Name) : nullptr;
+		if (SkinId && !Material && !ReportedMissing.Contains(Name))
+		{
+			ReportedMissing.Add(Name);
+			UE_LOG(LogOpenSCCT, Log, TEXT("Level state: skin '%s' unavailable for '%s', using mesh section %d's material"), *Name, *GetName(State.Info.NameId), Source);
+		}
+		Component->SetMaterial(Surface, Material ? Material : FindFixtureMaterial(Component, Surface));
 		State.bSkinned = true;
-		LevelAvoidNanite(Component);
 	}
-	else if (!ReportedMissing.Contains(Name))
-	{
-		ReportedMissing.Add(Name);
-		UE_LOG(LogOpenSCCT, Log, TEXT("Level state: '%s' wears skin '%s' in slot %d, which was not imported; it keeps its material"), *GetName(State.Info.NameId), *Name, Slot);
-	}
+	if (State.bSkinned) LevelAvoidNanite(Component);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1829,7 +1880,7 @@ void UScctLevelStateSubsystem::DrainEvents()
 			case EScctWorldEventKind::SkinChanged:
 				if (ActorStates.IsValidIndex(Event.NameId) && ActorStates[Event.NameId].bSeen)
 				{
-					ApplySkin(ActorStates[Event.NameId], Event.A, Event.B);
+					ApplySkins(ActorStates[Event.NameId]);
 				}
 				if (bLog)
 				{
