@@ -142,6 +142,8 @@ void UScctHubSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		"A hub you host from the Hub page is listed on the master server, where others find and join it (through its relay when your router does not let them in). Off: others join it by your address.");
 	Listed.Type = EScctSettingType::Bool;
 	Listed.Default = TEXT("true");
+	// The Hub page has the switch beside HOST A HUB (Menu/SScctHubPage.cpp); the settings page does not repeat it.
+	Listed.bVisible = false;
 	FScctSettings::Register(Listed);
 
 	// The status lines are for unattended runs; a player's log is not filled with them.

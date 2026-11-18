@@ -1,4 +1,6 @@
 #include "Menu/ScctFrontEndGameMode.h"
+#include "Engine/GameInstance.h"
+#include "Menu/ScctLoadingSubsystem.h"
 
 #include "Blueprint/UserWidget.h"
 #include "Demo/ScctDemoPlayback.h"
@@ -254,4 +256,17 @@ void AScctFrontEndGameMode::MoveCamera()
 	View.Fov = 70.0f;
 	View.Valid = 1;
 	ViewPawn->ApplyView(View);
+}
+
+void AScctFrontEndGameMode::StartToLeaveMap()
+{
+	// The loading page reads the map, the mode and the side from the travel's URL, which the engine empties next.
+	if (const UGameInstance* Instance = GetGameInstance())
+	{
+		if (UScctLoadingSubsystem* Loading = Instance->GetSubsystem<UScctLoadingSubsystem>())
+		{
+			Loading->NoteTravel();
+		}
+	}
+	Super::StartToLeaveMap();
 }

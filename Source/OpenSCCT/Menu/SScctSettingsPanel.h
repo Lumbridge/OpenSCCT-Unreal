@@ -81,6 +81,8 @@ private:
 	void ResetTab();
 	/** IMPORT FROM ENHANCED SCCT VERSUS (Menu/ScctEnhancedImport.h): where from, then what was taken over. */
 	void AskImportEnhanced();
+	/** EDIT HUD LAYOUT on the HUD tab: the edit mode over the match, or a practice match to edit over from the front end. */
+	void AskEditHud();
 	void RunImportEnhanced(const FString& Folder, bool bWithoutInstall);
 	void Toast(const FString& Message, bool bBad = false);
 

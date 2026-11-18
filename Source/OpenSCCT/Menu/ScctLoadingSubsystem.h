@@ -78,6 +78,12 @@ public:
 	/** Takes BeginCover's page away. */
 	void EndCover();
 
+	/**
+	 * Notes the URL of a travel that is waiting. A game mode calls it from StartToLeaveMap, the engine's last word
+	 * before a travel starts: a travel asked for by a mouse click starts in the same frame, before OnEndFrame.
+	 */
+	void NoteTravel();
+
 private:
 	void HandlePreLoadMap(const FWorldContext& Context, const FString& MapName);
 	void HandlePrepareLoadingScreen();
@@ -99,9 +105,6 @@ private:
 	/** BeginCover's page while it is up. */
 	TSharedPtr<SWidget> CoverPage;
 	FTSTicker::FDelegateHandle HoldTicker;
-
-	/** Notes the URL of a travel that waits for the next engine tick (FCoreDelegates::OnEndFrame). */
-	void NoteTravel();
 
 	/** The URL NoteTravel saw last; emptied once a load used it. */
 	FString PendingTravelURL;

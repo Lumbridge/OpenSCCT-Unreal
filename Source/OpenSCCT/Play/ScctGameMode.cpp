@@ -1,4 +1,6 @@
 #include "Play/ScctGameMode.h"
+#include "Engine/GameInstance.h"
+#include "Menu/ScctLoadingSubsystem.h"
 
 #include "Blueprint/UserWidget.h"
 #include "Demo/ScctDemoPlayback.h"
@@ -404,4 +406,17 @@ void AScctGameMode::SetMenuOpen(bool bOpen)
 	{
 		GiveInputToGame(Player);
 	}
+}
+
+void AScctGameMode::StartToLeaveMap()
+{
+	// The loading page reads the map, the mode and the side from the travel's URL, which the engine empties next.
+	if (const UGameInstance* Instance = GetGameInstance())
+	{
+		if (UScctLoadingSubsystem* Loading = Instance->GetSubsystem<UScctLoadingSubsystem>())
+		{
+			Loading->NoteTravel();
+		}
+	}
+	Super::StartToLeaveMap();
 }
