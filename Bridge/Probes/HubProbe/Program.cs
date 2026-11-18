@@ -133,6 +133,16 @@ internal static unsafe partial class Probe
         // Unreal calls this once its hub level is up and presents the session.
         s_api.ReportLoaded();
         Run(TimeSpan.FromSeconds(10), s => (s.Flags & HubStatusFlags.LocalPawn) != 0);
+
+        // A hub is other players' place even when this PC hosts it: the grenade preview (nadepreview) is refused.
+        bool nadePreview = OpenScct.UnrealBridge.Equipment.NadePreviewFeature.IsAllowed(slot);
+        Console.WriteLine($"grenade preview in the hub: {(nadePreview ? "ALLOWED" : "refused")}");
+        if (nadePreview)
+        {
+            Console.WriteLine("FAIL: the grenade preview is allowed in a hub");
+            return false;
+        }
+
         double until = s_run.Elapsed.TotalSeconds + inHubSeconds;
         Run(TimeSpan.FromSeconds(inHubSeconds), _ => false);
         HubStatus status;

@@ -68,7 +68,8 @@ if ($Level) {
 $arguments = @(
     "`"$project\OpenSCCTUnreal.uproject`"",
     "`"$levelPath$Options`"",
-    '-game', '-RenderOffscreen', '-ResX=1920', '-ResY=1080', '-ForceRes', '-unattended', '-nosplash',
+    # Unreal reads the first -ResX on the line, so a size given in -Extra replaces the default instead of following it.
+    '-game', '-RenderOffscreen', $(if ($Extra -match '-ResX=') { '' } else { '-ResX=1920 -ResY=1080' }), '-ForceRes', '-unattended', '-nosplash',
     $(if ($DeviceAudio) { '' } elseif ($NullAudio) { '-DeterministicAudio' } else { '-nosound' }),
     (Format-Switch 'ScctContent' $contentDir),
     "-ScctShots=$Shots",
