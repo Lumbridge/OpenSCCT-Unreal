@@ -1,4 +1,5 @@
 #include "OpenSCCT.h"
+#include "Runtime/ScctControlsApi.h"
 
 #include "Engine/Engine.h"
 #include "HAL/PlatformMisc.h"
@@ -50,6 +51,14 @@ namespace
 void FOpenSCCTModule::StartupModule()
 {
 	FDefaultGameModuleImpl::StartupModule();
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		const FKey Paddle = ScctPaddleKey(Index);
+		if (!EKeys::GetKeyDetails(Paddle))
+		{
+			EKeys::AddKey(FKeyDetails(Paddle, FText::Format(NSLOCTEXT("ScctInput", "Paddle", "Paddle {0}"), Index + 1), FKeyDetails::GamepadKey));
+		}
+	}
 	ScctLaunchOptions::Apply();
 	FScctLightPlan::Start();
 	FScctLightAudit::Start();

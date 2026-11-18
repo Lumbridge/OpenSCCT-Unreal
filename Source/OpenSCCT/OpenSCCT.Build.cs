@@ -71,6 +71,8 @@ public class OpenSCCT : ModuleRules
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PublicSystemLibraries.Add("crypt32.lib");
+			// Independent gamepad paddles and the viewport's Windows input-message origin filter.
+			PublicSystemLibraries.AddRange(new[] { "WindowsApp.lib", "Comctl32.lib" });
 			// The downloaded map packs are checked with SHA-256 from CNG (Online/ScctMapPacks).
 			PublicSystemLibraries.Add("bcrypt.lib");
 		}

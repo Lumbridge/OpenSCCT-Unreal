@@ -123,6 +123,8 @@ protected:
 
 private:
 	void Finish(const FString& Gesture, bool bCommit);
+	FString ReadGesture(const struct FScctPadApi& Pad);
+	void CaptureEdge();
 	EActiveTimerReturnType TickCapture(double InCurrentTime, float InDeltaTime);
 	FText GetShownText() const;
 	FSlateColor GetShownColour() const;
@@ -135,5 +137,6 @@ private:
 	FString Preview;
 	FString Refusal;
 	float CaptureSeconds = 0.0f;
+	double LastCaptureSample = 0.0;
 	TSharedPtr<FActiveTimerHandle> CaptureTimer;
 };

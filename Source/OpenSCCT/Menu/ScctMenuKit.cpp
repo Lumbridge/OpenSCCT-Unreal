@@ -1046,6 +1046,9 @@ FReply SScctKeyRow::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKe
 
 	const FKey Key = InKeyEvent.GetKey();
 	ScctUi::NoteInput(Key);
+	// This row captures keyboard and mouse bindings. A controller can open the
+	// row and its layout can supply a key, but the native button is not that key.
+	if (Key.IsGamepadKey()) return FReply::Handled();
 	if (Key == EKeys::Escape)
 	{
 		Finish(FKey(), false);

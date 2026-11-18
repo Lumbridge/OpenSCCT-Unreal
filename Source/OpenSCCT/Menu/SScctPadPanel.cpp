@@ -11,6 +11,7 @@
 #include "Play/ScctControlSettings.h"
 #include "Play/ScctRumble.h"
 #include "Runtime/ScctFeatures.h"
+#include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctMenuApi.h"
 #include "Runtime/ScctPadApi.h"
 #include "Widgets/Layout/SBox.h"
@@ -65,6 +66,8 @@ namespace
 			{ EKeys::Gamepad_DPad_Up, TEXT("DpadUp") }, { EKeys::Gamepad_DPad_Down, TEXT("DpadDown") },
 			{ EKeys::Gamepad_DPad_Left, TEXT("DpadLeft") }, { EKeys::Gamepad_DPad_Right, TEXT("DpadRight") },
 			{ EKeys::Gamepad_Special_Right, TEXT("Start") }, { EKeys::Gamepad_Special_Left, TEXT("Back") },
+			{ ScctPaddleKey(0), TEXT("P1") }, { ScctPaddleKey(1), TEXT("P2") },
+			{ ScctPaddleKey(2), TEXT("P3") }, { ScctPaddleKey(3), TEXT("P4") },
 		};
 		return Names;
 	}
@@ -186,6 +189,7 @@ void SScctPadBindRow::Press()
 	Preview.Reset();
 	Refusal.Reset();
 	CaptureSeconds = 0.0f;
+	LastCaptureSample = FPlatformTime::Seconds();
 	ScctUi::Describe(Caption, FText::FromString(TEXT("Press the button, hold B, or press a combination (left stick or left bumper with a face button). It is taken when you let go. Escape gives up.")));
 	CaptureTimer = RegisterActiveTimer(0.0f, FWidgetActiveTimerDelegate::CreateSP(this, &SScctPadBindRow::TickCapture));
 }
@@ -226,15 +230,28 @@ EActiveTimerReturnType SScctPadBindRow::TickCapture(double InCurrentTime, float 
 		return EActiveTimerReturnType::Stop;
 	}
 
+	const FString Gesture = ReadGesture(*Pad);
+	if (!Gesture.IsEmpty())
+	{
+		CaptureTimer.Reset();
+		Finish(Gesture, true);
+		return EActiveTimerReturnType::Stop;
+	}
+	return EActiveTimerReturnType::Continue;
+}
+
+FString SScctPadBindRow::ReadGesture(const FScctPadApi& Pad)
+{
+	const double Now = FPlatformTime::Seconds();
+	const float Delta = static_cast<float>(Now - LastCaptureSample);
+	LastCaptureSample = Now;
 	const FString Down = FString::Join(Held.Array(), TEXT("\n"));
 	int32 State = EScctPadCapture::Releasing;
-	const FString Text = PadPanelReadText([&](TCHAR* Buffer, int32 Capacity) { return Pad->CaptureUpdate(*Down, InDeltaTime, Buffer, Capacity, &State); });
+	const FString Text = PadPanelReadText([&](TCHAR* Buffer, int32 Capacity) { return Pad.CaptureUpdate(*Down, Delta, Buffer, Capacity, &State); });
 	switch (State)
 	{
 	case EScctPadCapture::Captured:
-		CaptureTimer.Reset();
-		Finish(Text, true);
-		return EActiveTimerReturnType::Stop;
+		return Text;
 	case EScctPadCapture::Refused:
 		Refusal = Text;
 		Preview.Reset();
@@ -247,7 +264,17 @@ EActiveTimerReturnType SScctPadBindRow::TickCapture(double InCurrentTime, float 
 	default:
 		break;
 	}
-	return EActiveTimerReturnType::Continue;
+	return {};
+}
+
+void SScctPadBindRow::CaptureEdge()
+{
+	// A press and release can both reach Slate between two active-timer callbacks.
+	if (const FScctPadApi* Pad = ScctFeature<FScctPadApi>())
+	{
+		const FString Gesture = ReadGesture(*Pad);
+		if (!Gesture.IsEmpty()) Finish(Gesture, true);
+	}
 }
 
 FReply SScctPadBindRow::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
@@ -260,7 +287,9 @@ FReply SScctPadBindRow::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& 
 			Finish(FString(), true);
 			return FReply::Handled();
 		}
-		return SScctOptionRow::OnKeyDown(MyGeometry, InKeyEvent);
+		const FReply Reply = SScctOptionRow::OnKeyDown(MyGeometry, InKeyEvent);
+		if (bCapturing && Key == EKeys::Gamepad_FaceButton_Bottom) Held.Add(TEXT("A"));
+		return Reply;
 	}
 
 	ScctUi::NoteInput(Key);
@@ -272,6 +301,7 @@ FReply SScctPadBindRow::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& 
 	FString Control = ControlOf(Key);
 	if (!Control.IsEmpty() && !InKeyEvent.IsRepeat())
 	{
+		if (Held.IsEmpty()) CaptureEdge();
 		// The bindings name logical controls: with a side's stick click and bumper swapped, the physical one stands
 		// for the other (LookSettings.PhysicalControl).
 		const UScctControlSettings* Controls = UScctControlSettings::Get();
@@ -285,6 +315,7 @@ FReply SScctPadBindRow::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& 
 			Control = Control == TEXT("RS") ? TEXT("RB") : TEXT("RS");
 		}
 		Held.Add(Control);
+		CaptureEdge();
 	}
 	// Everything else, including the controller's B and the shoulders the page would take, belongs to the capture.
 	return FReply::Handled();
@@ -303,6 +334,7 @@ FReply SScctPadBindRow::OnKeyUp(const FGeometry& MyGeometry, const FKeyEvent& In
 		Held.Remove(Control);
 		if (Control == TEXT("LS") || Control == TEXT("LB")) { Held.Remove(Control == TEXT("LS") ? TEXT("LB") : TEXT("LS")); }
 		if (Control == TEXT("RS") || Control == TEXT("RB")) { Held.Remove(Control == TEXT("RS") ? TEXT("RB") : TEXT("RS")); }
+		CaptureEdge();
 	}
 	return FReply::Handled();
 }
@@ -486,6 +518,9 @@ TSharedRef<SWidget> SScctPadPanel::BuildSettings()
 	Switch(TEXT("Enable stick movement"), TEXT("The left stick moves."), &Controls->bPadMove);
 	Switch(TEXT("Enable stick aiming"), TEXT("The right stick looks."), &Controls->bPadAim);
 	Switch(TEXT("Enable controller buttons"), TEXT("The buttons act (off: the sticks only)."), &Controls->bPadBinds);
+#if PLATFORM_WINDOWS
+	Switch(TEXT("Filter duplicate controller input"), TEXT("Ignore matching keyboard and mouse input sent by a controller layout. Turn this off if your layout intentionally sends both."), &Controls->bFilterPadMirrors);
+#endif
 	Slider(TEXT("Left stick dead zone"), TEXT("Travel at the centre of the left stick that does nothing. Raise it if the player creeps with the stick untouched."), &Controls->PadDeadzoneLeft, 0.0f, 0.9f, 0.01f, [](float V) { return PadPanelPercent(V * 100.0f); });
 	Slider(TEXT("Right stick dead zone"), TEXT("Travel at the centre of the right stick that does nothing. Raise it if the view drifts."), &Controls->PadDeadzoneRight, 0.0f, 0.9f, 0.01f, [](float V) { return PadPanelPercent(V * 100.0f); });
 	Slider(TEXT("Trigger press threshold"), TEXT("How far a trigger goes down before it counts as pressed."), &Controls->PadTriggerThreshold, 0.0f, 0.99f, 0.01f, [](float V) { return PadPanelPercent(V * 100.0f); });
@@ -596,7 +631,7 @@ void SScctPadPanel::RebuildButtons()
 		[
 			SAssignNew(Row, SScctPadBindRow)
 			.Label(FText::FromString(Label))
-			.Description(FText::FromString(TEXT("Enter or A, then press the button, hold B, or press a combination such as LS + Y; it is taken when you let go. Escape gives up; Delete clears it. Back paddles cannot be bound here.")))
+			.Description(FText::FromString(TEXT("Enter or A, then press the button, hold B, or press a combination such as LS + Y; it is taken when you let go. Escape gives up; Delete clears it. Controllers that report separate back paddles can bind P1 through P4.")))
 			.bMerc(bRowMerc)
 			.GetControls([Api, Id, bRowMerc]
 			{

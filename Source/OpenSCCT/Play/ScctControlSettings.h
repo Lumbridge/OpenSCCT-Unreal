@@ -262,6 +262,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Controller")
 	bool bPadEnabled = true;
 
+	/** Windows controller layouts can emit the same input as a key or click. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Controller")
+	bool bFilterPadMirrors = true;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Controller")
 	bool bPadMove = true;
 

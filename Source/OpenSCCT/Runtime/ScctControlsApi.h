@@ -39,7 +39,7 @@ enum class EScctKey : uint8
 	LeftMouse = 96, RightMouse, MiddleMouse, MouseX1, MouseX2,
 	MouseWheelUp = 101, MouseWheelDown, // no release: the byte is the notches turned since the last frame
 	PadA = 103, PadB, PadX, PadY, PadLB, PadRB, PadLS, PadRS, PadDpadUp, PadDpadDown, PadDpadLeft, PadDpadRight,
-	PadStart, PadBack, PadP1, PadP2, PadP3, PadP4, // P1..P4: back paddles, which Unreal has no keys for
+	PadStart, PadBack, PadP1, PadP2, PadP3, PadP4, // independently reported back paddles
 	Last = PadP4,
 };
 
@@ -114,10 +114,16 @@ constexpr FScctKeyNames ScctKeyNames[] = {
 	{ TEXT("Gamepad_DPad_Left"), nullptr }, { TEXT("Gamepad_DPad_Right"), nullptr },
 	{ TEXT("Gamepad_Special_Right"), nullptr }, { TEXT("Gamepad_Special_Left"), nullptr },
 	// 117: PadP1 .. PadP4
-	{ nullptr, nullptr }, { nullptr, nullptr }, { nullptr, nullptr }, { nullptr, nullptr },
+	{ TEXT("Scct_Paddle1"), nullptr }, { TEXT("Scct_Paddle2"), nullptr },
+	{ TEXT("Scct_Paddle3"), nullptr }, { TEXT("Scct_Paddle4"), nullptr },
 };
 
 static_assert(UE_ARRAY_COUNT(ScctKeyNames) == static_cast<int32>(EScctKey::Last) + 1, "ScctKeyNames must have one entry per EScctKey");
+
+inline FKey ScctPaddleKey(int32 Index)
+{
+	return FKey(FName(ScctKeyNames[static_cast<int32>(EScctKey::PadP1) + Index].Primary));
+}
 
 struct FScctKeyEdge
 {

@@ -1,11 +1,14 @@
 #include "Play/ScctLocalPlayer.h"
+#include "Play/ScctNativePad.h"
 
 #include "Engine/GameViewportClient.h"
+#include "Engine/GameInstance.h"
 #include "Framework/Application/IInputProcessor.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GameFramework/InputSettings.h"
 #include "HAL/IConsoleManager.h"
 #include "Menu/ScctMenuKit.h"
+#include "Menu/SScctPadPanel.h"
 #include "Misc/StringOutputDevice.h"
 #include "Play/ScctConsoleCommands.h"
 #include "Widgets/SViewport.h"
@@ -50,7 +53,8 @@ namespace
 			UConsole* Console = Client->ViewportConsole;
 			const auto Focus = Slate.GetKeyboardFocusedWidget();
 			if (!Console->ConsoleActive() && (ScctUi::IsTyping() ||
-				(Focus && Focus->GetType() == FName(TEXT("SScctKeyRow")) && StaticCastSharedPtr<SScctKeyRow>(Focus)->IsCapturing()))) return false;
+				(Focus && Focus->GetType() == FName(TEXT("SScctKeyRow")) && StaticCastSharedPtr<SScctKeyRow>(Focus)->IsCapturing()) ||
+				(Focus && Focus->GetType() == FName(TEXT("SScctPadBindRow")) && StaticCastSharedPtr<SScctPadBindRow>(Focus)->IsCapturing()))) return false;
 			if (Event.IsRepeat()) return true;
 			if (Console->ConsoleActive())
 			{
@@ -84,6 +88,13 @@ void UScctLocalPlayer::PlayerAdded(UGameViewportClient* InViewport, FPlatformUse
 		{
 			InViewport->ViewportConsole = NewObject<UScctGameConsole>(InViewport);
 		}
+#if PLATFORM_WINDOWS
+		if (InViewport->GetGameInstance() && InViewport->GetGameInstance()->GetFirstGamePlayer() == this)
+		{
+			NativePad = MakeScctNativePad(this);
+			FSlateApplication::Get().RegisterInputPreProcessor(NativePad, 0);
+		}
+#endif
 		ConsoleShortcut = MakeShared<FScctConsoleShortcut>(InViewport);
 		FSlateApplication::Get().RegisterInputPreProcessor(ConsoleShortcut, 0);
 	}
@@ -95,6 +106,11 @@ void UScctLocalPlayer::PlayerRemoved()
 	{
 		FSlateApplication::Get().UnregisterInputPreProcessor(ConsoleShortcut);
 	}
+	if (NativePad && FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().UnregisterInputPreProcessor(NativePad);
+	}
+	NativePad.Reset();
 	ConsoleShortcut.Reset();
 	Super::PlayerRemoved();
 }

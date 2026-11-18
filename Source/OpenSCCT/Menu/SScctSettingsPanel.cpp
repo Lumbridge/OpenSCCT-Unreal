@@ -101,25 +101,9 @@ namespace
 	/** The bindings' name of a controller button ("A", "LB", "DpadUp"), empty for anything else. */
 	FString PadName(const FKey& Key)
 	{
-		static const TPair<FKey, const TCHAR*> Names[] = {
-			{ EKeys::Gamepad_FaceButton_Bottom, TEXT("A") }, { EKeys::Gamepad_FaceButton_Right, TEXT("B") },
-			{ EKeys::Gamepad_FaceButton_Left, TEXT("X") }, { EKeys::Gamepad_FaceButton_Top, TEXT("Y") },
-			{ EKeys::Gamepad_LeftShoulder, TEXT("LB") }, { EKeys::Gamepad_RightShoulder, TEXT("RB") },
-			{ EKeys::Gamepad_LeftTrigger, TEXT("LT") }, { EKeys::Gamepad_RightTrigger, TEXT("RT") },
-			{ EKeys::Gamepad_LeftTriggerAxis, TEXT("LT") }, { EKeys::Gamepad_RightTriggerAxis, TEXT("RT") },
-			{ EKeys::Gamepad_LeftThumbstick, TEXT("LS") }, { EKeys::Gamepad_RightThumbstick, TEXT("RS") },
-			{ EKeys::Gamepad_DPad_Up, TEXT("DpadUp") }, { EKeys::Gamepad_DPad_Down, TEXT("DpadDown") },
-			{ EKeys::Gamepad_DPad_Left, TEXT("DpadLeft") }, { EKeys::Gamepad_DPad_Right, TEXT("DpadRight") },
-			{ EKeys::Gamepad_Special_Right, TEXT("Start") }, { EKeys::Gamepad_Special_Left, TEXT("Back") },
-		};
-		for (const TPair<FKey, const TCHAR*>& Name : Names)
-		{
-			if (Name.Key == Key)
-			{
-				return Name.Value;
-			}
-		}
-		return FString();
+		if (Key == EKeys::Gamepad_LeftTriggerAxis) return TEXT("LT");
+		if (Key == EKeys::Gamepad_RightTriggerAxis) return TEXT("RT");
+		return SScctPadBindRow::ControlOf(Key);
 	}
 
 	/** A registry page's name as a tab label: "Hud" reads "HUD". */
@@ -133,6 +117,7 @@ namespace
 	void CopyControllerSettings(const UScctControlSettings& From, UScctControlSettings& To)
 	{
 		To.bPadEnabled = From.bPadEnabled;
+		To.bFilterPadMirrors = From.bFilterPadMirrors;
 		To.bPadMove = From.bPadMove;
 		To.bPadAim = From.bPadAim;
 		To.bPadBinds = From.bPadBinds;

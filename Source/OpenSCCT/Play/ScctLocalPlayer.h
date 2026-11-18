@@ -25,6 +25,7 @@ public:
 
 private:
 	TSharedPtr<class IInputProcessor> ConsoleShortcut;
+	TSharedPtr<class IInputProcessor> NativePad;
 };
 
 /** Shipping has no engine exec console. The viewport still draws and edits the line for the game's own commands. */

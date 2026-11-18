@@ -2,6 +2,7 @@
 
 #include "HAL/FileManager.h"
 #include "Misc/Paths.h"
+#include "Misc/ConfigCacheIni.h"
 #include "OpenSCCT.h"
 #include "Runtime/ScctFeatures.h"
 #include "Runtime/ScctMouseAimApi.h"
@@ -140,6 +141,8 @@ bool UScctControlSettings::Load()
 		return false;
 	}
 
+	bFilterPadMirrors = true;
+	GConfig->GetBool(TEXT("OpenSCCT.Pad"), TEXT("FilterDuplicateInput"), bFilterPadMirrors, GGameUserSettingsIni);
 	const bool bRead = Controls->LoadSettings(*GetSettingsFile()) != 0;
 	// Whatever the file was, the properties show what the bridge now plays with.
 	FScctControlSettings Now = {};
@@ -203,6 +206,8 @@ bool UScctControlSettings::Save()
 	{
 		return FailFromBridge(TEXT("The control settings file could not be written."));
 	}
+	GConfig->SetBool(TEXT("OpenSCCT.Pad"), TEXT("FilterDuplicateInput"), bFilterPadMirrors, GGameUserSettingsIni);
+	GConfig->Flush(false, GGameUserSettingsIni);
 	UE_LOG(LogOpenSCCT, Log, TEXT("Control settings saved to %s"), *File);
 	return true;
 }
@@ -264,6 +269,7 @@ bool UScctControlSettings::GetDefaults(UScctControlSettings& Into)
 	MouseAim->GetDefaults(&Defaults);
 	Into.FromBridge(Defaults);
 	// Reloaded's first run: vibration off, at full strength when it is turned on.
+	Into.bFilterPadMirrors = true;
 	Into.bPadRumble = false;
 	Into.PadRumbleStrength = 1.0f;
 	return true;
