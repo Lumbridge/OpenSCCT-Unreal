@@ -1,4 +1,5 @@
 #include "Play/ScctLevelStateSubsystem.h"
+#include "Play/ScctEchelonLightFilter.h"
 #include "Demo/ScctDemoPlayback.h"
 #include "Play/ScctStudioProp.h"
 
@@ -1732,12 +1733,12 @@ void UScctLevelStateSubsystem::BindLight(FLightState& State, const FScctWorldLig
 	const bool bImporterAnimates = Actor->Tags.ContainsByPredicate([](const FName& Tag) { return Tag.ToString().StartsWith(LevelLightTypeTagPrefix); });
 	if (bImporterAnimates && Light->LightFunctionMaterial != nullptr)
 	{
-		State.OriginalLightFunction = Light->LightFunctionMaterial;
-		UMaterialInstanceDynamic* Steady = UMaterialInstanceDynamic::Create(Light->LightFunctionMaterial, Light);
-		Steady->SetScalarParameterValue(LevelLightTypeParameter, LevelSteadyLightType);
-		Light->SetLightFunctionMaterial(Steady);
-		State.bLightFunctionHeld = true;
-		++NumRhythmsHeld;
+		if (auto* Filter = GetWorld()->GetSubsystem<UScctEchelonLightFilter>())
+		{
+			State.OriginalLightFunction = Filter->HoldSteady(*Light, LevelLightTypeParameter, LevelSteadyLightType);
+			State.bLightFunctionHeld = State.OriginalLightFunction.IsValid();
+			NumRhythmsHeld += State.bLightFunctionHeld;
+		}
 	}
 
 	if ((Record.Flags & EScctWorldLightFlags::Triggered) != 0)

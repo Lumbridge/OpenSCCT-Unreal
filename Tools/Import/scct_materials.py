@@ -351,6 +351,9 @@ def pawn_light(g, normal, world_position):
 def build_surface(cosmetic=False):
     g = Graph("/Game/OpenSCCT/Materials/M_ScctCosmeticFinish" if cosmetic else SURFACE)
     material = g.material
+    if not cosmetic:
+        # Legacy imported and runtime lit-translucent instances inherit this setting from the opaque master.
+        material.set_editor_property("translucency_lighting_mode", unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
     # Normals leave the graph in world space: the detail layer is projected along world axes.
     material.set_editor_property("tangent_space_normal", False)
     # One material serves level surfaces and characters.

@@ -1,4 +1,5 @@
 #include "Play/ScctEffectsSubsystem.h"
+#include "Play/ScctEchelonLightFilter.h"
 #include "Demo/ScctDemoPlayback.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -351,6 +352,7 @@ bool UScctEffectsSubsystem::EnsureScene()
 		Light->SetIntensityUnits(ELightUnits::Candelas);
 		Light->SetVisibility(false);
 		Light->SetupAttachment(Root);
+		UScctEchelonLightFilter::RouteNewWorldLight(*Light);
 		Light->RegisterComponent();
 		LightComponents.Add(Light);
 	}

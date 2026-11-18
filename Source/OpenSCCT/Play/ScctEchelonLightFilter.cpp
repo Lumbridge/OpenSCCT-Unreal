@@ -1,5 +1,6 @@
 #include "Play/ScctEchelonLightFilter.h"
 
+#include "Algo/Includes.h"
 #include "Animation/SkeletalMeshActor.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SpotLightComponent.h"
@@ -11,12 +12,14 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "HAL/FileManager.h"
+#include "HAL/IConsoleManager.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/FileHelper.h"
 #include "Online/ScctMapFolders.h"
 #include "OpenSCCT.h"
 #include "Play/ScctSessionSubsystem.h"
+#include "Play/ScctLightRules.h"
 #include "Runtime/ScctWorldApi.h"
 #include "SceneViewExtension.h"
 #include "Serialization/JsonSerializer.h"
@@ -204,6 +207,13 @@ void UScctEchelonLightFilter::Deinitialize()
 
 void UScctEchelonLightFilter::Clear()
 {
+	bLightPlanReady = false;
+	Uninstall();
+}
+
+void UScctEchelonLightFilter::Uninstall()
+{
+	RestoreRouting();
 	ViewExtension.Reset();
 	if (SpawnHandle.IsValid()) GetWorld()->RemoveOnActorSpawnedHandler(SpawnHandle);
 	SpawnHandle.Reset();
@@ -251,11 +261,75 @@ void UScctEchelonLightFilter::CaptureVisibleProjectors(const FSceneView& View)
 void UScctEchelonLightFilter::QueueActor(AActor* Actor)
 {
 	// Stand-ins acquire their Scct tag after SpawnActor returns.
+	if (!Actor) return;
+	if (!NativeReceivers.IsEmpty())
+		for (auto* Light : TInlineComponentArray<ULightComponent*>(Actor)) RouteLight(*Light);
 	if (ScctEchelon::IsReceiver(Actor)) Pending.Add(Actor);
+}
+
+void UScctEchelonLightFilter::RouteLight(ULightComponent& Light)
+{
+	// Duplicate the ordinary world bit on ordinary lights. Projectors that reject the
+	// complete native group keep only their original world bit. Actor lamps keep bit 1.
+	if (NativeReceivers.IsEmpty() || !Light.LightingChannels.bChannel0 || Light.LightingChannels.bChannel2 ||
+		NativeProjectors.Contains(&Light)) return;
+	Light.SetLightingChannels(true, Light.LightingChannels.bChannel1, true);
+	MirroredLights.Add(&Light);
+}
+
+void UScctEchelonLightFilter::RouteNewWorldLight(ULightComponent& Light)
+{
+	if (auto* World = Light.GetWorld())
+		if (auto* Filter = World->GetSubsystem<UScctEchelonLightFilter>()) Filter->RouteLight(Light);
+}
+
+void UScctEchelonLightFilter::RouteReceiverComponent(UPrimitiveComponent& Mesh)
+{
+	AActor* Owner = Mesh.GetOwner();
+	if (!Mesh.LightingChannels.bChannel0 || Mesh.LightingChannels.bChannel2 || !ScctEchelon::IsReceiver(Owner) ||
+		!NativeReceivers.Contains(ScctEchelon::ActorTag(*Owner))) return;
+	Mesh.SetLightingChannels(false, Mesh.LightingChannels.bChannel1, true);
+	RoutedMeshes.Add(&Mesh);
+}
+
+void UScctEchelonLightFilter::RestoreRouting()
+{
+	for (const auto& Weak : RoutedMeshes)
+		if (auto* Mesh = Weak.Get(); Mesh && !Mesh->LightingChannels.bChannel0 && Mesh->LightingChannels.bChannel2)
+			Mesh->SetLightingChannels(true, Mesh->LightingChannels.bChannel1, false);
+	for (const auto& Weak : MirroredLights)
+		if (auto* Light = Weak.Get(); Light && Light->LightingChannels.bChannel0 && Light->LightingChannels.bChannel2)
+			Light->SetLightingChannels(true, Light->LightingChannels.bChannel1, false);
+	RoutedMeshes.Reset();
+	MirroredLights.Reset();
+	NativeProjectors.Reset();
+	NativeReceivers.Reset();
+}
+
+UMaterialInterface* UScctEchelonLightFilter::HoldSteady(ULightComponent& Light, FName Parameter, float Value)
+{
+	FLightState* State = Lights.FindByPredicate([&](const FLightState& Entry) { return Entry.Light.Get() == &Light; });
+	UMaterialInterface* Original = State ? State->Original.Get() : Light.LightFunctionMaterial.Get();
+	if (!Original) return nullptr;
+	auto* Steady = UMaterialInstanceDynamic::Create(Original, &Light);
+	Steady->SetScalarParameterValue(Parameter, Value);
+	if (State)
+	{
+		State->Original.Reset(Steady);
+		CastChecked<UMaterialInstanceDynamic>(Light.LightFunctionMaterial)->SetScalarParameterValue(Parameter, Value);
+	}
+	else Light.SetLightFunctionMaterial(Steady);
+	return Original;
 }
 
 void UScctEchelonLightFilter::AddReceiver(AActor& Actor)
 {
+	if (!NativeReceivers.IsEmpty())
+	{
+		for (auto* Light : TInlineComponentArray<ULightComponent*>(&Actor)) RouteLight(*Light);
+		if (ScctEchelon::IsReceiver(&Actor) && NativeReceivers.Contains(ScctEchelon::ActorTag(Actor)))
+			for (auto* Mesh : TInlineComponentArray<UPrimitiveComponent*>(&Actor)) RouteReceiverComponent(*Mesh);
+	}
 	for (const FName Tag : Actor.Tags)
 	{
 		for (auto It = CapturesByReceiver.CreateConstKeyIterator(Tag); It; ++It)
@@ -268,11 +342,15 @@ void UScctEchelonLightFilter::AddReceiver(AActor& Actor)
 
 void UScctEchelonLightFilter::Apply()
 {
+	static const IConsoleVariable* MegaChannels = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MegaLights.LightingChannels"));
+	const bool bCanSplit = bLightPlanReady && !FScctLightRules::BodyAids() && (!MegaChannels || MegaChannels->GetInt() != 0);
+	if (bInstalled && bNativeAllowed != bCanSplit) Uninstall();
 	if (!bInstalled)
 	{
 		const auto* Session = GetWorld()->GetSubsystem<UScctSessionSubsystem>();
 		if (!Session || !Session->IsPlaying() || !Session->GetSessionInfo().Map[0] || GetWorld()->GetNetMode() == NM_DedicatedServer) return;
 		const FString Folder = ScctMapFolders::FolderOf(Session->GetSessionInfo().Map);
+		bNativeAllowed = bCanSplit;
 		RegisterMap(Folder);
 		bInstalled = true;
 	}
@@ -309,14 +387,12 @@ void UScctEchelonLightFilter::RegisterMap(const FString& Folder)
 		if (IsReceiver(*It)) ReadImportedTags(**It, Rules);
 	if (Rules.IsEmpty()) return;
 
-	UMaterial* Master = LoadObject<UMaterial>(nullptr, FilterMaterial);
-	if (!Master)
+	struct FGroup
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Missing Echelon receiver light function %s"), FilterMaterial);
-		return;
-	}
-
-	TArray<TArray<FName>> Groups;
+		TArray<FName> Excluded;
+		TArray<USpotLightComponent*> Spots;
+	};
+	TArray<FGroup> Groups;
 	for (const auto& Projector : Projectors)
 	{
 		ALight* Actor = Placed.FindRef(FScctWorld::LevelTag(*Projector.Key.ToString()));
@@ -330,43 +406,79 @@ void UScctEchelonLightFilter::RegisterMap(const FString& Folder)
 		}
 		if (Excluded.IsEmpty()) continue;
 		Excluded.Sort(FNameLexicalLess());
-		int32 Index = Groups.IndexOfByPredicate([&](const TArray<FName>& Group)
+		FGroup* Group = Groups.FindByPredicate([&](const FGroup& G) { return G.Excluded == Excluded; });
+		if (!Group)
 		{
-			return Group == Excluded;
-		});
-		if (Index == INDEX_NONE)
-		{
-			Index = Groups.Add(MoveTemp(Excluded));
-			auto* Capture = NewObject<USceneCaptureComponent2D>(Actor, NAME_None, RF_Transient);
-			auto* Depth = NewObject<UTextureRenderTarget2D>(Capture, NAME_None, RF_Transient);
-			Depth->Filter = TF_Nearest;
-			Depth->InitCustomFormat(1, 1, PF_R32_FLOAT, true);
-			Capture->TextureTarget = Depth;
-			Capture->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
-			Capture->CaptureSource = SCS_SceneDepth;
-			Capture->bRenderInMainRenderer = true;
-			Capture->bMainViewResolution = true;
-			Capture->bMainViewCamera = true;
-			Capture->bCaptureEveryFrame = false;
-			Capture->bCaptureOnMovement = false;
-			Actor->AddInstanceComponent(Capture);
-			Capture->RegisterComponent();
-			Captures.Add(Capture);
-			for (FName Tag : Groups[Index]) CapturesByReceiver.Add(Tag, Index);
+			Group = &Groups.AddDefaulted_GetRef();
+			Group->Excluded = MoveTemp(Excluded);
 		}
-		auto* Function = UMaterialInstanceDynamic::Create(Master, Light);
-		UMaterialInterface* Original = Light->LightFunctionMaterial;
-		if (Original) Function->CopyMaterialUniformParameters(Original);
-		Function->SetTextureParameterValue(TEXT("ExcludedDepth"), Captures[Index]->TextureTarget);
-		Lights.Add({Light, TStrongObjectPtr<UMaterialInterface>(Original), bool(Light->bAllowMegaLights), Index});
-		// A camera-space receiver lookup cannot be baked into a projector's 2D cookie atlas.
-		Light->bAllowMegaLights = false;
-		Light->SetLightFunctionMaterial(Function);
-		Light->MarkRenderStateDirty();
+		Group->Spots.Add(Light);
 	}
-	if (Captures.IsEmpty()) return;
+	if (Groups.IsEmpty()) return;
+
+	// A stable choice on cooked and loose maps. Prefer the group that eliminates the
+	// most projector light functions, resolving ties by the sorted source actor names.
+	Groups.Sort([](const FGroup& A, const FGroup& B)
+	{
+		if (A.Spots.Num() != B.Spots.Num()) return A.Spots.Num() > B.Spots.Num();
+		const int32 Common = FMath::Min(A.Excluded.Num(), B.Excluded.Num());
+		for (int32 I = 0; I < Common; ++I)
+			if (A.Excluded[I] != B.Excluded[I]) return A.Excluded[I].LexicalLess(B.Excluded[I]);
+		return A.Excluded.Num() < B.Excluded.Num();
+	});
+	if (bNativeAllowed)
+	{
+		for (FName Tag : Groups[0].Excluded) NativeReceivers.Add(Tag);
+	}
+
+	UMaterial* Master = nullptr;
+	for (const FGroup& Group : Groups)
+	{
+		TArray<FName> Residual = Group.Excluded;
+		if (!NativeReceivers.IsEmpty() && Algo::Includes(Group.Excluded, Groups[0].Excluded, FNameLexicalLess()))
+		{
+			for (auto* Spot : Group.Spots) NativeProjectors.Add(Spot);
+			Residual.RemoveAll([&](FName Tag) { return NativeReceivers.Contains(Tag); });
+		}
+		if (Residual.IsEmpty()) continue;
+		if (!Master) Master = LoadObject<UMaterial>(nullptr, FilterMaterial);
+		if (!Master)
+		{
+			UE_LOG(LogOpenSCCT, Warning, TEXT("Missing Echelon receiver light function %s"), FilterMaterial);
+			continue;
+		}
+		AActor* Actor = Group.Spots[0]->GetOwner();
+		auto* Capture = NewObject<USceneCaptureComponent2D>(Actor, NAME_None, RF_Transient);
+		auto* Depth = NewObject<UTextureRenderTarget2D>(Capture, NAME_None, RF_Transient);
+		Depth->Filter = TF_Nearest;
+		Depth->InitCustomFormat(1, 1, PF_R32_FLOAT, true);
+		Capture->TextureTarget = Depth;
+		Capture->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
+		Capture->CaptureSource = SCS_SceneDepth;
+		Capture->bRenderInMainRenderer = true;
+		Capture->bMainViewResolution = true;
+		Capture->bMainViewCamera = true;
+		Capture->bCaptureEveryFrame = false;
+		Capture->bCaptureOnMovement = false;
+		Actor->AddInstanceComponent(Capture);
+		Capture->RegisterComponent();
+		const int32 Index = Captures.Add(Capture);
+		for (FName Tag : Residual) CapturesByReceiver.Add(Tag, Index);
+		for (auto* Light : Group.Spots)
+		{
+			auto* Function = UMaterialInstanceDynamic::Create(Master, Light);
+			UMaterialInterface* Original = Light->LightFunctionMaterial;
+			if (Original) Function->CopyMaterialUniformParameters(Original);
+			Function->SetTextureParameterValue(TEXT("ExcludedDepth"), Captures[Index]->TextureTarget);
+			Lights.Add({Light, TStrongObjectPtr<UMaterialInterface>(Original), bool(Light->bAllowMegaLights), Index});
+			// A camera-space receiver lookup cannot be baked into a projector's 2D cookie atlas.
+			Light->bAllowMegaLights = false;
+			Light->SetLightFunctionMaterial(Function);
+			Light->MarkRenderStateDirty();
+		}
+	}
 	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
-		if (IsReceiver(*It)) AddReceiver(**It);
+		AddReceiver(**It);
 	SpawnHandle = GetWorld()->AddOnActorSpawnedHandler(FOnActorSpawned::FDelegate::CreateUObject(this, &UScctEchelonLightFilter::QueueActor));
-	ViewExtension = FSceneViewExtensions::NewExtension<FReceiverView>(this);
+	if (!Captures.IsEmpty()) ViewExtension = FSceneViewExtensions::NewExtension<FReceiverView>(this);
 }

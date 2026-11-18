@@ -1,5 +1,6 @@
 #include "Play/ScctLevelStateSoftBodies.h"
 
+#include "Play/ScctEchelonLightFilter.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -224,6 +225,7 @@ void UScctSoftBodySubsystem::Build()
 		{
 			Mesh->SetDefaultCustomPrimitiveDataFloat(Slot, Custom[Slot]);
 		}
+		if (auto* Filter = GetWorld()->GetSubsystem<UScctEchelonLightFilter>()) Filter->RouteReceiverComponent(*Mesh);
 		Mesh->RegisterComponent();
 		Mesh->SetWorldTransform(LevelMesh->GetComponentTransform());
 		Owner->AddInstanceComponent(Mesh);

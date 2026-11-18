@@ -537,5 +537,6 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 		NumLive, NumOnBodies, NumHaze, NumOff, NumCapped, Cap, MostIntensity, NumWithoutActor, NumAlready);
 	UE_LOG(LogOpenSCCT, Log, TEXT("LightRules: the map %s; %d moons at share %.2f, %d sky lights at share %.2f, %d height fogs with %.2f of their glow; %d of %d level meshes carry no baked light and take the bodies' lamps."),
 		bSun ? TEXT("has a sun light (the level's directional light stays)") : TEXT("has no sun light"), NumMoons, MoonShare, NumSkies, SkyShare, NumFogs, FogShare, NumActorLit, NumMeshes);
+	if (auto* Filter = World->GetSubsystem<UScctEchelonLightFilter>()) Filter->OnLightPlanDressed();
 	return true;
 }

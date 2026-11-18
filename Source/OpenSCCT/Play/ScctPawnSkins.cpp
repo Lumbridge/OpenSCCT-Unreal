@@ -1,5 +1,6 @@
 #include "Play/ScctPawnSkins.h"
 
+#include "Play/ScctEchelonLightFilter.h"
 #include "CollisionQueryParams.h"
 #include "Components/PointLightComponent.h"
 #include "Components/PoseableMeshComponent.h"
@@ -556,6 +557,7 @@ void UScctPawnSkinsSubsystem::UpdateLight(AScctPawnProxy& Proxy, FPawnSkin& Skin
 		Light->SetLightColor(ShockLightColor());
 		Light->SetAttenuationRadius(LightRadiusUnit * (ShockLightRadius + 1.0f));
 		Light->SetCastShadows(false);
+		UScctEchelonLightFilter::RouteNewWorldLight(*Light);
 		Light->RegisterComponent();
 		if (!Proxy.AttachToBone(Light, ShockLightBone))
 		{

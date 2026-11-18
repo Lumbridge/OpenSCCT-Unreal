@@ -76,6 +76,10 @@ namespace
 		Lamp.IndirectLightingIntensity = 0.0f;
 		Lamp.VolumetricScatteringIntensity = 0.0f;
 		Lamp.bAffectTranslucentLighting = false;
+		// The preview has its own view bit. Normal world lamps can use both world receiver
+		// channels without reaching the turntable, even with a directional light in the map.
+		Lamp.ViewLightingChannels.bViewChannel0 = false;
+		Lamp.ViewLightingChannels.bViewChannel1 = true;
 		Lamp.LightingChannels.bChannel0 = false;
 		Lamp.LightingChannels.bChannel1 = false;
 		Lamp.LightingChannels.bChannel2 = true;
@@ -115,6 +119,8 @@ AScctArmouryPreviewStage::AScctArmouryPreviewStage()
 
 	Capture = CreateDefaultSubobject<USceneCaptureComponent2D>(TEXT("Capture"));
 	Capture->SetupAttachment(Root);
+	Capture->ViewLightingChannels.bViewChannel0 = false;
+	Capture->ViewLightingChannels.bViewChannel1 = true;
 	Capture->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
 	Capture->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
 	Capture->bCaptureEveryFrame = true;

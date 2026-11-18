@@ -1,5 +1,6 @@
 #include "Play/ScctEquipmentSubsystem.h"
 
+#include "Play/ScctEchelonLightFilter.h"
 #include "Camera/CameraComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/PoseableMeshComponent.h"
@@ -564,6 +565,7 @@ void UScctEquipmentSubsystem::UpdateTorch(FPawnGear& Found, AScctPawnProxy& Prox
 		Torch->SetIntensityUnits(ELightUnits::Candelas);
 		Torch->SetCastShadows(true);
 		Torch->SetSourceRadius(1.5f);
+		UScctEchelonLightFilter::RouteNewWorldLight(*Torch);
 		Torch->RegisterComponent();
 		Proxy.AddInstanceComponent(Torch);
 		Found.Torch = Torch;
@@ -720,6 +722,7 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		Light->SetAttenuationRadius(30.0f);
 		Light->SetLightColor(LaserColor);
 		Light->SetCastShadows(false);
+		UScctEchelonLightFilter::RouteNewWorldLight(*Light);
 		Light->RegisterComponent();
 		Proxy.AddInstanceComponent(Light);
 		Found.DotLight = Light;
