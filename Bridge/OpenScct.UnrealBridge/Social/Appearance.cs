@@ -113,7 +113,7 @@ public sealed partial class AccountService
             return false;
         }
 
-        return Exports.Current is not { IsDisposed: false } || OnlineBridge.Existing?.Client is not null || HubBridge.Existing?.Client is not null;
+        return Exports.Current is not { IsDisposed: false, IsBackdrop: false } || OnlineBridge.Existing?.Client is not null || HubBridge.Existing?.Client is not null;
     }
 
     // ---- the Armoury's choices ------------------------------------------------------------------------------------

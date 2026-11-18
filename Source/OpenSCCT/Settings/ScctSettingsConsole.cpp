@@ -344,6 +344,9 @@ namespace
 		Out.Add(OwnedBool(TEXT("Graphics.MotionBlur"),
 			[] { return UScctUserSettings::Get()->bMotionBlur; },
 			[](bool bValue) { UScctUserSettings::Get()->bMotionBlur = bValue; ScctConsoleApplyUser(false); }));
+		Out.Add(OwnedBool(TEXT("Graphics.LiveMenuBackground"),
+			[] { return UScctUserSettings::Get()->bLiveMenuBackground; },
+			[](bool bValue) { UScctUserSettings::Get()->bLiveMenuBackground = bValue; ScctConsoleApplyUser(false); }));
 		Out.Add(OwnedBool(TEXT("Hud.DistanceInFeet"),
 			[] { return UScctUserSettings::Get()->bDistanceInFeet; },
 			[](bool bValue) { UScctUserSettings::Get()->bDistanceInFeet = bValue; ScctConsoleApplyUser(false); }));

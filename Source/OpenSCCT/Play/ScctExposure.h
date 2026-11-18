@@ -5,8 +5,8 @@
 /**
  * How bright the player's picture is exposed right now, for game code that makes light.
  *
- * The levels are played with automatic exposure over a wide range: the eye opens up in a dark cellar and closes
- * down in a lit hall. A flash of a fixed strength is then a faint flicker in the hall and a white-out of the whole
+ * The levels are played with automatic exposure: the eye closes down in a lit hall and opens up for a dim room,
+ * though no further than a lamp-lit room needs (a dark place stays dark: see the range in ScctExposure.cpp). A flash of a fixed strength is then a faint flicker in the hall and a white-out of the whole
  * screen in the cellar. Lights that game code flashes (muzzle flashes, sparks, explosions) are therefore scaled
  * by the exposure of the last drawn frame, so a flash is as bright in the picture wherever it goes off. The
  * glowing materials do the same in their shaders (the engine's eye adaptation node, Tools/Import/scct_materials.py).
@@ -27,10 +27,17 @@ namespace FScctExposure
 	/**
 	 * How bright the last picture was as a whole, before the tone curve: the scene's average luminance (the
 	 * engine's exposure histogram over the whole picture, its brightest and darkest tenths left out) times the
-	 * exposure. 0.18 is a picture the eye has settled on; less is one too dark for the exposure's range (a cellar
-	 * with the lamps shot out), more one too bright. 0 until a frame was measured.
+	 * exposure. SettledPictureLevel() is a picture the eye has settled on; less is one too dark for the exposure's
+	 * range (a night street, a cellar with the lamps shot out), more one too bright. 0 until a frame was measured.
 	 */
 	OPENSCCT_API float PictureLevel();
+
+	/**
+	 * The PictureLevel of a place the exposure has settled on: middle grey (0.18) moved by the bias the maps are
+	 * played with (scct.Exposure.Bias). The maps' exposure range and that bias are set in ScctExposure.cpp, over
+	 * the levels' own post-process volumes.
+	 */
+	OPENSCCT_API float SettledPictureLevel();
 
 	/**
 	 * What to multiply a flash light's strength by so it reads the same at any exposure. The strengths in the code

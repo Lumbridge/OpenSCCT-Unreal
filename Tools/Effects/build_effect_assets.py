@@ -8,6 +8,8 @@ The materials go to /Game/OpenSCCT/Effects/ and are committed: they are ours, ma
   M_ScctFxGlow    additive unlit sprite; colour and opacity per instance (the first four custom data floats) and
                   the distance in cm over which it dims into a surface behind it (the fifth)
   M_ScctFxSmoke   soft translucent sprite lit by the scene; colour and opacity per instance
+  M_ScctFxCloud   a textured cloud sprite lit by the scene (the spy's smoke grenade): one cell of its Texture's
+                  Grid per instance (the fifth custom value), times the instance's colour and opacity
   M_ScctFxDecal   deferred decal: a bullet hole with a ragged lip in a chipped ring; parameters Color, RimColor,
                   Strength and RimStrength
   M_ScctFxSolid   opaque surface with a glow, for stand-in shapes; parameters Color and Glow
@@ -203,6 +205,93 @@ def build_smoke():
     haze.set_editor_property("const_b", 0.05)
     connect(colour, "", haze, "A")
     connect_output(haze, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    finish(material)
+
+
+def build_cloud():
+    """A sprite of a textured cloud (the spy's smoke grenade: Play/ScctEffectsSubsystem.cpp, EmitGrenadeCloud): one
+    cell of the Texture parameter's Grid (columns, rows), the cell picked per instance (the fifth custom value),
+    times the instance's colour and opacity. The original draws it unlit; here the room lights it, with a floor of
+    its own in the finished picture (Floor) so it is a grey cloud in the dark too and never a black blot."""
+    material = new_material("M_ScctFxCloud")
+    if not material:
+        return
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    material.set_editor_property("two_sided", True)
+    try_set(material, "translucency_lighting_mode", unreal.TranslucencyLightingMode.TLM_VOLUMETRIC_NON_DIRECTIONAL)
+    try_set(material, "used_with_instanced_static_meshes", True)
+
+    def node(cls, x, y):
+        return lib.create_material_expression(material, cls, x, y)
+
+    uv = node(unreal.MaterialExpressionTextureCoordinate, -1500, 0)
+    cell = node(unreal.MaterialExpressionPerInstanceCustomData, -1500, 150)
+    cell.set_editor_property("data_index", 4)
+    cell.set_editor_property("const_default_value", 0.0)
+    grid = node(unreal.MaterialExpressionVectorParameter, -1500, 300)
+    grid.set_editor_property("parameter_name", "Grid")
+    grid.set_editor_property("default_value", unreal.LinearColor(2, 2, 0, 0))
+    texture = node(unreal.MaterialExpressionTextureObjectParameter, -1500, -200)
+    texture.set_editor_property("parameter_name", "Texture")
+    default = unreal.load_asset("/Engine/EngineResources/DefaultTexture")
+    if default:
+        texture.set_editor_property("texture", default)
+
+    look = node(unreal.MaterialExpressionCustom, -1100, 0)
+    look.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT4)
+    pins = []
+    for name in ("Tex", "UV", "Cell", "Grid"):
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    look.set_editor_property("inputs", pins)
+    # Half a texel is kept clear of the cell's edge, so a cell never shows its neighbour's rim.
+    look.set_editor_property("code", "float2 g = max(Grid.xy, 1.0);\n"
+                                     "float c = floor(Cell + 0.5);\n"
+                                     "float2 o = float2(fmod(c, g.x), floor(c / g.x));\n"
+                                     "float2 uv = (clamp(UV, 0.01, 0.99) + o) / g;\n"
+                                     "return Texture2DSample(Tex, TexSampler, uv);")
+    connect(texture, "", look, "Tex")
+    connect(uv, "", look, "UV")
+    connect(cell, "", look, "Cell")
+    connect(grid, "", look, "Grid")
+    rgb = node(unreal.MaterialExpressionComponentMask, -850, -50)
+    for channel, on in (("r", True), ("g", True), ("b", True), ("a", False)):
+        rgb.set_editor_property(channel, on)
+    connect(look, "", rgb, "")
+    cover = node(unreal.MaterialExpressionComponentMask, -850, 150)
+    for channel, on in (("r", False), ("g", False), ("b", False), ("a", True)):
+        cover.set_editor_property(channel, on)
+    connect(look, "", cover, "")
+
+    colour, alpha = instance_colour(material, -850, -400)
+    base = node(unreal.MaterialExpressionMultiply, -600, -150)
+    connect(rgb, "", base, "A")
+    connect(colour, "", base, "B")
+    connect_output(base, "", unreal.MaterialProperty.MP_BASE_COLOR)
+
+    opacity = node(unreal.MaterialExpressionMultiply, -600, 150)
+    connect(cover, "", opacity, "A")
+    connect(alpha, "", opacity, "B")
+    # A short soft edge where a sprite meets the floor or a wall; short, so somebody against a wall stays hidden.
+    fade = node(unreal.MaterialExpressionDepthFade, -600, 320)
+    fade.set_editor_property("fade_distance_default", 20.0)
+    soft = node(unreal.MaterialExpressionMultiply, -400, 200)
+    connect(opacity, "", soft, "A")
+    connect(fade, "", soft, "B")
+    connect_output(soft, "", unreal.MaterialProperty.MP_OPACITY)
+
+    rough = node(unreal.MaterialExpressionConstant, -600, 450)
+    rough.set_editor_property("r", 1.0)
+    connect_output(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+
+    floor = node(unreal.MaterialExpressionScalarParameter, -600, -500)
+    floor.set_editor_property("parameter_name", "Floor")
+    floor.set_editor_property("default_value", 0.2)
+    own = node(unreal.MaterialExpressionMultiply, -400, -400)
+    connect(base, "", own, "A")
+    connect(floor, "", own, "B")
+    connect_output(in_the_picture(material, own, -150, -400), "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     finish(material)
 
 
@@ -735,6 +824,7 @@ def build_goggle_glow_hue():
 
 build_glow()
 build_smoke()
+build_cloud()
 build_decal()
 build_solid()
 build_projection()

@@ -172,8 +172,13 @@ void UScctEquipmentSubsystem::OnMatchStarted()
 		UE_LOG(LogOpenSCCT, Warning, TEXT("Equipment: no /Game/OpenSCCT/Weapons/Materials/M_ScctGlow (Tools/Import/Import-Characters.ps1 builds it); laser beams are not drawn"));
 	}
 
-	// Every mesh now, so the first shot or the first drawn pistol does not hitch on a load.
-	Models.LoadCatalog(*Api);
+	// Every mesh now, so the first shot or the first drawn pistol does not hitch on a load. Not for the match behind
+	// the main menu: most of the catalog is first-person models nobody sees there, and loading it all would hold
+	// the menu for most of a second; what the bots carry is loaded as it is first drawn.
+	if (const UScctSessionSubsystem* StartedSession = GetWorld()->GetSubsystem<UScctSessionSubsystem>(); StartedSession == nullptr || !StartedSession->IsBackdrop())
+	{
+		Models.LoadCatalog(*Api);
+	}
 
 	// The view model shadows itself from every light, the torch and the muzzle flash included.
 	SetIntCVar(TEXT("r.FirstPerson.SelfShadow"), 1);

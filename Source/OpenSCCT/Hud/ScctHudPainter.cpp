@@ -285,6 +285,36 @@ void FScctHudPainter::Image(const FBox2f& Box, const FSlateBrush& Brush, const F
 	FSlateDrawElement::MakeBox(Elements, ++Layer, BoxGeometry(Drawn), &Part, ESlateDrawEffect::None, Final);
 }
 
+void FScctHudPainter::ImageOutside(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint,
+	const FVector2f& MaskCentre, const FVector2f& MaskHalfSize, float MaskDegrees)
+{
+	// Slate clips to the inside of a box (turned or not), so the outside of the mask is drawn as the four boxes round
+	// it, which do not overlap: everything above it and everything below it along its own axes, and what is left and
+	// right of it between those two.
+	const float Radians = FMath::DegreesToRadians(MaskDegrees);
+	const FVector2f Along(FMath::Cos(Radians), FMath::Sin(Radians));
+	const FVector2f Across(-Along.Y, Along.X);
+	const float W = FMath::Abs(MaskHalfSize.X), H = FMath::Abs(MaskHalfSize.Y);
+	constexpr float Far = 20000.0f;
+	const float Parts[4][4] = {
+		{ -Far, Far, -Far, -H },
+		{ -Far, Far, H, Far },
+		{ -Far, -W, -H, H },
+		{ W, Far, -H, H },
+	};
+	const FSlateRenderTransform& ToRender = Geometry.GetAccumulatedRenderTransform();
+	for (const float* Part : Parts)
+	{
+		const auto Corner = [&](float A, float B)
+		{
+			return FVector2f(ToRender.TransformPoint(MaskCentre + Along * A + Across * B));
+		};
+		Elements.PushClip(FSlateClippingZone(Corner(Part[0], Part[2]), Corner(Part[1], Part[2]), Corner(Part[0], Part[3]), Corner(Part[1], Part[3])));
+		Image(Box, Brush, UV, Tint);
+		Elements.PopClip();
+	}
+}
+
 void FScctHudPainter::RotatedImage(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint, float Degrees)
 {
 	const FLinearColor Final = ScctHudStyle::Fade(Tint, Alpha());

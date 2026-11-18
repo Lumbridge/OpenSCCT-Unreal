@@ -1,5 +1,6 @@
 #include "Hud/ScctVisorEffects.h"
 
+#include "Hud/ScctGasMaskOverlay.h"
 #include "Hud/ScctHudModel.h"
 #include "Hud/ScctHudPainter.h"
 #include "Hud/ScctHudStyle.h"
@@ -19,6 +20,9 @@ namespace
 
 	/** The faked rain stops this long after it starts, so the droplets' run-out can be seen too. */
 	constexpr float ForcedWetSeconds = 12.0f;
+
+	/** The faked gas mask goes on this long after it is selected, so the frame alone can be seen first. */
+	constexpr float ForcedMaskOnSeconds = 2.0f;
 
 	bool HasFlag(const FScctHudState& State, int32 Flag)
 	{
@@ -390,9 +394,9 @@ void ScctVisorEffects::ParseCommandLine(FScctVisorState& Visor)
 		Visor.ForceDelay = FMath::Max(FCString::Atof(*Delay), 0.0f);
 	}
 	What = What.ToLower();
-	if (What != TEXT("shutdown") && What != TEXT("perturb") && What != TEXT("foam") && What != TEXT("shock") && What != TEXT("wet"))
+	if (What != TEXT("shutdown") && What != TEXT("perturb") && What != TEXT("foam") && What != TEXT("shock") && What != TEXT("wet") && What != TEXT("mask"))
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Visor: -ScctVisorFx=%s is not one of shutdown, perturb, foam, shock, wet"), *Value);
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Visor: -ScctVisorFx=%s is not one of shutdown, perturb, foam, shock, wet, mask"), *Value);
 		return;
 	}
 	Visor.Forced = What;
@@ -476,6 +480,16 @@ namespace
 		else if (Visor.Forced == TEXT("wet") && Age < ForcedWetSeconds)
 		{
 			State.EffectFlags |= EScctHudEffectFlags::Wet;
+		}
+		else if (Visor.Forced == TEXT("mask"))
+		{
+			// The gas mask selected (its frame comes up), put on 2 s later: the air then runs down from 30 s.
+			const float Worn = Age - ForcedMaskOnSeconds;
+			State.GasMaskAirSeconds = FMath::Max(30 - FMath::Max(FMath::TruncToInt32(Worn), 0), 0);
+			if (Worn >= 0.0f)
+			{
+				State.EffectFlags |= EScctHudEffectFlags::GasMaskWorn;
+			}
 		}
 	}
 }
@@ -579,6 +593,8 @@ void ScctVisorEffects::Update(FScctVisorState& Visor, FScctHudModel& Model, floa
 			bShocked && HasFlag(State, EScctHudEffectFlags::StickyShockHead) ? TEXT(" (head)") : TEXT(""));
 	}
 	Visor.bShocked = bShocked;
+
+	ScctGasMaskOverlay::Update(Visor, State);
 }
 
 bool ScctVisorEffects::IsHudShutDown(const FScctHudModel& Model)
@@ -595,6 +611,9 @@ void ScctVisorEffects::Paint(FScctHudPainter& Painter, const FScctHudModel& Mode
 	const FScctVisorState& Visor = *Model.Visor;
 	const FScctHudState& State = Model.State;
 	const float Now = State.TimeSeconds;
+
+	// The gas mask is on the face, under whatever is on the visor.
+	ScctGasMaskOverlay::Paint(Painter, Visor, State);
 
 	// As the merc update runs its handlers: the shutdown first; while it runs neither foam nor perturbation is driven,
 	// and foam on the visor hides the perturbation.

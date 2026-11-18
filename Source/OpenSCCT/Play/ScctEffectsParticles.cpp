@@ -8,10 +8,12 @@
 namespace
 {
 	// Sprites per layer. An explosion with its smoke uses about 150; a fire fight a few hundred.
-	constexpr int32 LayerCapacity[] = { 1536, 768 };
+	// The cloud layer holds eight smoke grenades' clouds of fifteen sprites.
+	constexpr int32 LayerCapacity[] = { 1536, 768, 120 };
 
 	// The five floats each instance hands its material: colour, opacity, and the distance (cm) over which a glow
-	// sprite dims into a surface behind it (M_ScctFxGlow; the smoke material has a fixed one).
+	// sprite dims into a surface behind it (M_ScctFxGlow; the smoke material has a fixed one). A cloud sprite's fifth
+	// is the cell of its picture instead (M_ScctFxCloud).
 	constexpr int32 CustomFloats = 5;
 
 	/** A big fireball meets the floor softly; a spark next to a wall keeps its brightness. */
@@ -54,10 +56,16 @@ namespace
 	}
 }
 
-void FScctFxSprites::Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* GlowMaterial, UMaterialInterface* SmokeMaterial)
+void FScctFxSprites::SetLayerOpacity(EScctFxLayer Layer, float Opacity)
 {
-	UMaterialInterface* const Materials[] = { GlowMaterial, SmokeMaterial };
-	const TCHAR* const Names[] = { TEXT("FxGlow"), TEXT("FxSmoke") };
+	Layers[static_cast<int32>(Layer)].Opacity = FMath::Clamp(Opacity, 0.0f, 1.0f);
+}
+
+void FScctFxSprites::Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* GlowMaterial, UMaterialInterface* SmokeMaterial, UMaterialInterface* CloudMaterial)
+{
+	static_assert(UE_ARRAY_COUNT(LayerCapacity) == static_cast<int32>(EScctFxLayer::Count), "a capacity for every sprite layer");
+	UMaterialInterface* const Materials[] = { GlowMaterial, SmokeMaterial, CloudMaterial };
+	const TCHAR* const Names[] = { TEXT("FxGlow"), TEXT("FxSmoke"), TEXT("FxCloud") };
 	Streaks.Reserve(MaxStreaks);
 
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Layers); ++Index)
@@ -70,6 +78,7 @@ void FScctFxSprites::Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* G
 		Layer.CustomData.SetNumZeroed(Instances * CustomFloats);
 		Layer.Next = 0;
 		Layer.Live = 0;
+		Layer.Opacity = 1.0f;
 		Layer.bDrawnEmpty = true;
 		Layer.Component = nullptr;
 		if (Host == nullptr || Quad == nullptr || Materials[Index] == nullptr)
@@ -172,14 +181,29 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 			}
 			Particle.Velocity += Particle.Acceleration * DeltaSeconds;
 			Particle.Velocity.Z -= Particle.Gravity * DeltaSeconds;
-			Particle.Velocity *= FMath::Max(0.0f, 1.0f - Particle.Drag * DeltaSeconds);
-			Particle.Position += Particle.Velocity * DeltaSeconds;
+			if (Particle.LossMax.IsZero())
+			{
+				Particle.Velocity *= FMath::Max(0.0f, 1.0f - Particle.Drag * DeltaSeconds);
+				Particle.Position += Particle.Velocity * DeltaSeconds;
+			}
+			else
+			{
+				// The original emitter's order: the move first, then each axis loses its share (never more than all of it,
+				// where the original's would turn round on a long frame).
+				Particle.Position += Particle.Velocity * DeltaSeconds;
+				Particle.Velocity.X *= FMath::Max(0.0, 1.0 - FMath::FRandRange(Particle.LossMin.X, Particle.LossMax.X) * DeltaSeconds);
+				Particle.Velocity.Y *= FMath::Max(0.0, 1.0 - FMath::FRandRange(Particle.LossMin.Y, Particle.LossMax.Y) * DeltaSeconds);
+				Particle.Velocity.Z *= FMath::Max(0.0, 1.0 - FMath::FRandRange(Particle.LossMin.Z, Particle.LossMax.Z) * DeltaSeconds);
+			}
 			Particle.Rotation += Particle.Spin * DeltaSeconds;
 			++Layer.Live;
 
 			const float Time = Particle.Age / Particle.Life;
 			const float Size = FMath::Lerp(Particle.SizeStart, Particle.SizeEnd, Time);
-			const float Fade = Time < Particle.FadeIn ? Time / Particle.FadeIn : 1.0f - (Time - Particle.FadeIn) / (1.0f - Particle.FadeIn);
+			const float Fade = Time < Particle.FadeIn ? Time / Particle.FadeIn
+				: Particle.FadeOutStart < 0.0f ? 1.0f - (Time - Particle.FadeIn) / (1.0f - Particle.FadeIn)
+				: Time > Particle.FadeOutStart ? 1.0f - (Time - Particle.FadeOutStart) / FMath::Max(1.0f - Particle.FadeOutStart, UE_KINDA_SMALL_NUMBER)
+				: 1.0f;
 
 			bool bDrawn = true;
 			if (Particle.Stretch > 0.0f)
@@ -202,8 +226,8 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 			Custom[0] = Particle.Color.R;
 			Custom[1] = Particle.Color.G;
 			Custom[2] = Particle.Color.B;
-			Custom[3] = Particle.Color.A * FMath::Clamp(Fade, 0.0f, 1.0f);
-			Custom[4] = SoftEdge(Size);
+			Custom[3] = Particle.Color.A * FMath::Clamp(Fade, 0.0f, 1.0f) * Layer.Opacity;
+			Custom[4] = LayerIndex == static_cast<int32>(EScctFxLayer::Cloud) ? Particle.Cell : SoftEdge(Size);
 		}
 
 		int32 Drawn = Layer.Live;

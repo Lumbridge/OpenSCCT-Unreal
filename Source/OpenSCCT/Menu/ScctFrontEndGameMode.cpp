@@ -11,6 +11,7 @@
 #include "Menu/SScctGearPage.h"
 #include "Menu/SScctStrategicMapPage.h"
 #include "Menu/ScctFrontEndWidget.h"
+#include "Menu/ScctMenuBackdrop.h"
 #include "Menu/ScctTutorialPlay.h"
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
@@ -98,6 +99,32 @@ void AScctFrontEndGameMode::Tick(float DeltaSeconds)
 	ShowMenu();
 	RevealBackdrop();
 	MoveCamera();
+
+	// The live backdrop, once the menu and the still are up (the still is settled when nothing is waited for any more).
+	if (IsValid(Menu))
+	{
+		if (!IsValid(LiveBackdrop))
+		{
+			LiveBackdrop = NewObject<UScctMenuBackdrop>(this);
+		}
+		LiveBackdrop->Tick(*this, DeltaSeconds, !IsValid(BackdropLevel), StillMap, StillLevel);
+	}
+}
+
+void AScctFrontEndGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (IsValid(LiveBackdrop))
+	{
+		LiveBackdrop->Shutdown(GetWorld());
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
+void AScctFrontEndGameMode::SetStillCamera(const FVector& Location, const FRotator& Rotation, float Sway)
+{
+	CameraLocation = Location;
+	CameraRotation = Rotation;
+	CameraSway = Sway;
 }
 
 void AScctFrontEndGameMode::RevealBackdrop()
@@ -146,6 +173,8 @@ void AScctFrontEndGameMode::RevealBackdrop()
 	CameraRotation = BackdropRotation;
 	CameraSway = BackdropSway;
 	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: backdrop is %s (shown after %.1f s)"), BackdropMap, Waited);
+	StillLevel = BackdropLevel;
+	StillMap = BackdropMap;
 	BackdropLevel = nullptr;
 }
 
@@ -260,6 +289,12 @@ void AScctFrontEndGameMode::MoveCamera()
 
 void AScctFrontEndGameMode::StartToLeaveMap()
 {
+	// The match behind the menu stops before the level that was asked for starts to load.
+	if (IsValid(LiveBackdrop))
+	{
+		LiveBackdrop->Shutdown(GetWorld());
+	}
+
 	// The loading page reads the map, the mode and the side from the travel's URL, which the engine empties next.
 	if (const UGameInstance* Instance = GetGameInstance())
 	{

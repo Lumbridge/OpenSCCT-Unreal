@@ -19,6 +19,7 @@
 #include "Misc/Parse.h"
 #include "NiagaraActor.h"
 #include "NiagaraComponent.h"
+#include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
 #include "Play/ScctEffectsSubsystem.h"
 #include "Play/ScctLevelStateDebug.h"
@@ -277,6 +278,20 @@ void UScctLevelStateSubsystem::HandleMatchStarted()
 		}
 	}
 
+	if (Session != nullptr && Session->IsBackdrop())
+	{
+		// Behind the main menu one map follows another in the same world: the index is of the map shown now.
+		bIndexed = false;
+		TaggedActors.Reset();
+		TaggedLights.Reset();
+		TaggedCoronas.Reset();
+		TaggedEmitters.Reset();
+		TaggedWetGround.Reset();
+		MovableTags.Reset();
+		MeshAssets.Reset();
+		MaterialAssets.Reset();
+		NumEffectActors = 0;
+	}
 	IndexLevel();
 
 	// The simulation's state of the first tick is applied before the first frame is drawn, so nothing the map
@@ -351,7 +366,11 @@ void UScctLevelStateSubsystem::IndexLevel()
 	// The map's meshes and materials are original content imported on the player's machine, so they are found by
 	// looking, not by fixed references. A mesh of the map's own file is named Package_Group_Name, with "_vc" and
 	// eight hex digits added for each differently lit copy; the plain name stands for any of them.
-	const FString MapFolder = FPackageName::GetLongPackagePath(GetWorld()->GetOutermost()->GetName());
+	// The match behind the main menu plays in a level streamed into the front end's world: its assets are the
+	// map's, not the front end's.
+	const FString MapFolder = FPackageName::GetLongPackagePath(Session != nullptr && Session->IsBackdrop()
+		? UScctOnlineSubsystem::ImportedLevelOf(Session->GetSessionInfo().Map)
+		: GetWorld()->GetOutermost()->GetName());
 	TArray<FAssetData> Assets;
 	ScanLevelFolder(MapFolder / TEXT("world/StaticMeshes"), UStaticMesh::StaticClass(), Assets);
 	ScanLevelFolder(LevelEffectMeshFolder, UStaticMesh::StaticClass(), Assets);

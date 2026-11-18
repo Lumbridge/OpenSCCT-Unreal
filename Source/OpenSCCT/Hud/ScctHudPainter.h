@@ -95,6 +95,13 @@ public:
 	/** The same turned by Degrees (clockwise on screen) about the box's centre. */
 	void RotatedImage(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint, float Degrees);
 
+	/**
+	 * Image drawn only outside a mask: a box of half size MaskHalfSize about MaskCentre, turned by MaskDegrees (clockwise
+	 * on screen) about that centre. A Magma page's masked picture: the mask hides what is under it.
+	 */
+	void ImageOutside(const FBox2f& Box, const FSlateBrush& Brush, const FBox2f& UV, const FLinearColor& Tint,
+		const FVector2f& MaskCentre, const FVector2f& MaskHalfSize, float MaskDegrees);
+
 private:
 	FPaintGeometry BoxGeometry(const FBox2f& Box) const;
 

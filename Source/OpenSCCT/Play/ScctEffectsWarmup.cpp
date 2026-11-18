@@ -119,6 +119,14 @@ int32 UScctEffectsSubsystem::SpawnWarmupSamples(const FVector& At, const FVector
 		float Debt = 3.0f;
 		Emit(Style, At + Up * 10.0, FVector::ZeroVector, 0.0f, Debt);
 	}
+	{
+		// The smoke grenade's cloud is drawn with a material of its own.
+		FScctFxParticle& Particle = Sprites.Spawn(EScctFxLayer::Cloud);
+		Particle.Position = At + Up * 10.0;
+		Particle.Life = 0.5f;
+		Particle.SizeStart = Particle.SizeEnd = 20.0f;
+		Particle.Color.A = 0.5f;
+	}
 	for (const TCHAR* Surface : { TEXT("Shocker"), TEXT("Blood"), TEXT("Water"), TEXT("Metal"), TEXT("Wood"), TEXT("Glass"), TEXT("Sand"), TEXT("Concrete") })
 	{
 		SpawnImpact(Backdrop - Ahead * 2.0, -Ahead, FString(Surface), FString());
@@ -256,6 +264,12 @@ void UScctEffectsWarmupSubsystem::HandleMatchStarted()
 {
 	if (Phase != EPhase::Idle)
 	{
+		return;
+	}
+	if (Session->IsBackdrop())
+	{
+		// The match behind the main menu: no loading page goes over the menu for it, and its effects are behind
+		// the menu's shade when they are first drawn.
 		return;
 	}
 	if (bDisabled || IsRunningDedicatedServer())

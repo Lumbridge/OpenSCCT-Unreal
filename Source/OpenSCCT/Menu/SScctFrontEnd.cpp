@@ -4,6 +4,7 @@
 #include "HAL/PlatformMisc.h"
 #include "Hub/ScctHubSubsystem.h"
 #include "Menu/ScctDashboardCards.h"
+#include "Menu/ScctMenuBackdrop.h"
 #include "Menu/ScctMenuDriver.h"
 #include "Menu/ScctMenuKit.h"
 #include "Menu/ScctMenuNav.h"
@@ -17,6 +18,7 @@
 #include "Social/ScctSocialSubsystem.h"
 #include "Fonts/FontMeasure.h"
 #include "Rendering/DrawElements.h"
+#include "Styling/CoreStyle.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SLeafWidget.h"
@@ -47,6 +49,21 @@ namespace
 			};
 			const FLinearColor Ink(0.002f, 0.004f, 0.008f, 1.0f);
 			const auto At = [&Ink](float Alpha) { return FLinearColor(Ink.R, Ink.G, Ink.B, Alpha); };
+
+			// While the live backdrop changes maps the scene is covered by the shade's own ink, under the gradients:
+			// the menu stays as it is and only the picture behind it dips to dark and comes back (Menu/ScctMenuBackdrop.h).
+			// A change usually holds the picture instead: the scene as it was last drawn, fading away over the new one.
+			float Held = 0.0f;
+			if (const FSlateBrush* Frame = UScctMenuBackdrop::GetFreeze(Held))
+			{
+				FSlateDrawElement::MakeBox(Out, Layer, Geometry.ToPaintGeometry(), Frame, ESlateDrawEffect::NoGamma,
+					FLinearColor(1.0f, 1.0f, 1.0f, FMath::Clamp(Held, 0.0f, 1.0f)));
+			}
+			if (const float Cover = UScctMenuBackdrop::GetCover(); Cover > 0.0f)
+			{
+				FSlateDrawElement::MakeBox(Out, Layer, Geometry.ToPaintGeometry(), FCoreStyle::Get().GetBrush("WhiteBrush"),
+					ESlateDrawEffect::None, At(FMath::Clamp(Cover, 0.0f, 1.0f)));
+			}
 
 			// Left to right: the column of type sits on dark, the scene breathes on the right.
 			Gradient(FVector2D::ZeroVector, Size, {

@@ -52,6 +52,15 @@
     <Compile Include="$(OpenScctRoot)shared\ProjectLinks.cs" Link="Linked\Shared\ProjectLinks.cs" />
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\GameReportState.cs" Link="Linked\UI\GameReportState.cs" />
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\PlayerLocationReport.cs" Link="Linked\UI\PlayerLocationReport.cs" />
+    <!-- The developer console's commands (ConsoleExports.cs): the Godot console's own parser, help and rules,
+         with the settings file it reads its keys from; Godot-free. -->
+    <Compile Include="$(OpenScctRoot)game\Scripts\UI\ConsoleCommands.cs" Link="Linked\UI\ConsoleCommands.cs" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\Options\SettingsConsole.cs" Link="Linked\Options\SettingsConsole.cs" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\Options\GameSettings.cs" Link="Linked\Options\GameSettings.cs" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\Options\CrosshairSettings.cs" Link="Linked\Options\CrosshairSettings.cs" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\Options\DisplayFrameCap.cs" Link="Linked\Options\DisplayFrameCap.cs" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\Options\HudEditorSettings.cs" Link="Linked\Options\HudEditorSettings.cs" />
+    <Compile Include="$(OpenScctRoot)game\Scripts\Options\TelemetrySettings.cs" Link="Linked\Options\TelemetrySettings.cs" />
     <!-- The Stats page's rows (Social/CareerModel.cs): the Godot StatsScreen's model, Godot-free. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\StatsModel.cs" Link="Linked\UI\StatsModel.cs" />
   </ItemGroup>

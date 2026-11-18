@@ -38,8 +38,19 @@ namespace ScctHudElements
 	/** The crosshair with its spread and hit confirmation, what the laser holds, noise and hit arcs around it. */
 	void PaintCrosshair(FScctHudPainter& Painter, const FScctHudModel& Model);
 
-	/** The merc's rifle scope (BinocularMode 2); the spy's binoculars have their own page below. */
+	/**
+	 * The merc's rifle scope (BinocularMode 2), which replaces the merc's HUD: the content's P_BinocularsDEF (PaintScopePage),
+	 * or a plain ring and sights when the content has no such page. The spy's binoculars have their own page below.
+	 */
 	void PaintScope(FScctHudPainter& Painter, const FScctHudModel& Model);
+
+	/**
+	 * The content's P_BinocularsDEF as the bridge evaluates it for this moment (Model.ScopeLayers): the scope rings, the
+	 * sights and axes at the aim point, the breath gauge, the range finder, the zoom label and the key help. The page
+	 * keeps its 4:3 shape at the picture's height in the middle of the screen, and a picture that reaches the page's
+	 * left or right side reaches the screen's (ScctHudElementsBinoculars.cpp). PaintScope calls it.
+	 */
+	void PaintScopePage(FScctHudPainter& Painter, const FScctHudModel& Model);
 
 	// --- Blinding layer, above everything ------------------------------------------------------------------
 	/** The flash-bang white-out (Hud/ScctHudElementsFlash.cpp). */

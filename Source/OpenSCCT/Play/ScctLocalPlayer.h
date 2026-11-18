@@ -5,9 +5,10 @@
 #include "ScctLocalPlayer.generated.h"
 
 /**
- * The game's local player (Config/DefaultEngine.ini LocalPlayerClassName). Its only addition: the console's Get and Set
- * of a setting (Play/ScctConsoleCommands.h) are run before the engine's own GET and SET of class properties, which
- * would otherwise take every command of those names. Anything else goes on as before.
+ * The game's local player (Config/DefaultEngine.ini LocalPlayerClassName). Its only addition is the console: Get and
+ * Set of a setting and the Godot console's words (Play/ScctConsoleCommands.h) are run before the engine's own words of
+ * the same names (GET and SET of class properties, HELP, SAY), which would otherwise take them. Anything else goes on to
+ * the engine as before, and a line the engine does not know either is answered as the Godot console answers it.
  */
 UCLASS()
 class OPENSCCT_API UScctLocalPlayer : public ULocalPlayer
