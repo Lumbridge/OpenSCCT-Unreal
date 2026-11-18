@@ -1487,7 +1487,7 @@ void SScctDialogLayer::Show(const FScctDialog& Dialog)
 	ScctUi::Play(EScctUiSound::Open);
 
 	const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
-	Box->AddSlot().AutoHeight()[ ScctUi::Text(ScctUi::ToText(Dialog.Title.ToUpper()), ScctUi::H2()) ];
+	Box->AddSlot().AutoHeight()[ ScctUi::Text(ScctUi::ToText(Dialog.Title.ToUpper()), ScctUi::H2(), FSlateColor(ScctHudStyle::Text()), true) ];
 	Box->AddSlot().AutoHeight().Padding(0.0f, 14.0f, 0.0f, 0.0f)[ ScctUi::Rule() ];
 	if (!Dialog.Body.IsEmpty() || Dialog.Timeout > 0.0f || Dialog.LiveBody)
 	{
@@ -1531,6 +1531,9 @@ void SScctDialogLayer::Show(const FScctDialog& Dialog)
 		}
 	}
 	Box->AddSlot().AutoHeight().HAlign(HAlign_Right).Padding(0.0f, 26.0f, 0.0f, 0.0f)[ Buttons ];
+	// The dialog is as wide as its row of buttons needs (four buttons do not fit the usual 560), never narrower.
+	Buttons->SlatePrepass(1.0f);
+	DialogBox->SetWidthOverride(FMath::Max(560.0f, Buttons->GetDesiredSize().X + 64.0f));
 	DialogBox->SetContent(ScctUi::Panel(Box, FMargin(32.0f, 28.0f), 0.9f));
 	FSlateApplication::Get().SetKeyboardFocus(TextField.IsValid() ? StaticCastSharedPtr<SWidget>(TextField) : Focus, EFocusCause::SetDirectly);
 }
