@@ -354,6 +354,7 @@ public static unsafe class Exports
             OfflineRules = (o.Flags & BridgeStartFlags.OfflineRules) != 0,
             ResponsiveSmoke = (o.Flags & BridgeStartFlags.ResponsiveSmoke) != 0,
             UnlimitedGear = (o.Flags & BridgeStartFlags.UnlimitedGear) != 0,
+            PlayLevel = (o.Flags & BridgeStartFlags.PlayLevel) != 0,
             TimeLimit = o.TimeLimitPlusOne - 1,
             SpyLives = o.SpyLivesPlusOne - 1,
             MercLives = o.MercLivesPlusOne - 1,

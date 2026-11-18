@@ -131,6 +131,7 @@ namespace EScctStartFlags
 	constexpr int32 OfflineRules = 4; // practice rules: no time limit, unlimited lives, 5 s respawn
 	constexpr int32 ResponsiveSmoke = 16; // smoke grenades fill the shared simulated cloud (SvmResponsiveSmoke)
 	constexpr int32 UnlimitedGear = 8; // Visit a Map practice: unlimited gear, instant gear changes, Switch Team
+	constexpr int32 PlayLevel = 32; // Original editor play rules
 }
 
 /** What StartLocalEx starts. Zero it, set Size = sizeof(FScctBridgeStartOptions), then the fields. */

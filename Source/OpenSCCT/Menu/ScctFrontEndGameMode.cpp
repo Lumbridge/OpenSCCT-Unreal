@@ -1,5 +1,6 @@
 #include "Menu/ScctFrontEndGameMode.h"
 #include "Engine/GameInstance.h"
+#include "Engine/Engine.h"
 #include "Menu/ScctLoadingSubsystem.h"
 
 #include "Blueprint/UserWidget.h"
@@ -14,9 +15,13 @@
 #include "Menu/ScctMenuBackdrop.h"
 #include "Menu/ScctTutorialPlay.h"
 #include "Misc/CommandLine.h"
+#include "Misc/MessageDialog.h"
+#include "Misc/Paths.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
 #include "Online/ScctOnlineSubsystem.h"
+#include "Online/ScctMapFolders.h"
+#include "Social/ScctLaunchOptions.h"
 #include "OpenSCCT.h"
 #include "Play/ScctViewPawn.h"
 #include "ShaderCompiler.h"
@@ -48,7 +53,99 @@ namespace
 
 	/** The longest the backdrop waits for its shaders (wall clock seconds) before it is shown anyway. */
 	constexpr double BackdropShaderWait = 12.0;
+
+	bool bTookEditorMap = false;
+
+	bool IsEditorOptionValue(const FString& Value)
+	{
+		for (const TCHAR Ch : Value)
+		{
+			if (!FChar::IsAlnum(Ch) && Ch != '_' && Ch != '-')
+			{
+				return false;
+			}
+		}
+		return !Value.IsEmpty() && Value.Len() < 32; // Map and Mode in FScctBridgeStartOptions
+	}
+
+	FString EditorPlayUrl(const FString& Folder)
+	{
+		const FString Id = FPaths::GetCleanFilename(Folder);
+		const FString Resolved = ScctMapFolders::FolderOf(Id);
+		if (!IsEditorOptionValue(Id) || Resolved.IsEmpty() || !FPaths::IsSamePath(Folder, Resolved)
+			|| !FPaths::FileExists(Folder / TEXT("manifest.json")) || !FPaths::FileExists(Folder / TEXT("render/world.glb"))
+			|| !FPackageName::DoesPackageExist(UScctOnlineSubsystem::RuntimeLevel))
+		{
+			return {};
+		}
+
+		FString Url = FString::Printf(TEXT("%s?ScctMap=%s"), UScctOnlineSubsystem::RuntimeLevel, *Id);
+		for (const TCHAR* Key : { TEXT("Side"), TEXT("Mode"), TEXT("Bots"), TEXT("Difficulty"), TEXT("MatchPlayers"), TEXT("PlayLevel"), TEXT("ResponsiveSmoke") })
+		{
+			FString Value;
+			if (FParse::Value(FCommandLine::Get(), *FString::Printf(TEXT("-ScctEditor%s="), Key), Value) && IsEditorOptionValue(Value))
+			{
+				Url += FString::Printf(TEXT("?%s=%s"), Key, *Value);
+			}
+		}
+		return Url;
+	}
+
+	// Shipping ignores the positional map URL. Travel after startup so both kinds of build use the same path.
+	bool OpenEditorMap(UWorld& World)
+	{
+		const FString& Folder = ScctLaunchOptions::EditorMap();
+		if (bTookEditorMap || Folder.IsEmpty())
+		{
+			return false;
+		}
+		bTookEditorMap = true; // Quitting the preview returns to the normal menu.
+		ScctMapFolders::SetEditorRoot(FPaths::GetPath(Folder));
+		const FString Url = EditorPlayUrl(Folder);
+		if (Url.IsEmpty())
+		{
+			ScctMapFolders::SetEditorRoot(FString());
+			const FText Error = FText::Format(NSLOCTEXT("OpenSCCT", "EditorMapUnavailable",
+				"Could not open the editor build at {0}. Check the compiled map, the shared content folder and the Unreal installation."), FText::FromString(Folder));
+			UE_LOG(LogOpenSCCT, Error, TEXT("%s"), *Error.ToString());
+			FMessageDialog::Open(EAppMsgType::Ok, Error);
+			return false;
+		}
+		UE_LOG(LogOpenSCCT, Log, TEXT("Editor play: %s from %s"), *Url, *Folder);
+		GEngine->SetClientTravel(&World, *Url, TRAVEL_Absolute);
+		return true;
+	}
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FScctEditorMapPrecedence, "OpenSCCT.Editor.MapPreview.Source",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FScctEditorMapPrecedence::RunTest(const FString&)
+{
+	// Exercise the production parser and bridge catalog with a real editor build, without starting a match.
+	const FString Folder = ScctLaunchOptions::EditorMap().IsEmpty()
+		? ScctMapFolders::FolderOf(TEXT("AquaE")) : ScctLaunchOptions::EditorMap();
+	if (Folder.IsEmpty())
+	{
+		AddInfo(TEXT("No AquaE installed. Supply --scct-editor-map=<compiled SVMap directory> to exercise editor map resolution."));
+		return true;
+	}
+	const FString Id = FPaths::GetCleanFilename(Folder);
+	const FString NormalLevel = UScctOnlineSubsystem::LevelOf(Id);
+	ScctMapFolders::SetEditorRoot(FPaths::GetPath(Folder));
+	ON_SCOPE_EXIT { ScctMapFolders::SetEditorRoot(FString()); };
+	TestTrue(TEXT("Editor build is the simulation catalog's first match"), FPaths::IsSamePath(Folder, ScctMapFolders::FolderOf(Id)));
+	const FString Url = EditorPlayUrl(Folder);
+	TestTrue(TEXT("Editor build uses the runtime map"), Url.StartsWith(FString::Printf(TEXT("%s?ScctMap=%s"), UScctOnlineSubsystem::RuntimeLevel, *Id)));
+	TestTrue(TEXT("A different build directory with the same ID is rejected"), EditorPlayUrl(Folder / TEXT("other") / Id).IsEmpty());
+	AddInfo(FString::Printf(TEXT("Normal selection: %s. Editor selection: %s from %s"), *NormalLevel, *Url, *Folder));
+	return true;
+}
+#endif
 
 AScctFrontEndGameMode::AScctFrontEndGameMode()
 {
@@ -60,6 +157,12 @@ AScctFrontEndGameMode::AScctFrontEndGameMode()
 void AScctFrontEndGameMode::StartPlay()
 {
 	Super::StartPlay();
+
+	if (!bTookEditorMap && !ScctLaunchOptions::EditorMap().IsEmpty())
+	{
+		return;
+	}
+	ScctMapFolders::SetEditorRoot(FString());
 
 	for (const FBackdrop& Backdrop : Backdrops)
 	{
@@ -95,6 +198,10 @@ void AScctFrontEndGameMode::StartPlay()
 void AScctFrontEndGameMode::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (OpenEditorMap(*GetWorld()))
+	{
+		return;
+	}
 	Seconds += DeltaSeconds;
 	ShowMenu();
 	RevealBackdrop();

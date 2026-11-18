@@ -488,6 +488,7 @@ $info = [ordered]@{
     configuration   = $Configuration
     engineVersion   = $engineVersion
     launcherProtocol = 1
+    editorMapProtocol = 1
     openscctVersion = $openScctVersion
     openscctCommit  = $openScctCommit
     executable      = $starter

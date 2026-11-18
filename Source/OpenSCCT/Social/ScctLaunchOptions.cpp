@@ -26,6 +26,7 @@ namespace
 		FString Content;
 		FString GameRoot;
 		FString MapDownloads;
+		FString EditorMap;
 		TArray<FString> Maps;
 		FString Priority;
 		FString Affinity;
@@ -69,6 +70,11 @@ namespace
 			else if (Take(TEXT("--svm-map-downloads="), Value))
 			{
 				Parsed.MapDownloads = FPaths::ConvertRelativePathToFull(Value);
+			}
+			else if (Take(TEXT("--scct-editor-map="), Value))
+			{
+				Parsed.EditorMap = FPaths::ConvertRelativePathToFull(Value);
+				FPaths::NormalizeDirectoryName(Parsed.EditorMap);
 			}
 			else if (Take(TEXT("--svm-maps="), Value))
 			{
@@ -311,6 +317,11 @@ const FString& ScctLaunchOptions::ContentRoot()
 const TArray<FString>& ScctLaunchOptions::MapRoots()
 {
 	return LaunchParsed().Maps;
+}
+
+const FString& ScctLaunchOptions::EditorMap()
+{
+	return LaunchParsed().EditorMap;
 }
 
 #undef LOCTEXT_NAMESPACE

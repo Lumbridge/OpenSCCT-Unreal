@@ -28,4 +28,7 @@ namespace ScctLaunchOptions
 
 	/** --svm-maps' folders, in order. */
 	const TArray<FString>& MapRoots();
+
+	/** Exact compiled SVMap directory requested by OpenSCCT Editor. Empty for a normal launch. */
+	const FString& EditorMap();
 }

@@ -15,6 +15,9 @@ namespace ScctMapFolders
 	/** Tells the bridge the folders of the command line and the executable, once per run. Safe to call often. */
 	void Apply();
 
+	/** Search this build root first for the editor playtest. Clear on return to the front end. */
+	void SetEditorRoot(const FString& Root);
+
 	/** The folder of a map (holding manifest.json), or empty when no folder has it. */
 	FString FolderOf(const FString& Map);
 

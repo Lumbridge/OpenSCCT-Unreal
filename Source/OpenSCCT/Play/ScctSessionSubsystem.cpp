@@ -113,6 +113,7 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 	Start.Flags = (Options.bSidearms ? EScctStartFlags::Sidearms : 0)
 		| (Options.bRifles ? EScctStartFlags::Rifles : 0)
 		| (Options.bOfflineRules ? EScctStartFlags::OfflineRules : 0)
+		| (Options.bPlayLevel ? EScctStartFlags::PlayLevel : 0)
 		| (Options.bResponsiveSmoke ? EScctStartFlags::ResponsiveSmoke : 0)
 		| (Options.bUnlimitedGear ? EScctStartFlags::UnlimitedGear : 0);
 	Start.Difficulty = FMath::Clamp(Options.Difficulty, 0, 4);

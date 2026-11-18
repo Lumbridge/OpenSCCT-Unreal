@@ -228,4 +228,5 @@ public static class BridgeStartFlags
     public const int ResponsiveSmoke = 16;
     /// <summary>Visit a Map practice: unlimited gear, instant gear changes, the in-match menu's Switch Team.</summary>
     public const int UnlimitedGear = 8;
+    public const int PlayLevel = 32;
 }

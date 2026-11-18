@@ -137,6 +137,8 @@ public static unsafe class MapsExports
             return [];
         }
 
-        return new string(text).Split(['\n', '\r', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        string list = new(text);
+        char[] separators = list.StartsWith('\n') ? ['\n', '\r'] : ['\n', '\r', ';'];
+        return list.Split(separators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 }

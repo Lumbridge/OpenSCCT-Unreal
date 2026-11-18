@@ -136,6 +136,7 @@ struct FScctLocalMatchOptions
 	/** Visit a Map practice: unlimited gear, instant gear changes, and Switch Team in the in-match menu. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	bool bUnlimitedGear = false;
+	bool bPlayLevel = false;
 
 	/** The player count the map's match-size rules lay the match out for (2 to 24); 0 for the bots and the local player. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")

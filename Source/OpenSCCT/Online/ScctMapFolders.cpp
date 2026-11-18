@@ -11,6 +11,7 @@
 namespace
 {
 	bool bApplied = false;
+	FString EditorRoot;
 
 	FString ReadText(const FScctMapsApi& Maps, EScctMapsText Kind)
 	{
@@ -43,6 +44,10 @@ void ScctMapFolders::Apply()
 
 	// -ScctMaps= may be given more than once, and each may list several folders.
 	TArray<FString> First;
+	if (!EditorRoot.IsEmpty())
+	{
+		First.Add(EditorRoot);
+	}
 	const TCHAR* Stream = FCommandLine::Get();
 	FString Value;
 	while (Stream != nullptr && *Stream != TEXT('\0') && FParse::Value(Stream, TEXT("ScctMaps="), Value, false, &Stream))
@@ -67,9 +72,20 @@ void ScctMapFolders::Apply()
 	Last.Add(FPaths::ConvertRelativePathToFull(FPaths::Combine(FPlatformProcess::BaseDir(), TEXT("maps"))));
 	Last.AddUnique(FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("maps"))));
 
-	const int32 Existing = Maps->SetFolders(*FString::Join(First, TEXT(";")), *FString::Join(Last, TEXT(";")));
+	// A leading newline selects an unambiguous list, including paths with literal semicolons.
+	const int32 Existing = Maps->SetFolders(*(TEXT("\n") + FString::Join(First, TEXT("\n"))), *(TEXT("\n") + FString::Join(Last, TEXT("\n"))));
 	UE_LOG(LogOpenSCCT, Log, TEXT("Map folders: %d named on the command line (%s), %d of the named and executable folders exist; searched: %s"),
 		First.Num(), First.Num() > 0 ? *FString::Join(First, TEXT("; ")) : TEXT("none"), Existing, *FString::Join(Roots(), TEXT("; ")));
+}
+
+void ScctMapFolders::SetEditorRoot(const FString& Root)
+{
+	if (EditorRoot != Root)
+	{
+		EditorRoot = Root;
+		bApplied = false;
+		Apply();
+	}
 }
 
 FString ScctMapFolders::FolderOf(const FString& Map)

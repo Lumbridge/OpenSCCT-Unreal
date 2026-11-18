@@ -103,6 +103,7 @@ void AScctGameMode::InitGame(const FString& MapName, const FString& Options, FSt
 	Match.Sidearm = ParseSidearm(UGameplayStatics::ParseOption(Options, TEXT("Sidearm")), Match.Sidearm);
 	Match.bRifles = ParseSwitch(Options, TEXT("Rifles"));
 	Match.bOfflineRules = ParseSwitch(Options, TEXT("Practice"));
+	Match.bPlayLevel = ParseSwitch(Options, TEXT("PlayLevel"));
 	Match.bUnlimitedGear = ParseSwitch(Options, TEXT("UnlimitedGear"));
 	Match.bResponsiveSmoke = ParseSwitch(Options, TEXT("ResponsiveSmoke"));
 	Match.MatchPlayers = FMath::Clamp(UGameplayStatics::GetIntOption(Options, TEXT("MatchPlayers"), 0), 0, 24);
