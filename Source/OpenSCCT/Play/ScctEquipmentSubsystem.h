@@ -172,6 +172,7 @@ private:
 	FScctFirstPerson FirstPerson = {};
 	int32 FirstPersonShots = -1;
 	int32 FirstPersonActor = 0;
+	float DrawnFirstPersonScale = 1.0f;
 
 	/** -ScctLaserProbe: the local beam's end across the view (degrees) since the last line. */
 	void ProbeLaser(const FVector& Start, const FVector& End);

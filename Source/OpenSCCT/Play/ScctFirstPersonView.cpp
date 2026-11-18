@@ -336,6 +336,16 @@ bool AScctFirstPersonView::FindCasingPort(FTransform& OutWorld) const
 	return false;
 }
 
+FVector AScctFirstPersonView::MercLaserStart(const FVector& TracedStart) const
+{
+	// The stock rifle's FX bone is ahead of its visible barrel. MountedBeam already backed the
+	// start into that barrel. Only a different gun with its own authored socket supersedes it.
+	const FScctEquipmentView& Gun = Parts[0];
+	FTransform Socket;
+	return Gun.HasReplacement() && Gun.GetRow() && Gun.FindPoint(Gun.GetRow()->MuzzleSocket, TEXT(""), Socket)
+		? Socket.GetLocation() : TracedStart;
+}
+
 bool AScctFirstPersonView::FindLaserStart(FTransform& OutWorld) const
 {
 	// A socket a wall hides from the eye is not a start: the laser then starts where the simulation puts it.

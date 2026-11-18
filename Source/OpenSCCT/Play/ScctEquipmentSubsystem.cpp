@@ -642,7 +642,15 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		// what is drawn this frame is better where there is something drawn: the view model's muzzle or laser
 		// socket, else the muzzle of the gun in hand (a merc's rifle, the local spy's pistol seen from behind).
 		FTransform Source;
-		if (bFromViewModel && FirstPersonView->FindLaserStart(Source))
+		if (bFromViewModel && (Pawn.Flags & EScctEquipmentFlags::Merc) != 0)
+		{
+			Start = FirstPersonView->MercLaserStart(Start);
+			// The world-space beam starts on the barrel as rendered. Only its near end follows
+			// the camera's first-person scale; its far end stays on the traced surface.
+			const FVector Eye = GetCamera().GetLocation();
+			Start = Eye + (Start - Eye) * DrawnFirstPersonScale;
+		}
+		else if (bFromViewModel && FirstPersonView->FindLaserStart(Source))
 		{
 			Start = Source.GetLocation();
 		}
@@ -804,9 +812,11 @@ void UScctEquipmentSubsystem::UpdateFirstPerson(const FScctEquipmentApi& Api, fl
 	// The camera carries how far first-person primitives are pulled in. The field of view stays the world's.
 	const APlayerController* Player = GetWorld()->GetFirstPlayerController();
 	const APawn* ViewPawn = Player != nullptr ? Player->GetPawn() : nullptr;
+	DrawnFirstPersonScale = 1.0f;
 	if (UCameraComponent* Camera = ViewPawn != nullptr ? ViewPawn->FindComponentByClass<UCameraComponent>() : nullptr)
 	{
 		const float Scale = FMath::Clamp(CVarFirstPersonScale.GetValueOnGameThread(), 0.05f, 1.0f);
+		DrawnFirstPersonScale = Scale;
 		Camera->SetEnableFirstPersonScale(true);
 		Camera->SetFirstPersonScale(Scale);
 
