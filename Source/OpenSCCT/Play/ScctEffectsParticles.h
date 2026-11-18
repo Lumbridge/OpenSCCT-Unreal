@@ -12,6 +12,7 @@ enum class EScctFxLayer : uint8
 	Glow,  // added light, unlit: fire, sparks, flashes, tracers
 	Smoke, // soft and lit by the scene: smoke, dust, mist
 	Cloud, // a cell of the smoke grenade's own picture, lit by the scene: the spy's smoke cloud
+	StickyGas, // a cell of the sticky camera's smoke_extincteur atlas
 	Count,
 };
 
@@ -63,7 +64,8 @@ class FScctFxSprites
 {
 public:
 	/** Creates the instanced components on Host. A missing material or mesh leaves that layer undrawn. */
-	void Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* GlowMaterial, UMaterialInterface* SmokeMaterial, UMaterialInterface* CloudMaterial);
+	void Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* GlowMaterial, UMaterialInterface* SmokeMaterial,
+		UMaterialInterface* CloudMaterial, UMaterialInterface* StickyGasMaterial);
 
 	/** How much of its opacity a layer's sprites are drawn with from the next Tick on (1 as spawned, 0 not at all): what a vision mode lets through. */
 	void SetLayerOpacity(EScctFxLayer Layer, float Opacity);
@@ -101,6 +103,7 @@ private:
 		int32 Next = 0;
 		int32 Live = 0;
 		float Opacity = 1.0f;
+		bool bUsesAtlas = false;
 		bool bDrawnEmpty = false; // the instance buffers already show nothing
 	};
 

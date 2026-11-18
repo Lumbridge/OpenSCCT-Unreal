@@ -115,6 +115,7 @@ namespace
 	constexpr float GrenadeCloudHeatOpacity = 0.2f;
 	// The cloud's picture (sfx.Emitter.smoke_grenade2), read from the content folder: original content, never in the project.
 	const TCHAR* const GrenadeCloudPicture = TEXT("shared/fx/textures/sfx_smoke_grenade2.png");
+	const TCHAR* const StickyGasPicture = TEXT("shared/fx/textures/sfx_smoke_extincteur.png");
 	const TCHAR* const SolidMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxSolid.M_ScctFxSolid");
 	const TCHAR* const ImportedMeshFolder = TEXT("/Game/Imported/Fx");
 
@@ -309,26 +310,27 @@ bool UScctEffectsSubsystem::EnsureScene()
 	// The smoke grenade's cloud is drawn with the game's own picture of it; without the picture or its material the
 	// cloud is the soft grey discs of the smoke layer, in the same places and sizes.
 	UMaterialInterface* SmokeMaterial = LoadObject<UMaterialInterface>(nullptr, SmokeMaterialPath);
-	UMaterialInterface* CloudMaterial = SmokeMaterial;
-	bCloudPicture = false;
-	const FString CloudPicturePath = FOpenSCCTModule::FindContentRoot() / GrenadeCloudPicture;
 	UMaterialInterface* CloudBase = LoadObject<UMaterialInterface>(nullptr, CloudMaterialPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
-	UTexture2D* CloudTexture = CloudBase != nullptr && FPaths::FileExists(CloudPicturePath) ? FImageUtils::ImportFileAsTexture2D(CloudPicturePath) : nullptr;
-	if (CloudTexture != nullptr)
+	auto CloudAtlas = [this, CloudBase](const TCHAR* RelativePath, int32 Grid) -> UMaterialInstanceDynamic*
 	{
-		CloudTexture->AddressX = CloudTexture->AddressY = TA_Clamp;
-		CloudTexture->UpdateResource();
+		const FString Path = FOpenSCCTModule::FindContentRoot() / RelativePath;
+		UTexture2D* Texture = CloudBase && FPaths::FileExists(Path) ? FImageUtils::ImportFileAsTexture2D(Path) : nullptr;
+		if (!Texture)
+		{
+			UE_LOG(LogOpenSCCT, Warning, TEXT("Effects: using soft smoke sprites for %s (%s unavailable)"), RelativePath, CloudBase ? *Path : CloudMaterialPath);
+			return nullptr;
+		}
+		Texture->AddressX = Texture->AddressY = TA_Clamp;
+		Texture->UpdateResource();
 		UMaterialInstanceDynamic* Cloud = UMaterialInstanceDynamic::Create(CloudBase, Host);
-		Cloud->SetTextureParameterValue(TEXT("Texture"), CloudTexture);
-		CloudMaterial = Cloud;
-		bCloudPicture = true;
-	}
-	else
-	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Effects: the smoke grenade's cloud is drawn as plain grey discs: %s"),
-			CloudBase == nullptr ? TEXT("M_ScctFxCloud is missing (run Tools/Effects/Build-EffectAssets.ps1)") : *FString::Printf(TEXT("its picture was not read from %s"), *CloudPicturePath));
-	}
-	Sprites.Init(Host, Quad, LoadObject<UMaterialInterface>(nullptr, GlowMaterialPath), SmokeMaterial, CloudMaterial);
+		Cloud->SetTextureParameterValue(TEXT("Texture"), Texture);
+		Cloud->SetVectorParameterValue(TEXT("Grid"), FLinearColor(Grid, Grid, 0, 0));
+		return Cloud;
+	};
+	UMaterialInterface* CloudMaterial = CloudAtlas(GrenadeCloudPicture, 2);
+	UMaterialInterface* GasMaterial = CloudAtlas(StickyGasPicture, 4);
+	bCloudPicture = CloudMaterial != nullptr;
+	Sprites.Init(Host, Quad, LoadObject<UMaterialInterface>(nullptr, GlowMaterialPath), SmokeMaterial, CloudMaterial, GasMaterial);
 
 	DecalMaterial = LoadObject<UMaterialInterface>(nullptr, DecalMaterialPath);
 	StandInMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
@@ -445,6 +447,7 @@ void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 	const UScctVisionSubsystem* Goggles = UScctVisionSubsystem::Find(GetWorld());
 	const int32 GogglesMode = Goggles != nullptr ? Goggles->GetVisionMode() : 0;
 	Sprites.SetLayerOpacity(EScctFxLayer::Cloud, GogglesMode == 38 ? 0.0f : GogglesMode == 36 ? GrenadeCloudHeatOpacity : 1.0f);
+	Sprites.SetLayerOpacity(EScctFxLayer::StickyGas, GogglesMode == 38 ? 0.0f : 1.0f);
 
 	const FScctBridgeView& View = Session->GetView();
 	Sprites.Tick(FxSeconds, FVector(View.X, View.Y, View.Z), FRotator(View.Pitch, View.Yaw, View.Roll).Quaternion());
@@ -943,6 +946,10 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 				EmitGrenadeCloud(*Fx);
 			}
 		}
+		else if (Fx->Style == EStyle::StickyGas && !bHidden)
+		{
+			EmitStickyGas(*Fx, Place.GetRotation());
+		}
 		else if (!bHidden && !bVolumeSmoke && !bFlicDrawn && Fx->Style != EStyle::None && Record.Kind == EScctEffectKind::Emitter)
 		{
 			Emit(Fx->Style, Fx->Location, FVector(Record.VelX, Record.VelY, Record.VelZ), DeltaSeconds, Fx->EmitDebt);
@@ -1156,6 +1163,31 @@ void UScctEffectsSubsystem::EmitGrenadeCloud(FActorFx& Fx)
 			Particle.Velocity *= Left;
 			Particle.Age = Born;
 		}
+	}
+}
+
+void UScctEffectsSubsystem::EmitStickyGas(FActorFx& Fx, const FQuat& Facing)
+{
+	// SStickyCamEmitter.StikyCamEmitter0 in shared/fx/effects.json. One dose emits fifteen
+	// world-space sprites along the mounted camera's +X, at 500/s, with no respawns.
+	const int32 Due = FMath::Min(15, FMath::FloorToInt32(Fx.Age * 500.0f));
+	for (; Fx.CloudSprites < Due; ++Fx.CloudSprites)
+	{
+		FScctFxParticle& Particle = Sprites.Spawn(EScctFxLayer::StickyGas);
+		Particle.Position = Fx.Location;
+		Particle.Velocity = Facing.RotateVector(FVector(Random.FRandRange(400.0f, 1200.0f),
+			Random.FRandRange(-30.0f, 30.0f), Random.FRandRange(-20.0f, 20.0f)));
+		Particle.Acceleration = FVector(2.0, 2.0, -2.0);
+		Particle.LossMin = FVector(4.0);
+		Particle.LossMax = FVector(5.0);
+		Particle.Life = Random.FRandRange(5.0f, 7.0f);
+		Particle.FadeIn = 0.1f / Particle.Life;
+		Particle.FadeOutStart = 0.8f / Particle.Life;
+		Particle.SizeStart = 2.0f * Random.FRandRange(2.0f, 5.0f);
+		Particle.SizeEnd = Particle.SizeStart * 40.0f;
+		Particle.Spin = Random.FRandRange(-0.1f, 0.1f) * UE_TWO_PI;
+		Particle.Cell = static_cast<float>(Random.RandHelper(16));
+		Particle.Color = FLinearColor::White;
 	}
 }
 
@@ -1701,7 +1733,7 @@ UScctEffectsSubsystem::EStyle UScctEffectsSubsystem::FindStyle(int32 ClassId)
 		{ TEXT("SmokeCanon"), EStyle::Wisp },
 		{ TEXT("Launch"), EStyle::Wisp },
 		{ TEXT("Poison"), EStyle::Gas },
-		{ TEXT("StickyCam"), EStyle::Gas },
+		{ TEXT("SStickyCamEmitter"), EStyle::StickyGas },
 		{ TEXT("Smoke"), EStyle::Smoke },
 		{ TEXT("Phospho"), EStyle::Smoke },
 		{ TEXT("Extincteur"), EStyle::Smoke },

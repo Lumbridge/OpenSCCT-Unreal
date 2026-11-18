@@ -142,6 +142,7 @@ private:
 		FlashBang,
 		Water,
 		Gas,
+		StickyGas,
 		Puff,       // any other emitter: one small puff of dust
 		Ps2Modem,   // the PS2 modem's destruction preset: two smokes and a flash, once (Play/ScctEffectsDevices.cpp)
 	};
@@ -324,6 +325,7 @@ private:
 	void Emit(EStyle Style, const FVector& At, const FVector& Velocity, float DeltaSeconds, float& Debt);
 	/** Lets out what a smoke grenade's cloud owes by its age: the original emitter's fifteen sprites, once. */
 	void EmitGrenadeCloud(FActorFx& Fx);
+	void EmitStickyGas(FActorFx& Fx, const FQuat& Facing);
 
 	// The looks.
 	void SpawnMuzzleFlash(const FVector& At, const FVector& Direction, float Scale, bool bSticky, bool bSuppressed, bool bShotgun);

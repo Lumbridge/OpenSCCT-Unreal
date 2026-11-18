@@ -9,7 +9,7 @@ namespace
 {
 	// Sprites per layer. An explosion with its smoke uses about 150; a fire fight a few hundred.
 	// The cloud layer holds eight smoke grenades' clouds of fifteen sprites.
-	constexpr int32 LayerCapacity[] = { 1536, 768, 120 };
+	constexpr int32 LayerCapacity[] = { 1536, 768, 120, 120 };
 
 	// The five floats each instance hands its material: colour, opacity, and the distance (cm) over which a glow
 	// sprite dims into a surface behind it (M_ScctFxGlow; the smoke material has a fixed one). A cloud sprite's fifth
@@ -61,11 +61,13 @@ void FScctFxSprites::SetLayerOpacity(EScctFxLayer Layer, float Opacity)
 	Layers[static_cast<int32>(Layer)].Opacity = FMath::Clamp(Opacity, 0.0f, 1.0f);
 }
 
-void FScctFxSprites::Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* GlowMaterial, UMaterialInterface* SmokeMaterial, UMaterialInterface* CloudMaterial)
+void FScctFxSprites::Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* GlowMaterial, UMaterialInterface* SmokeMaterial,
+	UMaterialInterface* CloudMaterial, UMaterialInterface* StickyGasMaterial)
 {
 	static_assert(UE_ARRAY_COUNT(LayerCapacity) == static_cast<int32>(EScctFxLayer::Count), "a capacity for every sprite layer");
-	UMaterialInterface* const Materials[] = { GlowMaterial, SmokeMaterial, CloudMaterial };
-	const TCHAR* const Names[] = { TEXT("FxGlow"), TEXT("FxSmoke"), TEXT("FxCloud") };
+	UMaterialInterface* const Materials[] = { GlowMaterial, SmokeMaterial,
+		CloudMaterial ? CloudMaterial : SmokeMaterial, StickyGasMaterial ? StickyGasMaterial : SmokeMaterial };
+	const TCHAR* const Names[] = { TEXT("FxGlow"), TEXT("FxSmoke"), TEXT("FxCloud"), TEXT("FxStickyGas") };
 	Streaks.Reserve(MaxStreaks);
 
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Layers); ++Index)
@@ -79,6 +81,8 @@ void FScctFxSprites::Init(AActor* Host, UStaticMesh* Quad, UMaterialInterface* G
 		Layer.Next = 0;
 		Layer.Live = 0;
 		Layer.Opacity = 1.0f;
+		Layer.bUsesAtlas = (Index == static_cast<int32>(EScctFxLayer::Cloud) && CloudMaterial)
+			|| (Index == static_cast<int32>(EScctFxLayer::StickyGas) && StickyGasMaterial);
 		Layer.bDrawnEmpty = true;
 		Layer.Component = nullptr;
 		if (Host == nullptr || Quad == nullptr || Materials[Index] == nullptr)
@@ -227,7 +231,7 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 			Custom[1] = Particle.Color.G;
 			Custom[2] = Particle.Color.B;
 			Custom[3] = Particle.Color.A * FMath::Clamp(Fade, 0.0f, 1.0f) * Layer.Opacity;
-			Custom[4] = LayerIndex == static_cast<int32>(EScctFxLayer::Cloud) ? Particle.Cell : SoftEdge(Size);
+			Custom[4] = Layer.bUsesAtlas ? Particle.Cell : SoftEdge(Size);
 		}
 
 		int32 Drawn = Layer.Live;
