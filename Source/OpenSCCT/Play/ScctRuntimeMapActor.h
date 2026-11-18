@@ -65,6 +65,9 @@ private:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UStaticMesh>> Meshes;
 
+	// Non-owning subset of Meshes whose UV2/3 carry the editor's baked light direction.
+	TSet<UStaticMesh*> DirectionMeshes;
+
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UMaterialInterface>> Materials;
 

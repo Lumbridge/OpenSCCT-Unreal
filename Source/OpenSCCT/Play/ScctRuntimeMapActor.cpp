@@ -1,5 +1,6 @@
 #include "Play/ScctRuntimeMapActor.h"
 #include "Play/ScctAuthoredMaterial.h"
+#include "Play/ScctAuthoredDirections.h"
 
 #include "Components/PointLightComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -375,7 +376,8 @@ AScctRuntimeMapActor::AScctRuntimeMapActor()
 namespace
 {
 	UStaticMesh* BuildMapMesh(UObject* Outer, const GLTF::FMesh& SourceMesh, const TArray<TSharedPtr<FJsonValue>>& JsonPrims,
-		bool bDevice, TFunctionRef<UMaterialInterface*(int32)> MaterialFor, int32& NumSections, int32& NumTriangles)
+		const TArray<GLTF::FAccessor>& Accessors, bool bDevice, TFunctionRef<UMaterialInterface*(int32)> MaterialFor,
+		int32& NumSections, int32& NumTriangles, bool& bVertexDirections)
 	{
 		UStaticMesh* Mesh = nullptr;
 		FMeshDescription Description;
@@ -387,6 +389,8 @@ namespace
 		// GLTFCore expands normalized COLOR_0 per corner and linearizes RGB. The fast static-mesh build
 		// packs it back to sRGB bytes (alpha stays linear), preserving the original vertex mask.
 		const auto& Primitives = SourceMesh.Primitives;
+		// A split section cannot claim these channels if a sibling uses them as genuine UVs.
+		const bool bAvailableUVs = !SourceMesh.HasTexCoords(2) && !SourceMesh.HasTexCoords(3);
 		bDevice &= JsonPrims.Num() == Primitives.Num();
 		TMap<int32, int32> SourceByMaterial;
 		bool bSplit = false;
@@ -415,6 +419,8 @@ namespace
 				SectionAttrs.Register();
 				Factory.FillMeshDescription(Part, FTransform::Identity, &Section);
 				if (!Section.Triangles().Num()) continue;
+				if (bAvailableUVs)
+					bVertexDirections |= ScctAuthored::CopyDirections(Factory, Accessors, MakeArrayView(&JsonPrims[P], 1), Section);
 				const int32 SourceSection = NumberOf(ObjectOf(JsonPrims[P]->AsObject(), TEXT("extras")), TEXT("scctSection"), P);
 				for (const auto Group : Section.PolygonGroups().GetElementIDs())
 				{
@@ -426,6 +432,8 @@ namespace
 		else
 		{
 			Factory.FillMeshDescription(SourceMesh, FTransform::Identity, &Description);
+			if (bAvailableUVs && JsonPrims.Num() == Primitives.Num())
+				bVertexDirections = ScctAuthored::CopyDirections(Factory, Accessors, JsonPrims, Description);
 			if (bDevice)
 			{
 				auto Names = Attributes.GetPolygonGroupMaterialSlotNames();
@@ -520,7 +528,8 @@ UStaticMesh* AScctRuntimeMapActor::SplitSkinMesh(UObject* Outer, UStaticMesh* Im
 		}
 	}
 	int32 Sections = 0, Triangles = 0;
-	return BuildMapMesh(Outer, Asset.Meshes[Index], ArrayOf(MeshList[Index]->AsObject(), TEXT("primitives")), true,
+	bool bVertexDirections = false;
+	return BuildMapMesh(Outer, Asset.Meshes[Index], ArrayOf(MeshList[Index]->AsObject(), TEXT("primitives")), Asset.Accessors, true,
 		[&](int32 M) -> UMaterialInterface*
 		{
 			if (Mats.IsValidIndex(M))
@@ -529,7 +538,7 @@ UStaticMesh* AScctRuntimeMapActor::SplitSkinMesh(UObject* Outer, UStaticMesh* Im
 				if (Found) return *Found;
 			}
 			return Imported->GetMaterial(0);
-		}, Sections, Triangles);
+		}, Sections, Triangles, bVertexDirections);
 }
 
 void AScctRuntimeMapActor::ConfigureSky(const FString& Map)
@@ -706,8 +715,10 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 		{
 			const auto& JsonMeshes = ArrayOf(Gltf, TEXT("meshes"));
 			const auto& Prims = ArrayOf(JsonMeshes[Index]->AsObject(), TEXT("primitives"));
-			Mesh = BuildMapMesh(this, Asset.Meshes[Index], Prims, !LevelMeshes.Contains(Index) && !SkyMeshes.Contains(Index),
-				[this](int32 M) { return MaterialFor(M); }, NumSections, NumTriangles);
+			bool bVertexDirections = false;
+			Mesh = BuildMapMesh(this, Asset.Meshes[Index], Prims, Asset.Accessors, !LevelMeshes.Contains(Index) && !SkyMeshes.Contains(Index),
+				[this](int32 M) { return MaterialFor(M); }, NumSections, NumTriangles, bVertexDirections);
+			if (Mesh && bVertexDirections) DirectionMeshes.Add(Mesh);
 			if (Mesh) Meshes.Add(Mesh);
 		}
 		Built.Add(Index, Mesh);
@@ -926,6 +937,8 @@ AActor* AScctRuntimeMapActor::PlaceMesh(UStaticMesh* Mesh, const FString& Name, 
 	if (VertexLightKind != 0.0f)
 	{
 		Component->SetDefaultCustomPrimitiveDataFloat(BakedVertexSlot, VertexLightKind);
+		if (DirectionMeshes.Contains(Mesh))
+			Component->SetDefaultCustomPrimitiveDataFloat(ScctAuthored::DirectionFlagSlot, 1.0f);
 	}
 	Component->RegisterComponent();
 	Actor->SetActorTransform(Transform);

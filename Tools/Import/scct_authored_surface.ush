@@ -163,6 +163,7 @@ if (B_detailNormal.x && DetailStrength>0)
 }
 normal = normalize(m.triplanar ? normal : normal.x*t + normal.y*b + normal.z*m.n);
 WorldNormal = normal.xzy;
+WorldTangent = t.xzy;
 Rough = clamp(Roughness*m.Scalar(T_roughness,T_baseColorSampler,B_roughness),0.04,1);
 float metal = Metallic*m.Scalar(T_metallic,T_baseColorSampler,B_metallic);
 F0 = lerp(0.08*SpecularColor*Specular*m.Scalar(T_specular,T_baseColorSampler,B_specular), base.rgb, metal);

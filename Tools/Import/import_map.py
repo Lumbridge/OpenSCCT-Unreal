@@ -23,6 +23,7 @@ DEST = "/Game/Imported/Maps/" + MAP
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import scct_materials  # noqa: E402  pylint: disable=wrong-import-position
+import scct_authored_geometry
 import scct_fx  # noqa: E402  pylint: disable=wrong-import-position
 
 # Light conversion. The original's lights are not physical: a light fades as 1 - (d / R)^2 and is gone at its
@@ -534,7 +535,11 @@ def main():
     lighting = json.load(open(os.path.join(RENDER, "lighting.json")))
 
     log("importing geometry of " + MAP)
-    import_files([glb_path], DEST)
+    geometry, direction_names = scct_authored_geometry.direction_geometry(
+        glb_path, gltf, os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()),
+                                    "ScctAuthoredImports"), log)
+    direction_meshes = {key(name) for name in direction_names}
+    import_files([geometry], DEST)
 
     normals = [os.path.join(NORMALS_DIR, f) for f in sorted(os.listdir(NORMALS_DIR)) if f.endswith("_N.png")]
     import_files(normals, DEST + "/Normals")
@@ -627,6 +632,8 @@ def main():
             component.set_default_custom_primitive_data_float(scct_materials.LOCAL_DETAIL_SLOT, 1.0)
         if vertex_kind:
             component.set_default_custom_primitive_data_float(scct_materials.BAKED_VERTEX_SLOT, vertex_kind)
+            if key(str(mesh.get_name())) in direction_meshes:
+                component.set_default_custom_primitive_data_float(scct_authored_geometry.DIR_FLAG_SLOT, 1.0)
         return actor
 
     for node in gltf["nodes"]:

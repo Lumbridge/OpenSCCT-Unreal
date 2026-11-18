@@ -2,6 +2,7 @@
 from pathlib import Path
 
 import unreal
+from scct_authored_geometry import DIR_FLAG_SLOT
 from scct_materials import Graph, FLOAT1, FLOAT2, FLOAT3, asset_tools, editor_assets, lib
 
 FOLDER = "/Game/OpenSCCT/Materials/Authored"
@@ -58,7 +59,7 @@ def master(translucent, unlit):
 
     evaluator = g.custom(Path(__file__).with_name("scct_authored_surface.ush").read_text(encoding="utf-8"), FLOAT3, **inputs)
     outputs = []
-    for name, kind in dict(F0=FLOAT3, WorldNormal=FLOAT3, Light=FLOAT3, Rough=FLOAT1, AO=FLOAT1, Alpha=FLOAT1).items():
+    for name, kind in dict(F0=FLOAT3, WorldNormal=FLOAT3, WorldTangent=FLOAT3, Light=FLOAT3, Rough=FLOAT1, AO=FLOAT1, Alpha=FLOAT1).items():
         out = unreal.CustomOutput()
         out.set_editor_property("output_name", name)
         out.set_editor_property("output_type", kind)
@@ -79,18 +80,50 @@ def master(translucent, unlit):
         bake_maps = {name: g.node(unreal.MaterialExpressionTextureObjectParameter, parameter_name=name, texture=default,
                                   sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_MASKS)
                      for name in ("Lightmap", "BakedDirection")}
+        anisotropy = g.scalar("Anisotropy", 0)
+        clearcoat = g.scalar("Clearcoat", 0)
+        gloss = g.scalar("ClearcoatGloss", 0.5)
         fill = g.custom("""
 float3 stored = HasPage ? Lightmap.SampleGrad(LightmapSampler, UV, ddx(UV), ddy(UV)).rgb : saturate(UseVertex)*Vertex;
 float3 term = stored*2;
 float3 irradiance = lerp(term/12.92, pow((term+0.055)/1.055,2.4),step(0.04045,term));
-if (HasDirection) {
-    float4 d = BakedDirection.SampleGrad(LightmapSampler,UV,ddx(UV),ddy(UV));
-    float3 axis = normalize(d.rgb*2-1).xzy;
+bool vertexDirection = !HasPage && UseVertex && HasVertexDirection;
+if (HasPage && HasDirection) {
+    float4 page = BakedDirection.SampleGrad(LightmapSampler,UV,ddx(UV),ddy(UV));
+    float3 axis = normalize(page.rgb*2-1).xzy;
     float ratio = saturate(dot(N,axis))/max(dot(Parameters.TangentToWorld[2],axis),0.1);
-    irradiance *= lerp(1,clamp(ratio,0,4),d.a);
+    irradiance *= lerp(1,clamp(ratio,0,4),page.a);
 }
-return Light + Base * AO * irradiance * Fill;
+float3 highlight = 0;
+float coherence = saturate(DirZA.y);
+float3 encoded = float3(DirXY,DirZA.x)*2-1;
+if (vertexDirection && coherence > 0 && dot(encoded,encoded) > 1e-8) {
+    float3 axis = normalize(encoded).xzy;
+    float nl = saturate(dot(N,axis));
+    float ratio = nl/max(dot(normalize(Parameters.TangentToWorld[2]),axis),0.1);
+    irradiance *= lerp(1,clamp(ratio,0,4),coherence);
+    // Godot am_highlight: only the GGX and coat terms of this baked vertex light.
+    if (nl > 0 && dot(Eye+axis,Eye+axis) > 1e-8) {
+        float3 h = normalize(Eye + axis);
+        float nv = max(dot(N,Eye),0.001), nh = saturate(dot(N,h)), vh = saturate(dot(Eye,h));
+        float a = max(0.002,Rough*Rough*lerp(1,0.5+abs(dot(T,h)),Aniso));
+        float a2 = a*a, denom = nh*nh*(a2-1)+1;
+        float distribution = a2/max(3.14159265*denom*denom,0.00001);
+        float k = (Rough+1)*(Rough+1)/8;
+        float masking = nv/(nv*(1-k)+k) * nl/(nl*(1-k)+k);
+        float3 fresnel = SpecF0 + (1-SpecF0)*pow(1-vh,5);
+        float coat = Coat*pow(nh,lerp(8,256,Gloss))*0.25;
+        highlight = (distribution*masking*fresnel/max(4*nv*nl,0.001)+coat)*nl*irradiance*coherence;
+    }
+}
+return Light + (Base * AO * irradiance + highlight) * Fill;
 """, FLOAT3, UV=g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1),
+                        DirXY=g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=2),
+                        DirZA=g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=3),
+                        HasVertexDirection=g.node(unreal.MaterialExpressionScalarParameter, parameter_name="HasVertexDirection",
+                                                  default_value=0, use_custom_primitive_data=True, primitive_data_index=DIR_FLAG_SLOT),
+                        SpecF0=(evaluator, "F0"), Rough=(evaluator, "Rough"), T=(evaluator, "WorldTangent"),
+                        Eye=inputs["Eye"], Aniso=anisotropy, Coat=clearcoat, Gloss=gloss,
                         Vertex=g.node(unreal.MaterialExpressionVertexColor), HasPage=g.scalar("HasLightmap", 0),
                         UseVertex=g.node(unreal.MaterialExpressionScalarParameter, parameter_name="BakedVertexLight",
                                          default_value=0, use_custom_primitive_data=True, primitive_data_index=1),
@@ -98,9 +131,9 @@ return Light + Base * AO * irradiance * Fill;
                         N=(evaluator, "WorldNormal"), Light=(evaluator, "Light"), Base=(evaluator, "return"),
                         AO=(evaluator, "AO"), **bake_maps)
         g.wire(fill, "", surface, "Emissive Color")
-        g.wire(g.scalar("Anisotropy", 0), "", surface, "Anisotropy")
-        g.wire(g.scalar("Clearcoat", 0), "", surface, "Second Roughness Weight")
-        coat = g.custom("return 1 - Gloss;", FLOAT1, Gloss=g.scalar("ClearcoatGloss", 0.5))
+        g.wire(anisotropy, "", surface, "Anisotropy")
+        g.wire(clearcoat, "", surface, "Second Roughness Weight")
+        coat = g.custom("return 1 - Gloss;", FLOAT1, Gloss=gloss)
         g.wire(coat, "", surface, "Second Roughness")
         g.output(evaluator, unreal.MaterialProperty.MP_AMBIENT_OCCLUSION, "AO")
     if translucent:
