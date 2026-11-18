@@ -471,6 +471,7 @@ def build_surface():
     lightmap = g.texture("Lightmap", "/Engine/EngineResources/Black", uvs=lightmap_uv)
     baked_vertex = g.node(unreal.MaterialExpressionScalarParameter, parameter_name="BakedVertexLight", default_value=0.0,
                           use_custom_primitive_data=True, primitive_data_index=BAKED_VERTEX_SLOT)
+    vertex_colour = g.node(unreal.MaterialExpressionVertexColor)
     # The baked light keeps only part of its colour: it is a fill under lamps that carry the same tint, and with
     # their bounces on top a tinted room turned into one flat hue.
     #
@@ -497,7 +498,7 @@ def build_surface():
         " term = max(lerp(level, term, Saturation) * Gain, 0.0);"
         " float gate = Bounce * smoothstep(Low, max(High, Low + 0.001), level);"
         " return float4(pow(term, 2.2), gate);", FLOAT4,
-        LM=(lightmap, "RGB"), VC=g.node(unreal.MaterialExpressionVertexColor), UseVC=baked_vertex,
+        LM=(lightmap, "RGB"), VC=vertex_colour, UseVC=baked_vertex,
         Fill=g.scalar("BakedFill", 0.0), Plan=g.light("Plan"), Scale=g.light("BakedScale"), Gain=g.light("BakedGain"),
         Saturation=g.light("BakedSaturation"), Ambient=g.light("Ambient"), Boost=g.light("Boost"),
         Bounce=g.light("BounceGate"), Low=g.light("BounceLow"), High=g.light("BounceHigh"))
@@ -510,7 +511,13 @@ def build_surface():
     # The glow of a screen, a lamp glass or an additive flare is a brightness in the finished picture (see
     # Graph.in_the_picture): 1 is the texture as painted, whatever the exposure. The baked light is light in the
     # scene like any lamp's and stays that.
-    glow = g.custom("return Base * Tint * Whole + Lit * Mask * Strength;", FLOAT3,
+    # Painted additive meshes use vertex RGB as the entire light term. A zero at the edge of an
+    # aquarium ripple must add nothing, even when the underlying animated texture is bright there.
+    painted_additive = g.custom("#if MATERIALBLENDING_ADDITIVE\nreturn Kind > 1.5 ? 1.0 : 0.0;\n"
+                                "#else\nreturn 0.0;\n#endif\n", FLOAT1, Kind=baked_vertex)
+    glow = g.custom("if (Painted > 0.5) return Base * Tint * pow(saturate(VC.rgb) * 2.0, 2.2);"
+                    " return Base * Tint * Whole + Lit * Mask * Strength;", FLOAT3,
+                    Painted=painted_additive, VC=vertex_colour,
                     Base=base["RGB"], Tint=tint, Whole=g.scalar("Emissive", 0.0),
                     Lit=(self_lit, "RGB"), Mask=(self_mask, "A"), Strength=g.scalar("SelfIllum", 0.0))
     # ---- the least light. The original never drew a lit surface black: every zone had an ambient light, and its
@@ -526,12 +533,14 @@ def build_surface():
     least = g.custom("return Base * Tint * Floor * (0.55 + 0.45 * saturate(N.z * 0.5 + 0.5)) * AO * (Plan < 0.5 ? 1.0 : Share);", FLOAT3,
                      Base=base["RGB"], Tint=tint, Floor=g.scalar("AmbientFloor", 0.0), N=normal, AO=occlusion,
                      Plan=g.light("Plan"), Share=g.light("Floor"))
-    emissive = g.custom("return Glow + Least + Base * Tint * (Baked + Pawn);", FLOAT3,
+    emissive = g.custom("return Painted > 0.5 ? Glow : Glow + Least + Base * Tint * (Baked + Pawn);", FLOAT3,
+                        Painted=painted_additive,
                         Glow=g.in_the_picture(glow, g.scalar("GlowInPicture", 1.0)), Least=least, Base=base["RGB"],
                         Tint=tint, Baked=baked, Pawn=pawn_light(g, normal, world_position))
     g.output(emissive, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
-    alpha = g.custom("return A * O;", FLOAT1, A=base["A"], O=g.scalar("Opacity", 1.0))
+    alpha = g.custom("return Painted > 0.5 ? O : A * O;", FLOAT1, Painted=painted_additive,
+                     A=base["A"], O=g.scalar("Opacity", 1.0))
     g.output(alpha, unreal.MaterialProperty.MP_OPACITY)
 
     # The mask: the texture's alpha (AlphaMask 0 ignores it: a body's texture keeps other things in its alpha),
