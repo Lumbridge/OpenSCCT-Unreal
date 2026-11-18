@@ -1,8 +1,11 @@
 #include "Menu/ScctMenuBackdrop.h"
 
+#include "Engine/GameViewportClient.h"
 #include "Engine/LevelStreamingDynamic.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "HDRHelper.h"
 #include "Hub/ScctHubSubsystem.h"
 #include "Menu/ScctFrontEndGameMode.h"
 #include "Menu/ScctUserSettings.h"
@@ -15,15 +18,32 @@
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctBackdropApi.h"
 #include "ShaderCompiler.h"
+#include "Styling/SlateBrush.h"
+#include "TextureResource.h"
+#include "UnrealClient.h"
 
 namespace
 {
 	/** How much of the scene the shade covers; the shade reads it every time it is drawn. */
 	float GScctMenuBackdropCover = 0.0f;
 
+	/** How opaque the held frame of the scene is; the shade reads it every time it is drawn. */
+	float GScctMenuBackdropFreeze = 0.0f;
+
+	/** The brush of the held frame. Its texture belongs to the director that made it. */
+	FSlateBrush& ScctMenuBackdropFreezeBrush()
+	{
+		static FSlateBrush Brush;
+		return Brush;
+	}
+
 	/** Seconds the scene takes to dip to the shade's ink, and to come back. */
 	constexpr double ScctMenuBackdropCoverIn = 0.4;
 	constexpr double ScctMenuBackdropCoverOut = 0.6;
+
+	/** Seconds the held frame takes to fade away over the new scene, and the longest it is waited for. */
+	constexpr double ScctMenuBackdropDissolve = 1.1;
+	constexpr double ScctMenuBackdropFreezeWait = 0.5;
 
 	/** The least time a new match runs under the cover before it is shown: its players stand in the world. */
 	constexpr double ScctMenuBackdropWarm = 0.4;
@@ -60,6 +80,97 @@ namespace
 float UScctMenuBackdrop::GetCover()
 {
 	return GScctMenuBackdropCover;
+}
+
+const FSlateBrush* UScctMenuBackdrop::GetFreeze(float& OutOpacity)
+{
+	OutOpacity = GScctMenuBackdropFreeze;
+	const FSlateBrush& Brush = ScctMenuBackdropFreezeBrush();
+	return OutOpacity > 0.0f && IsValid(Brush.GetResourceObject()) ? &Brush : nullptr;
+}
+
+void UScctMenuBackdrop::AskFreeze()
+{
+	bFreezeAsked = true;
+	bFreezeTaken = false;
+	// The viewport hands a screenshot to whoever listens instead of writing a file: only this one request is
+	// listened to, and nothing is asked while somebody else listens.
+	if (!bFreezeAllowed || UGameViewportClient::OnScreenshotCaptured().IsBound() || FScreenshotRequest::IsScreenshotRequested())
+	{
+		return;
+	}
+	// On an HDR display the viewport's screenshot is a floating point picture that goes to its own listeners (or to
+	// a file): it is not asked for, and the change dips to the shade's ink.
+	if (IsHDREnabled())
+	{
+		return;
+	}
+	FreezeHandle = UGameViewportClient::OnScreenshotCaptured().AddUObject(this, &UScctMenuBackdrop::HandleFreeze);
+	FScreenshotRequest::RequestScreenshot(false);
+}
+
+void UScctMenuBackdrop::ForgetFreezeRequest()
+{
+	if (FreezeHandle.IsValid())
+	{
+		UGameViewportClient::OnScreenshotCaptured().Remove(FreezeHandle);
+		FreezeHandle.Reset();
+	}
+}
+
+void UScctMenuBackdrop::HandleFreeze(int32 Width, int32 Height, const TArray<FColor>& Bitmap)
+{
+	ForgetFreezeRequest();
+	if (Width <= 0 || Height <= 0 || Bitmap.Num() != Width * Height)
+	{
+		return;
+	}
+	if (!IsValid(FreezeTexture) || FreezeTexture->GetSizeX() != Width || FreezeTexture->GetSizeY() != Height)
+	{
+		FreezeTexture = UTexture2D::CreateTransient(Width, Height, PF_B8G8R8A8);
+		if (!IsValid(FreezeTexture))
+		{
+			return;
+		}
+		// The pixels are the screen's own, already in the display's encoding: they are drawn back as they are.
+		FreezeTexture->SRGB = false;
+		FreezeTexture->NeverStream = true;
+		FreezeTexture->Filter = TF_Bilinear;
+	}
+	FTexturePlatformData* Platform = FreezeTexture->GetPlatformData();
+	if (Platform == nullptr || Platform->Mips.Num() == 0)
+	{
+		return;
+	}
+	void* Pixels = Platform->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
+	FMemory::Memcpy(Pixels, Bitmap.GetData(), static_cast<SIZE_T>(Bitmap.Num()) * sizeof(FColor));
+	Platform->Mips[0].BulkData.Unlock();
+	FreezeTexture->UpdateResource();
+
+	FSlateBrush& Brush = ScctMenuBackdropFreezeBrush();
+	Brush.SetResourceObject(FreezeTexture);
+	Brush.SetImageSize(FVector2f(static_cast<float>(Width), static_cast<float>(Height)));
+	Brush.DrawAs = ESlateBrushDrawType::Image;
+	Brush.Tiling = ESlateBrushTileType::NoTile;
+	bFreezeTaken = true;
+}
+
+void UScctMenuBackdrop::SetCovered(float Amount)
+{
+	GScctMenuBackdropFreeze = bCoverIsFreeze ? Amount : 0.0f;
+	GScctMenuBackdropCover = bCoverIsFreeze ? 0.0f : Amount;
+}
+
+void UScctMenuBackdrop::BeginDestroy()
+{
+	// The shade must not draw a frame whose texture goes with this director.
+	ForgetFreezeRequest();
+	if (ScctMenuBackdropFreezeBrush().GetResourceObject() == FreezeTexture)
+	{
+		ScctMenuBackdropFreezeBrush().SetResourceObject(nullptr);
+		GScctMenuBackdropFreeze = 0.0f;
+	}
+	Super::BeginDestroy();
 }
 
 void UScctMenuBackdrop::SetPhase(EPhase NewPhase)
@@ -185,6 +296,8 @@ void UScctMenuBackdrop::Suspend(UWorld& World, const FScctBackdropApi* Api, UScc
 		ShownLevel->SetShouldBeVisible(true);
 	}
 	GScctMenuBackdropCover = 0.0f;
+	GScctMenuBackdropFreeze = 0.0f;
+	ForgetFreezeRequest();
 	SetPhase(EPhase::Idle);
 	if (bWasBusy)
 	{
@@ -200,6 +313,8 @@ void UScctMenuBackdrop::Shutdown(UWorld* World)
 	}
 	bShutDown = true;
 	GScctMenuBackdropCover = 0.0f;
+	GScctMenuBackdropFreeze = 0.0f;
+	ForgetFreezeRequest();
 	UScctSessionSubsystem* Session = World != nullptr ? World->GetSubsystem<UScctSessionSubsystem>() : nullptr;
 	const bool bPlayed = Session != nullptr && Session->IsBackdrop();
 	if (Phase == EPhase::Idle && !bPlayed)
@@ -324,6 +439,8 @@ void UScctMenuBackdrop::TickPreparing(UWorld& World, const FScctBackdropApi& Api
 	{
 		CoverStarted = Now;
 		bLiveAfterCover = true;
+		bCoverIsFreeze = false;
+		bFreezeAsked = false;
 		SetPhase(EPhase::CoverIn);
 	}
 }
@@ -400,6 +517,9 @@ void UScctMenuBackdrop::Tick(AScctFrontEndGameMode& GameMode, float DeltaSeconds
 			// Unattended checks of the menu keep the still they were written against.
 			ForcedOption = 0;
 		}
+		int32 Freeze = 1;
+		FParse::Value(FCommandLine::Get(), TEXT("ScctMenuLiveFreeze="), Freeze);
+		bFreezeAllowed = Freeze != 0;
 		double Seconds = 0.0;
 		if (FParse::Value(FCommandLine::Get(), TEXT("ScctMenuLiveSwapSeconds="), Seconds) && Seconds > 0.0)
 		{
@@ -505,7 +625,36 @@ void UScctMenuBackdrop::Tick(AScctFrontEndGameMode& GameMode, float DeltaSeconds
 		break;
 
 	case EPhase::CoverIn:
-		GScctMenuBackdropCover = static_cast<float>(FMath::Clamp(InPhase / ScctMenuBackdropCoverIn, 0.0, 1.0));
+		if (!bFreezeAsked)
+		{
+			// The frame drawn at the end of this tick is the one that is held.
+			AskFreeze();
+			if (FreezeHandle.IsValid())
+			{
+				break;
+			}
+		}
+		if (bFreezeTaken)
+		{
+			// The held frame is the picture on screen: it goes over the scene at once, and nothing is seen to change.
+			bFreezeTaken = false;
+			bCoverIsFreeze = true;
+			SetCovered(1.0f);
+			Exchange(*World, *Session);
+			break;
+		}
+		if (FreezeHandle.IsValid())
+		{
+			if (InPhase < ScctMenuBackdropFreezeWait)
+			{
+				break;
+			}
+			// No frame came back: this change dips to the shade's ink instead.
+			ForgetFreezeRequest();
+			PhaseStarted = Now;
+			break;
+		}
+		SetCovered(static_cast<float>(FMath::Clamp(InPhase / ScctMenuBackdropCoverIn, 0.0, 1.0)));
 		if (GScctMenuBackdropCover >= 1.0f)
 		{
 			Exchange(*World, *Session);
@@ -597,8 +746,11 @@ void UScctMenuBackdrop::Tick(AScctFrontEndGameMode& GameMode, float DeltaSeconds
 			PhaseStarted = Now;
 			break;
 		}
-		GScctMenuBackdropCover = static_cast<float>(FMath::Clamp(1.0 - InPhase / ScctMenuBackdropCoverOut, 0.0, 1.0));
-		if (GScctMenuBackdropCover <= 0.0f)
+		// The held frame leaves slowly at both ends, as a dissolve does; the ink goes evenly.
+		SetCovered(bCoverIsFreeze
+			? static_cast<float>(FMath::SmoothStep(0.0, 1.0, FMath::Clamp(1.0 - InPhase / ScctMenuBackdropDissolve, 0.0, 1.0)))
+			: static_cast<float>(FMath::Clamp(1.0 - InPhase / ScctMenuBackdropCoverOut, 0.0, 1.0)));
+		if (GScctMenuBackdropCover <= 0.0f && GScctMenuBackdropFreeze <= 0.0f)
 		{
 			if (!bLiveAfterCover)
 			{
@@ -608,13 +760,13 @@ void UScctMenuBackdrop::Tick(AScctFrontEndGameMode& GameMode, float DeltaSeconds
 			const double Covered = Now - CoverStarted;
 			if (!bFirstShown)
 			{
-				UE_LOG(LogOpenSCCT, Log, TEXT("Menu: live backdrop is %s (2 v 2 bots, shown %.1f s after the menu opened; made ready in %.1f s, scene covered %.2f s: old level out %.2f, new level in %.2f, first ticks %.2f; longest frame %.0f ms while it was made ready, %.0f ms in the fades, %.0f ms under the cover; adopting the match took %.0f ms)"),
-					*ShownMap, Now - CreatedAt, CoverStarted - PrepareStarted, Covered, HideSeconds, ShowSeconds, WarmSeconds, LongestLoadingFrameMs, LongestFadeFrameMs, LongestCoveredFrameMs, AdoptMs);
+				UE_LOG(LogOpenSCCT, Log, TEXT("Menu: live backdrop is %s (2 v 2 bots, shown %.1f s after the menu opened; made ready in %.1f s, %s %.2f s: old level out %.2f, new level in %.2f, first ticks %.2f; longest frame %.0f ms while it was made ready, %.0f ms in the fades, %.0f ms under the cover; adopting the match took %.0f ms)"),
+					*ShownMap, Now - CreatedAt, CoverStarted - PrepareStarted, bCoverIsFreeze ? TEXT("a held frame dissolved into it over") : TEXT("scene dipped to dark for"), Covered, HideSeconds, ShowSeconds, WarmSeconds, LongestLoadingFrameMs, LongestFadeFrameMs, LongestCoveredFrameMs, AdoptMs);
 			}
 			else
 			{
-				UE_LOG(LogOpenSCCT, Log, TEXT("Menu: backdrop swap %s -> %s (made ready in %.1f s behind the old match, scene covered %.2f s: old level out %.2f, new level in %.2f, first ticks %.2f; longest frame %.0f ms while the next map was made ready, %.0f ms in the fades, %.0f ms under the cover; adopting the match took %.0f ms)"),
-					SwapFrom.IsEmpty() ? TEXT("the level's own scene") : *SwapFrom, *ShownMap, CoverStarted - PrepareStarted, Covered, HideSeconds, ShowSeconds, WarmSeconds, LongestLoadingFrameMs, LongestFadeFrameMs, LongestCoveredFrameMs, AdoptMs);
+				UE_LOG(LogOpenSCCT, Log, TEXT("Menu: backdrop swap %s -> %s (made ready in %.1f s behind the old match, %s %.2f s: old level out %.2f, new level in %.2f, first ticks %.2f; longest frame %.0f ms while the next map was made ready, %.0f ms in the fades, %.0f ms under the cover; adopting the match took %.0f ms)"),
+					SwapFrom.IsEmpty() ? TEXT("the level's own scene") : *SwapFrom, *ShownMap, CoverStarted - PrepareStarted, bCoverIsFreeze ? TEXT("a held frame dissolved into it over") : TEXT("scene dipped to dark for"), Covered, HideSeconds, ShowSeconds, WarmSeconds, LongestLoadingFrameMs, LongestFadeFrameMs, LongestCoveredFrameMs, AdoptMs);
 			}
 			bFirstShown = true;
 			SwapFrom.Reset();

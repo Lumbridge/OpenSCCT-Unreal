@@ -7,7 +7,9 @@
 class AScctFrontEndGameMode;
 class ULevelStreamingDynamic;
 class UScctSessionSubsystem;
+class UTexture2D;
 struct FScctBackdropApi;
+struct FSlateBrush;
 
 /**
  * The live picture behind the main menu: a real match played by four bots (two spies against two mercs, Story) on
@@ -21,9 +23,12 @@ struct FScctBackdropApi;
  *
  * A change of picture never stops the menu: the next map's level streams in hidden and its match is started on a
  * worker thread of the bridge (Runtime/ScctBackdropApi.h) while the current match goes on being shown. When both
- * are ready the scene dips to the menu shade's own dark ink (GetCover, drawn by the shade in Menu/SScctFrontEnd.cpp
- * under its gradients, so the menu itself does not change), the levels and the matches are exchanged under it, and
- * the scene comes back once the new match has a view and players to show. The old level is unloaded afterwards.
+ * are ready the picture on screen is held: the scene as it was just drawn is read back once and the menu's shade
+ * (Menu/SScctFrontEnd.cpp) draws that held frame over the scene, under its gradients, so the menu itself does not
+ * change (GetFreeze). The levels and the matches are exchanged under the held frame, and once the new match has a
+ * view and players to show the held frame fades away over the live scene: one picture dissolves into the next,
+ * with about a second of stillness in between and no dark frame. When the frame cannot be read back the scene
+ * dips to the shade's own dark ink instead and comes back (GetCover). The old level is unloaded under the cover.
  *
  * The match gives way to everything the player starts: an online or hub visit suspends it (the picture holds where
  * it was), and leaving the level for a match, a demo or a tutorial stops it (Shutdown, from the game mode's
@@ -36,6 +41,7 @@ struct FScctBackdropApi;
  *                                    checks stay what they were.
  *   -ScctMenuLiveSwapSeconds=S       change maps every S seconds instead of every four minutes
  *   -ScctMenuLiveMaps=AquaE,SteeE    the maps in this order (round and round) instead of a shuffle of all of them
+ *   -ScctMenuLiveFreeze=0            change maps through the dip to dark ink, never through a held frame
  *
  * Log lines to look for: "Menu: live backdrop is ..." (a match is on screen) and "Menu: backdrop swap A -> B ..."
  * with how long the scene was covered and the longest frames around the change.
@@ -50,6 +56,12 @@ public:
 	static float GetCover();
 
 	/**
+	 * The held frame the shade draws over the scene while maps change, and how opaque it is right now (0: not
+	 * drawn). The frame is the scene exactly as the screen showed it: draw it without gamma correction.
+	 */
+	static const FSlateBrush* GetFreeze(float& OutOpacity);
+
+	/**
 	 * Once a frame from the game mode. bStillSettled: the still backdrop is on screen, or there is none to wait for.
 	 * StillMap and StillLevel: that still's map and its streamed level (empty and null for the level's own scene).
 	 */
@@ -57,6 +69,8 @@ public:
 
 	/** The level is being left, or the game mode ends: the match and whatever is being made ready are dropped. */
 	void Shutdown(UWorld* World);
+
+	virtual void BeginDestroy() override;
 
 private:
 	enum class EPhase : uint8
@@ -86,6 +100,14 @@ private:
 	void GiveUpOnNext(UWorld& World, const FScctBackdropApi& Api, UScctSessionSubsystem& Session, AScctFrontEndGameMode& GameMode, const TCHAR* Why);
 	void Suspend(UWorld& World, const FScctBackdropApi* Api, UScctSessionSubsystem* Session, AScctFrontEndGameMode& GameMode, const TCHAR* Why);
 	void HoldPicture(AScctFrontEndGameMode& GameMode);
+
+	/** Asks the viewport for the scene as it is drawn this frame; HandleFreeze gets it at the end of the frame. */
+	void AskFreeze();
+	void HandleFreeze(int32 Width, int32 Height, const TArray<FColor>& Bitmap);
+	void ForgetFreezeRequest();
+
+	/** Sets how much of the scene is covered, as a held frame or as ink, whichever this change uses. */
+	void SetCovered(float Amount);
 	void DropNextLevel();
 	void SetPhase(EPhase NewPhase);
 	bool IsWanted(const UWorld& World, const UScctSessionSubsystem* Session, const TCHAR*& OutWhy) const;
@@ -107,6 +129,17 @@ private:
 	/** The level shown before the last exchange, unloaded once the new picture is up. */
 	UPROPERTY(Transient)
 	TObjectPtr<ULevelStreamingDynamic> OldLevel;
+
+	/** The held frame of the scene, kept from one change to the next (the shade's brush points at it). */
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> FreezeTexture;
+	FDelegateHandle FreezeHandle;
+	bool bFreezeAllowed = true;
+	bool bFreezeAsked = false;
+	bool bFreezeTaken = false;
+
+	/** This change covers the scene with a held frame (false: with the shade's ink). */
+	bool bCoverIsFreeze = false;
 
 	/** The maps in the order they are tried, and the place in it. */
 	TArray<FString> Order;
