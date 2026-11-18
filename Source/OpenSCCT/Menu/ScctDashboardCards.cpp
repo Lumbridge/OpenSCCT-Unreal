@@ -5,6 +5,7 @@
 #include "HAL/PlatformProcess.h"
 #include "Menu/ScctBotNavPrompt.h"
 #include "Menu/ScctMenuSubsystem.h"
+#include "Menu/SScctRankIcon.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
@@ -392,6 +393,15 @@ namespace ScctDashboard
 					})
 				]
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(10.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(SScctRankIcon).Size(26.0f)
+					.Visibility_Lambda([HasRank, Shown] { return Shown(HasRank()); })
+					.Rank_Lambda([Account, HasRank]
+					{
+						return HasRank() ? FScctRankEmblem{ Account->GetInfo().Level, Account->GetInfo().Prestige, Account->HasFlag(EScctAccountFlags::Master) } : FScctRankEmblem();
+					})
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.0f, 0.0f, 0.0f, 0.0f)
 				[
 					SNew(STextBlock).Font(ScctUi::Caps(13.0f))
 					.Visibility_Lambda([HasRank, Shown] { return Shown(HasRank()); })

@@ -132,6 +132,13 @@ public sealed class ControlsFeature
     /// </summary>
     public (FVector Location, FRotator Rotation)? DrawnCamera { get; private set; }
 
+    /// <summary>
+    /// The aim the last <c>GetView</c> handed Unreal (the controller's rotation plus the mouse turn not yet
+    /// simulated), or null before the first. The local player's laser is aimed along it each frame
+    /// (Equipment/EquipmentFeature.cs).
+    /// </summary>
+    public FRotator? DrawnAim { get; private set; }
+
     /// <summary>One rendered frame of device state, before the session's update.</summary>
     public unsafe void Frame(in BridgeRawInput raw)
     {
@@ -182,6 +189,7 @@ public sealed class ControlsFeature
     {
         ViewSample current = _session.View;
         DrawnCamera = null;
+        DrawnAim = null;
         if (!current.Valid)
         {
             return default;
@@ -265,6 +273,7 @@ public sealed class ControlsFeature
         FRotator pending = !overridden && _look.Active ? _look.Pending : default;
         FRotator aim = pc is null ? camera.Rotation : new FRotator(pc.Rotation.Pitch + pending.Pitch, pc.Rotation.Yaw + pending.Yaw, pc.Rotation.Roll);
         DrawnCamera = (camera.Location, camera.Rotation);
+        DrawnAim = aim;
         return new BridgeLookView
         {
             X = camera.Location.X,

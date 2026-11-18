@@ -203,7 +203,9 @@ void AScctPawnProxy::SetNearFade(float Distance, const FVector& Eye)
 
 	const FName Head = FindMeshBoneName(TEXT("B Head"));
 	bool bHideHead = false;
-	if (Distance > 0.0f && !Head.IsNone())
+	// Seen from the player's own eyes the body is out of the main view already and is drawn only as a shadow:
+	// a head hidden then (the eye always sits inside it) would only cut the head out of that shadow.
+	if (Distance > 0.0f && !Head.IsNone() && !IsFirstPerson())
 	{
 		const float Reach = Distance * HeadGoneFactor + (bHeadHidden ? HeadBackMargin : 0.0f);
 		bHideHead = FVector::DistSquared(Body->GetBoneLocation(Head), Eye) < FMath::Square(Reach);

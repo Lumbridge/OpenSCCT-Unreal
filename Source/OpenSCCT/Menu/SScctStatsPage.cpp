@@ -5,6 +5,7 @@
 #include "Menu/ScctCareerPages.h"
 
 #include "Menu/ScctMenuSubsystem.h"
+#include "Menu/SScctRankIcon.h"
 #include "Social/ScctAccountSubsystem.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SWrapBox.h"
@@ -152,6 +153,11 @@ namespace
 					SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[ ScctCareerUi::Line(bKnown && !Name.IsEmpty() ? Name : TEXT("Your career"), ScctUi::H2(), ScctHudStyle::Text(), false) ]
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(16.0f, 0.0f, 0.0f, 0.0f)
+					[
+						SNew(SScctRankIcon).Size(32.0f).Rank(Account != nullptr && !Rank.IsEmpty()
+							? FScctRankEmblem{ Account->GetInfo().Level, Account->GetInfo().Prestige, Account->HasFlag(EScctAccountFlags::Master) } : FScctRankEmblem())
+					]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.0f, 0.0f, 0.0f, 0.0f)
 					[
 						SNew(STextBlock).Font(ScctUi::Caps(13.0f)).Text(FText::FromString(Rank))
 						.ColorAndOpacity(Account != nullptr ? UScctAccountSubsystem::ToColour(Account->GetInfo().RankColour) : ScctUi::Accent())
