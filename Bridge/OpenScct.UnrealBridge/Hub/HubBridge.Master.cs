@@ -399,7 +399,8 @@ public sealed partial class HubBridge
         }
 
         Log("trying " + attempt.Describe());
-        Connect(attempt.Address, _name, _team);
+        // The account's look is asked for before the first way in only; the next ways follow at once.
+        Connect(attempt.Address, _name, _team, prepare: failed is null);
         _status = $"Connecting to {_masterName} ({attempt.Describe()})...";
         Touch();
         return true;

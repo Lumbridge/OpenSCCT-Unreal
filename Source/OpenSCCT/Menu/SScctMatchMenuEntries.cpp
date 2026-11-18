@@ -7,6 +7,7 @@
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Hud/ScctHudEdit.h"
+#include "Menu/SScctArmouryOverlay.h"
 #include "Menu/SScctGearPage.h"
 #include "Menu/SScctHelpPage.h"
 #include "Menu/SScctStrategicMapPage.h"
@@ -113,6 +114,22 @@ TSharedPtr<SScctStrategicMapPage> SScctMatchMenu::GetStrategicMap() const
 	return PageLayer.IsValid() ? SScctStrategicMapPage::FindOpen(PageLayer.ToSharedRef()) : nullptr;
 }
 
+bool SScctMatchMenu::ShowArmoury(bool bOnly)
+{
+	if (!PageLayer.IsValid())
+	{
+		return false;
+	}
+	if (SScctArmouryOverlay::FindOpen(PageLayer.ToSharedRef()).IsValid())
+	{
+		return true;
+	}
+	bPageOnly = bOnly;
+	SScctArmouryOverlay::Open(PageLayer.ToSharedRef(), Host, TEXT("the hub"),
+		FSimpleDelegate::CreateLambda([this] { if (bPageOnly && bOpen) { OnResume.ExecuteIfBound(); } bPageOnly = false; FocusDefault(); }));
+	return true;
+}
+
 void SScctMatchMenu::ShowHelp()
 {
 	if (PageLayer.IsValid())
@@ -134,6 +151,10 @@ bool SScctMatchMenu::BackFromOverlayPage()
 	if (const TSharedPtr<SScctHelpPage> Help = SScctHelpPage::FindOpen(PageLayer.ToSharedRef()))
 	{
 		Help->Close();
+		return true;
+	}
+	if (SScctArmouryOverlay::Back(PageLayer))
+	{
 		return true;
 	}
 	if (const TSharedPtr<SScctGearPage> Gear = GetGear())
@@ -160,6 +181,10 @@ void SScctMatchMenu::CloseOverlayPages()
 	if (const TSharedPtr<SScctHelpPage> Help = SScctHelpPage::FindOpen(PageLayer.ToSharedRef()))
 	{
 		Help->Close();
+	}
+	if (const TSharedPtr<SScctArmouryOverlay> Armoury = SScctArmouryOverlay::FindOpen(PageLayer.ToSharedRef()))
+	{
+		Armoury->Close();
 	}
 	if (const TSharedPtr<SScctGearPage> Gear = GetGear())
 	{

@@ -88,6 +88,9 @@ public:
 	TSharedPtr<SScctStrategicMapPage> ShowStrategicMap(bool bOnly);
 	TSharedPtr<SScctStrategicMapPage> GetStrategicMap() const;
 
+	/** The Armoury over the menu (Menu/SScctArmouryOverlay.h); bOnly as for ShowGear (the hub's Armoury key). */
+	bool ShowArmoury(bool bOnly);
+
 private:
 	enum class EView : uint8 { Pause, Settings, Results };
 

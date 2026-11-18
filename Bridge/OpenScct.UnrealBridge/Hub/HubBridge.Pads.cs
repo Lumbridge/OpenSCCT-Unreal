@@ -209,6 +209,12 @@ public sealed partial class HubBridge
             return;
         }
 
+        if (OnlineBridge.Existing is { Preparing: true })
+        {
+            // The online visit asks the account for its look first (a moment at most): no client yet.
+            return;
+        }
+
         if (OnlineBridge.Existing?.Client is not { } online)
         {
             // The online visit was ended from elsewhere (the match menu's leave button).
@@ -306,7 +312,7 @@ public sealed partial class HubBridge
             return;
         }
 
-        Connect(_target, _name, _team);
+        Connect(_target, _name, _team, prepare: true);
     }
 
     /// <summary>Ends a trip without going back (the visit is left): the online visit to the match is left too.</summary>

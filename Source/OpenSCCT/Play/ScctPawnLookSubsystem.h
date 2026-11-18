@@ -25,7 +25,7 @@ class UTexture2D;
  * torch beam takes the same turn. A slot another feature changes (the camo suit, a vision skin, the rate-of-fire
  * display) is left to it and looked at again once it is back.
  *
- * Options (Display page, Cosmetics): "Hide my cosmetics", "Hide others' cosmetics".
+ * Options (Online page, Cosmetics; also chips on the Armoury page): "Hide my cosmetics", "Hide others' cosmetics".
  *
  * Unattended switches (off by default):
  *   -ScctLook=<look>      once the player has a pawn, puts the look on his player info on the local server

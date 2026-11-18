@@ -85,6 +85,8 @@ public sealed partial class AccountService
             SaveState();
             _pushAt = 0;
             _social.Log("Account: took the account's settings");
+            // After Unreal put the settings in (its stored title among them): the record's look is the newest word.
+            TakeProfileLook(incoming.Record);
         }
         else
         {
@@ -102,6 +104,7 @@ public sealed partial class AccountService
         _pushAgain = false;
         _repushed = false;
         _incoming = null;
+        _profileLook = null;
     }
 
     /// <summary>Asks for the account's settings (after each sign-in, and at start-up with a saved one).</summary>
@@ -177,6 +180,12 @@ public sealed partial class AccountService
                 _social.Log("Account: " + problem);
                 return;
             case ProfileSync.ReadResult.NoUnrealPart:
+                // Only the Godot client wrote it: its look is taken by the rule the settings follow below.
+                if (_state.SyncedAccountId != _state.AccountId || _state.ProfileUpdatedMs == 0 || remote.Updated.ToUnixTimeMilliseconds() > _state.ProfileUpdatedMs)
+                {
+                    TakeProfileLook(remote.Data);
+                }
+
                 AddOwnPart(remote);
                 return;
         }
@@ -236,7 +245,7 @@ public sealed partial class AccountService
         }
 
         string? previous = _state.SyncedAccountId == _state.AccountId || _state.LastRecord is not null ? _state.LastRecord : null;
-        string data = ProfileSync.Build(previous, _localSettings!, _localControls, _localBindings);
+        string data = ProfileSync.Build(previous, _localSettings!, _localControls, _localBindings, ProfileLook);
         int bytes = Encoding.UTF8.GetByteCount(data);
         if (bytes > MasterApi.MaxProfileBytes)
         {
@@ -267,6 +276,7 @@ public sealed partial class AccountService
                     Take(stored, settings, controls, bindings);
                     return;
                 case ProfileSync.ReadResult.NoUnrealPart:
+                    TakeProfileLook(stored.Data);
                     AddOwnPart(stored);
                     return;
                 default:

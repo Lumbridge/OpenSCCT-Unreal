@@ -45,6 +45,11 @@ internal static class ArmouryLook
 
         return bySlot.Values.Order(StringComparer.Ordinal).ToArray();
     }
+
+    /// <summary>One log line for the look a new connection logs in with (<paramref name="how"/>: "with the join").</summary>
+    public static void LogSent(string how) => SocialBridge.Existing?.Log(
+        $"Armoury: look sent {how} (spy {Shared(CosmeticSide.Spy).ToHex()}, merc {Shared(CosmeticSide.Merc).ToHex()}"
+        + (PawnLooks.HideMine ? "; retail, as \"Hide my cosmetics\" is on)" : ")"));
 }
 
 /// <summary>
@@ -52,7 +57,10 @@ internal static class ArmouryLook
 /// the model of its ArmouryScreen): the chosen cosmetics and title follow the account with revision-checked writes
 /// (pulled every 30 s while in the menus, a lobby or a hub; sent 3 s after a choice), a change made elsewhere while
 /// this PC has unsent choices is a conflict the Armoury page resolves (reload the account's, or reapply this PC's),
-/// and the look is sent to the lobby or hub the player is in whenever it changes.
+/// and the look is sent to the lobby or hub the player is in whenever it changes. Before each connection the
+/// account's appearance is asked for afresh (<see cref="PrepareAppearance"/>). On a master without revision-checked
+/// appearance the look and title travel in the settings record instead, as the Godot client's ProfileSync carries
+/// them (its <c>cosmetics_spy</c>, <c>cosmetics_merc</c> and <c>title</c> settings).
 /// </summary>
 public sealed partial class AccountService
 {
@@ -239,6 +247,162 @@ public sealed partial class AccountService
         }
     }
 
+    // ---- before a connection --------------------------------------------------------------------------------------
+
+    /// <summary>How long a connection waits for the account's appearance before it goes on with the look held.</summary>
+    public const long PrepareTimeoutMs = 2_500;
+
+    private readonly List<Action> _prepareReady = [];
+    private long _prepareSince;
+    private bool _prepareAsked;
+    private bool _appearanceFailed;
+    private bool _pumped;
+
+    /// <summary>A connection waits for the account's appearance.</summary>
+    public bool PreparingAppearance => _prepareReady.Count > 0;
+
+    /// <summary>
+    /// Before a new connection (a join, the host's own join, a hub visit): asks the account for its appearance afresh
+    /// and runs <paramref name="ready"/> once it is in (and a change waiting here was sent), or after
+    /// <see cref="PrepareTimeoutMs"/> with the look held. <paramref name="ready"/> runs inside this call when there is
+    /// nothing to ask: signed out, a preview, sync off, or a master without revision-checked appearance.
+    /// A conflict does not hold the connection: the look held is used and the Armoury page still offers the choice.
+    /// </summary>
+    public void PrepareAppearance(Action ready)
+    {
+        ArgumentNullException.ThrowIfNull(ready);
+        if (!_started || !_pumped || Preview || _syncOff || !SignedIn || _appearanceSupported == false)
+        {
+            ready();
+            return;
+        }
+
+        _prepareReady.Add(ready);
+        if (_prepareReady.Count > 1)
+        {
+            return;
+        }
+
+        _prepareSince = NowMs;
+        _prepareAsked = false;
+        // A choice still waiting its three seconds goes to the account now.
+        _appearancePushAt = 0;
+        AppearanceStatus = "Checking appearance before joining…";
+        _social.Log("Armoury: asking the account for its appearance before connecting");
+        Touch();
+    }
+
+    private void FinishPreparation(string how)
+    {
+        if (_prepareReady.Count == 0)
+        {
+            return;
+        }
+
+        Action[] ready = [.. _prepareReady];
+        _prepareReady.Clear();
+        _social.Log($"Armoury: {how} after {(NowMs - _prepareSince).ToString(CultureInfo.InvariantCulture)} ms; connecting");
+        foreach (Action each in ready)
+        {
+            try
+            {
+                each();
+            }
+            catch (Exception e)
+            {
+                _social.Log("Armoury: the connection could not start: " + e.Message);
+            }
+        }
+
+        Touch();
+    }
+
+    /// <summary>The waits that end whatever the master does: nothing to ask after all, or the time is up.</summary>
+    private void PumpPreparation()
+    {
+        if (_prepareReady.Count == 0)
+        {
+            return;
+        }
+
+        if (!SignedIn || _syncOff || _appearanceSupported == false)
+        {
+            FinishPreparation("this sign-in has no appearance to check");
+        }
+        else if (NowMs - _prepareSince >= PrepareTimeoutMs)
+        {
+            FinishPreparation("the account's appearance did not come in time, so the look held here is used,");
+        }
+    }
+
+    // ---- a master without revision-checked appearance -------------------------------------------------------------
+
+    /// <summary>The look a settings record from the account carries, waiting until the master's kind is known.</summary>
+    private AccountAppearance? _profileLook;
+
+    /// <summary>The look the settings record is sent with: this PC's on a master that keeps no appearance of its own, else none.</summary>
+    private AccountAppearance? ProfileLook => _appearanceSupported == false ? LocalAppearance() : null;
+
+    /// <summary>This PC's look changed on such a master: the settings record goes to the account with it, as after a changed setting.</summary>
+    private void QueueProfileForLook()
+    {
+        _state.ProfileUpdatedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        SaveState();
+        if (CanSync)
+        {
+            _pushAt = NowMs + PushDelayMs;
+            _social.Log($"Armoury: the look changed; this master keeps it in the account's settings, sent in {PushDelayMs / 1000} s");
+            Touch();
+        }
+    }
+
+    /// <summary>A settings record of the account was taken: the look it carries is this PC's from now on (on such a master only).</summary>
+    private void TakeProfileLook(string? record)
+    {
+        if (ProfileSync.ReadLook(record) is { } look)
+        {
+            _profileLook = look;
+            ApplyProfileLook();
+        }
+    }
+
+    private void ApplyProfileLook()
+    {
+        if (_profileLook is not { } look || _appearanceSupported is not { } managed)
+        {
+            return;
+        }
+
+        _profileLook = null;
+        if (managed)
+        {
+            // The revision-checked appearance is the account's word; an older settings record must not reset it.
+            return;
+        }
+
+        string[] spy = ArmouryLook.Clean(CosmeticSide.Spy, look.Spy);
+        string[] merc = ArmouryLook.Clean(CosmeticSide.Merc, look.Merc);
+        string? title = string.IsNullOrWhiteSpace(look.Title) ? null : look.Title.Trim();
+        if (spy.SequenceEqual(ArmouryLook.Spy) && merc.SequenceEqual(ArmouryLook.Merc) && title == _chosenTitle)
+        {
+            return;
+        }
+
+        ArmouryLook.Spy = spy;
+        ArmouryLook.Merc = merc;
+        if (_chosenTitle != title)
+        {
+            _chosenTitle = title;
+            AppearanceTitle = title ?? string.Empty;
+            AppearanceTitleSerial++;
+        }
+
+        // Taken, not chosen: nothing to send back.
+        _observedAppearance = LocalAppearance();
+        _social.Log($"Armoury: took the look the account's settings carry (spy {(spy.Length == 0 ? "retail" : string.Join(",", spy))}; merc {(merc.Length == 0 ? "retail" : string.Join(",", merc))})");
+        Touch();
+    }
+
     // ---- the account's appearance ---------------------------------------------------------------------------------
 
     private void ConfigureAppearance(AccountInfo account)
@@ -290,6 +454,7 @@ public sealed partial class AccountService
         _appearanceDirty = false;
         _appearanceNextPoll = 0;
         _appearancePushAt = 0;
+        _appearanceFailed = false;
         AppearanceConflict = false;
         AppearanceStatus = string.Empty;
     }
@@ -313,6 +478,12 @@ public sealed partial class AccountService
         AccountAppearance current = LocalAppearance();
         bool changed = _observedAppearance is not null && !SameAppearance(_observedAppearance, current);
         _observedAppearance = current;
+        if (changed && _appearanceSupported == false)
+        {
+            // This master keeps no appearance of its own: the look goes with the settings record (ProfileSync).
+            QueueProfileForLook();
+        }
+
         if (!changed || _appearanceSupported == false)
         {
             return;
@@ -339,12 +510,16 @@ public sealed partial class AccountService
             return new AppearanceSnapshot(info, appearance);
         });
         _appearanceNextPoll = NowMs + 30_000;
+        // Asked after a waiting connection began: its answer is fresh enough for it.
+        _prepareAsked |= _prepareReady.Count > 0;
     }
 
     /// <summary>Once a frame from <see cref="Update"/>: the look on the servers, then the account's copy.</summary>
     private void PumpAppearance()
     {
+        _pumped = true;
         FollowLook();
+        PumpPreparation();
         if (!CanSyncAppearance || Account is not { } account)
         {
             if (_appearanceAccount != 0)
@@ -357,6 +532,7 @@ public sealed partial class AccountService
         }
 
         ConfigureAppearance(account);
+        ApplyProfileLook();
         ObserveAppearanceChange();
         if (!SafeForAppearance())
         {
@@ -369,6 +545,7 @@ public sealed partial class AccountService
             _appearancePull = null;
             if (pull.IsCompletedSuccessfully)
             {
+                _appearanceFailed = false;
                 Remember(pull.Result.Account);
                 if (pull.Result.Appearance is { } remote)
                 {
@@ -432,6 +609,21 @@ public sealed partial class AccountService
         else if (_appearancePull is null && _appearancePush is null && now >= _appearanceNextPoll)
         {
             PullAppearance();
+        }
+
+        // A connection waits: one pull asked after it began, and whatever that set off (a send of this PC's choice), is in.
+        if (_prepareReady.Count > 0 && _appearancePull is null && _appearancePush is null)
+        {
+            if (!_prepareAsked)
+            {
+                PullAppearance();
+            }
+            else
+            {
+                FinishPreparation(AppearanceConflict ? "the account's appearance is in conflict with this PC's choices (the Armoury page resolves it), so the look held here is used,"
+                    : _appearanceFailed ? "the account's appearance could not be fetched, so the look held here is used,"
+                    : "the account's appearance is in" + (_appearanceBaseline is { } b ? " (revision " + b.Revision.ToString(CultureInfo.InvariantCulture) + ")" : string.Empty));
+            }
         }
     }
 
@@ -515,6 +707,7 @@ public sealed partial class AccountService
             return;
         }
 
+        _appearanceFailed = true;
         AppearanceStatus = "Appearance sync unavailable: " + ErrorOf(task) + " Your local choices are kept; retrying in 30 seconds.";
         _appearanceNextPoll = NowMs + 30_000;
         _appearancePushAt = _appearanceNextPoll;
