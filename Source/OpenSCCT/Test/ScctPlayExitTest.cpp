@@ -107,6 +107,16 @@ namespace
 					}
 					return FScctTestResult::Pass(FString::Printf(TEXT("sessions=%d ids=%s map=%s"), Done, *FString::Join(SessionIds, TEXT(",")), *Map));
 				}
+				// PLAY OFFLINE is one step down, in the main menu's PLAY group.
+				const TSharedPtr<SWidget> Home = FrontEnd->GetCachedWidget();
+				if (Home.IsValid() && !ScctTestUi::FindButton(Home.ToSharedRef(), TEXT("PLAY OFFLINE")).IsValid())
+				{
+					if (!ScctTestUi::PressButton(FrontEnd, TEXT("PLAY"), &Error))
+					{
+						return FScctTestResult::Fail(Error);
+					}
+					return FScctTestResult::Running();
+				}
 				if (!ScctTestUi::PressButton(FrontEnd, TEXT("PLAY OFFLINE"), &Error))
 				{
 					return FScctTestResult::Fail(Error);
