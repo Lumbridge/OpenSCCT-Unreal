@@ -31,6 +31,7 @@
 #include "Runtime/ScctMenuApi.h"
 #include "Runtime/ScctMarkSurfaceApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Runtime/ScctOutfitArmsApi.h"
 #include "Runtime/ScctRejoinApi.h"
 #include "Runtime/ScctRoundApi.h"
 #include "Runtime/ScctPawnLookApi.h"
@@ -46,6 +47,7 @@
 #include "Runtime/ScctVoiceApi.h"
 #include "Runtime/ScctWorldApi.h"
 #include "Runtime/ScctWorldEmitterApi.h"
+#include "Test/ScctFeatureTestApi.h"
 #include "Test/ScctGrabAreaApi.h"
 #include "Test/ScctInspectApi.h"
 #include "Test/ScctLessonApi.h"
@@ -99,6 +101,7 @@ SCCT_FEATURE_TABLE(FScctMapsApi, "MapsExports", ScctMapsApiVersion);
 SCCT_FEATURE_TABLE(FScctMenuApi, "MenuExports", ScctMenuApiVersion);
 SCCT_FEATURE_TABLE(FScctMarkSurfaceApi, "MarkSurfaceExports", ScctMarkSurfaceApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
+SCCT_FEATURE_TABLE(FScctOutfitArmsApi, "OutfitArmsExports", ScctOutfitArmsApiVersion);
 SCCT_FEATURE_TABLE(FScctRejoinApi, "RejoinExports", ScctRejoinApiVersion);
 SCCT_FEATURE_TABLE(FScctRoundApi, "RoundExports", ScctRoundApiVersion);
 SCCT_FEATURE_TABLE(FScctPawnLookApi, "PawnLookExports", ScctPawnLookApiVersion);
@@ -118,6 +121,7 @@ SCCT_FEATURE_TABLE(FScctGrabAreaApi, "GrabAreaExports", ScctGrabAreaApiVersion);
 SCCT_FEATURE_TABLE(FScctLessonApi, "LessonExports", ScctLessonApiVersion);
 SCCT_FEATURE_TABLE(FScctTestApi, "TestExports", ScctTestApiVersion);
 SCCT_FEATURE_TABLE(FScctInspectApi, "InspectExports", ScctInspectApiVersion);
+SCCT_FEATURE_TABLE(FScctFeatureTestApi, "FeatureTestExports", ScctFeatureTestApiVersion);
 
 #undef SCCT_FEATURE_TABLE
 

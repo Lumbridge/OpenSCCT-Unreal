@@ -74,6 +74,9 @@ DECLARE_MULTICAST_DELEGATE(FScctOnlineChanged);
  *
  * Unattended switches (off by default; for runs with nobody at the keyboard, used with -RenderOffscreen):
  *   -ScctJoin=<host[:port]>   join that server as soon as the game is up
+ *   -ScctJoinPassword=<pw>    the server's password for -ScctJoin
+ *   -ScctRunIdentity          play as a new install for this run (a new id and key, not saved), so test processes
+ *                             started from one folder are separate players to a server
  *   -ScctSide=spy|merc|watch  the side asked for with -ScctJoin (default: the smaller side)
  *   -ScctAutoReady            say "ready" as soon as the lobby is reached, each time it is reached (a spectator's
  *                             "ready" starts nothing: the server wants a player on a side)
@@ -90,12 +93,14 @@ DECLARE_MULTICAST_DELEGATE(FScctOnlineChanged);
  *   -ScctHostName=<name>      the hosted game's name; -ScctHostPassword=<password> its password
  *   -ScctHostPublic           host on every interface with the Online page's listing, UPnP and LAN choices
  *   -ScctHostOptions=<line>   more rules of the hosted match by the setup line's names ("?TimeLimit=1?GamesInARow=2")
- *   -ScctLaunchWhen=N         the host launches once N players are in the lobby and the others are ready (default 2);
- *                             -ScctSide picks the host's own side
+ *   -ScctHostPlayers=N        the hosted game's player slots (default: the most a session allows); bots that fill the
+ *                             empty places fill these
+ *   -ScctLaunchWhen=N         the host launches once N people (bots not counted) are in the lobby and everyone is
+ *                             ready (default 2); -ScctSide picks the host's own side
  *   -ScctOnlineSettingsDump   log every option of the Online settings page with its value at start
  *   -ScctChatTeam=<text>      say this once in the lobby to the player's own side only
  *   -ScctChatWhen=N           -ScctChatTeam waits until N players are in the lobby (default 1)
- *   -ScctKickAfter=<name>,S   the host or admin kicks the player called <name> S seconds after he is in the lobby;
+ *   -ScctKickAfter=<name>,S   the host or admin kicks the player called <name> S seconds after joining the lobby;
  *                             -ScctBanAfter and -ScctVoiceBanAfter do the same with a ban and a voice ban
  *   -ScctLan                  a test host (-ScctHost without -ScctHostPublic) answers LAN searches on loopback, and
  *                             the server browser's LAN search asks this machine only (no broadcast, no firewall prompt)
@@ -534,6 +539,10 @@ private:
 	FString AutoHostMode;
 	FString AutoHostName;
 	FString AutoHostPassword;
+	/** -ScctHostPlayers (0: the request's default). */
+	int32 AutoHostPlayers = 0;
+	/** -ScctJoinPassword: the password -ScctJoin joins with. */
+	FString AutoJoinPassword;
 	bool bAutoHostPublic = false;
 	bool bAutoHosted = false;
 	int32 LaunchWhen = 2;

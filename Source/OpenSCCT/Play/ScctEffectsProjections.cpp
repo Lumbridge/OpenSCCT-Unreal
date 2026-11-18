@@ -10,6 +10,7 @@
 #include "Components/DecalComponent.h"
 #include "Engine/Texture2D.h"
 #include "GameFramework/Actor.h"
+#include "Hud/ScctVisionSubsystem.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "OpenSCCT.h"
@@ -104,6 +105,8 @@ void UScctEffectsSubsystem::UpdateProjections()
 		ProjectionBuffer.SetNumUninitialized(MaxProjections);
 	}
 
+	const UScctVisionSubsystem* ProjectionVision = UScctVisionSubsystem::Find(GetWorld());
+	const bool bHeatOrEmf = ProjectionVision != nullptr && ProjectionVision->IsHeatOrEmf();
 	const int32 Count = Projections->GetProjections(ProjectionBuffer.GetData(), ProjectionBuffer.Num());
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
@@ -184,7 +187,8 @@ void UScctEffectsSubsystem::UpdateProjections()
 			Slot.Opacity = Record.Opacity;
 			ProjectionLooks[SlotIndex]->SetScalarParameterValue(TEXT("Opacity"), Record.Opacity);
 		}
-		const bool bDrawn = FollowSurface(Slot.Surface, *Decal, TEXT("projection"), Record.Serial) && Record.Opacity > 0.0f;
+		// Thermal and EMF read the frame as heat and field strength: a footprint or a burn mark has neither.
+		const bool bDrawn = FollowSurface(Slot.Surface, *Decal, TEXT("projection"), Record.Serial) && Record.Opacity > 0.0f && !bHeatOrEmf;
 		if (Decal->IsVisible() != bDrawn)
 		{
 			Decal->SetVisibility(bDrawn);

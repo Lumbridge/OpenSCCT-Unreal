@@ -421,13 +421,20 @@ def build_surface():
     # lies below this share of its texture's height, so the real sky shows above the city (import_map.py, the
     # skyline; map_skies.json names the panoramas). The edge is a screen door over 5% of the height, which the
     # anti-aliasing turns into a soft fade, so the city's glow melts into the sky instead of ending on a ruled line.
+    # HorizonKey (0 = off) is for a panorama whose land is a black silhouette with the painted sky's glow running
+    # down between its peaks to the texture's foot (MuseE's sunset behind the hills): no height cut parts the two,
+    # so a pixel brighter than this (linear, its brightest channel) is dropped as well, screen-doored from half to
+    # one and a half times it, and only the dark ridge stays against the real sky.
     whole = g.custom("float keep = 1.0;"
                      " if (Cut > 0.0) {"
                      " float2 p = P + 5.588238 * float(View.StateFrameIndexMod8);"
                      " float n = frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));"
-                     " keep = n < saturate((frac(UV.y) - Cut) / 0.05 + 0.5) ? 1.0 : 0.0; }"
+                     " float share = saturate((frac(UV.y) - Cut) / 0.05 + 0.5);"
+                     " if (Key > 0.0) share *= 1.0 - saturate((max(max(C.r, C.g), C.b) - 0.5 * Key) / Key);"
+                     " keep = n < share ? 1.0 : 0.0; }"
                      " return lerp(1.0, A, saturate(UseAlpha)) * keep;", FLOAT1,
                      A=alpha, UseAlpha=g.scalar("AlphaMask", 1.0), Cut=g.scalar("HorizonCut", 0.0),
+                     Key=g.scalar("HorizonKey", 0.0), C=base["RGB"],
                      UV=g.node(unreal.MaterialExpressionTextureCoordinate),
                      P=(g.node(unreal.MaterialExpressionScreenPosition), "PixelPosition"))
     mask = g.custom("float gone = 1.0 - smoothstep(Start * %f, Start, Depth);"

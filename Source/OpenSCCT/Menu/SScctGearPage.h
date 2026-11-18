@@ -85,6 +85,13 @@ public:
 	void Close();
 
 	/**
+	 * The Godot gear picker's Switch Team (InGameMenuModel.GearSwitchTeam): where the round lets the player change
+	 * side (practice), PLAY AS SPY / MERC asks through this, and when it answers true the page stays open on the side
+	 * now played, whose kit APPLY then asks the server for. Unset, the button is not shown.
+	 */
+	void SetTeamSwitch(TFunction<bool()> InSwitch) { TeamSwitch = MoveTemp(InSwitch); }
+
+	/**
 	 * Unattended: "<spy|merc>,<gadget path>,...[,weapon=<path>][,sidearm=<id>]" picks each through the page's own
 	 * handlers (the side's tab, each slot in turn, the weapon and sidearm slots) and presses APPLY. False (logged) when
 	 * a pick was refused.
@@ -117,6 +124,8 @@ private:
 	TWeakPtr<SWidget> FocusBefore;
 	FSimpleDelegate OnApplied;
 	FSimpleDelegate OnClosed;
+	TFunction<bool()> TeamSwitch;
+	void SwitchPlayedTeam();
 	bool bTakeKeyboard = true;
 	TWeakPtr<class SScctDialogLayer> Dialogs;
 	bool bFocusTaken = false;

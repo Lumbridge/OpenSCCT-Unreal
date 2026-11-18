@@ -68,6 +68,17 @@ TSharedPtr<SScctGearPage> SScctMatchMenu::ShowGear(int32 Side, bool bOnly)
 	if (Page.IsValid())
 	{
 		Page->SetDialogs(Dialogs);
+		// GearMenu.CanSwitchTeam: the picker changes side where the menu itself offers Switch Team (practice).
+		FScctMatchMenuContext GearRound = {};
+		const FScctMatchMenuApi* GearRoundApi = ScctFeature<FScctMatchMenuApi>();
+		if (GearRoundApi != nullptr && GearRoundApi->GetContext(&GearRound) != 0 && GearRound.CanSwitchTeam != 0)
+		{
+			Page->SetTeamSwitch([]
+			{
+				const FScctMatchMenuApi* Table = ScctFeature<FScctMatchMenuApi>();
+				return Table != nullptr && Table->SwitchTeam() != 0;
+			});
+		}
 	}
 	else
 	{

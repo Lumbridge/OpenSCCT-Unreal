@@ -42,8 +42,9 @@ class UWorld;
  * "results", "gear", "map", "help"), and -ScctMatchMenuAct=<entry>[,yes] presses a pause entry a second after the
  * menu first opens (Gear, SwitchTeam, Map, Options, Help, Resign, Lobby, Leave, Quit, Resume) and answers its question
  * yes; the log has the entries, each press, question and answer ("ScctMatchMenu: ..."). The results are driven with:
- *   -ScctResultsAction=next|lobby|leave|rematch|menu   press that button S seconds after the results showed (once
- *                                                      a run), through the same code a click runs
+ *   -ScctResultsAction=next|lobby|leave|rematch|menu   press that button S seconds after the results showed (on
+ *                                                      each online results screen, once a run offline), through
+ *                                                      the same code a click runs
  *   -ScctResultsActionAfter=S                          (default 3)
  *   -ScctEndMatch=S                                    S seconds into a local match, run its clock out on its server
  *                                                      (Runtime/ScctRoundApi.h EndLocalRound), so it ends by time
