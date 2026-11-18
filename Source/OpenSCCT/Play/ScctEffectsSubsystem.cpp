@@ -1152,7 +1152,12 @@ void UScctEffectsSubsystem::SpawnMuzzleFlash(const FVector& At, const FVector& D
 	// As strong and as short as the view model's own flash (at 45 cd times an exposure scale of 0.04 in a lamp-lit
 	// room a spy's or a bot's shot left the room as it was). It lives as long as the view model's flash light: a
 	// rifle fires about ten rounds a second and the pool holds 16 lights.
-	AcquireLight(At + Direction * 35.0, LightTint, FScctExposure::MuzzleFlashCandelas() * Level, 900.0f, 0.085f, true);
+	// A shooter against a wall would burn it white: the nearest surface holds it down (FScctExposure::WallHold, on
+	// the strength AcquireLight will show).
+	const FVector LightAt = At + Direction * 35.0;
+	const float Candelas = FScctExposure::MuzzleFlashCandelas() * Level;
+	const float Hold = FScctExposure::WallHold(LightAt, Candelas * FScctExposure::FlashScale(), 900.0f);
+	AcquireLight(LightAt, LightTint, Candelas * Hold, 900.0f, 0.085f, true);
 }
 
 void UScctEffectsSubsystem::SpawnSparks(const FVector& At, const FVector& Normal, int32 Count, const FLinearColor& Color, float Speed)
@@ -1417,6 +1422,10 @@ int32 UScctEffectsSubsystem::AcquireLight(const FVector& At, const FLinearColor&
 		// opened up for the dark, sees a muzzle flash a metre from a wall as a white screen. A light an effect
 		// actor holds (a flare, a burning thing) is a lamp like any other and keeps its strength.
 		const float Shown = Life > 0.0f ? Candelas * FScctExposure::FlashScale() : Candelas;
+		if (Life > 0.0f)
+		{
+			FScctExposure::NoteFlash();
+		}
 		Lights[Index] = { Life, 0.0f, Shown, true };
 		UPointLightComponent* Light = LightComponents[Index];
 		Light->SetWorldLocation(At);

@@ -83,6 +83,10 @@ key are under `[OpenSCCT.Online]` in `Config/DefaultGame.ini`.
 
 `Tools\Run-OnlineCheck.ps1 -Content <folder> -OpenScct <OpenSCCT checkout>` starts a real dedicated server on
 localhost with bots, joins it with the game off-screen, plays a round and saves screenshots and logs.
+`Tools\Run-HostCheck.ps1 -Map AquaE -Content <folder>` does the same for hosting, with two or more game processes
+and no OpenSCCT checkout: one hosts, the others join it, and each lobby and round step (password, side, settings
+un-readying, team chat, kick, rejoin by address, bots filling 2v2, a revenge pair and results Next) prints PASS or
+FAIL from both sides' logs.
 
 ## Packaging
 

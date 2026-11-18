@@ -101,6 +101,19 @@ public:
 	/** How many effect actors of each simulation class ("SProjSmoke", "SSmokeEmitter") this match started. */
 	const TMap<FString, int32>& GetStartedByClass() const { return StartedByClass; }
 
+	/**
+	 * For the warm-up behind the loading page (Play/ScctEffectsWarmup.h): every look this subsystem draws, once, at
+	 * At in front of the camera looking along Forward: each particle style (explosion, smoke, gas, wisp, sparks,
+	 * electric arcs, chaff, flare, flash bang, water, dust, muzzle flashes, impacts by surface, the glass burst, the
+	 * modem's preset), timed lights with and without shadows, a bullet-mark decal and a projection decal on Backdrop,
+	 * a casing, a tracer streak, and every imported effect mesh in a small grid. Returns the number of meshes shown,
+	 * INDEX_NONE while the effects are not ready yet. Play/ScctEffectsWarmup.cpp.
+	 */
+	int32 SpawnWarmupSamples(const FVector& At, const FVector& Forward, const FVector& Backdrop);
+
+	/** Takes every warm-up sample away again: its components, its timed lights and every live particle. */
+	void ClearWarmupSamples();
+
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 
@@ -432,6 +445,10 @@ private:
 	TObjectPtr<UMaterialInstanceDynamic> CasingStandInMaterial;
 
 	TArray<FCasing> Casings;
+
+	/** The warm-up's own components (meshes, decals), destroyed by ClearWarmupSamples. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<USceneComponent>> WarmupComponents;
 	/** The client world's collision, which the casings bounce off (the level has no Unreal collision). */
 	const FScctFxTraceApi* FxTrace = nullptr;
 	/** The rain-on-pawn table (Runtime/ScctFlicFlocApi.h), looked for once. */

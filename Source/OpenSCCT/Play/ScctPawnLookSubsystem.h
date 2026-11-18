@@ -82,6 +82,8 @@ private:
 		int32 HeadSlot = 0;
 		/** Arms of a first-person view: the outfit's body texture goes only on the spy's own arms layout. */
 		bool bFirstPerson = false;
+		/** A first-person mesh's arms in the map outfit (the bridge's made texture, full path); empty for none. */
+		FString ArmsPath;
 	};
 
 	void OnMatchStarted();
@@ -102,6 +104,9 @@ private:
 	void LogLook(const FScctPawnLookApi& Api, const FScctPawnLook& Look, int32 Dressed) const;
 	void Forget();
 
+	/** The outfit arms texture of a first-person mesh for a team (FScctOutfitArmsApi), asked once per mesh asset. */
+	FString OutfitArmsFor(const UMeshComponent& Mesh, int32 Kind);
+
 	TWeakObjectPtr<UScctSessionSubsystem> Session;
 	FDelegateHandle StartedHandle;
 	FDelegateHandle ChangedHandle;
@@ -116,6 +121,7 @@ private:
 	FScctKindOutfit Outfits[2] = {};
 	mutable TMap<int32, FString> NameCache;
 	TSet<FString> FailedTextures;
+	TMap<FString, FString> OutfitArms;
 
 	UPROPERTY(Transient)
 	TMap<FString, TObjectPtr<UTexture2D>> Textures;

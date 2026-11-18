@@ -9,6 +9,9 @@
 #include "Runtime/ScctAudioViewApi.h"
 #include "Runtime/ScctContentApi.h"
 #include "Runtime/ScctControlsApi.h"
+#include "Runtime/ScctDashboardApi.h"
+#include "Runtime/ScctArmouryApi.h"
+#include "Runtime/ScctCareerApi.h"
 #include "Runtime/ScctDemoApi.h"
 #include "Runtime/ScctDemoPlayApi.h"
 #include "Runtime/ScctEquipmentApi.h"
@@ -27,6 +30,7 @@
 #include "Runtime/ScctMenuApi.h"
 #include "Runtime/ScctMarkSurfaceApi.h"
 #include "Runtime/ScctOnlineApi.h"
+#include "Runtime/ScctOutfitArmsApi.h"
 #include "Runtime/ScctRejoinApi.h"
 #include "Runtime/ScctRoundApi.h"
 #include "Runtime/ScctPawnLookApi.h"
@@ -74,6 +78,9 @@ SCCT_FEATURE_TABLE(FScctAudioCheckApi, "AudioCheckExports", ScctAudioCheckApiVer
 SCCT_FEATURE_TABLE(FScctAudioViewApi, "AudioViewExports", ScctAudioViewApiVersion);
 SCCT_FEATURE_TABLE(FScctContentApi, "ContentExports", ScctContentApiVersion);
 SCCT_FEATURE_TABLE(FScctControlsApi, "ControlsExports", ScctControlsApiVersion);
+SCCT_FEATURE_TABLE(FScctDashboardApi, "DashboardExports", ScctDashboardApiVersion);
+SCCT_FEATURE_TABLE(FScctArmouryApi, "ArmouryExports", ScctArmouryApiVersion);
+SCCT_FEATURE_TABLE(FScctCareerApi, "CareerExports", ScctCareerApiVersion);
 SCCT_FEATURE_TABLE(FScctDemoApi, "DemoExports", ScctDemoApiVersion);
 SCCT_FEATURE_TABLE(FScctDemoPlayApi, "DemoPlayExports", ScctDemoPlayApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
@@ -92,6 +99,7 @@ SCCT_FEATURE_TABLE(FScctMapsApi, "MapsExports", ScctMapsApiVersion);
 SCCT_FEATURE_TABLE(FScctMenuApi, "MenuExports", ScctMenuApiVersion);
 SCCT_FEATURE_TABLE(FScctMarkSurfaceApi, "MarkSurfaceExports", ScctMarkSurfaceApiVersion);
 SCCT_FEATURE_TABLE(FScctOnlineApi, "OnlineExports", ScctOnlineApiVersion);
+SCCT_FEATURE_TABLE(FScctOutfitArmsApi, "OutfitArmsExports", ScctOutfitArmsApiVersion);
 SCCT_FEATURE_TABLE(FScctRejoinApi, "RejoinExports", ScctRejoinApiVersion);
 SCCT_FEATURE_TABLE(FScctRoundApi, "RoundExports", ScctRoundApiVersion);
 SCCT_FEATURE_TABLE(FScctPawnLookApi, "PawnLookExports", ScctPawnLookApiVersion);

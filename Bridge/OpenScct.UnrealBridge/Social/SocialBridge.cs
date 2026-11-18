@@ -39,6 +39,7 @@ public sealed class SocialBridge : IDisposable
         Web = new WebsiteJoin(this);
         Lease = new ClientPresence(this);
         Account = new AccountService(this);
+        Dashboard = new MenuDashboard(this);
     }
 
     /// <summary>The one social bridge of the process, made on first use.</summary>
@@ -56,6 +57,9 @@ public sealed class SocialBridge : IDisposable
 
     /// <summary>The signed-in account, its progress and the settings sync (the Account page's table: AccountExports).</summary>
     public AccountService Account { get; }
+
+    /// <summary>The main menu's live information: players online, sessions, changelog, master version (DashboardExports).</summary>
+    public MenuDashboard Dashboard { get; }
 
     /// <summary>The state Unreal last described, as Discord would show it (whether the status is on or not).</summary>
     public PresenceState? LastState { get; private set; }
@@ -125,6 +129,7 @@ public sealed class SocialBridge : IDisposable
         Lease.Update();
         PumpMasterJoin();
         Account.Update();
+        Dashboard.Update();
     }
 
     public SocialStatus Status => new()

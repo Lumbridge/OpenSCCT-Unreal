@@ -131,7 +131,11 @@ bool UScctVisionSubsystem::EnsureVolume()
 void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 {
 	Data.Refresh(DeltaSeconds);
-	if (ForcedMode != INDEX_NONE)
+	if (WarmupMode != INDEX_NONE)
+	{
+		VisionMode = WarmupMode;
+	}
+	else if (ForcedMode != INDEX_NONE)
 	{
 		VisionMode = ForcedMode;
 	}
@@ -208,6 +212,17 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 
 	// Thermal and EMF draw no coronas and no sky, from the moment one is the mode furthest in until it has faded out.
 	Backdrop.Update(GetWorld(), ObjectMode == 36 || ObjectMode == 38);
+}
+
+void UScctVisionSubsystem::HoldModeForWarmup(int32 Mode)
+{
+	const bool bReleased = Mode == INDEX_NONE && WarmupMode != INDEX_NONE;
+	WarmupMode = Mode;
+	if (bReleased)
+	{
+		// Plain sight at once, not a fade out over the first moment of play.
+		Clear();
+	}
 }
 
 void UScctVisionSubsystem::Clear()
