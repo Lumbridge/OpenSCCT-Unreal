@@ -343,6 +343,7 @@ public static unsafe class HubExports
         HubText.Status => hub.Status,
         HubText.PlayerName => hub.PlayerName,
         HubText.ListMessage => hub.ListMessage,
+        HubText.LoadingPicture => RoundExports.LoadingPicture(hub.Catalog.Maps, hub.MapToLoad, hub.Client?.Team == 1, null),
         _ => null,
     } ?? string.Empty;
 

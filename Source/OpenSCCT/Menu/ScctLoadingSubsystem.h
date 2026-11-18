@@ -66,7 +66,7 @@ public:
 	 * title, the side's tip and the map's loading picture from the player's content, with Detail and Status as
 	 * given. The match overlay covers an online level with it while the round is travelled to or joined.
 	 */
-	FScctLoadingPage DescribeRound(const FString& Map, int32 Side, const FString& Detail, const FString& Status);
+	FScctLoadingPage DescribeRound(const FString& Map, int32 Side, const FString& Detail, const FString& Status, const FString& InstalledPicture = FString());
 
 	/**
 	 * Keeps the last level load's page over the game's picture after the movie player has taken its own away, while

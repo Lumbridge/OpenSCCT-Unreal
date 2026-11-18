@@ -4,6 +4,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
 #include "Hub/SScctHubLoadingScreen.h"
+#include "Menu/ScctLoadingSubsystem.h"
 #include "Hub/ScctHubActivities.h"
 #include "Hub/ScctHubAudio.h"
 #include "Hub/ScctHubEmotes.h"
@@ -888,7 +889,11 @@ void UScctHubSubsystem::OpenCover()
 	}
 
 	const TWeakObjectPtr<UScctHubSubsystem> Weak(this);
+	auto* Loading = GetGameInstance()->GetSubsystem<UScctLoadingSubsystem>();
+	const FScctLoadingPage Page = Loading ? Loading->DescribeRound(MapToLoad, Status.Team, FString(), FString(), ReadText(EScctHubText::LoadingPicture)) : FScctLoadingPage();
 	Cover = SNew(SScctHubLoadingScreen)
+		.Picture(Page.Picture)
+		.Tip(FText::FromString(Page.Tip))
 		.bMerc(Status.Team == 1)
 		.HubName_Lambda([Weak] { return Weak.IsValid() ? FText::FromString(Weak->HubName) : FText::GetEmpty(); })
 		.Status_Lambda([Weak]

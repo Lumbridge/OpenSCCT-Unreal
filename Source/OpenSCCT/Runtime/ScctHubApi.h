@@ -102,6 +102,7 @@ enum class EScctHubText : int32
 	Address = 3,    // the "host:port" the visit connects to
 	Status = 4,     // what is happening, as the hub page says it
 	PlayerName = 5, // the name the player joined under
+	LoadingPicture = 7,
 	ListMessage = 6, // what the master's hub list says ("3 hub(s) listed.", the master's error)
 };
 

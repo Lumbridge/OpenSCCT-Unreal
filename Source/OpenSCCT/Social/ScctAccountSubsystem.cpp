@@ -14,6 +14,9 @@
 #include "OpenSCCT.h"
 #include "Play/ScctControlSettings.h"
 #include "Runtime/ScctFeatures.h"
+#include "Runtime/ScctArmouryApi.h"
+#include "Menu/ScctMenuKit.h"
+#include "Engine/GameViewportClient.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -197,6 +200,7 @@ void UScctAccountSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UScctAccountSubsystem::Deinitialize()
 {
+	UpdateJoinDialog(false);
 	FTSTicker::RemoveTicker(TickerHandle);
 	FScctSettings::OnChanged().Remove(SettingHandle);
 	Api = nullptr;
@@ -250,6 +254,7 @@ bool UScctAccountSubsystem::Tick(float DeltaSeconds)
 	}
 
 	Api->GetInfo(&Info);
+	UpdateJoinDialog(HasFlag(EScctAccountFlags::JoinAppearanceConflict));
 	if (Info.Revision != SeenRevision)
 	{
 		SeenRevision = Info.Revision;
@@ -264,6 +269,38 @@ bool UScctAccountSubsystem::Tick(float DeltaSeconds)
 
 	RunSwitches(DeltaSeconds);
 	return true;
+}
+
+void UScctAccountSubsystem::UpdateJoinDialog(bool bNeeded)
+{
+	UGameViewportClient* Viewport = GetGameInstance()->GetGameViewportClient();
+	if (!bNeeded)
+	{
+		if (Viewport && JoinDialog) Viewport->RemoveViewportWidgetContent(JoinDialog.ToSharedRef());
+		JoinDialog.Reset();
+		return;
+	}
+	if (!Viewport || (JoinDialog && JoinDialog->IsOpen())) return;
+	const FScctArmouryApi* Armoury = ScctFeature<FScctArmouryApi>();
+	if (!Armoury) return;
+	if (!JoinDialog)
+	{
+		Viewport->AddViewportWidgetContent(SAssignNew(JoinDialog, SScctDialogLayer), 10000);
+	}
+	FScctDialog Dialog;
+	Dialog.Title = TEXT("Choose your appearance");
+	Dialog.Body = TEXT("Your account and this PC have different appearances. Choose which one to use before joining.");
+	auto Add = [&](const TCHAR* Label, EScctArmouryCommand Command)
+	{
+		Dialog.Buttons.Add({ Label, EScctButtonLook::Secondary, [Armoury, Command](const FString&)
+		{
+			Armoury->Command(static_cast<int32>(Command), 0);
+		} });
+	};
+	Add(TEXT("Use account appearance"), EScctArmouryCommand::Reload);
+	Add(TEXT("Use this PC's appearance"), EScctArmouryCommand::Reapply);
+	Add(TEXT("Cancel join"), EScctArmouryCommand::CancelJoin);
+	JoinDialog->Show(Dialog);
 }
 
 void UScctAccountSubsystem::RunSwitches(float DeltaSeconds)

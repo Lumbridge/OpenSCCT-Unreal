@@ -111,6 +111,8 @@ private:
 	bool UserSettingsChanged();
 
 	void RunSwitches(float DeltaSeconds);
+	void UpdateJoinDialog(bool bNeeded);
+	TSharedPtr<class SScctDialogLayer> JoinDialog;
 
 	static bool IsSynced(const FName& Page, const FName& Key);
 

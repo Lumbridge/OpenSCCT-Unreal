@@ -177,6 +177,7 @@ public static unsafe class ArmouryExports
                 case 1: Account.ReapplyAppearance(); break;
                 case 2: Account.Refresh(); break;
                 case 3: PawnLooks.HideMine = value != 0; break;
+                case 4: Account.CancelPreparedJoin(); break;
             }
         }
         catch (Exception e)

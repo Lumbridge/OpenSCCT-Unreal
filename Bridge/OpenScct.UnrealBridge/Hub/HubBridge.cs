@@ -196,7 +196,7 @@ public sealed partial class HubBridge : IDisposable
         try
         {
             Host = HubHost.Start(port <= 0 ? HubK.DefaultPort : port, player + "'s hub", new MapCatalog([.. Catalog.Maps.Roots]), Classes,
-                loopbackOnly, line => Log("server: " + line), HostListing(loopbackOnly));
+                loopbackOnly, line => Log("server: " + line), HostListing(loopbackOnly), Social.SocialBridge.Existing?.Account.HostIdentity());
         }
         catch (InvalidOperationException e)
         {

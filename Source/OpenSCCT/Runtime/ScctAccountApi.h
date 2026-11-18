@@ -30,7 +30,7 @@ namespace EScctAccountFlags
 	constexpr int32 RefreshFailed = 4;  // the last refresh failed; what is shown is from before
 	constexpr int32 HasProgress = 8;    // the master has levels: rank, XP and titles are filled
 	constexpr int32 Claiming = 16;
-	// 32 is unused.
+	constexpr int32 JoinAppearanceConflict = 32;
 	constexpr int32 Prestiging = 64;
 	constexpr int32 SigningOut = 128;
 	constexpr int32 CanPrestige = 256;

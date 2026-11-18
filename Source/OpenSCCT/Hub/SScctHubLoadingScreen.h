@@ -1,7 +1,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Styling/SlateBrush.h"
 #include "Widgets/SCompoundWidget.h"
+
+class UTexture2D;
 
 /**
  * The page over the hub while it loads (the Godot client's HubLoadingScreen): "Entering" and the hub's name, the side
@@ -12,17 +15,19 @@
  * hub level is opened, faded once the player has stood in the drawn hub for a few frames, and never longer than the
  * subsystem allows.
  *
- * Not ported: the hub map's loading picture and the side's tip (neither has a source in this game yet).
+ * Artwork and tips are read from the installed content.
  */
 class SScctHubLoadingScreen : public SCompoundWidget
 {
 public:
-	SLATE_BEGIN_ARGS(SScctHubLoadingScreen) : _bMerc(false) {}
+	SLATE_BEGIN_ARGS(SScctHubLoadingScreen) : _bMerc(false), _Picture(nullptr) {}
 		/** The hub's name as the hub says it (or its address before the welcome). */
 		SLATE_ATTRIBUTE(FText, HubName)
 		/** The line under the heading: what the visit is doing. */
 		SLATE_ATTRIBUTE(FText, Status)
 		SLATE_ARGUMENT(bool, bMerc)
+		SLATE_ARGUMENT(UTexture2D*, Picture)
+		SLATE_ARGUMENT(FText, Tip)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -37,6 +42,7 @@ public:
 	bool IsGone() const { return bFading && Opacity <= 0.0f; }
 
 private:
+	FSlateBrush PictureBrush;
 	bool bFading = false;
 	float Opacity = 1.0f;
 };

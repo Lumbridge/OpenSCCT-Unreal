@@ -266,7 +266,7 @@ public sealed partial class AccountService
     /// and runs <paramref name="ready"/> once it is in (and a change waiting here was sent), or after
     /// <see cref="PrepareTimeoutMs"/> with the look held. <paramref name="ready"/> runs inside this call when there is
     /// nothing to ask: signed out, a preview, sync off, or a master without revision-checked appearance.
-    /// A conflict does not hold the connection: the look held is used and the Armoury page still offers the choice.
+    /// A known conflict waits for the player's choice before the connection proceeds.
     /// </summary>
     public void PrepareAppearance(Action ready)
     {
@@ -287,8 +287,19 @@ public sealed partial class AccountService
         _prepareAsked = false;
         // A choice still waiting its three seconds goes to the account now.
         _appearancePushAt = 0;
-        AppearanceStatus = "Checking appearance before joining…";
+        if (!AppearanceConflict) AppearanceStatus = "Checking appearance before joining…";
         _social.Log("Armoury: asking the account for its appearance before connecting");
+        Touch();
+    }
+
+    internal bool NeedsJoinChoice => AppearanceConflict && PreparingAppearance &&
+        (OnlineBridge.Existing?.Preparing == true || HubBridge.Existing?.Preparing == true);
+
+    internal void CancelPreparedJoin()
+    {
+        if (OnlineBridge.Existing is { Preparing: true } match) match.Leave();
+        if (HubBridge.Existing is { Preparing: true } hub) hub.Leave();
+        _prepareReady.Clear();
         Touch();
     }
 
@@ -329,7 +340,7 @@ public sealed partial class AccountService
         {
             FinishPreparation("this sign-in has no appearance to check");
         }
-        else if (NowMs - _prepareSince >= PrepareTimeoutMs)
+        else if (!AppearanceConflict && _appearancePull?.IsCompleted != true && _appearancePush?.IsCompleted != true && NowMs - _prepareSince >= PrepareTimeoutMs)
         {
             FinishPreparation("the account's appearance did not come in time, so the look held here is used,");
         }
@@ -612,7 +623,7 @@ public sealed partial class AccountService
         }
 
         // A connection waits: one pull asked after it began, and whatever that set off (a send of this PC's choice), is in.
-        if (_prepareReady.Count > 0 && _appearancePull is null && _appearancePush is null)
+        if (_prepareReady.Count > 0 && !AppearanceConflict && _appearancePull is null && _appearancePush is null)
         {
             if (!_prepareAsked)
             {
@@ -620,8 +631,7 @@ public sealed partial class AccountService
             }
             else
             {
-                FinishPreparation(AppearanceConflict ? "the account's appearance is in conflict with this PC's choices (the Armoury page resolves it), so the look held here is used,"
-                    : _appearanceFailed ? "the account's appearance could not be fetched, so the look held here is used,"
+                FinishPreparation(_appearanceFailed ? "the account's appearance could not be fetched, so the look held here is used,"
                     : "the account's appearance is in" + (_appearanceBaseline is { } b ? " (revision " + b.Revision.ToString(CultureInfo.InvariantCulture) + ")" : string.Empty));
             }
         }
@@ -723,6 +733,7 @@ public sealed partial class AccountService
             return;
         }
 
+        _prepareSince = NowMs;
         AppearanceStatus = "Loaded the account's current appearance.";
         ApplyAppearance(remote);
     }
@@ -735,6 +746,7 @@ public sealed partial class AccountService
             return;
         }
 
+        _prepareSince = NowMs;
         _appearanceBaseline = remote;
         AppearanceConflict = false;
         _appearanceDirty = true;

@@ -68,6 +68,7 @@ enum class EScctArmouryCommand : int32
 	Reapply = 1,  // send this PC's choices over the account's (resolves a conflict)
 	Refresh = 2,  // ask the master for the account (its unlocks)
 	HideMine = 3, // "Hide my cosmetics" (Value 0 or 1)
+	CancelJoin = 4,
 };
 
 struct FScctArmouryApi

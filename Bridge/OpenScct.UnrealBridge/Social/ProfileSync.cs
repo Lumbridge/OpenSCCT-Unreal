@@ -35,8 +35,7 @@ public static class ProfileSync
     /// The record to send: <paramref name="previous"/> (the account's record as last seen, or null) with this client's
     /// part replaced. <paramref name="look"/> (a master without revision-checked appearance; null on any other) is
     /// the chosen cosmetics and title: written into this client's part, and into the Godot client's settings under
-    /// its own names when the record has them, so either client takes the look the other chose. A record without
-    /// Godot settings gets none made: a settings object with three fields would read there as every other setting reset.
+    /// its own names so a first sign-in from either client can recover the look.
     /// </summary>
     public static string Build(string? previous, string settingsJson, string controls, string bindings, AccountAppearance? look = null)
     {
@@ -67,10 +66,12 @@ public static class ProfileSync
         if (look is not null)
         {
             WriteLook(mine, look);
-            if (record["settings"] is JsonObject godot)
+            if (record["settings"] is not JsonObject godot)
             {
-                WriteLook(godot, look);
+                godot = new JsonObject();
+                record["settings"] = godot;
             }
+            WriteLook(godot, look);
         }
 
         return record.ToJsonString();

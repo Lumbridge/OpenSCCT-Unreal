@@ -40,7 +40,7 @@ public enum AccountFlags
 
     Claiming = 16,
 
-    // 32 is unused.
+    JoinAppearanceConflict = 32,
 
     Prestiging = 64,
     SigningOut = 128,

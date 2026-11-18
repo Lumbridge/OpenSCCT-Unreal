@@ -1,6 +1,8 @@
 #include "Hub/SScctHubLoadingScreen.h"
 
 #include "Brushes/SlateColorBrush.h"
+#include "Engine/Texture2D.h"
+#include "Widgets/Layout/SScaleBox.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Images/SThrobber.h"
@@ -21,6 +23,12 @@ void SScctHubLoadingScreen::Construct(const FArguments& InArgs)
 	static const FSlateColorBrush Solid(FLinearColor::White);
 	const TAttribute<FText> HubName = InArgs._HubName;
 	const FLinearColor SideColour = ScctHudStyle::Accent(InArgs._bMerc ? 1 : 0);
+
+	if (InArgs._Picture)
+	{
+		PictureBrush.SetResourceObject(InArgs._Picture);
+		PictureBrush.ImageSize = FVector2D(InArgs._Picture->GetSizeX(), InArgs._Picture->GetSizeY());
+	}
 
 	ChildSlot
 	[
@@ -61,6 +69,17 @@ void SScctHubLoadingScreen::Construct(const FArguments& InArgs)
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 0.0f, 0.0f, 26.0f)
 					[
 						Ui::Label(InArgs._bMerc ? TEXT("You arrive as a mercenary") : TEXT("You arrive as a spy"), SideColour)
+					]
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+					[
+						SNew(SBox).WidthOverride(320.f).HeightOverride(180.f)
+						.Visibility(InArgs._Picture ? EVisibility::HitTestInvisible : EVisibility::Collapsed)
+						[ SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[ SNew(SImage).Image(&PictureBrush) ] ]
+					]
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(12.f)
+					[
+						SNew(STextBlock).Text(InArgs._Tip).AutoWrapText(true)
+						.Visibility(InArgs._Tip.IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible)
 					]
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 0.0f, 0.0f, 18.0f)
 					[

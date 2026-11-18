@@ -85,6 +85,15 @@ public sealed partial class AccountService
     /// <summary>The signed-in account's id (as last seen, before the master answers), 0 when signed out.</summary>
     public long SignedInAccountId => Preview ? Account?.Id ?? 0 : SignedIn ? Account?.Id ?? _state.AccountId : 0;
 
+    internal OpenScct.Server.Online.HostAccount? HostIdentity()
+    {
+        if (!SignedIn || Preview || SignedInAccountId <= 0) return null;
+        string? name = Account is { } current ? current.Name : _state.Name;
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        int rank = RankOf(Account).Pack();
+        return new(SignedInAccountId, name, Account?.Unlocked, rank, Account?.Progress?.Titles);
+    }
+
     /// <summary>The master the sign-in belongs to (null: none set).</summary>
     public static string? MasterUrl => Master?.Url;
 
@@ -517,6 +526,7 @@ public sealed partial class AccountService
             }
         }
 
+        if (NeedsJoinChoice) flags |= AccountFlags.JoinAppearanceConflict;
         info.Flags = (int)flags;
     }
 

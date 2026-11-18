@@ -40,6 +40,7 @@ public sealed record HostRequest
 
     /// <summary>The host's install id, shared with its player so guests use the same tag in server lists.</summary>
     public string? HostInstallId { get; init; }
+    public HostAccount? HostAccount { get; init; }
 
     /// <summary>The folder each round is recorded into as a demo, or null to record nothing.</summary>
     public string? DemoFolder { get; init; }
@@ -173,6 +174,7 @@ public sealed class ListenHost : IDisposable
                 RequireAccounts = request.RequireAccounts,
                 DemoFolder = request.DemoFolder,
                 HostInstallId = request.HostInstallId,
+                HostAccount = request.HostAccount,
 
                 // The lobby's Ban keeps a banned player out for the rest of this hosting (no file: nothing is kept after).
                 Bans = new BanList(null, static () => DateTimeOffset.UtcNow),

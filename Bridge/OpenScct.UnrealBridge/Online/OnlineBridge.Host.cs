@@ -39,6 +39,7 @@ public sealed partial class OnlineBridge
         request = request with
         {
             HostInstallId = _installId,
+            HostAccount = Social.SocialBridge.Existing?.Account.HostIdentity(),
             MasterUrl = request.MasterUrl ?? Master.Url,
             InviteKey = request.InviteKey ?? Master.InviteKey,
         };

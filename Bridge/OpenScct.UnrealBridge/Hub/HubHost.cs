@@ -15,8 +15,7 @@ namespace OpenScct.UnrealBridge.Hub;
 /// and others on the LAN, by address or from the master's hub list (with the master's NAT punch and relay) join it. The
 /// host's own player joins it like anyone else, on 127.0.0.1. Stopping it takes it off the master's list (the hub
 /// server unlists itself when disposed).
-/// <para>Not ported: the host's account (HostAccount: his rank and looks in his own hub) and map downloads for the
-/// pads' laptops.</para>
+/// The host key identifies the local connection that may use the signed-in host account.
 /// </summary>
 public sealed class HubHost : IDisposable
 {
@@ -56,7 +55,7 @@ public sealed class HubHost : IDisposable
     /// the hub map is missing). With <paramref name="master"/> the hub lists itself in that master's hub list.
     /// </summary>
     public static HubHost Start(int port, string name, MapCatalog maps, NetClassRegistry classes, bool loopbackOnly, Action<string> log,
-        OpenScct.Server.Online.MasterLinkSettings? master = null)
+        OpenScct.Server.Online.MasterLinkSettings? master = null, OpenScct.Server.Online.HostAccount? hostAccount = null)
     {
         ArgumentNullException.ThrowIfNull(maps);
         ArgumentNullException.ThrowIfNull(log);
@@ -88,6 +87,7 @@ public sealed class HubHost : IDisposable
                     MatchLoopbackOnly = loopbackOnly,
                     Master = master,
                     HostKey = key,
+                    HostAccount = hostAccount,
                 });
             }
             catch (System.IO.IOException e)

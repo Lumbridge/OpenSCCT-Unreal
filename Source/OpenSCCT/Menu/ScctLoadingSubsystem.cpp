@@ -375,7 +375,7 @@ FScctLoadingPage UScctLoadingSubsystem::DescribeLoad(const FWorldContext& Contex
 	return DescribeRound(Map, bWatching ? -1 : (bMerc ? 1 : 0), Detail, FString());
 }
 
-FScctLoadingPage UScctLoadingSubsystem::DescribeRound(const FString& Map, int32 Side, const FString& Detail, const FString& Status)
+FScctLoadingPage UScctLoadingSubsystem::DescribeRound(const FString& Map, int32 Side, const FString& Detail, const FString& Status, const FString& InstalledPicture)
 {
 	FScctLoadingPage Page;
 	Page.Side = Side;
@@ -403,7 +403,7 @@ FScctLoadingPage UScctLoadingSubsystem::DescribeRound(const FString& Map, int32 
 		Page.Trivia = ScctSplashTrivia::Pick();
 	}
 
-	const FString File = ReadPlayText([&](TCHAR* Buffer, int32 Capacity) { return Play->GetLoadingImage(*Map, bMerc ? 1 : 0, Buffer, Capacity); });
+	const FString File = !InstalledPicture.IsEmpty() ? InstalledPicture : ReadPlayText([&](TCHAR* Buffer, int32 Capacity) { return Play->GetLoadingImage(*Map, bMerc ? 1 : 0, Buffer, Capacity); });
 	if (!File.IsEmpty())
 	{
 		TObjectPtr<UTexture2D>& Picture = Pictures.FindOrAdd(File);

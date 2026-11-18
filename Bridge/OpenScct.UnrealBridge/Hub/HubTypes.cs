@@ -163,4 +163,5 @@ public enum HubText
 
     /// <summary>What the master's hub list says ("3 hub(s) listed.", "Asking the master server for hubs...", its error).</summary>
     ListMessage = 6,
+    LoadingPicture = 7,
 }
