@@ -244,6 +244,7 @@ void UScctVisionSubsystem::Clear()
 	Data.Reset();
 	Motion.Reset();
 	MarkCharacters(false);
+	OutfitVision.Reset();
 	Objects.Reset();
 	Backdrop.Reset();
 }
@@ -353,6 +354,7 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 		// is part of the blurred ramp.
 		bool bMainPass = true;
 		bool bCustomDepth = false;
+		bool bMaskDrawsBody = false;
 		int32 BodyStencil = 0;
 		int32 CarriedStencil = 0;
 
@@ -414,6 +416,9 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 				bMainPass = !bSeeThrough;
 				bCustomDepth = true;
 				BodyStencil = PawnStencil(Intensity, Opacity);
+				const AScctPawnProxy* Local = Session->FindLocalProxy();
+				bMaskDrawsBody = OutfitVision.Mark(*Body, Proxy->GetKind(), Row && (Row->Flags & EScctVisionPawnFlags::Wet),
+					Local && Local->GetKind() == 0, bThermal, Intensity, Opacity);
 				const float* Carried = CarriedGlow.Find(Proxy->GetActorId());
 				CarriedStencil = PawnStencil(Carried != nullptr ? FMath::Max(Intensity, *Carried) : Intensity, Opacity);
 				SeeThrough += bSeeThrough ? 1 : 0;
@@ -435,7 +440,7 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 			{
 				continue;
 			}
-			SetPawnPrimitive(Primitive, bMainPass, bCustomDepth, Primitive == Body ? BodyStencil : CarriedStencil);
+			SetPawnPrimitive(Primitive, bMainPass, bCustomDepth && (Primitive != Body || !bMaskDrawsBody), Primitive == Body ? BodyStencil : CarriedStencil);
 			// A body the mode hides leaves no shadow either. Only shadows this took away are given back.
 			const TWeakObjectPtr<UPrimitiveComponent> Key(Primitive);
 			if (!bCastsShadow && Primitive->CastShadow)
@@ -454,6 +459,7 @@ void UScctVisionSubsystem::MarkCharacters(bool bMark)
 			PawnLines.Add({ Proxy->GetActorId(), Proxy->GetTeam(), Primitives, bMainPass, bCustomDepth, BodyStencil, CarriedStencil });
 		}
 	}
+	OutfitVision.EndFrame();
 
 	// What the goggles do with the pawns, in the log when it changes and every few seconds while a mode is on.
 	const int32 Summary = (MarkMode << 24) | (Marked << 16) | (Hidden << 8) | SeeThrough;

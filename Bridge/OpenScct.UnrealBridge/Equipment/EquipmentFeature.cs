@@ -209,11 +209,11 @@ public sealed class EquipmentFeature
         // view model is drawn over it (the merc in his scope, the spy's eye view with the pistol put away).
         _eyePawn = pc.FreeCameraFlying == 0 && (!pc.bBehindView || play.View.SpyFirstPerson) ? local : null;
 
-        bool shown = _merc.Draw(pc, _frameDt, alpha, ref _firstPerson);
+        bool shown = _merc.Draw(pc, _frameDt, alpha, ref _firstPerson, Controls.ControlsFeature.Of(_session).RifleAimBlend);
         if (!shown && play.View.SpyFirstPerson && pc is { SpyFirstPersonActive: true, FreeCameraFlying: 0 } && local is SPawnAttaque spy)
         {
             // The eye of the frame is the camera the controls handed Unreal (its sockets are traced from it).
-            shown = _spy.Draw(pc, spy, alpha, ref _firstPerson, Controls.ControlsFeature.Of(_session).DrawnCamera);
+            shown = _spy.Draw(pc, spy, alpha, ref _firstPerson, Controls.ControlsFeature.Of(_session).DrawnCamera, _frameDt);
             if (shown)
             {
                 FirstPersonSocketsHidden = (_spy.MuzzleHidden ? 1 : 0) | (_spy.LaserHidden ? 2 : 0);

@@ -30,14 +30,14 @@ internal static class SpyFirstPersonRig
     /// <paramref name="supportError"/> is how far the support wrist ended from where the stance wants it, in metres.
     /// </summary>
     public static bool TryPose(EquipmentModel model, in Xform ready, Span<Vector3> positions, Span<Quaternion> rotations,
-        Span<Vector3> scales, out Xform weapon, out float supportError)
+        Span<Vector3> scales, out Xform weapon, out float supportError, StudioClips? clips = null)
     {
         weapon = ready;
         supportError = -1f;
         GlbCharacter skeleton = model.Character;
         var left = new Arm(model, "L");
         var right = new Arm(model, "R");
-        if (!left.Valid || !right.Valid || skeleton.Find("WaitStSpFd2") is not { } stance)
+        if (!left.Valid || !right.Valid || (clips?.Find("WaitStSpFd2") ?? skeleton.Find("WaitStSpFd2")) is not { } stance)
         {
             return false;
         }

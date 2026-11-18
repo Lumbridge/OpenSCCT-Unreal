@@ -130,7 +130,7 @@ public static class OutfitArmsSkin
     }
 
     // The body's mesh serves every view model's arms: read each file once.
-    private static BindMesh Mesh(string path)
+    internal static BindMesh Mesh(string path)
     {
         string full = Path.GetFullPath(path);
         if (!s_meshes.TryGetValue(full, out BindMesh? mesh))
@@ -142,7 +142,7 @@ public static class OutfitArmsSkin
     }
 
     // An RGBA8 PNG, rows unfiltered.
-    private static byte[] Png(byte[] rgba, int width, int height)
+    internal static byte[] Png(byte[] rgba, int width, int height)
     {
         using var raw = new MemoryStream();
         using (var z = new ZLibStream(raw, CompressionLevel.Fastest, leaveOpen: true))
@@ -197,7 +197,7 @@ public static class OutfitArmsSkin
     }
 
     /// <summary>A decoded image sampled in managed code (wrapping, bilinear).</summary>
-    private sealed class TexelImage
+    internal sealed class TexelImage
     {
         private readonly int _width;
         private readonly int _height;

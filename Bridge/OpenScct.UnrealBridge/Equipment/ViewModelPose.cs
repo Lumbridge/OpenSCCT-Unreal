@@ -91,7 +91,7 @@ public sealed class ViewModelPose
     /// into the next tick (1 draws the last tick's state).
     /// </summary>
     public ReadOnlySpan<ChannelPose> Update(ViewModelAnim anim, GlbCharacter character, float dt, float tickAlpha = 1f,
-        bool exclusiveAction = false, bool blendLandingRecovery = true, bool blendLocomotion = false, ViewModelClipRates? rates = null)
+        bool exclusiveAction = false, bool blendLandingRecovery = true, bool blendLocomotion = false, ViewModelClipRates? rates = null, StudioClips? replacements = null)
     {
         ArgumentNullException.ThrowIfNull(anim);
         ArgumentNullException.ThrowIfNull(character);
@@ -134,7 +134,7 @@ public sealed class ViewModelPose
 
             // The holster is the draw clip played backward unless the model brings a clip of its own for it.
             bool authoredHolster = anim.IsBackward(c) && sequence == ViewModelClips.FirstDrawStEd2 &&
-                character.Find("FirstHolsterStFd2") is not null;
+                (replacements?.Find("FirstHolsterStFd2") ?? character.Find("FirstHolsterStFd2")) is not null;
             Name played = authoredHolster ? s_authoredHolster : sequence;
             if (_clipNameOf[c] != played)
             {
@@ -143,7 +143,7 @@ public sealed class ViewModelPose
             }
 
             string clipName = _clipName[c]!;
-            if (character.Find(clipName) is not { } clip)
+            if ((replacements?.Find(clipName) ?? character.Find(clipName)) is not { } clip)
             {
                 continue;
             }

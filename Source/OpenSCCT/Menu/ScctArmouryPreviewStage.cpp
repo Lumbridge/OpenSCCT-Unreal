@@ -5,6 +5,7 @@
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/Texture2D.h"
+#include "Play/ScctCosmeticMaterial.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "ImageUtils.h"
@@ -355,10 +356,10 @@ void AScctArmouryPreviewStage::Dress(const FString& Pattern)
 		UMaterialInterface* Source = Sources[Slot];
 		UTexture* Retail = nullptr;
 		UTexture2D* Made = nullptr;
+		TCHAR Path[1024] = {};
 		if (Api != nullptr && Source != nullptr && !Pattern.IsEmpty() && Source->GetTextureParameterValue(ArmouryStageBaseColor, Retail) && Retail != nullptr)
 		{
 			const FString Package = ArmouryStagePackageOf(*Retail);
-			TCHAR Path[1024] = {};
 			if (!Package.IsEmpty() && Api->CosmeticTexture(*Pattern, *Package, *Retail->GetName(), Path, UE_ARRAY_COUNT(Path)) > 0)
 			{
 				Made = LoadPicture(Path);
@@ -366,8 +367,7 @@ void AScctArmouryPreviewStage::Dress(const FString& Pattern)
 		}
 		if (Made != nullptr)
 		{
-			UMaterialInstanceDynamic* Instance = UMaterialInstanceDynamic::Create(Source, this);
-			Instance->SetTextureParameterValue(ArmouryStageBaseColor, Made);
+			UMaterialInstanceDynamic* Instance = ScctCosmeticMaterial::Create(this, Source, Made, Pattern, Path);
 			Body->SetMaterial(Slot, Instance);
 			++Dressed;
 		}

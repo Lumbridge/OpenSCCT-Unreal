@@ -348,8 +348,8 @@ def pawn_light(g, normal, world_position):
         """, FLOAT3, Active=active, Plan=g.light("Plan"), N=normal, P=world_position, **inputs)
 
 
-def build_surface():
-    g = Graph(SURFACE)
+def build_surface(cosmetic=False):
+    g = Graph("/Game/OpenSCCT/Materials/M_ScctCosmeticFinish" if cosmetic else SURFACE)
     material = g.material
     # Normals leave the graph in world space: the detail layer is projected along world axes.
     material.set_editor_property("tangent_space_normal", False)
@@ -449,8 +449,15 @@ def build_surface():
     roughness = g.custom("return saturate(lerp(Dark, Bright, G) + (D.g - 0.5) * 2.0 * Amount);", FLOAT1,
                          Dark=g.scalar("RoughnessDark", 0.85), Bright=g.scalar("RoughnessBright", 0.45),
                          G=base["G"], D=packed, Amount=g.scalar("DetailRoughness", 0.0))
+    metallic = g.scalar("Metallic", 0.0)
+    if cosmetic:
+        material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+        coverage = (g.texture("FinishMask", "/Engine/EngineResources/WhiteSquareTexture"), "R")
+        mirror = g.scalar("GoldMirror", 0.0)
+        roughness = g.custom("return lerp(R, lerp(.16,.055,Gold), Mask);", FLOAT1, R=roughness, Gold=mirror, Mask=coverage)
+        metallic = g.custom("return lerp(M, Gold, Mask);", FLOAT1, M=metallic, Gold=mirror, Mask=coverage)
     g.output(roughness, unreal.MaterialProperty.MP_ROUGHNESS)
-    g.output(g.scalar("Metallic", 0.0), unreal.MaterialProperty.MP_METALLIC)
+    g.output(metallic, unreal.MaterialProperty.MP_METALLIC)
     g.output(g.scalar("Specular", 0.5), unreal.MaterialProperty.MP_SPECULAR)
     # (Its output is with the baked light below: the lighting plan gates it by that.)
     occlusion = g.custom("return lerp(1.0, D.r, AO);", FLOAT1, D=packed, AO=occlusion_amount)
@@ -537,6 +544,31 @@ def build_surface():
                         Painted=painted_additive,
                         Glow=g.in_the_picture(glow, g.scalar("GlowInPicture", 1.0)), Least=least, Base=base["RGB"],
                         Tint=tint, Baked=baked, Pawn=pawn_light(g, normal, world_position))
+    if cosmetic:
+        # Gold reflects a bright studio environment even in shade. Pyre lacquer keeps the local lighting.
+        reflection = g.node(unreal.MaterialExpressionReflectionVectorWS)
+        view = g.node(unreal.MaterialExpressionTransform,
+                      transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_WORLD,
+                      transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_VIEW)
+        g.link(reflection, view, "Input")
+        fresnel = g.node(unreal.MaterialExpressionFresnel, exponent=4.0, base_reflect_fraction=0.0)
+        sheen = g.custom("""float3 r = normalize(R);
+            float level = saturate(dot(Lit,float3(1,1,1))/max(dot(C,float3(1,1,1)),.03));
+            float shade = lerp(lerp(.3,1,level),1,Gold);
+            float env = lerp(.3,1.25,smoothstep(-.45,.9,r.y)) + .85*exp(-pow((r.y-.12)*7,2));
+            float streaks = .35*sin(r.x*7+r.y*2.5) + .2*sin(r.x*17-r.z*5)
+                + .7*pow(saturate(dot(r,normalize(float3(-.7,.45,.4)))),6);
+            env = max(env+Gold*streaks,.15);
+            float spec = pow(saturate(dot(r,normalize(float3(.35,.8,.5)))),48);
+            float spec2 = pow(saturate(dot(r,normalize(float3(-.6,.3,.7)))),16);
+            float band = frac((UV.x+UV.y)*.5-T*.18);
+            float glint = smoothstep(0,.035,band)*(1-smoothstep(.035,.09,band));
+            float3 tint = lerp(float3(1,.93,.85),float3(1,.8,.36),Gold);
+            float strength = lerp(.7,1,Gold);
+            return saturate((C*env*lerp(.75,.95,Gold) + tint*(1.8*spec+.5*spec2+.6*Rim+.5*glint*Gold))*shade*strength);""",
+            FLOAT3, R=view, C=base_rgb, Gold=mirror, T=time, UV=uv, Rim=fresnel, Lit=emissive)
+        emissive = g.custom("return E*(1-Mask*lerp(.525,.95,Gold)) + Mask*S;", FLOAT3,
+                            E=emissive, Mask=coverage, Gold=mirror, S=g.in_the_picture(sheen))
     g.output(emissive, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
     alpha = g.custom("return Painted > 0.5 ? O : A * O;", FLOAT1, Painted=painted_additive,

@@ -66,9 +66,8 @@ private:
 	{
 		TWeakObjectPtr<UMaterialInterface> Source;
 		TWeakObjectPtr<UMaterialInstanceDynamic> Mine;
-		/** What the slot was worked out for (source and look); the texture file drawn, empty for its own. */
+		/** Source and look that produced the current material. */
 		uint32 Key = 0;
-		FString Path;
 	};
 
 	/** What a pawn's slots are dressed with. */
@@ -97,7 +96,7 @@ private:
 	void TurnGoggles(UMeshComponent& Mesh, float HueTurn, bool bTurn);
 
 	/** The texture file a slot whose material draws Retail (in Package) wears, or empty for its own. */
-	FString TextureFor(const FScctPawnLookApi& Api, const FString& Retail, const FString& Package, const FDress& Look) const;
+	FString TextureFor(const FScctPawnLookApi& Api, const FString& Retail, const FString& Package, const FDress& Look, FString& Finish) const;
 
 	UTexture2D* LoadTexture(const FString& Path);
 	FString Name(const FScctPawnLookApi& Api, int32 Id) const;

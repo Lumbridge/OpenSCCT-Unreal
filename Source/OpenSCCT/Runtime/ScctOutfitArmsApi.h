@@ -6,7 +6,7 @@
 // body (the outfit model, or the stock mesh with the outfit body texture) and hands the PNG it made. Mirrors
 // Bridge/OpenScct.UnrealBridge/Pose/OutfitArms/OutfitArmsExports.cs; change both together.
 
-constexpr int32 ScctOutfitArmsApiVersion = 1;
+constexpr int32 ScctOutfitArmsApiVersion = 2;
 
 struct FScctOutfitArmsApi
 {
@@ -18,4 +18,5 @@ struct FScctOutfitArmsApi
 	 * look. The first call for a pair of meshes makes the texture.
 	 */
 	int32 (__cdecl* ArmsTexture)(int32 Kind, const TCHAR* Package, int32 PackageLength, const TCHAR* Mesh, int32 MeshLength, TCHAR* OutPath, int32 Capacity);
+	int32 (__cdecl* VisionTexture)(int32 Kind, int32 WearsModel, const TCHAR* Slot, int32 SlotLength, int32 Wet, int32 LocalSpy, TCHAR* OutPath, int32 Capacity);
 };

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Hud/ScctVisionBackdrop.h"
 #include "Hud/ScctVisionData.h"
+#include "Hud/ScctOutfitVision.h"
 #include "Hud/ScctVisionMotion.h"
 #include "Hud/ScctVisionObjects.h"
 #include "Subsystems/WorldSubsystem.h"
@@ -131,6 +132,7 @@ protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 
 private:
+	FScctOutfitVision OutfitVision;
 	static constexpr int32 ModeCount = 4;
 
 	/** Motion tracking's place in the modes and materials (mode 37). */

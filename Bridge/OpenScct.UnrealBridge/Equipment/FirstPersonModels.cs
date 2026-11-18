@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Linq;
+using OpenScct.Animation;
 using OpenScct.Core;
 using OpenScct.Core.Engine;
 using OpenScct.Game.Camera;
@@ -20,8 +22,7 @@ namespace OpenScct.UnrealBridge.Equipment;
 /// one-shots are sampled after every client tick and drawn between ticks like the camera. Reads the simulation and
 /// never writes it.
 /// <para>A port of the placing and posing of OpenSCCT's game/Scripts/Views/FirstPersonView.cs. Not ported (they
-/// belong to Unreal's drawing): lighting at the eye, the stencil mask, cosmetics and map outfits on the sleeves, the
-/// aim-down-sights blend of OpenSCCT's own rifles (OpenScctRifles, which this content does not hold).</para>
+/// belong to Unreal's drawing): lighting at the eye, the stencil mask, cosmetics and map outfits on the sleeves.</para>
 /// <para>A merc watched in a demo's first-person camera gets the same view model, built from his recorded
 /// third-person weapon by OpenSCCT's ObservedWeaponViewModel (linked from game/Scripts/Views) and sampled after
 /// every tick as FirstPersonView.OnObservedTick and DrawObserved do: <see cref="OnObservedTick"/> and
@@ -96,7 +97,7 @@ internal sealed class MercFirstPerson
     /// (Estimated in OpenSCCT: the view model sits at the camera's location and rotation; the original's weapon draw
     /// offset is not in the specs.)
     /// </summary>
-    public bool Draw(SPlayerController? pc, float dt, float alpha, ref BridgeFirstPerson view)
+    public bool Draw(SPlayerController? pc, float dt, float alpha, ref BridgeFirstPerson view, float aimBlend = 0f)
     {
         Model = null;
         Applier = null;
@@ -104,10 +105,10 @@ internal sealed class MercFirstPerson
         var weapon = (pc?.Pawn as SBasePawn)?.MyWeapon as SWeaponDefense;
         bool show = pc is { bBehindView: false } && weapon is { bDrawWeapon: true, bDeleteMe: false } && !weapon.Mesh.IsNone &&
             ReferenceEquals(pc.ViewTarget ?? pc.Pawn, pc.Pawn);
-        return show && DrawWeapon(weapon!, weapon!.ShotCounter, dt, alpha, ref view);
+        return show && DrawWeapon(weapon!, weapon!.ShotCounter, dt, alpha, ref view, aimBlend);
     }
 
-    private bool DrawWeapon(SWeaponDefense weapon, int shotCount, float dt, float alpha, ref BridgeFirstPerson view)
+    private bool DrawWeapon(SWeaponDefense weapon, int shotCount, float dt, float alpha, ref BridgeFirstPerson view, float aimBlend = 0f)
     {
         if (Load(weapon.Mesh.Path!) is not { } loaded)
         {
@@ -134,13 +135,18 @@ internal sealed class MercFirstPerson
             (weapon is MercSidearm { ReloadUntil: > 0 } || action == weapon.AFirstReloGrenSt || action == weapon.AFirstReloSt);
         // A clip of an animation project bound to this model for gameplay runs at the project clip's frame rate.
         _rates.Bind(weapon.XLevel?.GetService<AnimationWorld>()?.Project, weapon.Mesh.Path!);
+        loaded.Clips.Bind(_rates.Project, weapon.Mesh.Path!);
         loaded.Applier.Apply(_pose.Update(weapon.ViewAnim, loaded.Model.Character, dt, alpha, exclusiveAction: customHandling,
-            blendLandingRecovery: weapon is MercSidearm, rates: _rates));
+            blendLandingRecovery: weapon is MercSidearm, blendLocomotion: aimBlend > .001f, rates: _rates, replacements: loaded.Clips));
 
         Xform root = Xform.Identity;
         if (weapon is MercSidearm && loaded.SightOffset is { } sight)
         {
             root *= sight;
+        }
+        else if (weapon is MercRifle && loaded.SightOffset is { } ads)
+        {
+            root *= EquipmentMath.Interpolate(Xform.Identity, ads, aimBlend);
         }
 
         if (_revolverKick > 0f)
@@ -179,8 +185,8 @@ internal sealed class MercFirstPerson
         Loaded? loaded = null;
         if (EquipmentModel.Load(asset, _sharedRoot) is { } model)
         {
-            Xform? neutral = NeutralMuzzle(model);
-            loaded = new Loaded(model, new ChannelPoseApplier(model.Character), SidearmSight(asset, neutral), neutral);
+            Xform? neutral = IdleSocket(model, model.MuzzleBone, .5f);
+            loaded = new Loaded(model, new ChannelPoseApplier(model.Character), SidearmSight(asset, neutral) ?? RifleSight(asset, model), neutral, new StudioClips(model.Character));
         }
 
         _loaded[asset] = loaded;
@@ -207,9 +213,9 @@ internal sealed class MercFirstPerson
     /// The muzzle ("FX") where it sits in the middle of the idle clip, in the model's actor frame: the neutral pose
     /// the pistols' sights and every gun's laser sight are set in. Null without the bone or the clip.
     /// </summary>
-    private static Xform? NeutralMuzzle(EquipmentModel model)
+    private static Xform? IdleSocket(EquipmentModel model, int bone, float phase)
     {
-        if (model.MuzzleBone < 0 || model.Character.Find(s_firstWaitStFd2.ToString()) is not { } idle)
+        if (bone < 0 || model.Character.Find(s_firstWaitStFd2.ToString()) is not { } idle)
         {
             return null;
         }
@@ -218,11 +224,23 @@ internal sealed class MercFirstPerson
         var positions = new Vector3[count];
         var rotations = new Quaternion[count];
         var scales = new Vector3[count];
-        model.Sample(idle, .5f, positions, rotations, scales);
-        return model.ActorToSkeleton * model.Global(model.MuzzleBone, positions, rotations, scales);
+        model.Sample(idle, phase, positions, rotations, scales);
+        return model.ActorToSkeleton * model.Global(bone, positions, rotations, scales);
     }
 
-    private sealed record Loaded(EquipmentModel Model, ChannelPoseApplier Applier, Xform? SightOffset, Xform? NeutralMuzzle);
+    private static Xform? RifleSight(string asset, EquipmentModel model)
+    {
+        MercRifleDefinition? rifle = MercRifles.All.FirstOrDefault(r => string.Equals(r.Asset + "_first", asset, StringComparison.OrdinalIgnoreCase));
+        if (rifle is null || IdleSocket(model, model.Character.FindBone("ADS"), 0f) is not { } sight)
+        {
+            return null;
+        }
+
+        Basis3 rotation = Basis3.FromQuaternion(EquipmentMath.ShortestArc(sight.Basis.X, Vector3.UnitX));
+        return new Xform(rotation, Vector3.UnitX * rifle.EyeRelief - rotation * sight.Origin);
+    }
+
+    private sealed record Loaded(EquipmentModel Model, ChannelPoseApplier Applier, Xform? SightOffset, Xform? NeutralMuzzle, StudioClips Clips);
 }
 
 /// <summary>
@@ -233,8 +251,8 @@ internal sealed class MercFirstPerson
 /// <para>A port of the placing and posing of OpenSCCT's game/Scripts/Views/SpyFirstPersonView.cs (the eye view is
 /// OpenSCCT's own). With the eye of the frame it also traces from the eye to the laser and muzzle sockets
 /// (TryGetSocket): a socket with a wall between it and the eye is flagged hidden, and Unreal then starts neither the
-/// muzzle flash nor the laser there. Not ported: the actions of an animation project's first-person profile
-/// (DrawStudioActions), lighting, cosmetics and outfits.</para>
+/// muzzle flash nor the laser there. Studio profiles can supply both hand and weapon poses; the native renderer
+/// dresses and lights the resulting meshes.</para>
 /// </summary>
 internal sealed class SpyFirstPerson
 {
@@ -255,6 +273,12 @@ internal sealed class SpyFirstPerson
     private Vector3 _stockRest;
     private Name _sampledClip;
     private float _sampledPhase = float.NaN;
+    private StudioClips? _weaponClips;
+    private StudioClips? _armClips;
+    private float _studioClock, _fireAge = float.PositiveInfinity, _lastShotTime = float.NegativeInfinity;
+    private bool _studioArms, _studioGun;
+    private Vector3[] _gripPositions = [], _gripScales = [];
+    private Quaternion[] _gripRotations = [];
     private string? _sampledName;
 
     public SpyFirstPerson(string? sharedRoot) => _sharedRoot = sharedRoot;
@@ -304,9 +328,12 @@ internal sealed class SpyFirstPerson
 
         _gripInverse = _gripped.AffineInverse();
         SupportContactError = error;
-        ArmPositions = positions;
-        ArmRotations = rotations;
-        ArmScales = scales;
+        _gripPositions = positions;
+        _gripRotations = rotations;
+        _gripScales = scales;
+        ArmPositions = (Vector3[])positions.Clone();
+        ArmRotations = (Quaternion[])rotations.Clone();
+        ArmScales = (Vector3[])scales.Clone();
         WeaponPositions = (Vector3[])gun.Character.RestPosition.Clone();
         WeaponRotations = (Quaternion[])gun.Character.RestRotation.Clone();
         WeaponScales = (Vector3[])gun.Character.RestScale.Clone();
@@ -316,6 +343,8 @@ internal sealed class SpyFirstPerson
             _stockRest = gun.Character.RestPosition[_stockBone];
         }
 
+        _weaponClips = new StudioClips(gun.Character);
+        _armClips = new StudioClips(arms.Character);
         Arms = arms;
         Weapon = gun;
     }
@@ -326,7 +355,7 @@ internal sealed class SpyFirstPerson
     /// hides it, the models missing).
     /// </summary>
     public bool Draw(SPlayerController pc, SPawnAttaque pawn, float alpha, ref BridgeFirstPerson view,
-        (FVector Location, FRotator Rotation)? eye = null)
+        (FVector Location, FRotator Rotation)? eye = null, float dt = 0f)
     {
         MuzzleHidden = false;
         LaserHidden = false;
@@ -346,12 +375,60 @@ internal sealed class SpyFirstPerson
             return false;
         }
 
+        var project = pawn.XLevel?.GetService<AnimationWorld>()?.Project;
+        if (_weaponClips!.Bind(project, WeaponAsset) || _studioGun) _sampledPhase = float.NaN;
+        var armsChanged = _armClips!.Bind(project, ArmsAsset);
+        if (armsChanged)
+        {
+            SpyFirstPersonRig.TryPose(arms, SpyFirstPersonRig.Ready, _gripPositions, _gripRotations, _gripScales,
+                out _gripped, out float error, _armClips);
+            SupportContactError = error;
+            _gripInverse = _gripped.AffineInverse();
+        }
+        if (armsChanged || _studioArms)
+        {
+            _gripPositions.CopyTo(ArmPositions, 0);
+            _gripRotations.CopyTo(ArmRotations, 0);
+            _gripScales.CopyTo(ArmScales, 0);
+        }
+        _studioArms = _studioGun = false;
         bool drawing = pawn.WeaponLoaded is 3 or 4;
         float amount = drawing ? DrawAmount(pawn, pistol?.ViewAnim, alpha) : 1f;
         float eased = amount * amount * (3f - (2f * amount));
         Xform gunRoot = drawing ? EquipmentMath.Interpolate(s_lowered, _gripped, eased) : _gripped;
         Xform armsRoot = drawing ? gunRoot * _gripInverse : Xform.Identity;
         PoseWeapon(gun, drawing ? ViewModelClips.DrawP190 : ViewModelClips.SnipeP190, drawing ? amount : 0f);
+
+        var profile = project?.FirstPersonProfiles.FindLast(p => p.Enabled && p.Role == FirstPersonRole.Spy && p.MainAsset == WeaponAsset);
+        if (project is not null && profile is not null)
+        {
+            if (project.Scene.Find(rig => rig.Id == profile.MainRig) is { } main)
+            {
+                var mount = Xform.FromTrs(main.Transform.Position, main.Transform.Rotation, main.Transform.Scale);
+                gunRoot = drawing ? EquipmentMath.Interpolate(s_lowered, mount, eased) : mount;
+                var support = project.Scene.Find(rig => rig.Id == profile.ArmsRig)?.Transform ?? BoneTransform.Identity;
+                armsRoot = Xform.FromTrs(support.Position, support.Rotation, support.Scale);
+                if (drawing) armsRoot = gunRoot * mount.AffineInverse() * armsRoot;
+            }
+            _studioClock += dt;
+            _fireAge += dt;
+            if (pistol is not null && pistol.LastShot != _lastShotTime)
+            {
+                _lastShotTime = pistol.LastShot;
+                float age = pawn.Level.TimeSeconds - pistol.LastShot;
+                if (!drawing && age >= 0f && age < .1f) _fireAge = 0f;
+            }
+            string slot = drawing ? pawn.WeaponLoaded == 4 ? "HolsterP190" : "DrawP190"
+                : _fireAge < FirstPersonEvaluation.Duration(project, profile, "FireP190") ? "FireP190"
+                : pawn.WeaponLoaded == 2 ? "AimP190" : pawn.Velocity.SizeSquared() > 100 ? "MoveP190" : "SnipeP190";
+            float duration = MathF.Max(FirstPersonEvaluation.Duration(project, profile, slot), .0001f);
+            float phase = drawing ? pawn.WeaponLoaded == 4 ? 1f - amount : amount
+                : slot == "FireP190" ? _fireAge / duration : (_studioClock % duration) / duration;
+            _studioGun = StudioClips.ApplyPose(project, FirstPersonEvaluation.Evaluate(project, profile, slot, phase, false),
+                gun.Character, WeaponPositions, WeaponRotations, WeaponScales);
+            _studioArms = StudioClips.ApplyPose(project, FirstPersonEvaluation.Evaluate(project, profile, slot, phase, true),
+                arms.Character, ArmPositions, ArmRotations, ArmScales);
+        }
 
         view.Kind = BridgeFirstPersonKind.Spy;
         view.PartCount = 2;
@@ -455,7 +532,7 @@ internal sealed class SpyFirstPerson
 
         _sampledClip = clip;
         _sampledPhase = phase;
-        if (model.Character.Find(_sampledName!) is not { } sequence)
+        if (_weaponClips!.Find(_sampledName!) is not { } sequence)
         {
             return;
         }

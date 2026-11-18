@@ -95,6 +95,7 @@ public sealed class ControlsFeature
     private bool _placed;
     private bool _wasCinematic;
     private float _aimBlend;
+    internal float RifleAimBlend => _aimBlend;
 
     private ControlsFeature(BridgeSession bridge)
     {

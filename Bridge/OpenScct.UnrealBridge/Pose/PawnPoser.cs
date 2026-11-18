@@ -7,6 +7,7 @@ using OpenScct.Game.Animation;
 using OpenScct.Game.Movement;
 using OpenScct.Game.SBase;
 using OpenScct.Physics.Movement;
+using OpenScct.Server;
 
 namespace OpenScct.UnrealBridge.Pose;
 
@@ -18,8 +19,7 @@ namespace OpenScct.UnrealBridge.Pose;
 /// <para>A port of the posing half of OpenSCCT's game/Scripts/Views/SimPawnView.cs (OnTick, SetAim, SetDirections,
 /// Pose, RootLockOf, Interpolated, ApplyOverlay), with the hub's emote overlay (<see cref="Overlay"/>). A map
 /// outfit's model is posed with its team's stock clips (see the constructor). The local spy's look-ahead aim
-/// (<see cref="DrawnView"/>) is handed over by Unreal each frame through Pose/PoseAimExports.cs. Not ported:
-/// replacement clips of an animation project.</para>
+/// (<see cref="DrawnView"/>) is handed over by Unreal each frame through Pose/PoseAimExports.cs.</para>
 /// </summary>
 public sealed partial class PawnPoser
 {
@@ -29,6 +29,7 @@ public sealed partial class PawnPoser
     private readonly Dictionary<Name, int> _boneOf = new();
     private readonly GlbCharacter _character;
     private readonly GlbCharacter _clips;
+    private readonly StudioClips _studio;
     private readonly ChannelPoseApplier _applier;
     private readonly int _aimBone;
     private FVector _location;
@@ -60,6 +61,7 @@ public sealed partial class PawnPoser
         Pawn = pawn ?? throw new ArgumentNullException(nameof(pawn));
         _character = character ?? throw new ArgumentNullException(nameof(character));
         _clips = clips ?? character;
+        _studio = new StudioClips(_clips);
         // BoneMirrors counts the team's stock skeleton; an outfit's bones are found from it by name.
         _applier = new ChannelPoseApplier(character, pawn.BoneMirrors, _clips);
         _aimBone = _applier.FindBone(MeshAimIK.FullAimBoneName);
@@ -293,11 +295,12 @@ public sealed partial class PawnPoser
     {
         SBasePawn pawn = Pawn;
         PawnAnimation anim = pawn.PawnAnim;
+        _studio.Bind(pawn.XLevel?.GetService<AnimationWorld>()?.Project, PawnOutfits.StockAsset(pawn is not SPAWNDEFENSE));
         Array.Clear(_channels);
         for (int c = 0; c < PawnAnimation.ChannelCount; c++)
         {
             PawnAnimChannel ch = anim[c];
-            if (ch.Sequence.IsNone || ch.Clip is null || _clips.Find(ch.Sequence.ToString()) is not { } clip)
+            if (ch.Sequence.IsNone || ch.Clip is null || _studio.Find(ch.Sequence.ToString()) is not { } clip)
             {
                 continue;
             }

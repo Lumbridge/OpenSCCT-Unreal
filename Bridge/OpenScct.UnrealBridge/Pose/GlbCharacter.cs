@@ -6,6 +6,7 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using OpenScct.Core;
+using OpenScct.Animation;
 
 namespace OpenScct.UnrealBridge.Pose;
 
@@ -63,6 +64,18 @@ public sealed class GlbClip
         _sources = sources;
     }
 
+    private readonly BoneTrack[]? _studioTracks;
+    private readonly float _studioTimeScale;
+
+    internal GlbClip(GlbCharacter owner, string name, float length, float sourceDuration, GlbTrack[] tracks, BoneTrack[] studioTracks)
+        : this(owner, name, [])
+    {
+        _length = length;
+        _tracks = tracks;
+        _studioTracks = studioTracks;
+        _studioTimeScale = length > 0f ? sourceDuration / length : 1f;
+    }
+
     public string Name { get; }
 
     public GlbTrack[] Tracks => _tracks ?? Read();
@@ -77,17 +90,27 @@ public sealed class GlbClip
         }
     }
 
-    public Vector3 Position(int track, double time) => Vector(Tracks[track], time);
+    public Vector3 Position(int track, double time) => SampleVector(track, time);
 
-    public Vector3 Scale(int track, double time) => Vector(Tracks[track], time);
+    public Vector3 Scale(int track, double time) => SampleVector(track, time);
 
     public Quaternion Rotation(int track, double time)
     {
+        if (_studioTracks is not null)
+        {
+            Vector4 q = ClipEvaluator.Sample(_studioTracks[track].Keys, (float)time * _studioTimeScale, rotation: true);
+            return ClipEvaluator.SafeRotation(q);
+        }
+
         GlbTrack t = Tracks[track];
         int key = KeyAt(t.Times, time, out float c);
         Quaternion a = QuaternionAt(t.Values, key);
         return c <= 0f || t.Step ? a : Quat.Slerp(a, QuaternionAt(t.Values, key + 1), c);
     }
+
+    private Vector3 SampleVector(int track, double time) => _studioTracks is null
+        ? Vector(Tracks[track], time)
+        : ClipEvaluator.Xyz(ClipEvaluator.Sample(_studioTracks[track].Keys, (float)time * _studioTimeScale));
 
     private static Vector3 Vector(GlbTrack t, double time)
     {

@@ -10,8 +10,7 @@ namespace OpenScct.UnrealBridge.Equipment;
 /// <see cref="ViewModelPose.DefaultFps"/>. A port of how the Godot client's AnimSampler.WithBindings sets
 /// AnimClip.NativeFrameRate, which its ViewModelPose then reads; as there, a later binding of the same slot wins.
 /// It reads the project and never writes it.
-/// <para>Only the rate is taken: the project clip's keys do not replace the model's own clip here (the Godot client
-/// also swaps the keys in; the bridge's <see cref="Pose.GlbCharacter"/> clips stay the model's).</para>
+/// The pose samples the matching replacement keys through <see cref="Pose.StudioClips"/>.
 /// </summary>
 public sealed class ViewModelClipRates
 {

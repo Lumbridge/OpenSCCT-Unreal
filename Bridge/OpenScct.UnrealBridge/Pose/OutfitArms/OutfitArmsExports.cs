@@ -20,11 +20,12 @@ public unsafe struct OutfitArmsApi
     /// The first call for a pair of meshes makes the texture.
     /// </summary>
     public delegate* unmanaged[Cdecl]<int, char*, int, char*, int, char*, int, int> ArmsTexture;
+    public delegate* unmanaged[Cdecl]<int, int, char*, int, int, int, char*, int, int> VisionTexture;
 }
 
 public static unsafe class OutfitArmsExports
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     /// <summary>Fills <paramref name="api"/>. Returns the API version.</summary>
     [UnmanagedCallersOnly]
@@ -37,6 +38,7 @@ public static unsafe class OutfitArmsExports
 
         api->Version = ApiVersion;
         api->ArmsTexture = &ArmsTexture;
+        api->VisionTexture = &VisionTexture;
         return ApiVersion;
     }
 
@@ -62,4 +64,22 @@ public static unsafe class OutfitArmsExports
             return 0;
         }
     }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int VisionTexture(int kind, int wearsModel, char* slot, int size, int wet, int localSpy, char* into, int capacity)
+    {
+        try
+        {
+            if (slot == null || size <= 0 || into == null || Exports.Current is not { IsDisposed: false } session ||
+                OutfitVisionMasks.For(session.Outfits, kind, wearsModel != 0, new string(slot, 0, size), wet != 0, localSpy != 0) is not { } path ||
+                capacity < path.Length) return 0;
+            path.AsSpan().CopyTo(new Span<char>(into, capacity));
+            return path.Length;
+        }
+        catch (Exception e)
+        {
+            Exports.ReportFailure(e.ToString());
+            return 0;
+        }
+    }
+
 }

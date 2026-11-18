@@ -1,4 +1,5 @@
 #include "Play/ScctPawnLookSubsystem.h"
+#include "Play/ScctCosmeticMaterial.h"
 
 #include "Components/PoseableMeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -405,7 +406,7 @@ UTexture2D* UScctPawnLookSubsystem::LoadTexture(const FString& Path)
 	return Texture;
 }
 
-FString UScctPawnLookSubsystem::TextureFor(const FScctPawnLookApi& Api, const FString& Retail, const FString& Package, const FDress& Look) const
+FString UScctPawnLookSubsystem::TextureFor(const FScctPawnLookApi& Api, const FString& Retail, const FString& Package, const FDress& Look, FString& Finish) const
 {
 	const FString Key = KeyOf(Retail);
 	// The arms of the eye view in the map outfit: the merc's sleeves and gloves, and the arms of a spy who wears a
@@ -433,6 +434,7 @@ FString UScctPawnLookSubsystem::TextureFor(const FScctPawnLookApi& Api, const FS
 	TCHAR Buffer[1024];
 	const int32 Length = FMath::Clamp(Api.CosmeticTexture(Pattern, *Package, Package.Len(), *Retail, Retail.Len(), Buffer, UE_ARRAY_COUNT(Buffer)),
 		0, static_cast<int32>(UE_ARRAY_COUNT(Buffer)));
+	if (Length > 0) Finish = Name(Api, Pattern);
 	return FString::ConstructFromPtrSize(Buffer, Length);
 }
 
@@ -483,8 +485,9 @@ int32 UScctPawnLookSubsystem::Dress(UMeshComponent& Mesh, const FDress& Look)
 		{
 			State.Key = Key;
 			UTexture* Retail = nullptr;
+			FString Finish;
 			const FString Path = Source->GetTextureParameterValue(BaseColorName, Retail) && Retail != nullptr
-				? TextureFor(*Api, Retail->GetName(), PackageOf(*Retail, Look.Kind), Look)
+				? TextureFor(*Api, Retail->GetName(), PackageOf(*Retail, Look.Kind), Look, Finish)
 				: FString();
 			UTexture2D* Made = Path.IsEmpty() ? nullptr : LoadTexture(Path);
 			if (Made == nullptr)
@@ -494,15 +497,12 @@ int32 UScctPawnLookSubsystem::Dress(UMeshComponent& Mesh, const FDress& Look)
 					Mesh.SetMaterial(Slot, Source);
 				}
 				State.Mine = nullptr;
-				State.Path.Reset();
 			}
-			else if (Path != State.Path || !State.Mine.IsValid())
+			else
 			{
-				UMaterialInstanceDynamic* Instance = State.Mine.IsValid() ? State.Mine.Get() : UMaterialInstanceDynamic::Create(Source, &Mesh);
-				Instance->SetTextureParameterValue(BaseColorName, Made);
+				UMaterialInstanceDynamic* Instance = ScctCosmeticMaterial::Create(&Mesh, Source, Made, Finish, Path);
 				Mesh.SetMaterial(Slot, Instance);
 				State.Mine = Instance;
-				State.Path = Path;
 			}
 		}
 		Dressed += State.Mine.IsValid() ? 1 : 0;

@@ -1,4 +1,5 @@
 #include "Play/ScctLevelStateSubsystem.h"
+#include "Play/ScctStudioProp.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Animation/AnimSequenceBase.h"
@@ -521,6 +522,7 @@ void UScctLevelStateSubsystem::RestoreLevel()
 		{
 			continue;
 		}
+		ScctStudioProp::Restore(*Component);
 		if (State.bMoved)
 		{
 			Actor->SetActorTransform(State.ImportedTransform);
@@ -1424,6 +1426,11 @@ void UScctLevelStateSubsystem::UpdateProps()
 		}
 
 		UAnimSequenceBase* Sequence = State.Sequence.Get();
+		if (ScctStudioProp::Apply(*Component, Record, Sequence ? Sequence->GetPlayLength() : 0.f, *this))
+		{
+			State.AppliedFrame = -1.f;
+			continue;
+		}
 		if (Sequence == nullptr)
 		{
 			continue;
