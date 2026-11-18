@@ -40,11 +40,40 @@ namespace FScctExposure
 	OPENSCCT_API float FlashScale();
 
 	/**
+	 * The exposure FlashScale and WallHold go by: the one the picture had settled on before the flashes, not the
+	 * one the eye has closed to while a burst lit the room (which would raise each next flash in turn until the
+	 * walls burned white). Follows Get() while no flash has been lit for a few seconds; 1 until a frame was drawn.
+	 */
+	OPENSCCT_API float FlashExposure();
+
+	/** A flash light has just been lit (after its strength was worked out): FlashExposure holds still for a while. */
+	OPENSCCT_API void NoteFlash();
+
+	/**
 	 * Candelas of a rifle's muzzle flash in a moderately lit room, before FlashScale (scct.Flash.Candelas). One
 	 * value for every muzzle flash light, the local player's view model and every flash seen from outside, so a
 	 * shot lights the room the same whoever fires it and from wherever it is seen.
 	 */
 	OPENSCCT_API float MuzzleFlashCandelas();
+
+	/**
+	 * What to multiply a flash light's strength (Candelas, already scaled by FlashScale) by so the nearest surface
+	 * around At does not burn white: FlashScale keeps a flash as bright in the picture at any exposure for a wall
+	 * a metre or two away, but a light's spot on a wall grows with the inverse square of its distance, so with the
+	 * gun against a wall the spot was many times brighter, and on a bright map the walls already near the top of
+	 * the picture clipped to white. The light is held so its brightest spot on any surface within its reach adds
+	 * no more than scct.Flash.WallLevel to the exposed picture; 1 when it is far enough already. Traces the level
+	 * (TraceLevel) in 26 directions around At, out to Radius cm. OutNearest gets the distance found (cm, Radius
+	 * when nothing is near).
+	 */
+	OPENSCCT_API float WallHold(const FVector& At, float Candelas, float Radius, float* OutNearest = nullptr);
+
+	/**
+	 * The level's own geometry (walls, floors, static meshes, movers; not pawns) on the line from Start to End, in
+	 * the simulation's collision through the bridge (Runtime/ScctFxTraceApi.h, the effects' trace): Unreal's copy of the level has no collision, the simulation
+	 * owns it. True when something is met, OutDistance the distance to it (cm); false with no hit or no session.
+	 */
+	OPENSCCT_API bool TraceLevel(const FVector& Start, const FVector& End, float& OutDistance);
 
 	/** The same factor with the caller's own bounds, for a light that must keep up over the whole exposure range. */
 	OPENSCCT_API float PictureScale(float Least, float Most);

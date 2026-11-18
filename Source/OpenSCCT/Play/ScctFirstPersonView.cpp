@@ -27,7 +27,8 @@ namespace
 	// How far in front of the muzzle the flash's light is (cm), FlashLightPlace.
 	constexpr double FlashLightAhead = 40.0;
 	// The light's strength is every muzzle flash's (FScctExposure::MuzzleFlashCandelas), scaled by the picture's
-	// exposure when it fires, so the flash does not white out the screen when the eye is open for the dark.
+	// exposure when it fires, so the flash does not white out the screen when the eye is open for the dark, and
+	// held down by the nearest wall (FScctExposure::WallHold) so a wall in front of the gun is not burned white.
 
 	struct FFlashShape
 	{
@@ -385,10 +386,18 @@ void AScctFirstPersonView::PlayMuzzleFlash()
 	FlashLight->SetVisibility(true);
 	FlashAge = 0.0f;
 	FlashExposureScale = FScctExposure::FlashScale();
+	// A wall close in front of the gun takes the light's full strength in one spot: held down so it is warmed,
+	// not burned white, whatever the exposure.
+	const FVector LightAt = FlashLightPlace();
+	float Nearest = 0.0f;
+	FlashWallHold = FScctExposure::WallHold(LightAt, FScctExposure::MuzzleFlashCandelas() * FlashExposureScale,
+		FlashLight->AttenuationRadius, &Nearest);
+	FScctExposure::NoteFlash();
 	++FlashesPlayed;
-	UE_LOG(LogOpenSCCT, Log, TEXT("First person: muzzle flash %d at (%.0f %.0f %.0f), %.1f cm from the eye, its light %.0f cd (exposure scale %.2f) %.1f cm from the eye"), FlashesPlayed,
+	UE_LOG(LogOpenSCCT, Log, TEXT("First person: muzzle flash %d at (%.0f %.0f %.0f), %.1f cm from the eye, its light %.0f cd (exposure %.3f, settled %.3f, scale %.2f, wall hold %.2f, nearest surface %.0f cm, picture level %.3f) %.1f cm from the eye"), FlashesPlayed,
 		Muzzle.GetLocation().X, Muzzle.GetLocation().Y, Muzzle.GetLocation().Z, FVector::Dist(Muzzle.GetLocation(), LastCamera.GetLocation()),
-		FScctExposure::MuzzleFlashCandelas() * FlashExposureScale, FlashExposureScale, FVector::Dist(FlashLightPlace(), LastCamera.GetLocation()));
+		FScctExposure::MuzzleFlashCandelas() * FlashExposureScale * FlashWallHold, FScctExposure::Get(), FScctExposure::FlashExposure(), FlashExposureScale, FlashWallHold, Nearest,
+		FScctExposure::PictureLevel(), FVector::Dist(LightAt, LastCamera.GetLocation()));
 	TickFlash(0.0f);
 }
 
@@ -398,14 +407,15 @@ FVector AScctFirstPersonView::FlashLightPlace() const
 	// in towards the eye (to 0.42 of its distance), so from there the arms as drawn are most of a metre away and
 	// take a little of its light, not all of it: from a place 60% of the way to the muzzle, a hand's width from
 	// the drawn sleeves, it burned them white. Only the level's own geometry between the eye and that place holds
-	// it back, 10 cm in front of the wall, so it never lights the far side of a wall instead of this one.
+	// it back, 10 cm in front of the wall, so it never lights the far side of a wall instead of this one. The
+	// simulation's collision is asked (FScctExposure::TraceLevel): Unreal's copy of the level has none, and a trace
+	// of it never met the wall.
 	const FVector Eye = LastCamera.GetLocation();
 	const FVector At = Muzzle.GetLocation() + Muzzle.GetRotation().GetForwardVector() * FlashLightAhead;
-	FHitResult Hit;
-	FCollisionQueryParams Query(TEXT("ScctMuzzleFlash"), false, this);
-	if (GetWorld()->LineTraceSingleByObjectType(Hit, Eye, At, FCollisionObjectQueryParams(ECC_WorldStatic), Query) && !Hit.bStartPenetrating)
+	float Distance = 0.0f;
+	if (FScctExposure::TraceLevel(Eye, At, Distance))
 	{
-		return Eye + (At - Eye).GetSafeNormal() * FMath::Max(Hit.Distance - 10.0, 0.0);
+		return Eye + (At - Eye).GetSafeNormal() * FMath::Max(Distance - 10.0, 0.0);
 	}
 	return At;
 }
@@ -446,7 +456,7 @@ void AScctFirstPersonView::TickFlash(float DeltaSeconds)
 	}
 
 	const float LightFade = bGunShown ? 1.0f - FMath::Clamp(Age / FlashLightSeconds, 0.0f, 1.0f) : 0.0f;
-	FlashLight->SetIntensity(FScctExposure::MuzzleFlashCandelas() * FlashExposureScale * LightFade);
+	FlashLight->SetIntensity(FScctExposure::MuzzleFlashCandelas() * FlashExposureScale * FlashWallHold * LightFade);
 	if (LightFade <= 0.0f)
 	{
 		FlashLight->SetVisibility(false);
