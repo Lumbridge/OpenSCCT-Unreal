@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- A console check of the Enhanced SCCT Versus import and the Help & feedback report without Unreal: writes a small
+  <!-- A console check of the Enhanced SCCT Versus import and the Help & feedback page without Unreal: writes a small
        Reloaded install (its config, a profile, two key files and the shortcut to them) and prints what the import maps
-       it onto, then the report details and the bug report address. -->
+       it onto, then checks game details and project links. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

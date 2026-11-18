@@ -57,9 +57,7 @@
     <!-- The first-person weapon of a merc watched in a demo, rebuilt from his recorded third-person one
          (Equipment/FirstPersonModels.cs, MercFirstPerson.DrawObserved); Godot-free like the session. -->
     <Compile Include="$(OpenScctRoot)game\Scripts\Views\ObservedWeaponViewModel.cs" Link="Linked\Views\ObservedWeaponViewModel.cs" />
-    <!-- The Help & feedback page's report (Menu/ReportExports.cs): the project's links and report fields (shared source,
-         compiled into each OpenSCCT app), the session classification and the local player's position line, all
-         Godot-free. -->
+    <!-- Shared project links and local game details for the Help & feedback page. -->
     <Compile Include="$(OpenScctRoot)shared\ProjectLinks.cs" Link="Linked\Shared\ProjectLinks.cs" />
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\GameReportState.cs" Link="Linked\UI\GameReportState.cs" />
     <Compile Include="$(OpenScctRoot)game\Scripts\UI\PlayerLocationReport.cs" Link="Linked\UI\PlayerLocationReport.cs" />

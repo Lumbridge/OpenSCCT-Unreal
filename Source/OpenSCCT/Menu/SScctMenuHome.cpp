@@ -153,9 +153,9 @@ namespace
 				[this] { Host.Open(TEXT("settings")); });
 
 			const int32 More = AddGroup(TEXT("More"), TEXT("Help & feedback, credits"),
-				TEXT("Reporting a bug or suggesting a feature, the guides, and who made OpenSCCT."));
-			Add(Groups[More].Entries, TEXT("Help & feedback"), TEXT("Report a bug, suggest a feature, the guides"),
-				TEXT("Report a bug with the game's details filled in and a screenshot if you want one, suggest a feature, browse the reported issues, and the documentation and contribution guides."),
+				TEXT("Suggest a feature, browse the guides or see who made OpenSCCT."));
+			Add(Groups[More].Entries, TEXT("Help & feedback"), TEXT("Feature requests and project guides"),
+				TEXT("Suggest a feature, browse existing issues, view game details or read the project guides."),
 				[this] { Host.Open(TEXT("feedback")); });
 			Add(Groups[More].Entries, TEXT("Credits"), TEXT("The people and the licences"),
 				TEXT("Who made OpenSCCT and this Unreal presentation, and the licences of the assets it uses."),

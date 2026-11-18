@@ -7,7 +7,7 @@ using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Controls;
 
 // The console check of "Import from Enhanced SCCT Versus" (Controls/EnhancedImport.cs) and of the Help & feedback
-// report (Menu/ReportExports.cs). It writes a small Reloaded install into the folder given (default: a temp folder):
+// links and game details (Menu/ReportExports.cs). It writes a small Reloaded install into the folder given (default: a temp folder):
 //   <folder>\System\SCCT_Versus.config      sensitivities, display, HUD, voice, controller
 //   <folder>\System\_Profiles_.lnk          a shortcut to <folder>\Profiles, as Reloaded's own
 //   <folder>\Profiles\Tester_prf.ini        inversions, volumes, wheel, gear
@@ -194,23 +194,22 @@ Check(lines[0] == "source " + root && lines.Count(l => l.StartsWith("set ", Stri
     $"the table's text: {lines.Length} lines (source, set, loadout, note, controls)");
 Check(EnhancedImportExports.ImportText(Path.Combine(root, "nowhere"), false, apply: false).StartsWith("error ", StringComparison.Ordinal), "a folder that is not there: an error line");
 
-// ---- the Help & feedback report (no match: the menus) --------------------------------------------------------------
+// ---- the Help & feedback links and game details (no match: the menus) --------------------------------------------------------------
 
-Console.WriteLine("Report details:");
+Console.WriteLine("Game details:");
 string details = ReportExports.Details();
 foreach (string line in details.Split('\n'))
 {
     Console.WriteLine("   " + line);
 }
 
-string url = ReportExports.Url(BridgeReportLink.BugReport);
-Console.WriteLine("Bug report address: " + url);
 Check(details.Contains("Source: OpenSCCT game", StringComparison.Ordinal) && details.Contains("Session: Menus", StringComparison.Ordinal),
     "the details name the game, its version and the menus");
-Check(url.StartsWith("https://master.lumbridge.co.uk/help/report-bug?area=game&version=", StringComparison.Ordinal) && url.Contains("&environment=", StringComparison.Ordinal),
-    "the bug report address carries the version and the details");
-string withCapture = ReportExports.Url(BridgeReportLink.BugReport, new string('a', 64));
-Check(withCapture.EndsWith("&capture=" + new string('a', 64), StringComparison.Ordinal), "a capture token is added to the address");
+string featureUrl = ReportExports.Url(BridgeReportLink.FeatureRequest);
+Check(featureUrl.StartsWith("https://github.com/Lumbridge/OpenSCCT/issues/new?template=feature_request.yml&environment=", StringComparison.Ordinal),
+    "feature requests open the GitHub template with game details");
+Check(ReportExports.Url(BridgeReportLink.Issues) == "https://github.com/Lumbridge/OpenSCCT/issues",
+    "browse existing issues opens the issue list");
 
 Console.WriteLine(failures == 0 ? "All checks passed." : $"{failures} check(s) FAILED.");
 return failures == 0 ? 0 : 1;
