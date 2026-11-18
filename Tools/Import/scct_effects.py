@@ -110,7 +110,7 @@ def particle_inputs(g):
 
 
 def build_light_sprites():
-    """Depth-tested map sprites. UV1 holds signed offsets from each card's centre in world units."""
+    """Depth-tested map sprites. UV1 holds signed offsets from each card's centre in metres."""
     for suffix, blend in (("Opaque", "OPAQUE"), ("Masked", "MASKED"), ("Alpha", "TRANSLUCENT"),
                           ("Add", "ADDITIVE"), ("Modulate", "MODULATE")):
         g = Graph(EFFECTS + "/M_ScctLightSprite" + suffix)
@@ -118,8 +118,8 @@ def build_light_sprites():
         g.material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
         g.material.set_editor_property("two_sided", True)
         offsets = g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1)
-        displacement = g.custom("return (ResolvedView.ViewRight - float3(0,1,0)) * D.x"
-                                " + (ResolvedView.ViewUp - float3(0,0,1)) * D.y;", FLOAT3, D=offsets)
+        displacement = g.custom("return 100 * ((ResolvedView.ViewRight - float3(0,1,0)) * D.x"
+                                " + (ResolvedView.ViewUp - float3(0,0,1)) * D.y);", FLOAT3, D=offsets)
         g.output(displacement, unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
         texture = g.texture("Texture", "/Engine/EngineResources/WhiteSquareTexture")
         g.output((texture if suffix == "Modulate" else g.in_the_picture((texture, "RGB"))),

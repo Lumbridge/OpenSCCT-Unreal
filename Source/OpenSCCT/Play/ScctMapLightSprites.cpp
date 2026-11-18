@@ -95,8 +95,10 @@ namespace ScctMapSprites
 			{
 				FProcMeshVertex& Vertex = Section.ProcVertexBuffer.AddDefaulted_GetRef();
 				Vertex.UV0 = UV;
-				Vertex.UV1 = FVector2D((UV.X - 0.5) * Size.X, (0.5 - UV.Y) * Size.Y);
-				Vertex.Position = Centre + FVector(0, Vertex.UV1.X, Vertex.UV1.Y);
+				const FVector2D Offset((UV.X - 0.5) * Size.X, (0.5 - UV.Y) * Size.Y);
+				// UVs are half precision on some renderers. ClarD's sky cards exceed 65,504 cm.
+				Vertex.UV1 = Offset * 0.01;
+				Vertex.Position = Centre + FVector(0, Offset.X, Offset.Y);
 			}
 			Section.ProcIndexBuffer.Append({Base, Base+1, Base+2, Base, Base+2, Base+3});
 			// Shader billboarding can rotate the quad outside its CPU plane.
