@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Hud/ScctPoisonOverlay.h"
 #include "Hud/ScctVisorEffects.h"
 #include "Styling/SlateBrush.h"
 #include "Subsystems/WorldSubsystem.h"
@@ -33,7 +34,8 @@ struct FScctHudState;
  * -ScctForceCrossEye=<0..1> holds CrossEyedFactor at that value from the start, so the doubling can be shot unattended.
  *
  * The merc's visor effects (EMP shutdown, perturbation, foam, droplets, sticky shock; Hud/ScctVisorEffects) keep their
- * latches here: Present moves them on and points the model at them.
+ * latches here: Present moves them on and points the model at them. The poison overlay's latch is with them, and its
+ * brightening layer is put in the picture from here (Hud/ScctPoisonOverlay.h).
  */
 UCLASS()
 class OPENSCCT_API UScctScreenEffectsSubsystem : public UWorldSubsystem
@@ -115,4 +117,7 @@ private:
 	float ForcedAt = -1.0f;
 
 	FScctVisorState Visor;
+
+	/** The poison overlay's brightening layer in the picture (Hud/ScctPoisonOverlay.h). */
+	FScctPoisonDodge PoisonDodge;
 };
