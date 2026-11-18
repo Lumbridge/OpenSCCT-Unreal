@@ -28,7 +28,7 @@ public struct WindowBakeEdit
 internal sealed class WindowBake
 {
     private readonly WindowLightTransfer? _transfer;
-    private readonly List<string> _panes = [];
+    private readonly List<(string Id, SVitre Placed)> _panes = [];
     private readonly WorldState? _world;
     private readonly Dictionary<string, int> _names = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string Actor, int Section), (int Mesh, int Primitive)> _meshes = [];
@@ -52,7 +52,7 @@ internal sealed class WindowBake
         var ids = transfer.Panes.Select(p => p.Actor).ToHashSet(StringComparer.OrdinalIgnoreCase);
         _world = WorldState.Of(bridge);
         foreach (var record in loaded.Gameplay.Actors)
-            if (ids.Contains(record.Id) && loaded.ActorOf(record) is SVitre) _panes.Add(record.Id);
+            if (ids.Contains(record.Id) && loaded.ActorOf(record) is SVitre pane) _panes.Add((record.Id, pane));
         foreach (var batch in transfer.Batches)
             foreach (var resource in batch.Resources) _names.TryAdd(resource.Name, EventNames.Id(resource.Name));
         ReadGeometry(Path.Combine(folder, "render"));
@@ -75,8 +75,9 @@ internal sealed class WindowBake
         if (root.TryGetProperty("extras", out var extras) && extras.TryGetProperty("svmap", out var svmap) && svmap.TryGetProperty("instances", out var instances))
             foreach (var instance in instances.EnumerateArray())
             {
-                string actor = instance.GetProperty("actor").GetString()!;
-                if (!_names.ContainsKey(actor) || !nodes.TryGetValue(instance.GetProperty("mesh").GetString()!, out int mesh)) continue;
+                if (!instance.TryGetProperty("actor", out var id) || id.GetString() is not { } actor ||
+                    !_names.ContainsKey(actor) || !instance.TryGetProperty("mesh", out var key) ||
+                    key.GetString() is not { } meshName || !nodes.TryGetValue(meshName, out int mesh)) continue;
                 int index = 0;
                 foreach (var p in meshes[mesh].GetProperty("primitives").EnumerateArray())
                 {
@@ -105,9 +106,10 @@ internal sealed class WindowBake
     {
         if (_transfer is null) return -1;
         bool changed = false;
-        foreach (string id in _panes)
+        foreach (var (id, placed) in _panes)
         {
-            if (_world?.PlacementActor(id) is not SVitre { bDeleteMe: false } pane) continue;
+            var pane = _world?.PlacementActor(id) as SVitre ?? placed;
+            if (pane.bDeleteMe) continue;
             bool broken = pane.bAlreadyDestroyed || pane.DrawType == EDrawType.DT_None || pane.StaticMesh.IsNone;
             changed |= broken ? _broken.Add(id) : _broken.Remove(id);
         }
@@ -203,6 +205,7 @@ public static unsafe class WindowBakeExports
     [UnmanagedCallersOnly]
     public static int GetApi(WindowBakeApi* api)
     {
+        if (api == null) return 0;
         api->Version = 1;
         api->Poll = &Poll;
         api->Copy = &Copy;
@@ -213,21 +216,25 @@ public static unsafe class WindowBakeExports
         ? s.Feature(static session =>
         {
             try { return new WindowBake(session); }
-            catch (Exception e) { Exports.ReportFailure("Window bake: " + e.Message); return new WindowBake(); }
+            catch (Exception e) { Console.Error.WriteLine("Window bake unavailable: " + e.Message); return new WindowBake(); }
         }) : null;
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int Poll()
     {
         try { return Current?.Poll() ?? -1; }
-        catch (Exception e) { Exports.ReportFailure("Window bake update: " + e.Message); return -1; }
+        catch (Exception e) { Console.Error.WriteLine("Window bake update: " + e.Message); return -1; }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int Copy(WindowBakeEdit* rows, int count)
     {
-        if (Current?.Edits is not { } edits || count < edits.Length || rows == null) return 0;
-        edits.AsSpan().CopyTo(new Span<WindowBakeEdit>(rows, count));
-        return edits.Length;
+        try
+        {
+            if (Current?.Edits is not { } edits || count < edits.Length || rows == null) return 0;
+            edits.AsSpan().CopyTo(new Span<WindowBakeEdit>(rows, count));
+            return edits.Length;
+        }
+        catch (Exception e) { Console.Error.WriteLine("Window bake copy: " + e.Message); return 0; }
     }
 }
