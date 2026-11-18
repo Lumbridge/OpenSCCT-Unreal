@@ -41,15 +41,24 @@ namespace
 		return FColor(Byte(Original.R + Edit.R), Byte(Original.G + Edit.G), Byte(Original.B + Edit.B), Original.A);
 	}
 
-	UTexture2D* MakePage(const FString& Path, const TArray<FScctWindowEdit>& Edits)
+	UTexture2D* MakePage(const FString& Path, const TArray<FScctWindowEdit>& Edits, const UTexture& Original)
 	{
 		FImage Image;
 		if (!FImageUtils::LoadImage(*Path, Image)) return nullptr;
-		Image.ChangeFormat(ERawImageFormat::BGRA8, EGammaSpace::sRGB);
+		// Transfer values address encoded file bytes. Some surface masters sample these linearly, others as sRGB.
+		Image.GammaSpace = EGammaSpace::Linear;
+		Image.ChangeFormat(ERawImageFormat::BGRA8, EGammaSpace::Linear);
 		auto Pixels = Image.AsBGRA8();
 		for (const auto& E : Edits)
 			if (Pixels.IsValidIndex(E.Element)) Pixels[E.Element] = AdjustBake(Pixels[E.Element], E);
-		return UTexture2D::CreateTransientFromImage(&Image);
+		UTexture2D* Texture = UTexture2D::CreateTransientFromImage(&Image);
+		if (Texture)
+		{
+			Texture->SRGB = Original.SRGB;
+			Texture->Filter = Original.Filter;
+			Texture->UpdateResource();
+		}
+		return Texture;
 	}
 
 	void SwapWindowMesh(UStaticMeshComponent& C, UStaticMesh* Mesh)
@@ -230,31 +239,32 @@ void UScctWindowLighting::Apply(const TArray<FScctWindowEdit>& Rows)
 	TMap<int32,TArray<FScctWindowEdit>> Pages;
 	TMap<int32,int32> RuntimeSlots;
 	TMap<FString,int32> ImportedPages;
-	TMap<int32,FString> Names;
+	TMap<FString, int32> ImportedSlots;
+	TMap<int32, FString> Names;
+	auto NameFor = [&](int32 Id) -> const FString&
+	{
+		if (const auto* Found = Names.Find(Id)) return *Found;
+		TArray<TCHAR> Buffer;
+		Buffer.SetNumZeroed(Events->GetName(Id, nullptr, 0) + 1);
+		Events->GetName(Id, Buffer.GetData(), Buffer.Num());
+		return Names.Add(Id, Buffer.GetData());
+	};
 	for (const auto& E : Rows)
 	{
-		FString* Name = Names.Find(E.Name);
-		if (!Name)
+		const FString& Name = NameFor(E.Name);
+		if (E.Mesh >= 0) Actors.FindOrAdd(FName(*(TEXT("Scct:") + Name))).Add(E);
+		else if (E.Mesh == -2)
 		{
-			TArray<TCHAR> Buffer;
-			Buffer.SetNumZeroed(Events->GetName(E.Name, nullptr, 0)+1);
-			Events->GetName(E.Name, Buffer.GetData(), Buffer.Num());
-			Name = &Names.Add(E.Name, Buffer.GetData());
+			RuntimeSlots.Add(E.Element, E.Name);
+			ImportedSlots.Add(BakeKey(NameFor(E.Primitive)), E.Name);
 		}
-		if (E.Mesh >= 0) Actors.FindOrAdd(FName(*(TEXT("Scct:") + *Name))).Add(E);
-		else if (E.Mesh == -2) RuntimeSlots.Add(E.Element,E.Name);
-		else Pages.FindOrAdd(E.Name).Add(E);
-	}
-	TMap<int32,UTexture2D*> Textures;
-	for (const auto& Page : Pages)
-	{
-		const FString& Uri = Names[Page.Key];
-		if (auto* Texture = MakePage(Render/Uri,Page.Value))
+		else
 		{
-			Textures.Add(Page.Key,Texture);
-			ImportedPages.Add(BakeKey(FPaths::GetBaseFilename(Uri)),Page.Key);
+			Pages.FindOrAdd(E.Name).Add(E);
+			ImportedPages.Add(BakeKey(FPaths::GetBaseFilename(Name)), E.Name);
 		}
 	}
+	TMap<TPair<int32, UTexture*>, UTexture2D*> Textures;
 	if (!Actors.IsEmpty() && !Geometry.IsValid())
 	{
 		Geometry = MakeShared<GLTF::FAsset>();
@@ -288,9 +298,28 @@ void UScctWindowLighting::Apply(const TArray<FScctWindowEdit>& Rows)
 				UMaterialInterface* M=C->GetMaterial(I);
 				UTexture* Page=nullptr;
 				if (!M || !M->GetTextureParameterValue(FHashedMaterialParameterInfo(TEXT("Lightmap")),Page) || !Page) continue;
-				int32 Id = Runtime && Original->GetStaticMaterials().IsValidIndex(I)
-					? RuntimeSlots.FindRef(FCString::Atoi(*Original->GetStaticMaterials()[I].MaterialSlotName.ToString())) : ImportedPages.FindRef(BakeKey(Page->GetName()));
-				UTexture2D* Texture = Textures.FindRef(Id);
+				int32 Id = ImportedPages.FindRef(BakeKey(Page->GetName()));
+				if (Original->GetStaticMaterials().IsValidIndex(I))
+				{
+					const auto& Material = Original->GetStaticMaterials()[I];
+					const FString Slot = Material.MaterialSlotName.ToString();
+					if (Runtime) Id = RuntimeSlots.FindRef(FCString::Atoi(*Slot));
+					else if (!Id)
+					{
+						// The authored importer gives each sampling variant a hashed texture name.
+						Id = ImportedSlots.FindRef(BakeKey(Slot));
+						if (!Id && Material.MaterialInterface)
+						{
+							FString Name = Material.MaterialInterface->GetName();
+							Name.RemoveFromStart(TEXT("MI_"));
+							Id = ImportedSlots.FindRef(BakeKey(Name));
+						}
+					}
+				}
+				const auto* PageEdits = Pages.Find(Id);
+				if (!PageEdits) continue;
+				auto*& Texture = Textures.FindOrAdd(TPair<int32, UTexture*>(Id, Page));
+				if (!Texture) Texture = MakePage(Render / NameFor(Id), *PageEdits, *Page);
 				if (!Texture) continue;
 				auto*& MID = PageInstances.FindOrAdd(M);
 				if (!MID)

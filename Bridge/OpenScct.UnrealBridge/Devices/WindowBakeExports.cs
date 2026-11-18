@@ -32,7 +32,7 @@ internal sealed class WindowBake
     private readonly WorldState? _world;
     private readonly Dictionary<string, int> _names = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string Actor, int Section), (int Mesh, int Primitive)> _meshes = [];
-    private readonly Dictionary<string, List<int>> _pageMaterials = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<(int Index, int Name)>> _pageMaterials = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _broken = new(StringComparer.OrdinalIgnoreCase);
     private Task<WindowBakeEdit[]>? _pending;
     private int _revision, _working, _applied;
@@ -95,7 +95,7 @@ internal sealed class WindowBake
             if (m.TryGetProperty("name", out var name) && byMaterial.TryGetValue(name.GetString()!, out var page))
             {
                 if (!_pageMaterials.TryGetValue(page, out var list)) _pageMaterials[page] = list = [];
-                list.Add(materialIndex);
+                list.Add((materialIndex, EventNames.Id(name.GetString())));
             }
             materialIndex++;
         }
@@ -187,7 +187,7 @@ internal sealed class WindowBake
         // Resource-to-material bindings for transient runtime textures, whose UObject names are generated.
         foreach (var (page, materials) in _pageMaterials)
             if (_names.TryGetValue(page, out int id))
-                foreach (int m in materials) rows.Add(new() { Name = id, Mesh = -2, Element = m });
+                foreach (var m in materials) rows.Add(new() { Name = id, Mesh = -2, Element = m.Index, Primitive = m.Name });
         return rows.ToArray();
     }
 }
