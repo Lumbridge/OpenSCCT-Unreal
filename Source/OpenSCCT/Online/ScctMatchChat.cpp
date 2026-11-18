@@ -422,10 +422,6 @@ void UScctMatchChatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UScctMatchChatSubsystem::Deinitialize()
 {
-	if (CommandSource.IsValid())
-	{
-		CommandSource->OnLocalCommand.Remove(CommandHandle);
-	}
 	if (IsValid(Widget))
 	{
 		Widget->RemoveFromParent();
@@ -459,14 +455,6 @@ bool UScctMatchChatSubsystem::OpenChat(bool bTeam)
 	return true;
 }
 
-void UScctMatchChatSubsystem::HandleLocalCommand(FName Name, int32 Arg, bool bPressed)
-{
-	// ChatInput.OnLocalCommand: Talk for everyone, TeamTalk for the side.
-	if (bPressed && (Name == TEXT("Talk") || Name == TEXT("TeamTalk")))
-	{
-		OpenChat(Name == TEXT("TeamTalk"));
-	}
-}
 
 void UScctMatchChatSubsystem::Tick(float DeltaTime)
 {
@@ -492,11 +480,9 @@ void UScctMatchChatSubsystem::Tick(float DeltaTime)
 		Widget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 		Widget->AddToViewport(ChatLayer);
 	}
-	if (CommandSource.Get() != Player)
-	{
-		CommandSource = Player;
-		CommandHandle = Player->OnLocalCommand.AddUObject(this, &UScctMatchChatSubsystem::HandleLocalCommand);
-	}
+	// Talk and TeamTalk are not followed here: UScctChatSubsystem is their one handler in every match, online rounds
+	// included (it reads and sends through the visit), so a key no longer opens two composers at once. This line still
+	// shows the server's own lines while closed, and opens from scct.OpenChat and the unattended switches.
 
 	const bool bInRound = InRound();
 	if (!bInRound && Widget->IsOpen())

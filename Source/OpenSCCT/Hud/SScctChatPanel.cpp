@@ -3,6 +3,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformTime.h"
 #include "Hud/ScctHudElements.h"
+#include "Hud/ScctHudLayout.h"
 #include "Hud/ScctHudPainter.h"
 #include "Hud/ScctHudStyle.h"
 #include "InputCoreTypes.h"
@@ -492,6 +493,13 @@ int32 SScctChatPanel::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 
 	if (!bOpen)
 	{
+		// The passive lines are the HUD layout's Chat group (Hud/ScctHudLayout.h): moved, scaled and faded as the
+		// side's layout says. The open composer stays where it is.
+		const ScctHudLayout::FScope LayoutScope(Painter, EScctHudGroup::Chat, Team);
+		if (!LayoutScope.Draws())
+		{
+			return LayerId;
+		}
 		// Passive: the newest lines that are still in their time, newest lowest, at most PassiveLines wrapped lines.
 		const int32 PassiveLines = FMath::Clamp(FScctSettings::GetInt(TEXT("Hud.ChatPassiveLines")), 0, 8);
 		const double Visible = FMath::Max(FScctSettings::GetFloat(TEXT("Hud.ChatFadeSeconds")), 0.5f);
