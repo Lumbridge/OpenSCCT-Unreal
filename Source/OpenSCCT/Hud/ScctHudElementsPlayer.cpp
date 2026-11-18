@@ -214,12 +214,10 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 		ScctCrosshair::Paint(Painter, Pieces);
 		LogPlayerCrosshair(Crosshair, Pieces.Num(), At, Size);
 	}
-	else if ((State.Flags & EScctHudFlags::ShowReticle) != 0 && !bScoped)
+	else if (bMercReticle)
 	{
-		if (bMercReticle)
-		{
-			LogPlayerCrosshair(Crosshair, 0, ReticleCentre, Size);
-		}
+		// The merc's page only, as the arrows below: a spy never gets the ticks that open with a weapon's spread.
+		LogPlayerCrosshair(Crosshair, 0, ReticleCentre, Size);
 		const FVector2f TickCentre = ReticleCentre;
 		// Four ticks that open with the weapon's spread; they turn red for a moment when a shot lands.
 		const float Gap = 5.0f + Model.Spread * 24.0f;
@@ -285,7 +283,9 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 	static const FArrow Arrows[ScctHudArrowCount] = {
 		{ 270.0f, 96.0f }, { 90.0f, 96.0f }, { 0.0f, 96.0f }, { 180.0f, 96.0f }, { 0.0f, 108.0f }, { 180.0f, 108.0f },
 	};
-	for (int32 Index = 0; Index < ScctHudArrowCount; ++Index)
+	// The simulation times them on every player's HUD (SHud.NotifyHotSound has no side test); only the merc's page has
+	// the arrows (the Godot client's MercHudPage.DriveArrows), so a spy gets none.
+	for (int32 Index = 0; State.Side == 1 && Index < ScctHudArrowCount; ++Index)
 	{
 		const float Seconds = State.ArrowSeconds[Index];
 		if (Seconds > 0.0f)
