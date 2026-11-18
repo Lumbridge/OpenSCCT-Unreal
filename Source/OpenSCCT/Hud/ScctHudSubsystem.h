@@ -213,6 +213,13 @@ private:
 	int32 LastLoggedFadeStep = -1;
 	bool bLastLoggedHeldBriefings = false;
 
+	// The running round's scoreboard (ScctHudLiveBoard.cpp): the bridge's board with the delayed combat columns into the
+	// model while the scoreboard or the status page is up, the whole board in the log when it comes up and its timing
+	// line every two seconds after.
+	void ReadLiveBoard();
+	bool bLiveBoardLogged = false;
+	float LiveBoardLogAt = 0.0f;
+
 	// The merc backpack panels (ScctHudBackpack.cpp): the bridge's backpack table into the model, a log line when the
 	// panels change and with each snapshot line, and the timed commands GiveBackpack, Backpack and Refill.
 	void InitBackpack();

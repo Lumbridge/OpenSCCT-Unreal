@@ -545,6 +545,12 @@ void ScctHudElements::PaintScoreboard(FScctHudPainter& Painter, const FScctHudMo
 		return;
 	}
 
+	// The detailed board, when the bridge has the running round's (ScctHudElementsLiveBoard.cpp).
+	if (PaintLiveScoreboard(Painter, Model))
+	{
+		return;
+	}
+
 	const FVector2f Size = Painter.Size();
 	const FScctHudRound& Round = Model.Round;
 	const bool bObjectiveList = Model.StatusShown > 0.01f && Model.ObjectiveLines.Num() > 0;

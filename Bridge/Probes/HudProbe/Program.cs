@@ -25,6 +25,11 @@ Console.WriteLine($"sizes: HudState {Unsafe.SizeOf<HudState>()}, HudRound {Unsaf
 
 Console.WriteLine($"sizes: HudCameraView {Unsafe.SizeOf<HudCameraView>()}, HudGadgetApi {Unsafe.SizeOf<HudGadgetApi>()}");
 
+if (args.Length > 5 && args[5].Equals("board", StringComparison.OrdinalIgnoreCase))
+{
+    return BoardProbe.Run(content, map, mode, merc, seconds);
+}
+
 if (args.Length > 5 && args[5].Equals("api", StringComparison.OrdinalIgnoreCase))
 {
     return ApiRun(content, map, mode, merc, seconds);

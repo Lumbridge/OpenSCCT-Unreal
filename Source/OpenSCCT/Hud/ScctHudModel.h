@@ -8,6 +8,7 @@
 #include "Runtime/ScctHudMotionApi.h"
 #include "Runtime/ScctHudRadarApi.h"
 #include "Runtime/ScctHudTextureApi.h"
+#include "Hud/ScctHudLiveBoard.h"
 #include "Hud/ScctTeamPingView.h"
 #include "Hud/ScctTelemetryView.h"
 
@@ -186,6 +187,12 @@ public:
 	 * both panels hidden while the options are off.
 	 */
 	FScctTelemetryView Telemetry;
+
+	/**
+	 * The running round's scoreboard with the delayed combat columns (Hud/ScctHudLiveBoard.h), read while the scoreboard or
+	 * the mission status page is up. Not valid without the bridge's table: the scoreboard then draws Scores.
+	 */
+	FScctHudLiveBoard LiveBoard;
 
 	/** The team of the player at this machine (0 spies, 1 mercs), from the scoreboard, else the side played. */
 	int32 LocalTeam = 0;
