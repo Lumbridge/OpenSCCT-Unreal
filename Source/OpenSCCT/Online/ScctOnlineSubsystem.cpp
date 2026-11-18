@@ -667,6 +667,12 @@ void UScctOnlineSubsystem::RefreshTexts()
 			// Kept for the next run; never shown and never logged.
 			ScctAccountToken::Save(ReadText(EScctOnlineText::AccountToken));
 			UE_LOG(LogOpenSCCT, Log, TEXT("Online: signed in as '%s'"), *AccountName);
+			// The account's claimed name is the player's name everywhere, offline too: the event feed, the scoreboard
+			// and the lobby said "Player" (the install's default) for a signed-in player who never typed a name.
+			if (!AccountName.TrimStartAndEnd().IsEmpty())
+			{
+				SetPlayerName(AccountName);
+			}
 		}
 	}
 	if (LastAccountState == static_cast<int32>(EScctOnlineAccountState::SigningIn))
