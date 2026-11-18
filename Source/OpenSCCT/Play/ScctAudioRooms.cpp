@@ -294,7 +294,8 @@ void UScctAudioSubsystem::CreateRoomFields()
 	}
 	RoomAdaptiveStates().Add(this, FScctRoomAdaptive());
 
-	FAudioDevice* Device = GetWorld() != nullptr ? GetWorld()->GetAudioDeviceRaw() : nullptr;
+	RoomDevice = GetWorld()->GetAudioDevice();
+	FAudioDevice* Device = RoomDevice.GetAudioDevice();
 	USoundSubmix* World = Mix != nullptr ? Mix->GetSubmix(EScctAudioCategory::World) : nullptr;
 	if (Device == nullptr || !bRoomsEnabled)
 	{
@@ -308,9 +309,13 @@ void UScctAudioSubsystem::CreateRoomFields()
 		UReverbEffect* Effect = NewObject<UReverbEffect>(this);
 		Effect->Density = DefaultReverb->Density;
 		FScctRoomEax::From(*DefaultReverb).Put(*Effect);
-		USubmixEffectReverbPreset* Preset = NewObject<USubmixEffectReverbPreset>(this);
+		// The mixer keeps registered submixes rooted until its audio-thread unregister runs.
+		// Neither the submix nor its retained preset may own the departing world during travel.
+		UObject* Outer = GetTransientPackage();
+		const FName RoomName(*FString::Printf(TEXT("ScctSourceRoom%d"), Index));
+		USoundSubmix* Submix = NewObject<USoundSubmix>(Outer, MakeUniqueObjectName(Outer, USoundSubmix::StaticClass(), RoomName), RF_Transient);
+		USubmixEffectReverbPreset* Preset = NewObject<USubmixEffectReverbPreset>(Submix);
 		Preset->SetSettingsWithReverbEffect(Effect, 1.0f, 0.0f);
-		USoundSubmix* Submix = NewObject<USoundSubmix>(this, *FString::Printf(TEXT("ScctSourceRoom%d"), Index));
 		// A child of the match's effects submix, so its headroom and the device's master apply to the room as to the
 		// voices it comes from (Godot's source-room buses send to SvmWorld).
 		Submix->ParentSubmix = World;
@@ -341,9 +346,9 @@ void UScctAudioSubsystem::CreateRoomFields()
 
 void UScctAudioSubsystem::ReleaseRoomFields()
 {
-	const UWorld* World = GetWorld();
-	if (FAudioDevice* Device = World != nullptr ? World->GetAudioDeviceRaw() : nullptr)
+	if (FAudioDevice* Device = RoomDevice.GetAudioDevice())
 	{
+		Device->DeactivateReverbEffect(TEXT("ScctZone"));
 		const TArray<TSharedRef<FScctRoomFieldPeak, ESPMode::ThreadSafe>>* Peaks = RoomFieldPeaks().Find(this);
 		for (int32 Index = 0; Index < RoomSubmixes.Num(); ++Index)
 		{
@@ -359,6 +364,7 @@ void UScctAudioSubsystem::ReleaseRoomFields()
 		}
 	}
 	RoomFieldPeaks().Remove(this);
+	RoomDevice.Reset();
 	RoomSubmixes.Reset();
 	RoomPresets.Reset();
 	RoomEffects.Reset();

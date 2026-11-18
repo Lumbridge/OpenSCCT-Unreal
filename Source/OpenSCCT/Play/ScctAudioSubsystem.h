@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AudioDeviceHandle.h"
 #include "Play/ScctSoundData.h"
 #include "Runtime/ScctAcousticApi.h"
 #include "Runtime/ScctAudioViewApi.h"
@@ -489,6 +490,7 @@ private:
 
 	// Source-room and adaptive reverb (Play/ScctAudioRooms.cpp).
 	const FScctReverbRoomApi* RoomApi = nullptr;
+	FAudioDeviceHandle RoomDevice;
 	TArray<FRoomField> RoomFields;
 	TArray<FVector> RoomPoints;
 	TArray<FScctReverbRoom> RoomResults;
