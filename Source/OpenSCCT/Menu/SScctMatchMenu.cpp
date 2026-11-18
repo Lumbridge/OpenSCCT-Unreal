@@ -7,6 +7,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Menu/SScctHelpFeedbackPage.h"
 #include "Menu/SScctSettingsPanel.h"
+#include "Menu/ScctDeathmatchLine.h"
 #include "Menu/ScctMenuDriver.h"
 #include "Menu/ScctMenuKit.h"
 #include "Menu/ScctMenuNav.h"
@@ -462,9 +463,15 @@ void SScctMatchMenu::LogResults() const
 	TArray<TArray<FString>> Rows;
 	TArray<int32> Teams;
 	TArray<bool> Local;
-	if (!ReadResults(Winner, Reason, Rows, Teams, Local))
+	FScctDeathmatchLine Deathmatch;
+	if (!ReadResults(Winner, Reason, Rows, Teams, Local, nullptr, &Deathmatch))
 	{
 		return;
+	}
+	if (Deathmatch.bShown)
+	{
+		UE_LOG(LogOpenSCCT, Log, TEXT("Results: deathmatch line \"%s\" (most kills %d, %d leader(s), the local player %s)"), *Deathmatch.Text, Deathmatch.Best, Deathmatch.Leaders,
+			Deathmatch.bLocalLeads ? TEXT("leads") : TEXT("does not lead"));
 	}
 	const int32 LocalTeam = GetResultsLocalTeam();
 	UE_LOG(LogOpenSCCT, Log, TEXT("Results: winner %d, the local player played %d (%s), %s, %d line(s)"), Winner, LocalTeam,
@@ -786,7 +793,7 @@ TSharedRef<SWidget> SScctMatchMenu::BuildPause()
 		];
 }
 
-bool SScctMatchMenu::ReadResults(int32& OutWinner, FString& OutReason, TArray<TArray<FString>>& OutRows, TArray<int32>& OutTeams, TArray<bool>& OutLocal, TArray<int32>* OutRanks) const
+bool SScctMatchMenu::ReadResults(int32& OutWinner, FString& OutReason, TArray<TArray<FString>>& OutRows, TArray<int32>& OutTeams, TArray<bool>& OutLocal, TArray<int32>* OutRanks, FScctDeathmatchLine* OutDeathmatch) const
 {
 	OutWinner = 255;
 	if (bOnlineLevel)
@@ -837,11 +844,16 @@ bool SScctMatchMenu::ReadResults(int32& OutWinner, FString& OutReason, TArray<TA
 					Name += TEXT("  (left)");
 				}
 			}
-			OutRows.Add({ Name, FString::FromInt(Row.Score), FString::FromInt(Row.Kills), FString::FromInt(Row.Deaths) });
+			const int32 Kills = FScctDeathmatchLine::ForcedKills(OutRows.Num(), Row.Kills);
+			const bool bLocalRow = Row.Id == Visit->GetStatus().LocalId;
+			if (OutDeathmatch != nullptr) { OutDeathmatch->Add(Row.Name, Kills, bLocalRow); }
+			OutRows.Add({ Name, FString::FromInt(Row.Score), FString::FromInt(Kills), FString::FromInt(Row.Deaths) });
 			OutTeams.Add(Row.Team);
-			OutLocal.Add(Row.Id == Visit->GetStatus().LocalId);
+			OutLocal.Add(bLocalRow);
 			if (OutRanks != nullptr) { OutRanks->Add(Rank); }
 		}
+		// Merc Deathmatch (EGameMode 7, the lobby's setup as the Godot client reads it) names its winner by kills.
+		if (OutDeathmatch != nullptr && (Visit->GetStatus().Mode == 7 || FScctDeathmatchLine::IsForced())) { OutDeathmatch->Finish(); }
 		return true;
 	}
 
@@ -860,11 +872,15 @@ bool SScctMatchMenu::ReadResults(int32& OutWinner, FString& OutReason, TArray<TA
 	Rows.StableSort([](const FScctHudScoreRow& A, const FScctHudScoreRow& B) { return A.Team != B.Team ? A.Team < B.Team : A.Score > B.Score; });
 	for (const FScctHudScoreRow& Row : Rows)
 	{
-		OutRows.Add({ Model.Text(Row.NameId), FString::FromInt(Row.Score), FString::FromInt(Row.Kills), FString::FromInt(Row.Deaths) });
+		const int32 Kills = FScctDeathmatchLine::ForcedKills(OutRows.Num(), Row.Kills);
+		const bool bLocalRow = (Row.Flags & EScctHudScoreFlags::Local) != 0;
+		if (OutDeathmatch != nullptr) { OutDeathmatch->Add(Model.Text(Row.NameId), Kills, bLocalRow); }
+		OutRows.Add({ Model.Text(Row.NameId), FString::FromInt(Row.Score), FString::FromInt(Kills), FString::FromInt(Row.Deaths) });
 		OutTeams.Add(Row.Team);
-		OutLocal.Add((Row.Flags & EScctHudScoreFlags::Local) != 0);
+		OutLocal.Add(bLocalRow);
 		if (OutRanks != nullptr) { OutRanks->Add(Row.Rank); }
 	}
+	if (OutDeathmatch != nullptr && Model.Round.Ended != 0 && (Model.Round.GameMode == 7 || FScctDeathmatchLine::IsForced())) { OutDeathmatch->Finish(); }
 	return true;
 }
 
@@ -876,18 +892,27 @@ TSharedRef<SWidget> SScctMatchMenu::BuildResults()
 	TArray<int32> Teams;
 	TArray<bool> Local;
 	TArray<int32> Ranks;
-	const bool bHave = ReadResults(Winner, Reason, Rows, Teams, Local, &Ranks);
+	FScctDeathmatchLine Deathmatch;
+	const bool bHave = ReadResults(Winner, Reason, Rows, Teams, Local, &Ranks, &Deathmatch);
 
-	const bool bDecided = Winner == 0 || Winner == 1;
 	const bool bEnded = bOnlineLevel || bResultsReady;
+	// Merc Deathmatch has one side: the page names the player with the most kills instead (Menu/ScctDeathmatchLine.h),
+	// in the mercenaries' colour, and the line above it is the local player's own verdict by kills.
+	const bool bDeathmatch = bHave && bEnded && Deathmatch.bShown;
+	if (bDeathmatch)
+	{
+		Winner = 1;
+	}
+	const bool bDecided = bDeathmatch ? Deathmatch.Leaders == 1 : Winner == 0 || Winner == 1;
 	// The original's line per winning side, a list: ("Shadownet Spies team wins","ARGUS PMC Mercenaries team wins").
-	const FString Headline = bDecided
+	const FString Headline = bDeathmatch ? Deathmatch.Text : bDecided
 		? ScctUi::GameTextItem(TEXT("Ending_Menu"), TEXT("TextTeamWin"), Winner, Winner == 0 ? TEXT("Spies win") : TEXT("Mercenaries win"))
 		: bEnded ? FString(TEXT("Round over")) : FString(TEXT("Scoreboard"));
 	const int32 LocalTeam = GetResultsLocalTeam();
 	const bool bSpectator = LocalTeam != 0 && LocalTeam != 1;
-	const bool bLocalWon = bDecided && !bSpectator && Winner == LocalTeam;
+	const bool bLocalWon = bDecided && !bSpectator && (bDeathmatch ? Deathmatch.bLocalLeads : Winner == LocalTeam);
 	const FString Kicker = !bEnded ? FString(TEXT("ROUND IN PROGRESS"))
+		: bDeathmatch && Deathmatch.Leaders > 1 ? FString(TEXT("DRAW"))
 		: bLocalWon ? FString(TEXT("YOU WIN")) : bDecided && !bSpectator ? FString(TEXT("YOU LOSE")) : bDecided ? FString(TEXT("ROUND OVER")) : FString(TEXT("NO WINNER"));
 
 	// Two tables, one per side.
