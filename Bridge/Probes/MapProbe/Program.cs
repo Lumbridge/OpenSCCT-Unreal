@@ -23,9 +23,10 @@ void Check(bool ok, string what)
 unsafe
 {
     Console.WriteLine("Sizes:");
-    Check(sizeof(MapApi) == 88, $"MapApi {sizeof(MapApi)}");
-    Check(sizeof(BridgeMapState) == 1092, $"BridgeMapState {sizeof(BridgeMapState)}");
-    Check(sizeof(BridgeMapPlace) == 16, $"BridgeMapPlace {sizeof(BridgeMapPlace)}");
+    Check(sizeof(MapApi) == 96, $"MapApi {sizeof(MapApi)}");
+    Check(sizeof(BridgeMapState) == 1468, $"BridgeMapState {sizeof(BridgeMapState)}");
+    Check(sizeof(BridgeMapTriangle) == 36, $"BridgeMapTriangle {sizeof(BridgeMapTriangle)}");
+    Check(sizeof(BridgeMapPlace) == 28, $"BridgeMapPlace {sizeof(BridgeMapPlace)}");
 }
 
 BridgeSession.Configure(content);
@@ -55,6 +56,7 @@ internal static unsafe class Probe
         Console.WriteLine($"   floors {s.FloorCount}, shown {s.Floor}, camera {s.HasCamera}, live {s.Live}, picture \"{picture}\", places {s.PlaceCount}");
         check(s.FloorCount >= 1 && s.HasPicture == 1 && File.Exists(picture), "the first floor's picture is there");
         check(s.Live == 0 && s.YouShown == 0 && s.HasYou == 0 && s.MateCount == 0, "no markers in the lobby");
+        check(api.ListGeometry(null, 0) == 0, "lobby uses the authored floor plan");
         string legend = Legend();
         Console.WriteLine($"   legend: {legend.Replace("\n", " | ")}");
         check(legend.Length > 0, "the legend is read from the map's mapinfo");
@@ -133,6 +135,16 @@ internal static unsafe class Probe
         check(s.Live == 1 && s.HasYou == 1 && s.Floor == s.YouFloor, "the page opens on the player's floor");
         check(s.YouShown == 1 && s.YouU is >= 0f and <= 1f && s.YouV is >= 0f and <= 1f, "the you-are-here marker is on the picture");
         check(bots < 3 || (s.MateCount >= 1 && s.MatesShown >= 1), $"{s.MateCount} team mate(s) placed, {s.MatesShown} on this floor (bots of a local match too)");
+        CheckGeometry(api, s, check);
+        var data = StrategicMapPage.Model!.Data;
+        for (int i = 0; i < s.MateCount; i++)
+        {
+            var point = new OpenScctGame.UI.StrategicMapPoint(s.MateX[i], s.MateY[i], s.MateZ[i]);
+            var uv = data.Project(point);
+            check(s.MateFloor[i] == data.FloorAt(point.Z) && (s.MateShown[i] == 0 ||
+                (uv.HasValue && Math.Abs(uv.Value.U - s.MateU[i]) < 0.00001f && Math.Abs(uv.Value.V - s.MateV[i]) < 0.00001f)),
+                $"team mate {i} shares the world sample of the floor plan");
+        }
         int bright = s.Bright;
         api.Tick();
         api.GetState(&s);
@@ -141,11 +153,25 @@ internal static unsafe class Probe
         {
             bool moved = s.Floor < s.FloorCount - 1 ? api.Up() == 1 : api.Down() == 1;
             api.GetState(&s);
+            CheckGeometry(api, s, check);
             check(moved && s.Floor != s.YouFloor && s.YouShown == 0, $"on floor {s.Floor + 1} the player's marker is not shown (he is on {s.YouFloor + 1})");
         }
 
         api.Close();
         bridge.Stop();
+    }
+
+    private static void CheckGeometry(MapApi api, BridgeMapState state, Action<bool, string> check)
+    {
+        int count = api.ListGeometry(null, 0);
+        var rows = new BridgeMapTriangle[count];
+        fixed (BridgeMapTriangle* dst = rows)
+        {
+            check(api.ListGeometry(dst, count) == count && count > 0, $"floor {state.Floor + 1} exports {count} static faces");
+        }
+        bool inSlice(OpenScct.Core.FVector p) => float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z)
+            && p.Z >= state.FloorMinZ - 87.51f && p.Z <= state.FloorMaxZ - 87.49f;
+        check(Array.TrueForAll(rows, t => inSlice(t.A) && inSlice(t.B) && inSlice(t.C)), "all three corners of each face are in this storey");
     }
 
     private static int Open(int context, string map)

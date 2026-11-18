@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using OpenScct.Content.Maps;
+using OpenScct.Core;
 using OpenScct.Core.Engine;
 using OpenScct.Game.SBase;
 using OpenScct.Server;
@@ -66,6 +68,12 @@ public unsafe struct BridgeMapState
     public fixed float MateV[MaxMates];
     public fixed float MateAngle[MaxMates];
 
+    public fixed float MateX[MaxMates];
+    public fixed float MateY[MaxMates];
+    public fixed float MateZ[MaxMates];
+    public fixed int MateFloor[MaxMates];
+    public float FloorMinZ;
+    public float FloorMaxZ;
     public int PlaceCount;
     public fixed char Picture[PathCapacity];
 
@@ -81,6 +89,7 @@ public struct BridgeMapPlace
     public int Floor;
     public float U;
     public float V;
+    public FVector World;
 }
 
 /// <summary>
@@ -102,6 +111,7 @@ public unsafe struct MapApi
     public delegate* unmanaged[Cdecl]<int> CanDisplay;
     public delegate* unmanaged[Cdecl]<void> Close;
     public delegate* unmanaged[Cdecl]<char*, int, int> LastError;
+    public delegate* unmanaged[Cdecl]<BridgeMapTriangle*, int, int> ListGeometry;
 }
 
 /// <summary>
@@ -119,6 +129,25 @@ public static class StrategicMapPage
     // The map data read once per folder (the pictures' files, the camera, the legend, the places).
     private static string? s_dataFolder;
     private static StrategicMapData s_data = StrategicMapData.Empty;
+
+    internal static BridgeMapPlace[] Places { get; private set; } = [];
+    internal static StrategicMapPosition? You { get; private set; }
+    internal static List<StrategicMapPosition> Team { get; private set; } = [];
+    private static readonly Dictionary<int, BridgeMapTriangle[]> GeometryByFloor = new();
+
+    internal static ReadOnlySpan<BridgeMapTriangle> Geometry()
+    {
+        if (!Live || Model is not { } model || Exports.Current is not { } round)
+        {
+            return [];
+        }
+        if (!GeometryByFloor.TryGetValue(model.FloorIndex, out var mesh))
+        {
+            mesh = StrategicMapGeometry.Build(round.Session.Loader.Map.Collision, model.Data, model.FloorIndex);
+            GeometryByFloor.Add(model.FloorIndex, mesh);
+        }
+        return mesh;
+    }
 
     public static StrategicMapModel? Model => s_model;
     public static bool Live => s_live;
@@ -153,14 +182,16 @@ public static class StrategicMapPage
         if (!string.Equals(folder, s_dataFolder, StringComparison.OrdinalIgnoreCase))
         {
             s_data = StrategicMapData.Load(folder);
+            Places = ReadPlaces(folder, s_data);
             s_dataFolder = folder;
         }
 
+        GeometryByFloor.Clear();
         s_live = context == MatchContext;
         s_map = Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         s_model = new StrategicMapModel(s_data);
-        (StrategicMapPosition? you, List<StrategicMapPosition> mates) = Positions();
-        s_model.Open(you, mates);
+        (You, Team) = Positions();
+        s_model.Open(You, Team);
         return true;
     }
 
@@ -169,25 +200,28 @@ public static class StrategicMapPage
     {
         if (s_model is { } model)
         {
-            (StrategicMapPosition? you, List<StrategicMapPosition> mates) = Positions();
-            model.Tick(you, mates);
+            (You, Team) = Positions();
+            model.Tick(You, Team);
         }
     }
 
     public static bool Up()
     {
-        (StrategicMapPosition? you, List<StrategicMapPosition> mates) = Positions();
-        return s_model?.Up(you, mates) ?? false;
+        (You, Team) = Positions();
+        return s_model?.Up(You, Team) ?? false;
     }
 
     public static bool Down()
     {
-        (StrategicMapPosition? you, List<StrategicMapPosition> mates) = Positions();
-        return s_model?.Down(you, mates) ?? false;
+        (You, Team) = Positions();
+        return s_model?.Down(You, Team) ?? false;
     }
 
     public static void Close()
     {
+        GeometryByFloor.Clear();
+        You = null;
+        Team.Clear();
         s_model = null;
         s_live = false;
     }
@@ -261,6 +295,24 @@ public static class StrategicMapPage
         return mates;
     }
 
+    private static BridgeMapPlace[] ReadPlaces(string folder, StrategicMapData data)
+    {
+        IReadOnlyList<MapPlace> places = MapIdentity.Load(folder).Places;
+        var rows = new BridgeMapPlace[places.Count];
+        for (int i = 0; i < rows.Length; i++)
+        {
+            MapPlace p = places[i];
+            var uv = data.Project(new StrategicMapPoint(p.At.X, p.At.Y, p.At.Z));
+            rows[i] = new BridgeMapPlace
+            {
+                Number = p.Number,
+                Floor = p.Floor is { } floor && floor < data.Floors.Count ? floor : data.FloorAt(p.At.Z),
+                World = p.At, U = uv?.U ?? -1f, V = uv?.V ?? -1f,
+            };
+        }
+        return rows;
+    }
+
     /// <summary>A map's folder by name in the content's map roots (the content's svmap, the packs, the built-in maps).</summary>
     public static string? FindMapFolder(string map)
     {
@@ -284,7 +336,7 @@ public static class StrategicMapPage
 
 public static unsafe class MapExports
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     private static string s_lastError = "";
 
@@ -308,6 +360,7 @@ public static unsafe class MapExports
         api->CanDisplay = &CanDisplay;
         api->Close = &Close;
         api->LastError = &LastError;
+        api->ListGeometry = &ListGeometry;
         return ApiVersion;
     }
 
@@ -328,7 +381,9 @@ public static unsafe class MapExports
         s.Bright = model.Bright ? 1 : 0;
         s.Live = StrategicMapPage.Live ? 1 : 0;
         s.HasPicture = model.Picture is not null ? 1 : 0;
-        s.PlaceCount = data.Places.Count;
+        s.PlaceCount = StrategicMapPage.Places.Length;
+        s.FloorMinZ = s.Floor > 0 ? data.Floors[s.Floor].FloorZ : float.MinValue;
+        s.FloorMaxZ = s.Floor + 1 < s.FloorCount ? data.Floors[s.Floor + 1].FloorZ : float.MaxValue;
         Put(model.Picture, s.Picture, BridgeMapState.PathCapacity);
         Put(StrategicMapPage.Map, s.Map, BridgeMapState.MapCapacity);
         if (model.You is { } you)
@@ -339,20 +394,26 @@ public static unsafe class MapExports
             s.YouAngle = you.Angle;
         }
 
-        // Where the player is now, for the page's log and checks (the model keeps only the marker).
-        if (StrategicMapPage.Live && Exports.Current?.Session.LocalController?.Pawn is { } pawn)
+        // Use the same sample for the model's visibility decision and both representations of each marker.
+        if (StrategicMapPage.You is { } player)
         {
             s.HasYou = 1;
-            s.YouX = pawn.Location.X;
-            s.YouY = pawn.Location.Y;
-            s.YouZ = pawn.Location.Z;
-            s.YouYaw = pawn.Rotation.Yaw;
-            s.YouFloor = data.FloorAt(pawn.Location.Z);
+            s.YouX = player.Location.X;
+            s.YouY = player.Location.Y;
+            s.YouZ = player.Location.Z;
+            s.YouYaw = player.Yaw;
+            s.YouFloor = data.FloorAt(player.Location.Z);
         }
 
-        // The mates with a position are the model's filled slots plus those off the shown floor: count them again.
-        s.MateCount = Math.Min(StrategicMapPage.Live && Exports.Current?.Session.LocalController is { } pc ? StrategicMapPage.Mates(pc).Count : 0,
-            BridgeMapState.MaxMates);
+        s.MateCount = Math.Min(StrategicMapPage.Team.Count, BridgeMapState.MaxMates);
+        for (int i = 0; i < s.MateCount; i++)
+        {
+            StrategicMapPoint at = StrategicMapPage.Team[i].Location;
+            s.MateX[i] = at.X;
+            s.MateY[i] = at.Y;
+            s.MateZ[i] = at.Z;
+            s.MateFloor[i] = data.FloorAt(at.Z);
+        }
         IReadOnlyList<StrategicMapMarker?> mates = model.Mates;
         for (int i = 0; i < mates.Count && i < BridgeMapState.MaxMates; i++)
         {
@@ -410,13 +471,19 @@ public static unsafe class MapExports
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int ListPlaces(BridgeMapPlace* places, int capacity) => Guard(() =>
     {
-        IReadOnlyList<StrategicMapPlace> list = StrategicMapPage.Model?.Data.Places ?? [];
-        for (int i = 0; places != null && i < list.Count && i < capacity; i++)
-        {
-            places[i] = new BridgeMapPlace { Number = list[i].Number, Floor = list[i].Floor, U = list[i].U, V = list[i].V };
-        }
+        ReadOnlySpan<BridgeMapPlace> list = StrategicMapPage.Model is null ? [] : StrategicMapPage.Places;
+        int count = Math.Clamp(capacity, 0, list.Length);
+        if (places != null) list[..count].CopyTo(new Span<BridgeMapPlace>(places, count));
+        return list.Length;
+    });
 
-        return list.Count;
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ListGeometry(BridgeMapTriangle* triangles, int capacity) => Guard(() =>
+    {
+        ReadOnlySpan<BridgeMapTriangle> mesh = StrategicMapPage.Geometry();
+        int count = Math.Clamp(capacity, 0, mesh.Length);
+        if (triangles != null) mesh[..count].CopyTo(new Span<BridgeMapTriangle>(triangles, count));
+        return mesh.Length;
     });
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

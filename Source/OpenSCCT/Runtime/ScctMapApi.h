@@ -11,7 +11,7 @@
 // This mirrors MapExports.cs field for field; change both together and bump the version. Strings are UTF-16 and zero
 // terminated, cut to fit.
 
-constexpr int32 ScctMapApiVersion = 1;
+constexpr int32 ScctMapApiVersion = 2;
 
 namespace EScctMapContext
 {
@@ -55,6 +55,9 @@ struct FScctMapState
 	float MateU[MaxMates];
 	float MateV[MaxMates];
 	float MateAngle[MaxMates];
+	float MateX[MaxMates], MateY[MaxMates], MateZ[MaxMates];
+	int32 MateFloor[MaxMates];
+	float FloorMinZ, FloorMaxZ; // marker heights in [min, max)
 	int32 PlaceCount;
 	TCHAR Picture[PathCapacity];
 	TCHAR Map[MapCapacity];
@@ -67,6 +70,12 @@ struct FScctMapPlace
 	int32 Floor;
 	float U;
 	float V;
+	FVector3f World;
+};
+
+struct FScctMapTriangle
+{
+	FVector3f A, B, C;
 };
 
 struct FScctMapApi
@@ -98,12 +107,16 @@ struct FScctMapApi
 	void (__cdecl* Close)();
 
 	int32 (__cdecl* LastError)(TCHAR* Buffer, int32 Capacity);
+
+	/** Static map faces clipped to this floor in simulation coordinates. Only available in a match. */
+	int32 (__cdecl* ListGeometry)(FScctMapTriangle* Triangles, int32 Capacity);
 };
 
 // The sizes the C# side has (Bridge/Probes/MapProbe prints them).
-static_assert(sizeof(FScctMapState) == 1092, "FScctMapState must match BridgeMapState");
-static_assert(sizeof(FScctMapPlace) == 16, "FScctMapPlace must match BridgeMapPlace");
-static_assert(sizeof(FScctMapApi) == 88, "FScctMapApi must match MapApi (64-bit)");
+static_assert(sizeof(FScctMapState) == 1468, "FScctMapState must match BridgeMapState");
+static_assert(sizeof(FScctMapPlace) == 28, "FScctMapPlace must match BridgeMapPlace");
+static_assert(sizeof(FScctMapTriangle) == 36, "FScctMapTriangle must match BridgeMapTriangle");
+static_assert(sizeof(FScctMapApi) == 96, "FScctMapApi must match MapApi (64-bit)");
 
 // Fetched like every other feature table (Runtime/ScctFeatures.h), declared here so the shared list stays as it is.
 template <> struct TScctFeatureInfo<FScctMapApi>
