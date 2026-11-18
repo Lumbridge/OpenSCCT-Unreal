@@ -30,7 +30,8 @@ public sealed class HudMagmaPage
         float ShadowRed, float ShadowGreen, float ShadowBlue, float ShadowAlpha,
         float ShadowX, float ShadowY,
         float Tracking,
-        int Mask = 0);
+        int Mask = 0,
+        bool Dodge = false);
 
     /// <summary><see cref="Layer.Mask"/>: the picture is not drawn, it hides what the next masked pictures have under it (SETMASK).</summary>
     public const int MaskSet = 1;
@@ -99,6 +100,7 @@ public sealed class HudMagmaPage
         public bool Hidden;
         public int Align;
         public int Mask;
+        public bool Dodge;   // image: BLENDINGMODE Dodge, 2X or 4X (the screen under it is brightened, nothing is covered)
         public string Text = "";
         public readonly List<Key> Keys = [];
     }
@@ -210,6 +212,7 @@ public sealed class HudMagmaPage
                 Align = (w.TryGetProperty("align", out JsonElement al) ? al.GetString() : null) switch { "center" => 1, "right" => 2, _ => 0 },
                 Mask = (w.TryGetProperty("mask", out JsonElement mk) && mk.ValueKind == JsonValueKind.String ? mk.GetString() : null) switch { "set" => MaskSet, "use" => MaskUse, _ => 0 },
                 Text = w.TryGetProperty("text", out JsonElement t) ? t.GetString() ?? "" : "",
+                Dodge = w.TryGetProperty("blend", out JsonElement bl) && bl.ValueKind == JsonValueKind.String && (bl.GetString() ?? "").StartsWith("Dodge", StringComparison.Ordinal),
             };
 
             if (w.TryGetProperty("keys", out JsonElement keys))
@@ -443,7 +446,7 @@ public sealed class HudMagmaPage
             into.Add(new Layer(false, _package, m.Texture, w.Name, "", l, t, r + 1f, b + 1f, k.Rot,
                 m.U0 + su0 * (m.U1 - m.U0), m.V0 + sv0 * (m.V1 - m.V0), m.U0 + su1 * (m.U1 - m.U0), m.V0 + sv1 * (m.V1 - m.V0),
                 Math.Clamp(colour[0], 0f, 1f), Math.Clamp(colour[1], 0f, 1f), Math.Clamp(colour[2], 0f, 1f), Math.Clamp(colour[3], 0f, 1f),
-                0f, 0, 0f, 0f, 0f, 0f, 0f, 0f, 0f, w.Mask));
+                0f, 0, 0f, 0f, 0f, 0f, 0f, 0f, 0f, w.Mask, w.Dodge));
         }
     }
 

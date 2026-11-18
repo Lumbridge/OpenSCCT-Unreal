@@ -218,8 +218,14 @@ public:
 	bool IsTutorialUp() const { return bHasState && State.TutorialId != 0; }
 
 	// --- Text ---------------------------------------------------------------------------------------------
-	/** The text behind one of the snapshot's ...Id fields. Ids belong to one session. */
+	/**
+	 * The text behind one of the snapshot's ...Id fields. Ids belong to one session. A key token in it (a backslash and
+	 * USE, SECONDARYFIRE...) is given as the key the local player's side has on that action, as the Godot client's pages do.
+	 */
 	const FString& Text(int32 Id) const;
+
+	/** Words with their key tokens (a backslash and USE, SECONDARYFIRE...) given as the local player's side's keys. */
+	FString WithKeys(const FString& Words) const;
 	const FString& Label(EScctHudLabel Which) const { return Labels[static_cast<int32>(Which)]; }
 
 	// --- Messages on screen -------------------------------------------------------------------------------
@@ -294,6 +300,15 @@ private:
 
 	const FScctHudApi* Api = nullptr;
 	mutable TMap<int32, FString> Texts;
+
+	/** A text that names keys by their tokens, with the side's keys in it; read again now and then. */
+	struct FKeyedText
+	{
+		FString Value;
+		float At = 0.0f;
+		int32 Side = INDEX_NONE;
+	};
+	mutable TMap<int32, FKeyedText> KeyedTexts;
 	FString Labels[static_cast<int32>(EScctHudLabel::Count)];
 
 	// What the last frame showed, to notice changes.
