@@ -39,7 +39,7 @@ DECLARE_MULTICAST_DELEGATE(FScctHubChanged);
  * The master's hub list (official hubs first with their region and ping, then the hubs players host) comes from the
  * master the game is set up with ([OpenSCCT.Online] MasterUrl and InviteKey in Config/DefaultGame.ini), through the
  * same master client and sign-in as the server list, so a signed-in player joins a listed hub under his account. A
- * hub this PC hosts lists itself there unless the player turned off the Online page's "Show a hub I host in the hub
+ * hub this PC hosts lists itself there unless the player turned off the Hub page's "Show a hub I host in the hub
  * list" (the setting Online.HubListed).
  *
  * The loading cover (SScctHubLoadingScreen) goes up as soon as the hub has welcomed the player, a few frames before
