@@ -4,6 +4,7 @@
 #include "Engine/GameViewportClient.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerInput.h"
+#include "InputKeyEventArgs.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
@@ -55,6 +56,34 @@ namespace
 AScctPlayerController::AScctPlayerController()
 {
 	bShowMouseCursor = false;
+}
+
+void AScctPlayerController::SetInputMode(const FInputModeDataBase& InData)
+{
+	Super::SetInputMode(InData);
+	GameplayMousePresses.Reset();
+	const ULocalPlayer* Local = GetLocalPlayer();
+	UGameViewportClient* Client = Local ? Local->ViewportClient.Get() : nullptr;
+	// Every return from a menu applies a new input mode. GameOnly resets the project's capture
+	// setting to CapturePermanently, which consumes the click that captures the viewport.
+	if (Client && Client->GetMouseCaptureMode() == EMouseCaptureMode::CapturePermanently)
+	{
+		Client->SetMouseCaptureMode(EMouseCaptureMode::CapturePermanently_IncludingInitialMouseDown);
+	}
+}
+
+bool AScctPlayerController::InputKey(const FInputKeyEventArgs& Params)
+{
+	if (Params.Event == IE_Pressed && Params.Key.IsMouseButton() && !bMenuOpen && !bShowMouseCursor)
+	{
+		const ULocalPlayer* Local = GetLocalPlayer();
+		const UGameViewportClient* Client = Local ? Local->ViewportClient.Get() : nullptr;
+		if (Client && Client->GetMouseCaptureMode() == EMouseCaptureMode::CapturePermanently_IncludingInitialMouseDown)
+		{
+			GameplayMousePresses.Add(Params.Key);
+		}
+	}
+	return Super::InputKey(Params);
 }
 
 void AScctPlayerController::BeginPlay()
@@ -299,6 +328,7 @@ void AScctPlayerController::FeedControls(float DeltaSeconds)
 	}
 	FrameMouseX = Raw.MouseX;
 	Controls->Frame(&Raw);
+	GameplayMousePresses.Reset();
 
 	TakeLocalCommands(*Controls);
 }
@@ -314,6 +344,7 @@ void AScctPlayerController::ReadDevices(FScctRawInput& Raw) const
 	const TArray<TPair<FKey, FKey>>& Table = FScctControls::Keys();
 	for (int32 Code = 0; Code < Table.Num(); ++Code)
 	{
+		const bool bWheel = Code == static_cast<int32>(EScctKey::MouseWheelUp) || Code == static_cast<int32>(EScctKey::MouseWheelDown);
 		uint8 State = 0;
 		int32 Presses = 0;
 		for (const FKey* Key : { &Table[Code].Key, &Table[Code].Value })
@@ -329,7 +360,10 @@ void AScctPlayerController::ReadDevices(FScctRawInput& Raw) const
 			}
 			// Every press since the last frame is counted, so a key that went down and up again inside one
 			// frame is still seen, and so is each notch of the wheel.
-			Presses += KeyState->EventCounts[IE_Pressed].Num();
+			if (bWheel || !Key->IsMouseButton() || GameplayMousePresses.Contains(*Key))
+			{
+				Presses += KeyState->EventCounts[IE_Pressed].Num();
+			}
 		}
 		if (Presses > 0)
 		{
@@ -337,7 +371,6 @@ void AScctPlayerController::ReadDevices(FScctRawInput& Raw) const
 		}
 
 		// The wheel's two codes hold the notches turned this frame, not a key state: a wheel has no "down".
-		const bool bWheel = Code == static_cast<int32>(EScctKey::MouseWheelUp) || Code == static_cast<int32>(EScctKey::MouseWheelDown);
 		Raw.Keys[Code] = bWheel ? static_cast<uint8>(FMath::Min(Presses, 255)) : State;
 	}
 

@@ -156,12 +156,21 @@ public sealed class InputMapper
 
         if (!_playing)
         {
-            // Play starts or resumes: what is held now was pressed for something else.
+            // Block a button carried over from a menu. A mouse press delivered to the game
+            // during this frame (including a tap already released) owns its normal binding.
             _playing = true;
             for (int code = 0; code < count; code++)
             {
                 if (BridgeKeys.IsWheel(code) || BridgeKeys.NameOf(code) is not { } name)
                 {
+                    continue;
+                }
+
+                if (code is >= (int)BridgeKey.LeftMouse and <= (int)BridgeKey.MouseX2 && (keys[code] & 2) != 0)
+                {
+                    _state.Forget(name);
+                    _was[code] = false;
+                    Press(keys, code);
                     continue;
                 }
 

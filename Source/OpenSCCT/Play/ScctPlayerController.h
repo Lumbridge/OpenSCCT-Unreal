@@ -95,6 +95,8 @@ public:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void PlayerTick(float DeltaTime) override;
+	virtual void SetInputMode(const FInputModeDataBase& InData) override;
+	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
 
 	/**
 	 * The controls' view of this frame as the camera drew it; Valid is 0 while there is none. Beyond the camera:
@@ -190,6 +192,7 @@ private:
 	void ReportAutoplay(const FString& Label);
 
 	TWeakObjectPtr<UScctSessionSubsystem> Session;
+	TSet<FKey> GameplayMousePresses;
 	FDelegateHandle BeforeTicksHandle;
 	FDelegateHandle SessionChangedHandle;
 
