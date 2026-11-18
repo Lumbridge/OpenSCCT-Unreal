@@ -60,6 +60,9 @@ class UTexture2D;
  *   -ScctFxLog             log every flash, tracer, impact, casing and effect actor as it starts or ends
  *   -ScctMineLight         two proximity mines hang in front of the view 2 s into a local match and the first is
  *                          chaffed at 10 s, so the status light can be seen in each state (Play/ScctEffectSkins.h)
+ *   -ScctKnockCheck        not an effect, only run from this subsystem's frame: the local player is knocked down
+ *                          3 s into a match and the log says where the view is against the head bone
+ *                          (Runtime/ScctCameraBoneApi.h)
  * A camera fault ('camnet fault <name>') and a modem's destruction ('Ps2ModemEffect start') are always logged.
  */
 UCLASS()

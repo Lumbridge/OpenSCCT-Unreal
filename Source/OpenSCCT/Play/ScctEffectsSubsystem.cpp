@@ -408,6 +408,8 @@ void UScctEffectsSubsystem::HandleBeforeTicks(float DeltaSeconds)
 void UScctEffectsSubsystem::HandleFrame(float DeltaSeconds)
 {
 	MatchSeconds += DeltaSeconds;
+	// -ScctKnockCheck (Runtime/ScctCameraBoneApi.h); nothing without the switch.
+	ScctRunCameraBoneCheck(MatchSeconds);
 	if (Events == nullptr || !bSceneReady || !IsValid(Host))
 	{
 		return;

@@ -15,6 +15,7 @@
 #include "Runtime/ScctCrashApi.h"
 #include "Runtime/ScctCareerApi.h"
 #include "Runtime/ScctDemoApi.h"
+#include "Runtime/ScctCameraBoneApi.h"
 #include "Runtime/ScctDemoPlayApi.h"
 #include "Runtime/ScctEquipmentApi.h"
 #include "Runtime/ScctEffectSkinApi.h"
@@ -87,6 +88,7 @@ SCCT_FEATURE_TABLE(FScctArmouryPreviewApi, "ArmouryPreviewExports", ScctArmouryP
 SCCT_FEATURE_TABLE(FScctCrashApi, "CrashExports", ScctCrashApiVersion);
 SCCT_FEATURE_TABLE(FScctCareerApi, "CareerExports", ScctCareerApiVersion);
 SCCT_FEATURE_TABLE(FScctDemoApi, "DemoExports", ScctDemoApiVersion);
+SCCT_FEATURE_TABLE(FScctCameraBoneApi, "CameraBoneExports", ScctCameraBoneApiVersion);
 SCCT_FEATURE_TABLE(FScctDemoPlayApi, "DemoPlayExports", ScctDemoPlayApiVersion);
 SCCT_FEATURE_TABLE(FScctEquipmentApi, "EquipmentExports", ScctEquipmentApiVersion);
 SCCT_FEATURE_TABLE(FScctEffectSkinApi, "EffectSkinExports", ScctEffectSkinApiVersion);
