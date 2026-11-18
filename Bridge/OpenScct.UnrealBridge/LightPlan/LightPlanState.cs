@@ -24,6 +24,10 @@ public static class BridgeLightRigOptions
 
     /// <summary>Leave special-lit lights out of the set (the simulation's field does not).</summary>
     public const int NoSpecialLit = 8;
+
+    // The pawn material supplies the ordinary lamps whose world contribution is already baked.
+    // Live map lamps, projectors, torches and effect lights have their own shadowed Unreal light.
+    public const int MaterialLamps = 16;
 }
 
 /// <summary>Flags of one light of a rig.</summary>
@@ -166,11 +170,11 @@ public sealed class LightPlanState : IDisposable
     /// Takes the map lights' state of this frame from the world state (the one the level's lights are drawn from): on
     /// or off by the trigger lights, the light type's scale, and where a light that rides an actor is.
     /// </summary>
-    private void Refresh()
+    private void Refresh(bool includeRuntime = true)
     {
         float time = Level.Info.TimeSeconds;
         float alpha = _session.Alpha;
-        if (time != _runtimeTime)
+        if (includeRuntime && time != _runtimeTime)
         {
             _runtimeTime = time;
             ScanRuntime();
@@ -272,10 +276,11 @@ public sealed class LightPlanState : IDisposable
     /// </summary>
     public void Rig(FVector centre, float radius, FVector viewer, int options, Actor? self, RigResult rig)
     {
-        Refresh();
+        bool materialLamps = (options & BridgeLightRigOptions.MaterialLamps) != 0;
+        bool runtime = !materialLamps && (options & BridgeLightRigOptions.NoRuntimeLights) == 0;
+        Refresh(runtime);
         ICollisionWorld? collision = Collision;
         bool placed = (options & BridgeLightRigOptions.PlacedOnly) != 0;
-        bool runtime = (options & BridgeLightRigOptions.NoRuntimeLights) == 0;
         bool noSpecial = (options & BridgeLightRigOptions.NoSpecialLit) != 0;
         float time = Level.Info.TimeSeconds;
         int zone = collision?.GetZoneIndex(centre) ?? -1;
@@ -294,6 +299,10 @@ public sealed class LightPlanState : IDisposable
         for (int i = 0; i < _lights.Length; i++)
         {
             PlanLight l = _lights[i];
+            if (materialLamps && (l.Hidden || l.Class is not (BridgeLightClass.Baked or BridgeLightClass.CharactersOnly)))
+            {
+                continue;
+            }
             if (!l.InSet || !_on[i] || (noSpecial && l.SpecialLit) || (l.OwnZoneOnly && zone >= 0 && l.Zone >= 0 && l.Zone != zone))
             {
                 continue;
@@ -419,16 +428,28 @@ public sealed class LightPlanState : IDisposable
                 flags |= BridgeRigLightFlags.Sun;
                 location = -rotation.Vector();
             }
-            else if ((options & BridgeLightRigOptions.NoOcclusion) == 0 && collision is not null &&
-                     collision.LineCheck(out _, null, centre, location, default, ShadowFlags))
+            if ((options & BridgeLightRigOptions.NoOcclusion) == 0 && collision is not null &&
+                (effect != ActorLightRules.LE_Sunlight || materialLamps))
             {
-                flags |= BridgeRigLightFlags.Occluded;
+                FVector source = effect == ActorLightRules.LE_Sunlight ? centre + (location * 65536f) : location;
+                if (collision.LineCheck(out _, null, centre, source, default, ShadowFlags))
+                {
+                    flags |= BridgeRigLightFlags.Occluded;
+                }
             }
 
             rig.Lights[i] = new RigLight { Id = id, Flags = flags, Position = location, Colour = reach };
         }
 
         rig.Count = count;
+
+        if (materialLamps)
+        {
+            rig.Spot = default;
+            rig.Level = ActorLightRules.Combine(around, default).Luminance;
+            rig.LevelFacing = ActorLightRules.Combine(facing, default).Luminance;
+            return;
+        }
 
         // Projectors and torches (AiLightField: every spot shadow light that gives light, shadowed by a line).
         LightRgb spotAround = default, spotFacing = default;

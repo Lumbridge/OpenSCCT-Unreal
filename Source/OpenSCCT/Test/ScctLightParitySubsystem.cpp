@@ -13,6 +13,8 @@
 #include "HAL/FileManager.h"
 #include "ImageUtils.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Engine/Texture2D.h"
 #include "Materials/MaterialExpressionConstant.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
 #include "Misc/CommandLine.h"
@@ -24,6 +26,7 @@
 #include "Play/ScctLightAudit.h"
 #include "Play/ScctLightPlan.h"
 #include "Play/ScctLightRules.h"
+#include "Play/ScctPawnLighting.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
@@ -105,6 +108,21 @@ void UScctLightParitySubsystem::Deinitialize()
 
 UMaterialInterface* UScctLightParitySubsystem::MakeGrey()
 {
+	if (FScctLightPlan::IsOn())
+	{
+		UMaterialInterface* Surface = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/OpenSCCT/Materials/M_ScctSurface.M_ScctSurface"));
+		UTexture2D* White = LoadObject<UTexture2D>(nullptr, TEXT("/Engine/EngineResources/WhiteSquareTexture.WhiteSquareTexture"));
+		if (Surface && White)
+		{
+			UMaterialInstanceDynamic* GreySurface = UMaterialInstanceDynamic::Create(Surface, this);
+			GreySurface->SetTextureParameterValue(TEXT("BaseColor"), White);
+			GreySurface->SetVectorParameterValue(TEXT("Tint"), FLinearColor(LightSphereAlbedo, LightSphereAlbedo, LightSphereAlbedo));
+			GreySurface->SetScalarParameterValue(TEXT("Specular"), 0.0f);
+			GreySurface->SetScalarParameterValue(TEXT("RoughnessDark"), 1.0f);
+			GreySurface->SetScalarParameterValue(TEXT("RoughnessBright"), 1.0f);
+			return GreySurface;
+		}
+	}
 #if WITH_EDITOR
 	// A matte grey of a known albedo, made here so the measurement needs no asset: no highlight, no texture.
 	UMaterial* Material = NewObject<UMaterial>(GetTransientPackage(), NAME_None, RF_Transient);
@@ -818,6 +836,10 @@ void UScctLightParitySubsystem::Tick(float DeltaTime)
 		break;
 
 	case EPhase::Settle:
+		if (FScctLightPlan::IsOn() && !bBodyPass)
+		{
+			FScctPawnLighting::Sample(Spots[Index].Centre, LightPawnRadius).Apply(*Sphere);
+		}
 		MatchCaptureToView(Spots[Index]);
 		if (Now - PhaseAt >= SettleSeconds)
 		{

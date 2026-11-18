@@ -248,7 +248,7 @@ public unsafe struct LightPlanApi
 
 public static unsafe class LightPlanExports
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     private const float RotatorToDegrees = 360f / 65536f;
 

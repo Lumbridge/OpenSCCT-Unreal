@@ -323,6 +323,31 @@ return normalize(nx * w.x + ny * w.y + nz * w.z);"""
 DETAIL_BLEND_CODE = TRIPLANAR_WEIGHTS + " return OX * w.x + OY * w.y + OZ * w.z;"
 
 
+def pawn_light(g, normal, world_position):
+    """Four ordinary lights from the simulation. Slots 3..35 match FScctPawnLighting."""
+    active = g.node(unreal.MaterialExpressionScalarParameter, parameter_name="HasPawnRig", default_value=0.0,
+                    use_custom_primitive_data=True, primitive_data_index=3)
+    inputs = {}
+    for i in range(4):
+        for j, name in enumerate(("Place", "Colour")):
+            key = name + str(i)
+            param = g.node(unreal.MaterialExpressionVectorParameter, parameter_name="PawnLamp" + key,
+                           default_value=unreal.LinearColor(0, 0, 0, 0), use_custom_primitive_data=True,
+                           primitive_data_index=4 + 8 * i + 4 * j)
+            inputs[key] = (param, "RGBA")
+    return g.custom("""
+        if (Active < 0.5 || Plan < 0.5) return 0;
+        float4 places[4] = {Place0, Place1, Place2, Place3};
+        float3 colours[4] = {Colour0.rgb, Colour1.rgb, Colour2.rgb, Colour3.rgb};
+        float3 term = float3(Colour0.a, Colour1.a, Colour2.a);
+        [unroll] for (int i = 0; i < 4; ++i) {
+            float3 toward = places[i].xyz - P * places[i].w;
+            term += colours[i] * saturate(dot(N, toward) * rsqrt(max(dot(toward, toward), 1e-6)));
+        }
+        return pow(clamp(term, 0.0, 2.0), 2.2);
+        """, FLOAT3, Active=active, Plan=g.light("Plan"), N=normal, P=world_position, **inputs)
+
+
 def build_surface():
     g = Graph(SURFACE)
     material = g.material
@@ -501,8 +526,9 @@ def build_surface():
     least = g.custom("return Base * Tint * Floor * (0.55 + 0.45 * saturate(N.z * 0.5 + 0.5)) * AO * (Plan < 0.5 ? 1.0 : Share);", FLOAT3,
                      Base=base["RGB"], Tint=tint, Floor=g.scalar("AmbientFloor", 0.0), N=normal, AO=occlusion,
                      Plan=g.light("Plan"), Share=g.light("Floor"))
-    emissive = g.custom("return Glow + Least + Base * Tint * Baked;", FLOAT3, Glow=g.in_the_picture(glow, g.scalar("GlowInPicture", 1.0)),
-                        Least=least, Base=base["RGB"], Tint=tint, Baked=baked)
+    emissive = g.custom("return Glow + Least + Base * Tint * (Baked + Pawn);", FLOAT3,
+                        Glow=g.in_the_picture(glow, g.scalar("GlowInPicture", 1.0)), Least=least, Base=base["RGB"],
+                        Tint=tint, Baked=baked, Pawn=pawn_light(g, normal, world_position))
     g.output(emissive, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
     alpha = g.custom("return A * O;", FLOAT1, A=base["A"], O=g.scalar("Opacity", 1.0))

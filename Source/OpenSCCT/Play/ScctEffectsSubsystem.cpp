@@ -24,6 +24,7 @@
 #include "Play/ScctFirstPersonView.h"
 #include "Play/ScctLightPlan.h"
 #include "Play/ScctLightRules.h"
+#include "Play/ScctPawnLighting.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
@@ -483,19 +484,19 @@ void UScctEffectsSubsystem::UpdateBodyFill(float DeltaSeconds)
 	}
 	const AScctPawnProxy* Local = Session->FindLocalProxy();
 
-	// Under the lighting plan (Play/ScctLightRules.h) every body, and what it carries, takes the lamps that lit
-	// actors in the original from lighting channel 1; the own side's fill and rim, when they are kept at all, move
-	// to channel 2, which nothing else of the plan's lights is on.
+	// Each pawn and its equipment share the same ordinary lamps. Channel 0 carries live world lights and flares.
+	// Channel 2 is reserved for the optional own-side fill and rim.
 	const bool bPlan = FScctLightPlan::IsOn();
 	if (bPlan)
 	{
-		const bool bLamps = FScctLightRules::BodiesOnLampChannel();
 		const bool bAids = FScctLightRules::BodyAids();
-		if (static_cast<bool>(BodyFill->LightingChannels.bChannel2) != true)
+		if (!BodyFill->LightingChannels.bChannel2)
 		{
 			BodyFill->SetLightingChannels(false, false, true);
 			BodyRim->SetLightingChannels(false, false, true);
 		}
+		const UScctEquipmentSubsystem* Equipment = GetWorld()->GetSubsystem<UScctEquipmentSubsystem>();
+		const AScctFirstPersonView* FirstPerson = Equipment ? Equipment->GetFirstPersonView() : nullptr;
 		for (const FScctBridgePawn& Pawn : Session->GetPawns())
 		{
 			const AScctPawnProxy* Proxy = Session->FindProxy(Pawn.ActorId);
@@ -504,27 +505,21 @@ void UScctEffectsSubsystem::UpdateBodyFill(float DeltaSeconds)
 				continue;
 			}
 			const bool bOwnSide = bAids && Local != nullptr && Proxy->GetTeam() == Local->GetTeam();
-			TInlineComponentArray<UPrimitiveComponent*> Parts(Proxy);
-			for (UPrimitiveComponent* Part : Parts)
+			const FScctPawnLighting Lighting = FScctPawnLighting::Sample(FVector(Pawn.X, Pawn.Y, Pawn.Z),
+				Pawn.CollisionRadius + 0.5f * Pawn.CollisionHeight);
+			TArray<USceneComponent*> Parts;
+			Proxy->GetRootComponent()->GetChildrenComponents(true, Parts);
+			if (Proxy == Local && FirstPerson && FirstPerson->IsShown())
 			{
-				const bool bBody = Part == Proxy->GetBodyMesh();
-				if (static_cast<bool>(Part->LightingChannels.bChannel1) != bLamps || (bBody && static_cast<bool>(Part->LightingChannels.bChannel2) != bOwnSide))
-				{
-					Part->SetLightingChannels(true, bLamps, bBody && bOwnSide);
-				}
+				TArray<USceneComponent*> ViewParts;
+				FirstPerson->GetRootComponent()->GetChildrenComponents(true, ViewParts);
+				Parts.Append(ViewParts);
 			}
-		}
-		if (const UScctEquipmentSubsystem* Equipment = GetWorld()->GetSubsystem<UScctEquipmentSubsystem>())
-		{
-			if (const AActor* View = Equipment->GetFirstPersonView())
+			for (USceneComponent* Part : Parts)
 			{
-				TInlineComponentArray<UPrimitiveComponent*> Parts(View);
-				for (UPrimitiveComponent* Part : Parts)
+				if (UMeshComponent* Mesh = Cast<UMeshComponent>(Part))
 				{
-					if (static_cast<bool>(Part->LightingChannels.bChannel1) != bLamps)
-					{
-						Part->SetLightingChannels(true, bLamps, false);
-					}
+					Lighting.Apply(*Mesh, bOwnSide && Mesh == Proxy->GetBodyMesh());
 				}
 			}
 		}
@@ -974,8 +969,15 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 			{
 				UPointLightComponent* Light = LightComponents[Fx->Light];
 				Light->SetWorldLocation(Fx->Location);
-				Light->SetIntensity(Candelas);
-				Light->SetLightColor(Color);
+				if (Fx->Style == EStyle::Flare && FScctLightPlan::IsOn())
+				{
+					FScctLightRules::SetFlareLight(*Light, Record.LightBrightness, Color);
+				}
+				else
+				{
+					Light->SetIntensity(Candelas);
+					Light->SetLightColor(Color);
+				}
 				Light->SetAttenuationRadius(Radius);
 			}
 		}
@@ -1647,6 +1649,8 @@ int32 UScctEffectsSubsystem::AcquireLight(const FVector& At, const FLinearColor&
 		}
 		Lights[Index] = { Life, 0.0f, Shown, true };
 		UPointLightComponent* Light = LightComponents[Index];
+		// A returned flare may have used the fitted display-space falloff. Other effects use candelas.
+		Light->SetUseInverseSquaredFalloff(true);
 		Light->SetWorldLocation(At);
 		Light->SetLightColor(Color);
 		Light->SetIntensity(Shown);

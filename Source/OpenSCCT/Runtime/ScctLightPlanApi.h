@@ -18,7 +18,7 @@
 //   ambient]) + projectors))
 // as a display value (0 to 1). Under the plan's tone curve a display value v is scene light v^2.2 at exposure 1.
 
-constexpr int32 ScctLightPlanApiVersion = 1;
+constexpr int32 ScctLightPlanApiVersion = 2;
 
 /** What the lighting plan does with a map light. */
 namespace EScctLightClass
@@ -152,6 +152,8 @@ namespace EScctLightRigOptions
 	constexpr int32 NoOcclusion = 4;
 	/** Leave special-lit lights out of the set (the simulation's field does not). */
 	constexpr int32 NoSpecialLit = 8;
+	/** Only ordinary lamps supplied by the pawn material. Unreal draws live lights separately. */
+	constexpr int32 MaterialLamps = 16;
 }
 
 namespace EScctRigLightFlags

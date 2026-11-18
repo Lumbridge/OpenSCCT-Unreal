@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 
 class AActor;
+class UPointLightComponent;
 class UWorld;
 
 /**
@@ -20,9 +21,8 @@ class UWorld;
  *   baked            its light is in the lightmaps already: it lights no surface, and stays for the haze in the air
  *   characters only  never lit the world: off the world
  *   special lit      lights nothing
- * Until characters are drawn by the simulation's own light term (the plan's next step), the baked and characters-only
- * lights that lit actors in the original light them here from lighting channel 1, without shadows (as the original
- * lit a pawn through a wall), and bodies, movers and props without baked light are on that channel.
+ * Pawns receive the baked and characters-only lamps through FScctPawnLighting, with an occlusion test per lamp.
+ * Movers and props without baked light receive those lamps on channel 1. Channel 0 supplies live world lights.
  *
  * UNITS. A light's reach is the original's (25 x (LightRadius + 1)); it has no inverse square law. Its strength and
  * falloff exponent are solved so the original's display term (peak x S(d / R), S = 1 - 3x^2 + 2x^3) crosses 0.5 and
@@ -38,7 +38,8 @@ class UWorld;
  *   scct.Light.LampGain           a factor on every map light's strength (1)
  *   scct.Light.LampSaturation     1 a map light's own colour, 0 grey (1)
  *   scct.Light.PeakCap            the most a light's own term shows at the light, in display units (2.5)
- *   scct.Light.CharacterLamps     1: the lamps that lit actors light bodies from channel 1 (until the body term); 0: not
+ *   scct.Light.CharacterLamps     1 enables ordinary actor lamps
+ *   scct.Light.PawnShadow         1 suppresses ordinary lamps blocked on the path to the pawn, 0 uses retail visibility
  *   scct.Light.BodyAids           1: the own side's body fill and rim lights stay under the plan (0: removed)
  *   scct.Light.Moon               the share of the level's moon that stays on a map without a sun (0)
  *   scct.Light.SkyLight           the share of the level's sky light that stays (1: it reaches only what the gate lets it)
@@ -87,7 +88,10 @@ namespace FScctLightRules
 	/** A map light's colour for a display colour the simulation gives it mid-match (its strength stays as dressed). */
 	FLinearColor LightColour(const FLinearColor& Display);
 
-	/** Bodies, view models and what they carry take the channel-1 lamps (the plan is on and scct.Light.CharacterLamps is). */
+	/** Apply the flare emitter's current brightness to a movable world light. */
+	void SetFlareLight(UPointLightComponent& Light, float Brightness, const FLinearColor& Display);
+
+	/** Ordinary actor lamps are enabled under the plan. */
 	OPENSCCT_API bool BodiesOnLampChannel();
 
 	/** The own side's body fill and rim lights are wanted (always without the plan). */

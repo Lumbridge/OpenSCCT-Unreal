@@ -64,7 +64,7 @@ namespace
 	TAutoConsoleVariable<float> CVarLightPeakCap(TEXT("scct.Light.PeakCap"), 2.5f,
 		TEXT("Under scct.Light.Plan 1: the most a map light's own term shows at the light, in the original's display units (it capped at 2). A brighter light keeps the distance of its lit edge."));
 	TAutoConsoleVariable<int32> CVarLightCharacterLamps(TEXT("scct.Light.CharacterLamps"), 1,
-		TEXT("Under scct.Light.Plan 1, until bodies are drawn by the simulation's light term: 1 the lamps that lit actors in the original light bodies, movers and props from lighting channel 1, unshadowed; 0 they light nothing."));
+		TEXT("Under scct.Light.Plan 1: ordinary actor lamps light pawns through the material rig and other actor-lit props on channel 1. 0 disables those lamps."));
 	TAutoConsoleVariable<int32> CVarLightBodyAids(TEXT("scct.Light.BodyAids"), 0,
 		TEXT("Under scct.Light.Plan 1: 1 keeps the fill and rim lights on the bodies of the local player's own side (scct.BodyFill, scct.BodyRim); 0 removes them, as the original had none."));
 	TAutoConsoleVariable<float> CVarLightMoon(TEXT("scct.Light.Moon"), 0.0f,
@@ -75,6 +75,8 @@ namespace
 		TEXT("Under scct.Light.Plan 1: the share of the height fog's own glow that stays (0: the air glows only where a light shines through it; read when a level is dressed)."));
 	TAutoConsoleVariable<int32> CVarLightProjectorShadows(TEXT("scct.Light.ProjectorShadows"), 1,
 		TEXT("Under scct.Light.Plan 1: 1 a projector (LightEffect 22) is shadowed by the level's drawn meshes; 0 it is not (to tell what of a missing patch is shadow; read when a level is dressed)."));
+	TAutoConsoleVariable<int32> CVarLightFlareShadows(TEXT("scct.Light.FlareShadows"), 1,
+		TEXT("Under the lighting plan, geometry and characters cast shadows from burning and airborne flares."));
 	TAutoConsoleVariable<int32> CVarLightRulesLog(TEXT("scct.Light.RulesLog"), 0,
 		TEXT("1: log every map light as the lighting plan dresses it."));
 
@@ -246,6 +248,19 @@ FLinearColor FScctLightRules::LightColour(const FLinearColor& Display)
 	const float Keep = FMath::Clamp(CVarLightLampSaturation.GetValueOnGameThread(), 0.0f, 1.0f);
 	const float Grey = 0.2126f * Linear.R + 0.7152f * Linear.G + 0.0722f * Linear.B;
 	return FLinearColor(Grey + (Linear.R - Grey) * Keep, Grey + (Linear.G - Grey) * Keep, Grey + (Linear.B - Grey) * Keep);
+}
+
+void FScctLightRules::SetFlareLight(UPointLightComponent& Light, float Brightness, const FLinearColor& Display)
+{
+	// ActorLightRules.Colour at full value, multiplied by the reference point-light gain.
+	// The effect bridge already supplies the live flicker/fade and converts the reach to centimetres.
+	const float Peak = (2.0f * 0.8213f / 255.0f) * Brightness * FMath::Max3(Display.R, Display.G, Display.B);
+	const FFit Solved = Fit(Peak, EFalloff::Smooth, CVarLightPeakCap.GetValueOnGameThread(), 1.0f);
+	Light.SetUseInverseSquaredFalloff(false);
+	Light.SetLightFalloffExponent(Solved.Exponent);
+	Light.SetIntensity(Solved.Intensity);
+	Light.SetLightColor(LightColour(Display));
+	Light.SetCastShadows(CVarLightFlareShadows.GetValueOnGameThread() != 0);
 }
 
 bool FScctLightRules::BodiesOnLampChannel()
