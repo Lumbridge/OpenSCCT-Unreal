@@ -131,6 +131,7 @@ public sealed partial class HubBridge
         _padRun?.Sent();
         StopRound();
         Client = null;
+        Voice.VoiceBridge.Existing?.EndHub();
         try
         {
             client.Session.Disconnect();

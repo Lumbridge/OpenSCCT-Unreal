@@ -66,7 +66,7 @@ public sealed partial class VoiceBridge : IDisposable
     /// The client the microphone goes to: the echo test's while it runs, else the visit's, else the Voice page's level
     /// meter while it is wanted, else none.
     /// </summary>
-    public VoiceClient? Capturing => _echo is { Running: true } echo ? echo.Client : _online?.Voice ?? _meter;
+    public VoiceClient? Capturing => _echo is { Running: true } echo ? echo.Client : _online?.Voice ?? _hub?.Voice ?? _meter;
 
     internal VoiceEchoTest? Echo => _echo;
 
@@ -88,6 +88,8 @@ public sealed partial class VoiceBridge : IDisposable
         {
             if (_online is null || !ReferenceEquals(_visit, client))
             {
+                // The online visit owns the microphone: a hub's voice (the trip to a pad's match) lets go.
+                EndHub();
                 StartVisit(client);
             }
 
@@ -134,6 +136,7 @@ public sealed partial class VoiceBridge : IDisposable
     {
         _captureRate = Math.Clamp(sampleRate, 8000, 192000);
         _online?.Voice.SetCaptureRate(_captureRate);
+        _hub?.Voice.SetCaptureRate(_captureRate);
         _echo?.Client.SetCaptureRate(_captureRate);
         _meter?.SetCaptureRate(_captureRate);
     }
@@ -142,7 +145,7 @@ public sealed partial class VoiceBridge : IDisposable
     public void SubmitCapture(ReadOnlySpan<float> mono) => Capturing?.SubmitCapture(mono);
 
     /// <summary>What the voice output played (48 kHz mono, the mix of every talker): the echo canceller's reference.</summary>
-    public void SubmitPlayback(ReadOnlySpan<float> mono) => _online?.Voice.SubmitPlayback(mono);
+    public void SubmitPlayback(ReadOnlySpan<float> mono) => (_online?.Voice ?? _hub?.Voice)?.SubmitPlayback(mono);
 
     /// <summary>The push to talk keys: <paramref name="talk"/> the all channel, <paramref name="team"/> the team channel.</summary>
     public void SetKeys(bool talk, bool team)
@@ -223,7 +226,7 @@ public sealed partial class VoiceBridge : IDisposable
     public VoiceStatus ReadState()
     {
         // A finished echo test still shows its counters until it is stopped or a visit starts.
-        VoiceClient? client = Capturing ?? (_online is null ? _echo?.Client : null);
+        VoiceClient? client = Capturing ?? (_online is null && _hub is null ? _echo?.Client : null);
         var status = new VoiceStatus
         {
             EchoPhase = (int)(_echo?.Phase ?? VoiceEchoPhase.Off),
@@ -252,6 +255,11 @@ public sealed partial class VoiceBridge : IDisposable
     /// <summary>Fills <paramref name="into"/> with the remote talkers heard so far; returns how many there are.</summary>
     public unsafe int ReadTalkers(Span<VoiceTalkerInfo> into)
     {
+        if (_online is null && _hub is { } hub && _echo is not { Running: true })
+        {
+            return ReadHubTalkers(hub, into);
+        }
+
         if (_echo is { } echo && (echo.Running || _online is null))
         {
             if (echo.Heard is not { } heard)
@@ -354,6 +362,11 @@ public sealed partial class VoiceBridge : IDisposable
             return false;
         }
 
+        if (_online is null && _hub is { } hub && _echo is not { Running: true })
+        {
+            return hub.Voice.FindTalker((ushort)talker) is { } heard && heard.ReadFrame(destination);
+        }
+
         if (_echo is { } echo && (echo.Running || _online is null))
         {
             return talker == VoiceEchoTest.Talker && echo.ReadFrame(destination);
@@ -368,6 +381,11 @@ public sealed partial class VoiceBridge : IDisposable
     /// </summary>
     public void SetMuted(int talker, bool muted)
     {
+        if (_online is null && talker is > 0 and <= ushort.MaxValue && SetHubMuted(talker, muted))
+        {
+            return;
+        }
+
         if (_online is not { } online || talker is <= 0 or > ushort.MaxValue)
         {
             return;
@@ -386,6 +404,11 @@ public sealed partial class VoiceBridge : IDisposable
     /// <summary>Sets the local player's volume for a talker, 0 to 2 (by name when he is named, as for the mute).</summary>
     public void SetVolume(int talker, float volume)
     {
+        if (_online is null && talker is > 0 and <= ushort.MaxValue && float.IsFinite(volume) && SetHubVolume(talker, volume))
+        {
+            return;
+        }
+
         if (_online is not { } online || talker is <= 0 or > ushort.MaxValue || !float.IsFinite(volume))
         {
             return;
@@ -402,7 +425,7 @@ public sealed partial class VoiceBridge : IDisposable
     }
 
     /// <summary>The client whose talkers Unreal hears: the echo test's listener, else the visit's; none for the meter.</summary>
-    private VoiceClient? ListenerOf() => _online is null && _echo is { } echo ? echo.Listener : _online?.Voice;
+    private VoiceClient? ListenerOf() => _online?.Voice ?? (_hub is { } hub && _echo is not { Running: true } ? hub.Voice : _echo?.Listener);
 
     // ---- the lobby's "Restrict Mic to Team" ---------------------------------------------------------------------
 
@@ -443,7 +466,7 @@ public sealed partial class VoiceBridge : IDisposable
 
     private void UpdateMeter()
     {
-        if (!_meterWanted || _online is not null || _echo is { Running: true })
+        if (!_meterWanted || _online is not null || _hub is not null || _echo is { Running: true })
         {
             StopMeter();
             return;
@@ -479,7 +502,7 @@ public sealed partial class VoiceBridge : IDisposable
     /// </summary>
     public bool StartEchoTest(int recordSeconds)
     {
-        if (_online is not null)
+        if (_online is not null || _hub is not null)
         {
             return false;
         }
@@ -506,6 +529,7 @@ public sealed partial class VoiceBridge : IDisposable
     {
         StopEchoTest();
         StopMeter();
+        EndHub();
         EndVisit();
         if (ReferenceEquals(s_instance, this))
         {
