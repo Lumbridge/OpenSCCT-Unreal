@@ -6,6 +6,7 @@
 #include "Misc/App.h"
 #include "Misc/ConfigCacheIni.h"
 #include "OpenSCCT.h"
+#include "Play/ScctTone.h"
 #include "Runtime/ScctFeatures.h"
 
 namespace
@@ -102,7 +103,8 @@ void UScctUserSettings::ApplyAll()
 	SetVariable(TEXT("r.ScreenPercentage"), static_cast<float>(RenderScale));
 	if (GEngine != nullptr)
 	{
-		GEngine->DisplayGamma = Gamma;
+		// The lighting plan holds the brightness to a narrower range (Play/ScctTone.h); without the plan this is Gamma itself.
+		GEngine->DisplayGamma = FScctTone::DisplayGamma(Gamma);
 	}
 	if (const FScctHudApi* Hud = ScctFeature<FScctHudApi>())
 	{

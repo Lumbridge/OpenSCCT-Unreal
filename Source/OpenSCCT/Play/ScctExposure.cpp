@@ -12,6 +12,7 @@
 #include "HAL/IConsoleManager.h"
 #include "OpenSCCT.h"
 #include "Play/ScctLightPlan.h"
+#include "Play/ScctTone.h"
 #include "Runtime/ScctFeatures.h"
 #include "SceneView.h"
 #include "SceneViewExtension.h"
@@ -215,6 +216,7 @@ namespace
 		}
 		if (MapWorld == nullptr)
 		{
+			FScctTone::Leave();
 			return true;
 		}
 
@@ -263,6 +265,9 @@ namespace
 			Settings.bOverride_AutoExposureBias = true;
 			Settings.AutoExposureBias = CVarExposureBias.GetValueOnGameThread();
 		}
+
+		// The plan's tone curve, bloom threshold and brightness range ride on this volume too (nothing when the plan is off).
+		FScctTone::Apply(MapWorld, Volume, bFixed, ExposureFixedScale());
 
 		// The sky dome, held as dark in the picture as it is at the reference exposure.
 		if (ExposureSky.World.Get() != MapWorld)

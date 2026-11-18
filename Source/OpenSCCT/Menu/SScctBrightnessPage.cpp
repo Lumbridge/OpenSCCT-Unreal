@@ -9,6 +9,7 @@
 #include "OpenSCCT.h"
 #include "Rendering/DrawElements.h"
 #include "Menu/ScctUserSettings.h"
+#include "Play/ScctTone.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
@@ -24,16 +25,18 @@ namespace Ui = ScctMenuStyle;
 namespace
 {
 	/** The brightness is the display gamma of the settings (UScctUserSettings::Gamma, the Video tab's Brightness row). */
-	constexpr float GammaMin = 1.6f;
-	constexpr float GammaMax = 3.0f;
+	// 1.6 to 3.0, and 2.0 to 2.4 under the lighting plan (Play/ScctTone.h): the plan's picture is as dark as the original,
+	// and a wider range would let a player see into what the original hides.
+	float BrightnessGammaMin() { return FScctTone::GammaMin(); }
+	float BrightnessGammaMax() { return FScctTone::GammaMax(); }
 	constexpr float GammaStep = 0.1f;
 
-	float GetBrightness() { return UScctUserSettings::Get()->Gamma; }
+	float GetBrightness() { return FMath::Clamp(UScctUserSettings::Get()->Gamma, BrightnessGammaMin(), BrightnessGammaMax()); }
 
 	void SetBrightness(float Value)
 	{
 		UScctUserSettings* Settings = UScctUserSettings::Get();
-		Settings->Gamma = FMath::Clamp(FMath::RoundToFloat(Value / GammaStep) * GammaStep, GammaMin, GammaMax);
+		Settings->Gamma = FMath::Clamp(FMath::RoundToFloat(Value / GammaStep) * GammaStep, BrightnessGammaMin(), BrightnessGammaMax());
 		Settings->ApplyAll();
 	}
 
@@ -181,8 +184,8 @@ void SScctBrightnessPage::Construct(const FArguments& InArgs)
 				SNew(SBox).WidthOverride(360.0f)
 				[
 					SNew(SSlider)
-					.MinValue(GammaMin)
-					.MaxValue(GammaMax)
+					.MinValue(BrightnessGammaMin())
+					.MaxValue(BrightnessGammaMax())
 					.StepSize(StepSize)
 					.MouseUsesStep(true)
 					.IsFocusable(false)

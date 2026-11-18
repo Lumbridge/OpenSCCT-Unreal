@@ -64,6 +64,17 @@ public:
 	/** The mode the goggles show now (34 night, 36 thermal, 37 motion, 38 EMF, 0 plain sight), forced or the HUD's. */
 	int32 GetVisionMode() const { return ShownMode; }
 
+	/** How far any goggle mode is in the picture: 0 plain sight, 1 a mode fully on, between while one comes on or goes off. */
+	float GetShownAmount() const
+	{
+		float Most = 0.0f;
+		for (const float Amount : Amounts)
+		{
+			Most = FMath::Max(Most, Amount);
+		}
+		return Most;
+	}
+
 	/** Thermal or EMF: the modes that show detector beams flagged bHideInNormalVision. */
 	bool IsHeatOrEmf() const { return ShownMode == 36 || ShownMode == 38; }
 

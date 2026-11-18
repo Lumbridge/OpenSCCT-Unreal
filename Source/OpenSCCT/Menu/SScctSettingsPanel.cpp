@@ -17,6 +17,7 @@
 #include "Play/ScctAudioOutput.h"
 #include "Play/ScctControlSettings.h"
 #include "Play/ScctGameMode.h"
+#include "Play/ScctTone.h"
 #include "Runtime/ScctControlsApi.h"
 #include "Runtime/ScctFeatures.h"
 #include "Settings/ScctGraphicsSettings.h"
@@ -617,8 +618,8 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 	Add(SNew(SScctSlider)
 		.Label(FText::FromString(TEXT("Brightness")))
 		.Description(FText::FromString(TEXT("The display gamma. Raise it until the darkest corners of a room are just visible, no further: the spies need their shadows.")))
-		.Min(1.6f).Max(3.0f).Step(0.1f)
-		.Get([Settings] { return Settings->Gamma; })
+		.Min(FScctTone::GammaMin()).Max(FScctTone::GammaMax()).Step(0.1f)
+		.Get([Settings] { return FMath::Clamp(Settings->Gamma, FScctTone::GammaMin(), FScctTone::GammaMax()); })
 		.Set([Settings](float Value) { Settings->Gamma = Value; Settings->ApplyAll(); })
 		.Format([](float Value) { return Percent((Value / 2.2f) * 100.0f); }));
 	Rows->AddSlot().AutoHeight().HAlign(HAlign_Right).Padding(0.0f, 4.0f, 16.0f, 10.0f)

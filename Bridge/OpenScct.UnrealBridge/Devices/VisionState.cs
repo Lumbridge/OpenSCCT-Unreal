@@ -166,6 +166,9 @@ public struct BridgeVisionLevel
 
     /// <summary>The client's LevelInfo.TimeSeconds of the last tick: the clock lock times run on.</summary>
     public float TimeSeconds;
+
+    /// <summary>LevelInfo.GlowThreshold, 0 to 255 (class default 224): the glow's bright pass keeps what is brighter than this / 255; 255 no glow.</summary>
+    public int GlowThreshold;
 }
 
 public static class BridgeVisionLevelFlags
@@ -468,6 +471,7 @@ public sealed class VisionState
         row.MtvSlope = level.Info.MTVSlope;
         row.MtvOffset = level.Info.MTVOffset;
         row.TimeSeconds = level.Info.TimeSeconds;
+        row.GlowThreshold = level.Info.GlowThreshold;
         if (Tracker is { } tracker)
         {
             row.Flags = BridgeVisionLevelFlags.HasTracker | (tracker.IsActive() ? BridgeVisionLevelFlags.TrackerActive : 0);

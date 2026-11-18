@@ -16,7 +16,8 @@
 // map name, which the imported level actor carries as the tag "Scct:<name>".
 
 // Version 1: pawns, actors, the level and the motion tracker's locks.
-constexpr int32 ScctVisionApiVersion = 1;
+// Version 2: the level's GlowThreshold.
+constexpr int32 ScctVisionApiVersion = 2;
 
 namespace EScctVisionPawnFlags
 {
@@ -97,8 +98,9 @@ struct FScctVisionLevel
 	float FocusTime;   // the tracker's FocusTime and OutTime, seconds (0 without a tracker)
 	float OutTime;
 	float TimeSeconds; // the client's LevelInfo.TimeSeconds of the last tick: the clock the lock times run on
+	int32 GlowThreshold; // LevelInfo.GlowThreshold 0..255 (default 224): the glow's bright pass keeps what is brighter than this / 255; 255 no glow
 };
-static_assert(sizeof(FScctVisionLevel) == 28, "FScctVisionLevel must match BridgeVisionLevel");
+static_assert(sizeof(FScctVisionLevel) == 32, "FScctVisionLevel must match BridgeVisionLevel");
 
 /**
  * The view the motion tracker's locks are boxed from, and how its 640 x 480 HUD frame sits on the screen:

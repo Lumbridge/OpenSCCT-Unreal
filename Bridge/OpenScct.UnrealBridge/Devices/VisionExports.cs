@@ -23,8 +23,8 @@ public unsafe struct VisionApi
 
 public static unsafe class VisionExports
 {
-    /// <summary>1: pawns, actors, the level and the motion tracker's locks.</summary>
-    public const int ApiVersion = 1;
+    /// <summary>1: pawns, actors, the level and the motion tracker's locks. 2: the level's GlowThreshold.</summary>
+    public const int ApiVersion = 2;
 
     /// <summary>Fills <paramref name="api"/>. Returns the API version.</summary>
     [UnmanagedCallersOnly]
