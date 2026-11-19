@@ -1176,13 +1176,22 @@ namespace
 			UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
 			const FScctOnlineStatus& Status = Visit->GetStatus();
 			const FString Map = Visit->GetSetupMap();
+			const bool bPractice = Visit->HasFlag(EScctOnlineStatusFlags::Practice);
 			const FString Infinite = ScctUi::GameText(TEXT("Lobby_Create"), TEXT("Infini"), TEXT("Unlimited"));
 			const auto Lives = [&Infinite](int32 Value) { return Value <= 0 ? Infinite : FString::FromInt(Value); };
 			TArray<FString> Rules;
-			Rules.Add(Status.TimeLimit > 0 ? FString::Printf(TEXT("%d min"), Status.TimeLimit) : Infinite + TEXT(" time"));
-			Rules.Add(FString::Printf(TEXT("Spy lives %s"), *Lives(Status.SpyLives)));
-			Rules.Add(FString::Printf(TEXT("Merc lives %s"), *Lives(Status.MercLives)));
-			if (Status.RespawnSeconds > 0) { Rules.Add(FString::Printf(TEXT("Respawn %d s"), Status.RespawnSeconds)); }
+			Rules.Add(!bPractice && Status.TimeLimit > 0 ? FString::Printf(TEXT("%d min"), Status.TimeLimit) : Infinite + TEXT(" time"));
+			if (bPractice)
+			{
+				Rules.Add(Infinite + TEXT(" lives"));
+				Rules.Add(TEXT("Quick respawns"));
+			}
+			else
+			{
+				Rules.Add(FString::Printf(TEXT("Spy lives %s"), *Lives(Status.SpyLives)));
+				Rules.Add(FString::Printf(TEXT("Merc lives %s"), *Lives(Status.MercLives)));
+				if (Status.RespawnSeconds > 0) { Rules.Add(FString::Printf(TEXT("Respawn %d s"), Status.RespawnSeconds)); }
+			}
 			if (Status.GamesInARow > 1) { Rules.Add(FString::Printf(TEXT("%d games in a row"), Status.GamesInARow)); }
 			if (Status.Bots != 0) { Rules.Add(TEXT("Bots")); }
 			const FString ModeName = Menu != nullptr ? Menu->GetModeName(LobbyModeIndex(Status.Mode)) : Visit->GetModeName();
@@ -1209,7 +1218,7 @@ namespace
 				+ SVerticalBox::Slot().AutoHeight()
 				[
 					SNew(SBox).Padding(0.0f, 8.0f, 0.0f, 0.0f)
-					.Visibility(Visit->HasFlag(EScctOnlineStatusFlags::Practice) ? EVisibility::Visible : EVisibility::Collapsed)
+					.Visibility(bPractice ? EVisibility::Visible : EVisibility::Collapsed)
 					[
 						SNew(SVerticalBox)
 						+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Label(TEXT("PRACTICE MODE"), ScctHudStyle::Text(), 14.0f) ]
