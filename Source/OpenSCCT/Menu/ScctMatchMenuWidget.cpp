@@ -272,6 +272,19 @@ void UScctMatchMenuWidget::SetMenuOpen(bool bOpen)
 	}
 }
 
+bool UScctMatchMenuWidget::IsShowingLocalResults() const
+{
+	return Overlay.IsValid() && Overlay->GetMenu()->IsShowingLocalResults();
+}
+
+void UScctMatchMenuWidget::TickResults(float DeltaSeconds)
+{
+	if (Overlay.IsValid())
+	{
+		Overlay->GetMenu()->TickResults(DeltaSeconds);
+	}
+}
+
 bool UScctMatchMenuWidget::ShowGear(int32 Side)
 {
 	if (!Overlay.IsValid())

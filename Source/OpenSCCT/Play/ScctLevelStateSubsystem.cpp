@@ -9,6 +9,7 @@
 #include "Animation/SkeletalMeshActor.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/LightComponent.h"
+#include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Light.h"
 #include "Engine/StaticMesh.h"
@@ -74,6 +75,34 @@ namespace
 	constexpr float FixtureReachBreakable = 170.0f;
 	constexpr float FixtureMaxExtent = 260.0f;
 	const TCHAR* const BreakableTagPrefix = TEXT("Scct:SGamePlayObject");
+	constexpr float MidwayFillShare = 0.16f;
+
+	/** Lower spill from Moonlight Park's west plaza flood, onto the boards beneath the Midway East rail. */
+	USpotLightComponent* MakeMidwayFill(ALight& Owner, const FLinearColor& Colour)
+	{
+		// The canopy blocks the high flood in Unreal. A downward fill under the rail keeps the path readable
+		// without lighting the rail's underside or removing shadows from the flood itself.
+		auto* Fill = NewObject<USpotLightComponent>(&Owner, NAME_None, RF_Transient);
+		Fill->SetMobility(EComponentMobility::Movable);
+		Fill->SetWorldLocationAndRotation(FVector(-200.0, 655.0, 225.0), FRotator(-90.0, 0.0, 0.0));
+		Fill->SetUseInverseSquaredFalloff(false);
+		Fill->SetLightFalloffExponent(2.2f);
+		Fill->SetAttenuationRadius(1150.0f);
+		Fill->SetOuterConeAngle(80.0f);
+		Fill->SetInnerConeAngle(56.0f);
+		Fill->SetSourceRadius(35.0f);
+		Fill->SetSoftSourceRadius(12.0f);
+		Fill->SetCastShadows(true);
+		Fill->SetSpecularScale(0.0f);
+		Fill->SetIndirectLightingIntensity(0.0f);
+		Fill->SetVolumetricScatteringIntensity(0.0f);
+		Fill->SetLightColor(Colour);
+		Fill->SetIntensity(0.0f);
+		Fill->SetVisibility(false);
+		Owner.AddInstanceComponent(Fill);
+		Fill->RegisterComponent();
+		return Fill;
+	}
 
 	/** A name reduced to its letters and digits: how imported assets are matched to the game's object paths. */
 	FString LevelKey(const FString& Name)
@@ -471,6 +500,10 @@ void UScctLevelStateSubsystem::RestoreLevel()
 		if (bTearingDown)
 		{
 			break;
+		}
+		if (ULightComponent* Fill = State.MidwayFill.Get())
+		{
+			Fill->DestroyComponent();
 		}
 		if (ULightComponent* Light = State.Light.Get())
 		{
@@ -1288,6 +1321,10 @@ void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 
 		if (!State.bSeen || State.NameId != Record.NameId)
 		{
+			if (ULightComponent* Fill = State.MidwayFill.Get())
+			{
+				Fill->DestroyComponent();
+			}
 			State = FLightState();
 			State.NameId = Record.NameId;
 			State.bSeen = true;
@@ -1330,6 +1367,7 @@ void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 
 		if (ULightComponent* Light = State.Light.Get())
 		{
+			ULightComponent* Fill = State.MidwayFill.Get();
 			if (!FMath::IsNearlyEqual(State.Shown, State.AppliedScale, 0.003f) || (State.Shown == 0.0f) != (State.AppliedScale == 0.0f))
 			{
 				State.AppliedScale = State.Shown;
@@ -1339,6 +1377,11 @@ void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 				{
 					Light->SetVisibility(bVisible);
 				}
+				if (Fill != nullptr)
+				{
+					Fill->SetIntensity(State.OriginalIntensity * State.Shown * MidwayFillShare);
+					Fill->SetVisibility(bVisible);
+				}
 			}
 
 			// A colour is applied only once the simulation changes it: until then the imported one stands.
@@ -1346,7 +1389,12 @@ void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 			if (!Color.Equals(State.AppliedColor, 0.004f))
 			{
 				State.AppliedColor = Color;
-				Light->SetLightColor(Color.Equals(State.FirstColor, 0.004f) ? State.OriginalColor : ToLightColor(Color));
+				const FLinearColor LightColor = Color.Equals(State.FirstColor, 0.004f) ? State.OriginalColor : ToLightColor(Color);
+				Light->SetLightColor(LightColor);
+				if (Fill != nullptr)
+				{
+					Fill->SetLightColor(LightColor);
+				}
 			}
 
 			// A lamp on a skeletal prop's bone goes with the bone; one that rides a lift or a mover goes where the
@@ -1742,6 +1790,11 @@ void UScctLevelStateSubsystem::BindLight(FLightState& State, const FScctWorldLig
 	State.OriginalIntensity = Light->Intensity;
 	State.OriginalColor = Light->GetLightColor();
 	State.bOriginalVisible = Light->IsVisible();
+	if (FScctLightPlan::IsOn() && Session != nullptr && FCString::Stricmp(Session->GetSessionInfo().Map, TEXT("MoonD")) == 0
+		&& Name.Equals(TEXT("PlazaFlood2"), ESearchCase::IgnoreCase))
+	{
+		State.MidwayFill = MakeMidwayFill(*Actor, State.OriginalColor);
+	}
 	++NumLightsFound;
 
 	// One owner for the rhythm: the importer's light function animates this light by itself; while a match plays

@@ -282,9 +282,8 @@ namespace
 			const UScctOnlineSubsystem* Visit = Host.Online.Get();
 			if (Visit == nullptr) { return FString(); }
 			const FScctOnlineStatus& Status = Visit->GetStatus();
-			return FString::Printf(TEXT("Lobby · %d/%d players%s%s"), Status.PlayerCount, Status.MaxPlayers,
-				Visit->HasFlag(EScctOnlineStatusFlags::Dedicated) ? TEXT(" · dedicated") : TEXT(""),
-				Visit->HasFlag(EScctOnlineStatusFlags::Practice) ? TEXT(" · practice") : TEXT(""));
+			return FString::Printf(TEXT("Lobby · %d/%d players%s"), Status.PlayerCount, Status.MaxPlayers,
+				Visit->HasFlag(EScctOnlineStatusFlags::Dedicated) ? TEXT(" · dedicated") : TEXT(""));
 		}
 
 		virtual void GetHints(TArray<TPair<FString, FString>>& OutKeyAndWhat, TArray<FString>& OutPadKeys) const override
@@ -1207,6 +1206,20 @@ namespace
 					SNew(STextBlock).Font(ScctUi::H2()).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true).Text(FText::FromString(Menu != nullptr ? Menu->GetMapTitle(Map) : Map))
 				]
 				+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Label(ModeName.ToUpper(), ScctUi::Accent(), 12.0f) ]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SBox).Padding(0.0f, 8.0f, 0.0f, 0.0f)
+					.Visibility(Visit->HasFlag(EScctOnlineStatusFlags::Practice) ? EVisibility::Visible : EVisibility::Collapsed)
+					[
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Label(TEXT("PRACTICE MODE"), ScctHudStyle::Text(), 14.0f) ]
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
+							.Text(FText::FromString(TEXT("Rounds do not count toward stats or achievements.")))
+						]
+					]
+				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)
 				[
 					SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true).Text(FText::FromString(FString::Join(Rules, TEXT("  ·  "))))

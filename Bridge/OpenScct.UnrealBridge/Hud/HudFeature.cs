@@ -113,7 +113,7 @@ public sealed class HudFeature : IDisposable
         _bridge = bridge;
         _session = bridge.Session;
         Strings = HudStrings.Load(SharedContent.FindRoot(_session.MapFolder));
-        _reader = new HudReader(Texts, Strings);
+        _reader = new HudReader(Texts, Strings, bridge.Map);
         _projectAim = p => SHud.ProjectToCanvas(_aimCamera, _aimView, _aimFov, _aspect, p);
         InstallReceiver(_session.Client);
 

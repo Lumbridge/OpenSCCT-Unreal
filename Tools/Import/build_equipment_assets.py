@@ -3,15 +3,15 @@ game content). Runs inside the editor's Python, with no window:
 
     UnrealEditor-Cmd <project> -run=pythonscript -script="build_equipment_assets.py" -nullrhi
 
-  Materials/M_ScctGlow         a soft self-lit glow, bright at the middle of a shape and gone at its edge: laser
-                               beams and dots, the muzzle flash, torch coronas
+  Materials/M_ScctGlow         a soft self-lit glow for laser dots, muzzle flashes and torch coronas
+  Materials/M_ScctLaserBeam    an additive laser ribbon with a narrow luminous core and a feathered red halo
   Materials/M_ScctGoggleGlow   the lit goggle lenses (parent of the lens materials the character import makes)
   Materials/M_ScctCloak        the camo suit: the body turns to bent light with a faint rim
   DA_ScctWeapons               which mesh stands for each simulation weapon class and where its sockets are
                                (UScctWeaponSet, Source/OpenSCCT/Play/ScctEquipmentData.h). Made once and then left
                                alone, so edits made in the editor are kept; delete it to get the defaults back.
 
-Pass "rebuild" to make the materials again from this script.
+Pass "rebuild" to make the materials again from this script. Pass "--laser-only" to build just the laser ribbon.
 """
 import sys
 
@@ -128,6 +128,73 @@ def build_glow():
     faded = binary(material, unreal.MaterialExpressionMultiply, lit, fade, -400, -50)
     out = binary(material, unreal.MaterialExpressionMultiply, faded, core, -100, 0)
     materials_lib.connect_material_property(in_the_picture(material, out, 150, 0), "", MP.MP_EMISSIVE_COLOR)
+    finish(material)
+
+
+def build_laser_beam():
+    material = new_material("M_ScctLaserBeam")
+    if not material:
+        return
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_ADDITIVE)
+    material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property("two_sided", True)
+
+    # ScctLaserBeam places a 100 cm plane with its local X axis down the beam and its Y axis across it.
+    position = materials_lib.create_material_expression(material, unreal.MaterialExpressionWorldPosition, -1250, 180)
+    local = materials_lib.create_material_expression(material, unreal.MaterialExpressionTransformPosition, -1020, 180)
+    local.set_editor_property("transform_source_type", unreal.MaterialPositionTransformSource.TRANSFORMPOSSOURCE_WORLD)
+    local.set_editor_property("transform_type", unreal.MaterialPositionTransformSource.TRANSFORMPOSSOURCE_LOCAL)
+    if not materials_lib.connect_material_expressions(position, "", local, ""):
+        raise RuntimeError("Could not connect world position to the laser's local position")
+    length = scalar(material, "LengthCm", 100.0, -1020, 300)
+    length.set_editor_property("use_custom_primitive_data", True)
+    length.set_editor_property("primitive_data_index", 0)
+    tint = vector(material, "Color", (1.0, 0.03, 0.02, 1.0), -1020, -150)
+    intensity = scalar(material, "Intensity", 1.0, -1020, 0)
+    weapon_profile = scalar(material, "WeaponProfile", 0.0, -1020, 440)
+
+    profile = materials_lib.create_material_expression(material, unreal.MaterialExpressionCustom, -760, 0)
+    profile.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    inputs = []
+    for name, node in (("Local", local), ("LengthCm", length), ("Tint", tint),
+                       ("Intensity", intensity), ("WeaponProfile", weapon_profile)):
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        inputs.append((pin, node))
+    profile.set_editor_property("inputs", [pin for pin, _ in inputs])
+    for pin, node in inputs:
+        name = pin.get_editor_property("input_name")
+        if not materials_lib.connect_material_expressions(node, "", profile, name):
+            raise RuntimeError("Could not connect the laser profile's " + name + " input")
+    profile.set_editor_property("code", """
+        float distanceFromMuzzle = saturate(Local.x * 0.01 + 0.5) * LengthCm;
+        float distanceFromImpact = max(LengthCm - distanceFromMuzzle, 0.0);
+        float muzzleFadeCm = lerp(8.0, 5.0, WeaponProfile);
+        float muzzle = smoothstep(0.0, max(min(muzzleFadeCm, LengthCm * 0.25), 0.01), distanceFromMuzzle);
+        float impact = smoothstep(0.0, max(min(5.0, LengthCm * 0.20), 0.01), distanceFromImpact);
+        float endFade = muzzle * impact;
+        float across = Local.y * 0.02 / lerp(0.55, 1.0, endFade);
+
+        // Preserve the core's energy when its projected width approaches a pixel.
+        // A first-person muzzle can be only 25 cm away. Its core and halo are tighter than a room detector's.
+        float coreRadius = lerp(0.18, 0.12, WeaponProfile);
+        float footprint = min(fwidth(across), 0.45);
+        float filteredRadius = sqrt(coreRadius * coreRadius + footprint * footprint * 0.25);
+        float normalizedCore = across / filteredRadius;
+        float core = (coreRadius / filteredRadius) * exp2(-normalizedCore * normalizedCore);
+        float halo = exp2(-6.0 * across * across) * (1.0 - smoothstep(0.68, 1.0, abs(across)));
+        float3 coreTint = Tint.rgb + Tint.r * float3(0.0, 0.11, 0.055);
+        float coreGain = lerp(1.08, 0.84, WeaponProfile);
+        float haloGain = lerp(0.13, 0.06, WeaponProfile);
+        return Intensity * endFade * (coreTint * core * coreGain + Tint.rgb * halo * haloGain);
+    """)
+
+    # Keep the depth test, with a short fade where the ribbon meets opaque geometry.
+    depth_fade = materials_lib.create_material_expression(material, unreal.MaterialExpressionDepthFade, -760, 260)
+    depth_fade.set_editor_property("fade_distance_default", 1.8)
+    out = binary(material, unreal.MaterialExpressionMultiply, profile, depth_fade, -480, 0)
+    if not materials_lib.connect_material_property(in_the_picture(material, out, -230, 0), "", MP.MP_EMISSIVE_COLOR):
+        raise RuntimeError("Could not connect the laser's emissive output")
     finish(material)
 
 
@@ -336,7 +403,11 @@ def build_weapon_set():
     log("made " + path)
 
 
-build_glow()
-build_goggle_glow()
-build_cloak()
-build_weapon_set()
+if "--laser-only" in sys.argv[1:]:
+    build_laser_beam()
+else:
+    build_glow()
+    build_laser_beam()
+    build_goggle_glow()
+    build_cloak()
+    build_weapon_set()

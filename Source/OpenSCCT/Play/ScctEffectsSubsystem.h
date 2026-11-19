@@ -134,7 +134,8 @@ private:
 		None,       // nothing drawn (an editor helper, or something another feature draws)
 		Explosion,
 		Smoke,      // a thick lasting cloud
-		Wisp,       // thin smoke: a gun barrel, a launch trail
+		Wisp,       // thin smoke from a launch trail
+		BarrelSmoke,
 		Sparks,
 		Electric,
 		Chaff,
@@ -162,9 +163,9 @@ private:
 		bool bStandIn = false;
 		FScctEffectSkins::FWorn Skins; // the run-time skins its mesh wears (the proximity mine's status light)
 
-		// The spy's smoke grenade cloud (SSmokeEmitter): the original's fifteen sprites, and how many are out.
+		// One-shot emitters keep track of how many sprites they have already released.
 		bool bGrenadeCloud = false;
-		int32 CloudSprites = 0;
+		int32 EmittedSprites = 0;
 
 		// Rain on a pawn (SFlicFlocEmitter, Play/ScctEffectsFlicFloc.cpp): the script's restarts and puff triggers
 		// already applied, each sub-emitter's spawns owed and the spawn budget left since its restart.
@@ -326,6 +327,7 @@ private:
 	void Emit(EStyle Style, const FVector& At, const FVector& Velocity, float DeltaSeconds, float& Debt);
 	/** Lets out what a smoke grenade's cloud owes by its age: the original emitter's fifteen sprites, once. */
 	void EmitGrenadeCloud(FActorFx& Fx);
+	void EmitBarrelSmoke(FActorFx& Fx, float EmissionAge);
 	void EmitStickyGas(FActorFx& Fx, const FQuat& Facing);
 
 	// The looks.

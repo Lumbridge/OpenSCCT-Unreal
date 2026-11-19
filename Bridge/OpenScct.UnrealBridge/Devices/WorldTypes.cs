@@ -184,8 +184,8 @@ public struct BridgeWorldLaser
     /// <summary>0 an SLaserTrigger's tripwire, 1 a mine's beam (SLaserBeam_MineLaser).</summary>
     public int Kind;
 
-    /// <summary>The tripwire's map name, 0 for a mine beam.</summary>
-    public int NameId;
+    /// <summary>For a tripwire, its map NameId. For a mine beam, its owner's ActorId if known, or 0.</summary>
+    public int ObjectId;
 
     /// <summary><see cref="BridgeWorldLaserFlags"/>.</summary>
     public int Flags;

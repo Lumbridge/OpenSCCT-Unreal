@@ -164,6 +164,7 @@ private:
 		int32 NameId = 0;
 		TWeakObjectPtr<AActor> Actor;
 		TWeakObjectPtr<ULightComponent> Light;
+		TWeakObjectPtr<ULightComponent> MidwayFill;
 		TArray<FFixture> Fixtures;
 		TArray<FCorona> Coronas;
 

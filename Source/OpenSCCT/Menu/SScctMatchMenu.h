@@ -71,6 +71,9 @@ public:
 
 	/** The results are on screen (the visit's banner stays away then). */
 	bool IsShowingResults() const { return View == EView::Results && bResultsReady; }
+	bool IsShowingLocalResults() const { return !bOnlineLevel && IsShowingResults(); }
+	/** The game mode follows the round even when Slate has no visible menu content to paint. */
+	void TickResults(float DeltaSeconds);
 
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
 	virtual FReply OnAnalogValueChanged(const FGeometry& MyGeometry, const FAnalogInputEvent& InAnalogInputEvent) override;

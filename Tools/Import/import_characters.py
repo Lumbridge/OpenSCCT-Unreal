@@ -175,7 +175,10 @@ def set_materials(package, mesh_name, surface, look):
         # The original files name a texture after its material; OpenSCCT's own models have a PBR set per
         # material, and their arms reuse an original material's name over a texture set of their own.
         def colour_of(name):
-            return textures.get(key(name)) or textures.get(key(name + "_baseColor"))
+            name_key = key(name)
+            if name_key in ("openscctsidearmscasebrass", "openscctsidearmscaseprimer"):
+                return textures.get(name_key) or textures.get(name_key[len("openscctsidearms"):])
+            return textures.get(name_key) or textures.get(name_key + "basecolor")
 
         claimed = {colour_of(name) for name in names}
         spare = [path for texture, path in sorted(textures.items()) if texture.endswith("basecolor") and path not in claimed]
@@ -362,6 +365,27 @@ if not surface:
     raise RuntimeError("no %s: run Tools/Import/Import-Assets.ps1 -MaterialsOnly first" % SURFACE_MATERIAL)
 if not (surface.get_editor_property("used_with_skeletal_mesh") and surface.get_editor_property("used_with_nanite")):
     log("WARNING: %s lacks the skeletal mesh or Nanite usage: rebuild it with Tools/Import/Import-Assets.ps1 -MaterialsOnly" % SURFACE_MATERIAL)
+
+if "--magnum-reload-only" in sys.argv:
+    package, mesh_name = "OpenScctSidearms", "magnum44_first"
+    import_models([(package, mesh_name)], pipelines_without_animations())
+    if not name_mesh_after_file(package, mesh_name):
+        raise RuntimeError("missing imported mesh " + mesh_name)
+    set_materials(package, mesh_name, surface, equipment_look)
+    for case in range(6):
+        path = "%s/%s/%s/SkeletalMeshes/SpentCase%d_mesh" % (DEST, package, mesh_name, case)
+        mesh = unreal.load_asset(path)
+        if not mesh:
+            raise RuntimeError("missing improved case mesh at " + path)
+        materials = {str(slot.material_interface.get_name()): slot.material_interface
+                     for slot in mesh.get_editor_property("materials") if slot.material_interface}
+        for name in ("CaseBrass", "CasePrimer"):
+            instance = materials.get("MI_OpenScctSidearms_" + name)
+            texture = materials_lib.get_material_instance_texture_parameter_value(instance, "BaseColor") if instance else None
+            if not texture or str(texture.get_name()) != name:
+                raise RuntimeError("missing %s texture binding on %s" % (name, path))
+    log("magnum44_first: verified all six brass cases with recessed primer materials")
+    sys.exit(0)
 
 import_models(BODIES, None)
 for package, mesh_name in BODIES:

@@ -754,13 +754,14 @@ public sealed class WorldState
             // A beam with no length (a trap with nothing ahead) draws nothing.
             if (!beam.bDeleteMe && !beam.bHidden && beam.fTailleFaisceau > 0f)
             {
-                Write(lasers, count++, beam.ActorId, 1, 0, beam, beam.fTailleFaisceau);
+                Write(lasers, count++, beam.ActorId, 1, beam.Owner is SMines { bDeleteMe: false } mine ? mine.ActorId : 0,
+                    beam, beam.fTailleFaisceau);
             }
         }
 
         return count;
 
-        static void Write(Span<BridgeWorldLaser> lasers, int index, int id, int kind, int nameId, Actor beam, float length)
+        static void Write(Span<BridgeWorldLaser> lasers, int index, int id, int kind, int objectId, Actor beam, float length)
         {
             if (index >= lasers.Length)
             {
@@ -772,7 +773,7 @@ public sealed class WorldState
             {
                 Id = id,
                 Kind = kind,
-                NameId = nameId,
+                ObjectId = objectId,
                 Flags = beam.bHideInNormalVision ? BridgeWorldLaserFlags.HideInNormalVision : 0,
                 StartX = beam.Location.X,
                 StartY = beam.Location.Y,

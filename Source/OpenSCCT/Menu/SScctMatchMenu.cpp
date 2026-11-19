@@ -20,6 +20,7 @@
 #include "Runtime/ScctFeatures.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "OpenSCCT.h"
+#include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctOnlineApi.h"
 #include "Social/ScctAccountSubsystem.h"
 #include "Styling/CoreStyle.h"
@@ -271,6 +272,10 @@ void SScctMatchMenu::ShowNamed(const FString& Name)
 
 void SScctMatchMenu::GoBack()
 {
+	if (IsShowingLocalResults())
+	{
+		return;
+	}
 	ScctUi::Play(EScctUiSound::Back);
 	if (View == EView::Pause)
 	{
@@ -400,7 +405,10 @@ void SScctMatchMenu::Tick(const FGeometry& AllottedGeometry, const double InCurr
 		ShowNamed(Name);
 	};
 	FScctMenuDriver::Tick(InDeltaTime, DriverHost);
+}
 
+void SScctMatchMenu::TickResults(float DeltaSeconds)
+{
 	// The results: online when the server sent them, offline a moment after the round ended (the HUD's own end
 	// banner has the first seconds).
 	bool bReady = false;
@@ -420,7 +428,15 @@ void SScctMatchMenu::Tick(const FGeometry& AllottedGeometry, const double InCurr
 	{
 		bResultsReady = bReady;
 		ResultsRevision = Revision;
-		if (bReady && (View == EView::Results || !bOpen))
+		if (bReady && !bOnlineLevel)
+		{
+			// A bot match can finish while gear, settings or another pause page is open.
+			CloseOverlayPages();
+			Dialogs->Dismiss();
+			Asking = -1;
+			Show(EView::Results);
+		}
+		else if (bReady && (View == EView::Results || !bOpen))
 		{
 			Show(EView::Results);
 		}
@@ -452,9 +468,9 @@ void SScctMatchMenu::Tick(const FGeometry& AllottedGeometry, const double InCurr
 	}
 	if (bResultsReady)
 	{
-		ResultsShownFor += InDeltaTime;
+		ResultsShownFor += DeltaSeconds;
 	}
-	LevelTime += InDeltaTime;
+	LevelTime += DeltaSeconds;
 	RunResultsUnattended();
 }
 
@@ -566,12 +582,24 @@ void SScctMatchMenu::RunResultsUnattended()
 
 FString SScctMatchMenu::GetMapId() const
 {
-	if (!World.IsValid())
+	const UWorld* Level = World.Get();
+	if (Level == nullptr)
 	{
 		return FString();
 	}
-	FString Map = UGameplayStatics::ParseOption(World->URL.ToString(), TEXT("ScctMap"));
-	return Map.IsEmpty() ? FPackageName::GetShortName(World->URL.Map) : Map;
+	// A runtime level can present any map. Prefer the map the bridge is currently playing in this world.
+	if (const UScctSessionSubsystem* Session = Level->GetSubsystem<UScctSessionSubsystem>();
+		Session != nullptr && Session->IsPlaying() && Session->GetSessionInfo().Map[0] != TEXT('\0'))
+	{
+		return Session->GetSessionInfo().Map;
+	}
+	FString Map = Level->URL.GetOption(TEXT("ScctMap="), TEXT(""));
+	if (Map.IsEmpty())
+	{
+		Map = FPackageName::GetShortName(Level->URL.Map);
+		Map.RemoveFromStart(Level->StreamingLevelsPrefix);
+	}
+	return Map;
 }
 
 bool SScctMatchMenu::IsMercLocal() const

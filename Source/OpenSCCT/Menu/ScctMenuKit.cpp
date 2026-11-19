@@ -1580,6 +1580,19 @@ void SScctDialogLayer::Answer(int32 Index)
 	if (Current.Buttons.IsValidIndex(Index) && !Current.Buttons[Index].Enabled.Get()) return;
 	const TFunction<void(const FString&)> Pressed = Current.Buttons.IsValidIndex(Index) ? Current.Buttons[Index].OnPressed : TFunction<void(const FString&)>();
 	const FString Typed = TextField.IsValid() ? TextField->GetText().ToString() : FString();
+	Dismiss();
+	if (Pressed)
+	{
+		Pressed(Typed);
+	}
+}
+
+void SScctDialogLayer::Dismiss()
+{
+	if (!bOpen)
+	{
+		return;
+	}
 	bOpen = false;
 	TextField.Reset();
 	DialogBox->SetContent(SNullWidget::NullWidget);
@@ -1592,10 +1605,6 @@ void SScctDialogLayer::Answer(int32 Index)
 	else if (const TSharedPtr<SWidget> Back = FocusAfter.Pin())
 	{
 		FSlateApplication::Get().SetKeyboardFocus(Back, EFocusCause::SetDirectly);
-	}
-	if (Pressed)
-	{
-		Pressed(Typed);
 	}
 }
 

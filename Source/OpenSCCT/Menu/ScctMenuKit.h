@@ -589,6 +589,8 @@ public:
 	bool IsOpen() const { return bOpen; }
 	/** Presses the dialog's button at Index (the last one for a negative index). */
 	void Answer(int32 Index);
+	/** Closes the dialog when its page is replaced, without pressing a button. */
+	void Dismiss();
 
 	void Toast(const FString& Message, const FLinearColor& Colour = ScctUi::Accent());
 

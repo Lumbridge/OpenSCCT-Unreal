@@ -35,3 +35,9 @@ Microsoft.Data.Sqlite through the local master server probe). They are developme
 | Poly Haven | the sky and the texture sets under `Content/OpenSCCT/ThirdParty/PolyHaven` | CC0 1.0: https://polyhaven.com/license |
 
 `docs/ASSETS.md` lists every asset taken from these sources.
+
+## Hub scenery
+
+The Hub includes adapted models and textures from the Godot Procedural Forest Demo, Poly Haven, Kenney, and
+SimpleGrassTextured. Model authors, source locations, changes and licenses are listed in
+`OpenSCCTUnreal/Binaries/Bridge/maps/Hub/render/scenery/CREDITS.txt`.

@@ -185,10 +185,14 @@ if ($CheckContentOnly) { return }
 # without it a release would ship no maps at all.
 $importedMaps = Join-Path $repo 'Content/Imported/Maps'
 $bundledMaps = @(Get-ChildItem -LiteralPath $importedMaps -Directory -ErrorAction SilentlyContinue |
-    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "$($_.Name).umap") } | ForEach-Object Name | Sort-Object)
+    Where-Object { $_.Name -ne 'Hub' -and (Test-Path -LiteralPath (Join-Path $_.FullName "$($_.Name).umap")) } | ForEach-Object Name | Sort-Object)
 if ($bundledMaps.Count -eq 0) {
     Fail "no imported maps in $importedMaps (no <Map>\<Map>.umap): run the map import on this machine first, a release bundles the enhanced maps"
 }
+if (-not (Test-Path -LiteralPath (Join-Path $importedMaps 'Hub/Hub.umap'))) {
+    Fail 'the Hub level is missing: run Tools/Import/Import-HubMap.ps1 -Content <converted packs folder> before packaging'
+}
+$mapsToCook = $bundledMaps + @('Hub')
 Write-Host "Bundling $($bundledMaps.Count) enhanced maps: $($bundledMaps -join ', ')"
 
 # Each first-person file contains separate skinned arms and rifle meshes. The FAMAS and M4 also
@@ -396,7 +400,7 @@ try {
         # DirectoriesToAlwaysCook finds no .umap, so the levels are named here; a map list on the command line replaces
         # MapsToCook in Config/DefaultGame.ini, hence the front end and the runtime level (which builds every map
         # without an imported level from the player's packs) too.
-        ('-MapsToCook=' + ((@('/Game/OpenSCCT/Maps/L_FrontEnd', '/Game/OpenSCCT/RuntimeMap/L_RuntimeMap') + @($bundledMaps | ForEach-Object { "/Game/Imported/Maps/$_/$_" })) -join '+'))
+        ('-MapsToCook=' + ((@('/Game/OpenSCCT/Maps/L_FrontEnd', '/Game/OpenSCCT/RuntimeMap/L_RuntimeMap') + @($mapsToCook | ForEach-Object { "/Game/Imported/Maps/$_/$_" })) -join '+'))
     )
     if ($Configuration -eq 'Shipping') { $uatArgs += '-distribution' }
     & $uat @uatArgs *> (Join-Path $Out 'uat.log')
@@ -422,14 +426,19 @@ $ufsManifest = Join-Path $staged 'Manifest_UFSFiles_Win64.txt'
 if (-not (Test-Path -LiteralPath $ufsManifest)) { Fail "staging wrote no ${ufsManifest}: cannot check what was cooked" }
 $stagedFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($l in [IO.File]::ReadLines($ufsManifest)) { [void]$stagedFiles.Add(($l -split "`t")[0].Replace('\', '/')) }
-$unbundled = @($bundledMaps | Where-Object { -not $stagedFiles.Contains("$target/Content/Imported/Maps/$_/$_.umap") })
+$unbundled = @($mapsToCook | Where-Object { -not $stagedFiles.Contains("$target/Content/Imported/Maps/$_/$_.umap") })
 if ($unbundled.Count -gt 0) {
     Fail "imported maps missing from the cook (see $ufsManifest; check DirectoriesToAlwaysCook=/Game/Imported/Maps in Config/DefaultGame.ini and $Out\uat.log): $($unbundled -join ', ')"
 }
 $unstagedRifles = @($rifleAssets | Where-Object { -not $stagedFiles.Contains("$target/$_") })
 if ($unstagedRifles.Count) { Fail "additional rifle assets missing from the cook (see ${ufsManifest}): $($unstagedRifles -join ', ')" }
+foreach ($hubAsset in @('Hub/manifest.json', 'Hub/sim/gameplay.json', 'Hub/sim/collision.bin', 'Hub/render/world.glb', 'Hub/render/scenery/CREDITS.txt', 'hubmap/hub.json', 'hubmap/areas.json')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $staged "$target/Binaries/Bridge/maps/$hubAsset"))) {
+        Fail "the packaged hub is missing its loose map data: $hubAsset"
+    }
+}
 $importedCount = @($stagedFiles | Where-Object { $_ -like "$target/Content/Imported/*" }).Count
-Write-Host "Staged $($bundledMaps.Count) enhanced maps ($importedCount files from /Game/Imported)."
+Write-Host "Staged the Hub and $($bundledMaps.Count) enhanced maps ($importedCount files from /Game/Imported)."
 # The map packs (Tools/Cook/Cook-MapPaks.ps1, docs/MAP-PAKS.md) are downloaded by the game, never shipped with it: a
 # release cook is not chunked (Config/Custom/MapPaks is read only with -CustomConfig=MapPaks), so the only container is
 # pakchunk0. Any other chunk means the map pak settings reached this cook.

@@ -36,6 +36,11 @@ namespace
 		return Category.IsEmpty() ? FString(TEXT("Other")) : Category.Left(1).ToUpper() + Category.Mid(1);
 	}
 
+	bool CanDownloadContent(const FScctContentRow& Row)
+	{
+		return Row.State == TEXT("available") || Row.State == TEXT("update") || (Row.bShared && Row.State == TEXT("notneeded"));
+	}
+
 	/** The line under a row's title: what this PC has, or how its download went. */
 	FString ContentStateText(const FScctContentRow& Row)
 	{
@@ -43,12 +48,13 @@ namespace
 		{
 			return Row.JobLine.IsEmpty() ? FString(TEXT("Starting")) : Row.JobLine;
 		}
-		if (Row.HasFailed() && !Row.IsDownloaded())
+		if (Row.HasFailed() && CanDownloadContent(Row))
 		{
-			return Row.Job == TEXT("stopped") ? FString(TEXT("Stopped")) : TEXT("Failed: ") + Row.JobLine;
+			const FString Operation = Row.State == TEXT("update") ? TEXT("Update") : TEXT("Download");
+			return Row.Job == TEXT("stopped") ? Operation + TEXT(" stopped") : Operation + TEXT(" failed: ") + Row.JobLine;
 		}
 		const FString Version = Row.Version.IsEmpty() ? FString() : FString::Printf(TEXT(" (%s)"), *Row.Version);
-		if (Row.State == TEXT("downloaded")) { return TEXT("Downloaded") + Version; }
+		if (Row.State == TEXT("downloaded")) { return TEXT("Up to date") + Version; }
 		if (Row.State == TEXT("update")) { return TEXT("Update available") + Version; }
 		if (Row.State == TEXT("ingame")) { return TEXT("In your converted game files"); }
 		if (Row.State == TEXT("unlisted")) { return TEXT("Downloaded (no longer listed)"); }
@@ -59,7 +65,7 @@ namespace
 	FLinearColor ContentStateColour(const FScctContentRow& Row)
 	{
 		if (Row.IsRunning()) { return ScctHudStyle::Text(); }
-		if (Row.HasFailed() && !Row.IsDownloaded()) { return ContentWarnColour(); }
+		if (Row.HasFailed() && CanDownloadContent(Row)) { return ContentWarnColour(); }
 		if (Row.State == TEXT("downloaded")) { return ScctUi::Accent(); }
 		if (Row.State == TEXT("update")) { return ContentWarnColour(); }
 		if (Row.State == TEXT("available")) { return ScctHudStyle::Text(); }
@@ -150,6 +156,7 @@ namespace
 									+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
 									[
 										SAssignNew(FolderButton, SScctButton)
+										.Look(EScctButtonLook::Chip)
 										.Text(FText::FromString(TEXT("OPEN FOLDER")))
 										.Description(FText::FromString(TEXT("Shows the folder downloaded maps and shared packs go into.")))
 										.OnPressed(FSimpleDelegate::CreateSP(this, &SScctMenuContent::OpenFolder))
@@ -157,8 +164,9 @@ namespace
 									+ SHorizontalBox::Slot().AutoWidth()
 									[
 										SNew(SScctButton)
-										.Text(FText::FromString(TEXT("REFRESH")))
-										.Description(FText::FromString(TEXT("Reads the list of OpenSCCT-Content again.")))
+										.Look(EScctButtonLook::Chip)
+										.Text(FText::FromString(TEXT("CHECK FOR UPDATES")))
+										.Description(FText::FromString(TEXT("Checks the OpenSCCT-Content catalogue. An UPDATE button appears beside each installed map with a different published release.")))
 										.OnPressed(FSimpleDelegate::CreateSP(this, &SScctMenuContent::Refresh))
 									]
 								])
@@ -186,7 +194,7 @@ namespace
 
 		virtual void GetHints(TArray<TPair<FString, FString>>& OutKeyAndWhat, TArray<FString>& OutPadKeys) const override
 		{
-			OutKeyAndWhat.Add({ TEXT("R"), TEXT("Refresh") });
+			OutKeyAndWhat.Add({ TEXT("R"), TEXT("Check for updates") });
 			OutPadKeys.Add(TEXT("Y"));
 		}
 
@@ -254,7 +262,7 @@ namespace
 			FString Out = Summary;
 			for (const FScctContentRow& Row : Rows)
 			{
-				Out += Row.Key + Row.State + Row.Job + (Row.Picture.IsEmpty() ? TEXT("") : TEXT("p"));
+				Out += Row.Key + Row.State + Row.Version + Row.Job + (Row.Picture.IsEmpty() ? TEXT("") : TEXT("p"));
 			}
 			return Out;
 		}
@@ -426,12 +434,15 @@ namespace
 			}
 			else
 			{
-				const bool bOfferDownload = bShared ? Row.State != TEXT("downloaded") : (Row.State == TEXT("available") || Row.State == TEXT("update") || (Row.HasFailed() && Row.State != TEXT("ingame") && Row.State != TEXT("unlisted")));
-				if (bOfferDownload)
+				if (CanDownloadContent(Row))
 				{
-					const FString Caption = FString(Row.HasFailed() ? TEXT("RETRY") : Row.State == TEXT("update") ? TEXT("UPDATE") : TEXT("DOWNLOAD")) + (bShared ? TEXT(" PACK") : TEXT(""));
-					AddButton(Caption, FString::Printf(TEXT("Downloads %s (%s) from OpenSCCT-Content.%s"), *Title, *ContentMegabytes(Row.Size),
-						bShared ? TEXT("") : TEXT(" Once installed it can be picked in Create Session and played on servers that use it.")),
+					const bool bUpdate = Row.State == TEXT("update");
+					const FString Caption = FString(Row.HasFailed() ? TEXT("RETRY") : bUpdate ? TEXT("UPDATE") : TEXT("DOWNLOAD")) + (bShared ? TEXT(" PACK") : TEXT(""));
+					const FString Description = bUpdate
+						? FString::Printf(TEXT("Downloads the published release of %s (%s) and replaces the installed copy after verification."), *Title, *ContentMegabytes(Row.Size))
+						: FString::Printf(TEXT("Downloads %s (%s) from OpenSCCT-Content.%s"), *Title, *ContentMegabytes(Row.Size),
+							bShared ? TEXT("") : TEXT(" Once installed it can be picked in Create Session and played on servers that use it."));
+					AddButton(Caption, Description,
 						Row.State == TEXT("notneeded") ? EScctButtonLook::Secondary : EScctButtonLook::Primary, FSimpleDelegate::CreateSP(this, &SScctMenuContent::DownloadRow, bShared, Key));
 				}
 				if (!bShared && Row.IsDownloaded())
@@ -602,8 +613,8 @@ namespace
 
 		void Refresh()
 		{
+			ActionStatus.Reset();
 			ScctContentCatalogue::RefreshIndex(true);
-			ShowStatus(TEXT("Loading the content list..."));
 			ForceRefill();
 		}
 

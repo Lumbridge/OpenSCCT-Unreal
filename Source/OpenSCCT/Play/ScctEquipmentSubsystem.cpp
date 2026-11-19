@@ -19,6 +19,7 @@
 #include "OpenSCCT.h"
 #include "Play/ScctEquipmentData.h"
 #include "Play/ScctFirstPersonView.h"
+#include "Play/ScctLaserBeam.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
@@ -55,9 +56,11 @@ namespace
 	const FVector TorchEyeOffset(30.0, 5.0, -7.0);
 
 	const FLinearColor LaserColor(1.0f, 0.03f, 0.02f);
+	constexpr double LaserRibbonWidth = 3.6;        // cm, including the faint outer glow
 	constexpr float LaserBeamWidth = 0.7f;          // cm
 	constexpr float LaserDotWidth = 2.2f;           // cm
-	constexpr float LaserBeamIntensity = 14.0f;
+	constexpr float LaserBeamIntensity = 8.0f;
+	constexpr float LaserBeamSharpness = 1.7f;
 	constexpr float LaserDotIntensity = 160.0f;
 
 	const TCHAR* const CylinderPath = TEXT("/Engine/BasicShapes/Cylinder.Cylinder");
@@ -168,9 +171,10 @@ void UScctEquipmentSubsystem::OnMatchStarted()
 
 	Weapons = UScctWeaponSet::Get();
 	GlowMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/OpenSCCT/Weapons/Materials/M_ScctGlow.M_ScctGlow"), nullptr, LOAD_NoWarn);
+	LaserBeamMaterial = LoadObject<UMaterialInterface>(nullptr, ScctLaserBeam::MaterialPath, nullptr, LOAD_NoWarn);
 	if (GlowMaterial == nullptr)
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Equipment: no /Game/OpenSCCT/Weapons/Materials/M_ScctGlow (Tools/Import/Import-Characters.ps1 builds it); laser beams are not drawn"));
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Equipment: no /Game/OpenSCCT/Weapons/Materials/M_ScctGlow (Tools/Import/Import-Characters.ps1 builds it); laser dots and torch coronas are not drawn"));
 	}
 
 	// Every mesh now, so the first shot or the first drawn pistol does not hitch on a load. Not for the match behind
@@ -521,10 +525,12 @@ void UScctEquipmentSubsystem::UpdateAttachment(const FScctEquipmentApi& Api, FPa
 	}
 }
 
-UStaticMeshComponent* UScctEquipmentSubsystem::MakeGlowShape(AScctPawnProxy& Proxy, const TCHAR* MeshPath, const FLinearColor& Color, float Intensity, float Sharpness)
+UStaticMeshComponent* UScctEquipmentSubsystem::MakeGlowShape(AScctPawnProxy& Proxy, const TCHAR* MeshPath, const FLinearColor& Color,
+	float Intensity, float Sharpness, UMaterialInterface* Material)
 {
 	UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, MeshPath);
-	if (Mesh == nullptr || GlowMaterial == nullptr)
+	UMaterialInterface* Parent = Material != nullptr ? Material : GlowMaterial.Get();
+	if (Mesh == nullptr || Parent == nullptr)
 	{
 		return nullptr;
 	}
@@ -538,11 +544,14 @@ UStaticMeshComponent* UScctEquipmentSubsystem::MakeGlowShape(AScctPawnProxy& Pro
 	Shape->SetUsingAbsoluteLocation(true);
 	Shape->SetUsingAbsoluteRotation(true);
 	Shape->SetUsingAbsoluteScale(true);
-	UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(GlowMaterial, Shape);
-	Material->SetVectorParameterValue(TEXT("Color"), Color);
-	Material->SetScalarParameterValue(TEXT("Intensity"), Intensity);
-	Material->SetScalarParameterValue(TEXT("Sharpness"), Sharpness);
-	Shape->SetMaterial(0, Material);
+	UMaterialInstanceDynamic* Instance = UMaterialInstanceDynamic::Create(Parent, Shape);
+	Instance->SetVectorParameterValue(TEXT("Color"), Color);
+	Instance->SetScalarParameterValue(TEXT("Intensity"), Intensity);
+	if (Material == nullptr)
+	{
+		Instance->SetScalarParameterValue(TEXT("Sharpness"), Sharpness);
+	}
+	Shape->SetMaterial(0, Instance);
 	Shape->RegisterComponent();
 	Proxy.AddInstanceComponent(Shape);
 	return Shape;
@@ -574,6 +583,8 @@ void UScctEquipmentSubsystem::UpdateTorch(FPawnGear& Found, AScctPawnProxy& Prox
 		Torch->SetUsingAbsoluteRotation(true);
 		Torch->SetIntensityUnits(ELightUnits::Candelas);
 		Torch->SetCastShadows(true);
+		// The torch follows aim directly. MegaLights' temporal denoising leaves rings at its previous positions.
+		Torch->bAllowMegaLights = false;
 		Torch->SetSourceRadius(1.5f);
 		UScctEchelonLightFilter::RouteNewWorldLight(*Torch);
 		Torch->RegisterComponent();
@@ -644,23 +655,32 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 {
 	const bool bBeam = (Pawn.Flags & EScctEquipmentFlags::LaserBeam) != 0 && Proxy.IsShown();
 	const bool bDot = bBeam || ((Pawn.Flags & EScctEquipmentFlags::LaserDot) != 0 && Proxy.IsShown());
+	const bool bMerc = (Pawn.Flags & EScctEquipmentFlags::Merc) != 0;
+	const bool bMercPrimary = bMerc && Pawn.ActiveWeaponSlot == 0;
 
 	const FVector End(Pawn.LaserEndX, Pawn.LaserEndY, Pawn.LaserEndZ);
-	FVector Start(Pawn.LaserStartX, Pawn.LaserStartY, Pawn.LaserStartZ);
+	const FVector TracedStart(Pawn.LaserStartX, Pawn.LaserStartY, Pawn.LaserStartZ);
+	FVector Start = TracedStart;
 	if (bBeam)
 	{
-		// The bridge's end is laid for this frame (the local player's from the view drawn this frame, another
-		// merc's between the last two ticks like his body). Its start is worked out from its own pose of the gun;
-		// what is drawn this frame is better where there is something drawn: the view model's muzzle or laser
-		// socket, else the muzzle of the gun in hand (a merc's rifle, the local spy's pistol seen from behind).
+		// Leave the impact at the bridge's traced point. Match the near end to the weapon as posed for this frame.
 		FTransform Source;
-		if (bFromViewModel && (Pawn.Flags & EScctEquipmentFlags::Merc) != 0)
+		if (bMercPrimary)
 		{
-			Start = FirstPersonView->MercLaserStart(Start);
-			// The world-space beam starts on the barrel as rendered. Only its near end follows
-			// the camera's first-person scale; its far end stays on the traced surface.
-			const FVector Eye = GetCamera().GetLocation();
-			Start = Eye + (Start - Eye) * DrawnFirstPersonScale;
+			if (bFromViewModel && FirstPersonView->FindMercLaserStart(Source))
+			{
+				const FVector Eye = GetCamera().GetLocation();
+				Start = Eye + (Source.GetLocation() - Eye) * DrawnFirstPersonScale;
+			}
+			else if (!Proxy.IsFirstPerson() && (Pawn.Flags & EScctEquipmentFlags::TorchInCamera) == 0
+				&& (Pawn.Flags & EScctEquipmentFlags::WeaponInHand) != 0)
+			{
+				const FScctEquipmentView& Gun = Found.Slots[EScctAttachmentSlot::Weapon].View;
+				if (Gun.IsShown() && Gun.GetBody()->IsVisible() && Gun.FindMercLaserMount(Source))
+				{
+					Start = Source.GetLocation();
+				}
+			}
 		}
 		else if (bFromViewModel && FirstPersonView->FindLaserStart(Source))
 		{
@@ -671,11 +691,19 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		{
 			Start = Source.GetLocation();
 		}
+		if (bMerc && !bMercPrimary && bFromViewModel)
+		{
+			const FVector Eye = GetCamera().GetLocation();
+			Start = Eye + (Start - Eye) * DrawnFirstPersonScale;
+		}
 	}
 
 	const FVector Along = End - Start;
 	const double Length = Along.Size();
 	const FVector Direction = Length > UE_KINDA_SMALL_NUMBER ? Along / Length : FVector::ForwardVector;
+	// A first-person weapon can reach past the struck surface near a wall. Show the impact without a reversed beam.
+	const bool bDrawBeam = bBeam && Length > 1.0 && (!bMercPrimary || FVector::DotProduct(Along, End - TracedStart) > 0.0);
+	const FVector SurfaceDirection = bMercPrimary && bBeam && !bDrawBeam ? (End - TracedStart).GetSafeNormal() : Direction;
 
 	if (bLaserProbe && bBeam && &Proxy == Session->FindLocalProxy())
 	{
@@ -686,7 +714,7 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 	// stands in for the red one, whose added light the mode's material would read as brightness.
 	const UScctVisionSubsystem* Goggles = UScctVisionSubsystem::Find(GetWorld());
 	const int32 GoggleMode = Goggles != nullptr ? Goggles->GetVisionMode() : 0;
-	const int32 GoggleStencil = bBeam && Length > 1.0 ? FScctLaserVision::StencilFor(GoggleMode, (Pawn.Flags & EScctEquipmentFlags::Merc) != 0) : 0;
+	const int32 GoggleStencil = bDrawBeam ? FScctLaserVision::StencilFor(GoggleMode, bMerc) : 0;
 	if (GoggleStencil != 0)
 	{
 		LaserVision.Show(*GetWorld(), Pawn.ActorId, Start, End, GetCamera().GetLocation(), GoggleStencil);
@@ -695,22 +723,41 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 	{
 		Found.LaserVisionStencil = GoggleStencil;
 		UE_LOG(LogOpenSCCT, Log, TEXT("Equipment: pawn %d (%s) laser beam, %.0f cm, is drawn %s (vision mode %d)"), Pawn.ActorId,
-			(Pawn.Flags & EScctEquipmentFlags::Merc) != 0 ? TEXT("merc") : TEXT("spy"), Length,
-			GoggleStencil == 0 ? (bBeam ? TEXT("as the red beam") : TEXT("not at all")) : GoggleStencil == UScctVisionSubsystem::StencilEmfStreak ? TEXT("for the goggles as a dark grey EMF streak") : TEXT("for the goggles as heat 1"), GoggleMode);
+			bMerc ? TEXT("merc") : TEXT("spy"), Length,
+			GoggleStencil == 0 ? (bDrawBeam ? TEXT("as the red beam") : TEXT("not at all")) : GoggleStencil == UScctVisionSubsystem::StencilEmfStreak ? TEXT("for the goggles as a dark grey EMF streak") : TEXT("for the goggles as heat 1"), GoggleMode);
 	}
 
-	if (bBeam && !Found.Beam.IsValid())
+	if (bDrawBeam && !Found.Beam.IsValid())
 	{
-		Found.Beam = MakeGlowShape(Proxy, CylinderPath, LaserColor, LaserBeamIntensity, 1.5f);
+		if (LaserBeamMaterial != nullptr)
+		{
+			UStaticMeshComponent* Ribbon = MakeGlowShape(Proxy, ScctLaserBeam::PlanePath, LaserColor, 1.0f, 1.0f, LaserBeamMaterial.Get());
+			if (Ribbon != nullptr)
+			{
+				CastChecked<UMaterialInstanceDynamic>(Ribbon->GetMaterial(0))->SetScalarParameterValue(TEXT("WeaponProfile"), 1.0f);
+			}
+			Found.Beam = Ribbon;
+		}
+		else
+		{
+			Found.Beam = MakeGlowShape(Proxy, CylinderPath, LaserColor, LaserBeamIntensity, LaserBeamSharpness);
+		}
 	}
 	if (UStaticMeshComponent* Beam = Found.Beam.Get())
 	{
-		const bool bShow = bBeam && Length > 1.0 && GoggleStencil == 0;
+		const bool bShow = bDrawBeam && GoggleStencil == 0;
 		if (bShow)
 		{
-			// The engine's cylinder is 100 across and 100 long, along Z.
-			Beam->SetWorldTransform(FTransform(FRotationMatrix::MakeFromZ(Direction).ToQuat(), Start + Along * 0.5,
-				FVector(LaserBeamWidth / 100.0, LaserBeamWidth / 100.0, Length / 100.0)));
+			if (LaserBeamMaterial != nullptr)
+			{
+				ScctLaserBeam::Place(*Beam, Start, End, GetCamera().GetLocation(), LaserRibbonWidth);
+			}
+			else
+			{
+				// The fallback cylinder is 100 across and 100 long along Z.
+				Beam->SetWorldTransform(FTransform(FRotationMatrix::MakeFromZ(Direction).ToQuat(), Start + Along * 0.5,
+					FVector(LaserBeamWidth / 100.0, LaserBeamWidth / 100.0, Length / 100.0)));
+			}
 		}
 		if (Beam->IsVisible() != bShow)
 		{
@@ -741,7 +788,7 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 	{
 		if (bDot)
 		{
-			Dot->SetWorldLocation(End - Direction * 0.4);
+			Dot->SetWorldLocation(End - SurfaceDirection * 0.4);
 			Dot->SetWorldScale3D(FVector(LaserDotWidth / 100.0));
 		}
 		if (Dot->IsVisible() != bDot)
@@ -754,7 +801,7 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		if (bDot)
 		{
 			// Just off the surface, so the spill lands on it.
-			Light->SetWorldLocation(End - Direction * 4.0);
+			Light->SetWorldLocation(End - SurfaceDirection * 4.0);
 		}
 		if (Light->IsVisible() != bDot)
 		{

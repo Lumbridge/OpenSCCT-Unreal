@@ -20,6 +20,7 @@
 #include "OpenSCCT.h"
 #include "PipelineStateCache.h"
 #include "Play/ScctEffectsSubsystem.h"
+#include "Play/ScctLaserBeam.h"
 #include "Play/ScctLevelStateSubsystem.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "ProceduralMeshComponent.h"
@@ -102,10 +103,17 @@ int32 UScctEffectsSubsystem::SpawnWarmupSamples(const FVector& At, const FVector
 
 	// A dark card behind the samples, for the decals to land on whatever the camera faces.
 	UMaterialInterface* Solid = LoadObject<UMaterialInterface>(nullptr, WarmupSolidMaterialPath);
-	if (UStaticMesh* Plane = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane")))
+	if (UStaticMesh* Plane = LoadObject<UStaticMesh>(nullptr, ScctLaserBeam::PlanePath))
 	{
 		// The engine's plane is 100 cm square facing +Z: turned to face the camera.
 		AddMesh(Plane, StandInMaterial != nullptr ? StandInMaterial.Get() : Solid, Backdrop, FRotationMatrix::MakeFromZX(-Ahead, Right).Rotator(), FVector(1.2f));
+		if (UMaterialInterface* LaserMaterial = LoadObject<UMaterialInterface>(nullptr, ScctLaserBeam::MaterialPath, nullptr, LOAD_NoWarn))
+		{
+			const FVector Centre = At + Up * 23.0;
+			UStaticMeshComponent* Beam = AddMesh(Plane, LaserMaterial, Centre, FRotator::ZeroRotator, FVector::OneVector);
+			Beam->SetCastShadow(false);
+			ScctLaserBeam::Place(*Beam, Centre - Right * 10.0, Centre + Right * 10.0, At - Ahead * WarmupSampleDistance, 3.6);
+		}
 	}
 
 	// Every particle look, at once.

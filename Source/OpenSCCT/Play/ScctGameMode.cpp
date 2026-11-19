@@ -6,6 +6,8 @@
 #include "Demo/ScctDemoPlayback.h"
 #include "Engine/GameViewportClient.h"
 #include "GameFramework/PlayerController.h"
+#include "Hud/ScctChatSubsystem.h"
+#include "Hud/ScctHudEdit.h"
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Menu/ScctMatchMenuWidget.h"
@@ -213,6 +215,7 @@ void AScctGameMode::Tick(float DeltaSeconds)
 		TickPlayError(Player, DeltaSeconds);
 		return;
 	}
+	MatchMenu->TickResults(DeltaSeconds);
 
 	// The menu opens on the player's own binding (ShowMenu, Quit), which arrives as an interface command.
 	AScctPlayerController* ScctPlayer = Cast<AScctPlayerController>(Player);
@@ -224,7 +227,7 @@ void AScctGameMode::Tick(float DeltaSeconds)
 
 	// While it is open the controls raise no commands (the player's keys are held back), so the keys that close
 	// it are read here.
-	if (MatchMenu->IsMenuOpen())
+	if (MatchMenu->IsMenuOpen() && !MatchMenu->IsShowingLocalResults())
 	{
 		// The press that opened the menu must not close it again: whether this actor ticks before or after the
 		// player controller is not fixed, so that press can still read as "just pressed" in the next frame. A
@@ -376,6 +379,18 @@ void AScctGameMode::SetMenuOpen(bool bOpen)
 	if (Player == nullptr || !IsValid(MatchMenu))
 	{
 		return;
+	}
+	if (bOpen && MatchMenu->IsShowingLocalResults())
+	{
+		// The results take input from any fullscreen controls still active when the round ended.
+		if (UScctHudEditSubsystem* HudEdit = GetWorld()->GetSubsystem<UScctHudEditSubsystem>())
+		{
+			HudEdit->Stop();
+		}
+		if (UScctChatSubsystem* Chat = GetWorld()->GetSubsystem<UScctChatSubsystem>())
+		{
+			Chat->Close();
+		}
 	}
 
 	// The match goes on underneath (it is the server's, or the bots'): the menu takes the mouse and the keys, and

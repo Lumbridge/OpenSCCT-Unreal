@@ -141,7 +141,8 @@ private:
 	void DropEverything();
 
 	/** A self-lit shape (beam, dot, corona) on a proxy, placed in the world each frame. */
-	UStaticMeshComponent* MakeGlowShape(AScctPawnProxy& Proxy, const TCHAR* MeshPath, const FLinearColor& Color, float Intensity, float Sharpness);
+	UStaticMeshComponent* MakeGlowShape(AScctPawnProxy& Proxy, const TCHAR* MeshPath, const FLinearColor& Color,
+		float Intensity, float Sharpness, UMaterialInterface* Material = nullptr);
 
 	/** The camera of this frame in the world. */
 	FTransform GetCamera() const;
@@ -203,4 +204,6 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInterface> GlowMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> LaserBeamMaterial;
 };

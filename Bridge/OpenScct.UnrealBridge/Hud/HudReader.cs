@@ -124,6 +124,8 @@ public sealed class HudReader
 
     private readonly HudTextTable _texts;
     private readonly HudStrings _strings;
+    private readonly string _map;
+    private string? _mapTitle;
     private readonly HashSet<PlayerReplicationInfo> _alive = new();
     private readonly Dictionary<PlayerReplicationInfo, int> _pawnIds = new();
     private readonly Dictionary<string, int> _lineIds = new(StringComparer.Ordinal);
@@ -131,10 +133,11 @@ public sealed class HudReader
     private readonly Dictionary<string, (int U, int V)> _weaponIcons = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Type, int> _classIds = new();
 
-    public HudReader(HudTextTable texts, HudStrings strings)
+    public HudReader(HudTextTable texts, HudStrings strings, string map)
     {
         _texts = texts;
         _strings = strings;
+        _map = map;
     }
 
     /// <summary>
@@ -1247,7 +1250,13 @@ public sealed class HudReader
         r.NumDisks = gri.NumDisks;
         r.NumDisksToWin = gri.NumDisksToWin;
         r.CounterMode = gri.GameMode == EGameMode.GM_DeathMatch ? 1 : gri.GameMode == EGameMode.GM_DiskHunt ? 2 : 0;
-        r.MapTitleId = _texts.Id(info.Title);
+        // Some maps leave the level title at the engine's default. The map catalog holds their display name.
+        string title = info.Title;
+        if (string.IsNullOrWhiteSpace(title) || title.Trim().Equals("Untitled", StringComparison.OrdinalIgnoreCase))
+        {
+            title = _mapTitle ??= MenuExports.MapTitle(_map);
+        }
+        r.MapTitleId = _texts.Id(title);
         if (!spectating || pc.bGameEnded || pc.PlayerReplicationInfo is not { } pri)
         {
             return;

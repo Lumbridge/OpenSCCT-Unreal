@@ -7,6 +7,7 @@
 
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
+class UScctEffectsSubsystem;
 class UScctLevelStateSubsystem;
 class UScctSessionSubsystem;
 class UStaticMesh;
@@ -22,8 +23,8 @@ class UStaticMeshComponent;
  *     locked or armed, green taken, grey not in play yet;
  *   - security cameras and room sensors as a small status lamp on top of the device: green watching, red
  *     alarmed, amber locked;
- *   - detector beams (tripwires, mine beams) as a hair-thin bright core inside a faint wide glow that shimmers
- *     like dust in the light, with a small bloom where the beam starts and where it lands.
+ *   - detector beams (tripwires, mine beams) as a hair-thin bright core inside a soft halo, with a small bloom
+ *     where the beam leaves its emitter and where it lands.
  *
  * The looks are two materials built by Tools/Level/build_level_assets.py (/Game/OpenSCCT/Level) on engine shapes;
  * without them nothing is drawn and the log says so.
@@ -117,6 +118,7 @@ private:
 	void ResetMatch();
 	void UpdateMarkers(const FVector& ViewLocation);
 	void UpdateLasers();
+	FVector LaserAperture(const FScctWorldLaser& Laser, const FVector& Start, const FVector& End) const;
 
 	static FLook LookOf(const FScctWorldMarker& Marker);
 
@@ -129,6 +131,9 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UScctLevelStateSubsystem> LevelState;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UScctEffectsSubsystem> Effects;
+
 	/** The actor every marker component hangs on (it keeps them, and their materials, alive). */
 	UPROPERTY(Transient)
 	TObjectPtr<AActor> Host;
@@ -138,6 +143,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInterface> BeamMaterial;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> LaserRibbonMaterial;
 
 	/** The engine shapes the pools draw with: kept here, since a pool that has made no component yet holds nothing alive. */
 	UPROPERTY(Transient)

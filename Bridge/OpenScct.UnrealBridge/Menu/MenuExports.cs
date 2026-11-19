@@ -179,6 +179,9 @@ public static unsafe class MenuExports
         }
     }
 
+    internal static string MapTitle(string map) =>
+        Catalog.GetCatalogEntry(map)?.DisplayName is { Length: > 0 } title ? title : map;
+
     private static HudStrings Strings
     {
         get

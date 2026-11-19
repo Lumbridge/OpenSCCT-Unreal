@@ -20,6 +20,8 @@ class OPENSCCT_API UScctMatchMenuWidget : public UUserWidget
 public:
 	void SetMenuOpen(bool bOpen);
 	bool IsMenuOpen() const { return bMenuOpen; }
+	bool IsShowingLocalResults() const;
+	void TickResults(float DeltaSeconds);
 
 	/** The menu's last button: leaves the server (online round) or goes back to the main menu (local match). */
 	void LeaveMatch();

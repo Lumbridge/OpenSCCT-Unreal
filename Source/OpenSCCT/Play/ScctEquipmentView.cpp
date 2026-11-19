@@ -13,6 +13,7 @@
 #include "Play/ScctArmIk.h"
 #include "Play/ScctEquipmentData.h"
 #include "Play/ScctEquipmentModels.h"
+#include "Play/ScctMercLaserMount.h"
 
 namespace
 {
@@ -87,6 +88,13 @@ void FScctEquipmentView::Show(AActor& Owner, const FScctEquipmentModel* NewModel
 
 	UPoseableMeshComponent* Posed = MakePosed(Owner, Model->Mesh.Get(), bFirstPerson);
 	Body = Posed;
+	MercLaserBone = Model->MeshBoneByName(TEXT("Laser"));
+	MercLaserBoreOffset = FVector::ZeroVector;
+	if (MercLaserBone == INDEX_NONE)
+	{
+		MercLaserBone = Model->MeshBoneByName(TEXT("FX"));
+		MercLaserBoreOffset = ScctMercLaserMount::BoreOffset(Model->Name);
+	}
 	for (const TStrongObjectPtr<USkeletalMesh>& Extra : Model->ExtraMeshes)
 	{
 		UPoseableMeshComponent* Follower = MakePosed(Owner, Extra.Get(), bFirstPerson);
@@ -466,6 +474,27 @@ bool FScctEquipmentView::FindPoint(FName ReplacementSocket, const TCHAR* Origina
 bool FScctEquipmentView::FindMuzzle(FTransform& OutWorld) const
 {
 	return FindPoint(Row != nullptr ? Row->MuzzleSocket : NAME_None, TEXT("FX"), OutWorld);
+}
+
+bool FScctEquipmentView::FindMercLaserMount(FTransform& OutWorld) const
+{
+	const FName Socket = Row != nullptr ? Row->LaserSocket : FName(TEXT("LaserModule"));
+	if (Replacement.IsValid())
+	{
+		return FindPoint(Socket, TEXT(""), OutWorld) || FindMuzzle(OutWorld);
+	}
+	if (Body.IsValid() && Body->DoesSocketExist(Socket))
+	{
+		OutWorld = Body->GetSocketTransform(Socket);
+		return true;
+	}
+	if (!Body.IsValid() || MercLaserBone == INDEX_NONE)
+	{
+		return false;
+	}
+	OutWorld = Body->GetBoneTransform(MercLaserBone);
+	OutWorld.SetLocation(OutWorld.TransformPosition(MercLaserBoreOffset));
+	return true;
 }
 
 void FScctCloakLook::Apply(UMeshComponent& Component, float Amount)

@@ -43,7 +43,12 @@ public static class ContentCatalogue
                 var detail = new List<string> { "Map code " + map.Code };
                 if (map.Version.Length > 0)
                 {
-                    detail.Add("Version " + map.Version);
+                    detail.Add("Catalogue version " + map.Version);
+                }
+
+                if (pack is { Version.Length: > 0 })
+                {
+                    detail.Add("Installed version " + pack.Version);
                 }
 
                 if (map.Modes.Count > 0)
@@ -104,7 +109,7 @@ public static class ContentCatalogue
         if (index is null)
         {
             return ContentPacks.IndexError is { } e
-                ? "Could not read the content list (" + e + "). Maps already on this PC are listed; press REFRESH to try again."
+                ? "Could not read the content list (" + e + "). Maps already on this PC are listed. Select CHECK FOR UPDATES to try again."
                 : "Loading the content list...";
         }
 

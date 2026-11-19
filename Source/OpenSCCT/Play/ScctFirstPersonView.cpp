@@ -336,21 +336,14 @@ bool AScctFirstPersonView::FindCasingPort(FTransform& OutWorld) const
 	return false;
 }
 
-FVector AScctFirstPersonView::MercLaserStart(const FVector& TracedStart) const
+bool AScctFirstPersonView::FindMercLaserStart(FTransform& OutWorld) const
 {
 	const FScctEquipmentView& Gun = Parts[0];
-	FTransform Socket;
-	if (!FindLaserStart(Socket))
+	if (bShown && Gun.IsShown() && Gun.GetBody()->IsVisible() && Gun.FindMercLaserMount(OutWorld))
 	{
-		return TracedStart;
+		return true;
 	}
-	if (!Gun.HasReplacement() && Gun.GetModel() && Gun.GetModel()->Name == TEXT("SWeaponFirst.1DEF_01") && bHasMuzzle)
-	{
-		// Centre of the eight barrel-rim vertices, relative to the posed FX bone (cm, X forward).
-		// The simulation begins its collision trace well inside the stock.
-		return Muzzle.TransformPositionNoScale(FVector(-0.47, -0.43, -0.36));
-	}
-	return Socket.GetLocation();
+	return FindLaserStart(OutWorld);
 }
 
 bool AScctFirstPersonView::FindLaserStart(FTransform& OutWorld) const

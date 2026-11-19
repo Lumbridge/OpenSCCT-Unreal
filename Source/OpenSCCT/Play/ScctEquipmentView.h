@@ -85,6 +85,9 @@ struct FScctEquipmentView
 	/** The muzzle: the replacement's Muzzle socket, else the bone "FX". */
 	bool FindMuzzle(FTransform& OutWorld) const;
 
+	/** The Merc sight's aperture or the centre of the drawn barrel when the model has no separate mount. */
+	bool FindMercLaserMount(FTransform& OutWorld) const;
+
 	/**
 	 * -ScctWeaponProbe (unattended, off by default): every few seconds logs every bone of the original model in
 	 * the space of the weapon table row's gun bone (place, and where its X, Y and Z axes point), the hand bones
@@ -103,6 +106,8 @@ private:
 	const FScctEquipmentModel* Model = nullptr;
 	const FScctWeaponPresentation* Row = nullptr;
 	double NextProbe = 0.0;
+	int32 MercLaserBone = INDEX_NONE;
+	FVector MercLaserBoreOffset = FVector::ZeroVector;
 
 	/** The original's gun and magazine bones in the posed mesh, and the replacement's moving parts; INDEX_NONE where there is none. */
 	int32 GunBone = INDEX_NONE;

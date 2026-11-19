@@ -11,6 +11,8 @@
 #include "Misc/Parse.h"
 #include "Hud/ScctVisionSubsystem.h"
 #include "OpenSCCT.h"
+#include "Play/ScctEffectsSubsystem.h"
+#include "Play/ScctLaserBeam.h"
 #include "Play/ScctLevelStateSubsystem.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
@@ -45,6 +47,9 @@ namespace
 	// A beam: the core is the laser itself, the halo the dust it lights (cm across).
 	constexpr float BeamCoreWidth = 0.7f;
 	constexpr float BeamHaloWidth = 7.0f;
+	constexpr float BeamRibbonWidth = 4.5f;
+	constexpr float BeamRibbonIntensity = 0.75f;
+	constexpr float BeamSourceSize = 2.5f;
 	constexpr float BeamEndSize = 5.0f;
 	constexpr float LampSize = 6.0f;
 
@@ -73,6 +78,7 @@ void UScctMarkersSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Session = Collection.InitializeDependency<UScctSessionSubsystem>();
 	// The level state first: its frame places (and spawns) the things the signs stand over.
 	LevelState = Collection.InitializeDependency<UScctLevelStateSubsystem>();
+	Effects = Collection.InitializeDependency<UScctEffectsSubsystem>();
 	if (Session == nullptr)
 	{
 		return;
@@ -156,6 +162,7 @@ bool UScctMarkersSubsystem::EnsureScene()
 
 	MarkerMaterial = LoadObject<UMaterialInterface>(nullptr, MarkerMaterialPath);
 	BeamMaterial = LoadObject<UMaterialInterface>(nullptr, BeamMaterialPath);
+	LaserRibbonMaterial = LoadObject<UMaterialInterface>(nullptr, ScctLaserBeam::MaterialPath, nullptr, LOAD_NoWarn);
 	PlaneMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
 	CylinderMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
 	SphereMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
@@ -183,8 +190,8 @@ bool UScctMarkersSubsystem::EnsureScene()
 	Signs.Material = MarkerMaterial;
 	Lamps.Mesh = SphereMesh;
 	Lamps.Material = BeamMaterial;
-	Cores.Mesh = CylinderMesh;
-	Cores.Material = BeamMaterial;
+	Cores.Mesh = LaserRibbonMaterial != nullptr ? PlaneMesh.Get() : CylinderMesh.Get();
+	Cores.Material = LaserRibbonMaterial != nullptr ? LaserRibbonMaterial.Get() : BeamMaterial.Get();
 	Halos.Mesh = CylinderMesh;
 	Halos.Material = BeamMaterial;
 	// Never drawn in the picture, only into the custom depth stencil, so any opaque material will do: the engine's
@@ -512,6 +519,55 @@ void UScctMarkersSubsystem::UpdateMarkers(const FVector& ViewLocation)
 	}
 }
 
+FVector UScctMarkersSubsystem::LaserAperture(const FScctWorldLaser& Laser, const FVector& Start, const FVector& End) const
+{
+	if (Laser.ObjectId == 0)
+	{
+		return Start;
+	}
+
+	const UStaticMeshComponent* Emitter = nullptr;
+	if (Laser.Kind == 0 && LevelState != nullptr)
+	{
+		const AActor* Actor = LevelState->FindLevelActor(LevelState->GetName(Laser.ObjectId));
+		Emitter = Actor != nullptr ? Actor->FindComponentByClass<UStaticMeshComponent>() : nullptr;
+	}
+	else if (Laser.Kind == 1 && Effects != nullptr)
+	{
+		Emitter = Effects->FindActorMesh(Laser.ObjectId);
+	}
+	const UStaticMesh* Mesh = Emitter != nullptr ? Emitter->GetStaticMesh() : nullptr;
+	if (Mesh == nullptr || !Emitter->IsVisible())
+	{
+		return Start;
+	}
+
+	// The bridge exports the actor pivot. These local positions are the lens tips on the imported meshes, in cm.
+	// The component transform already includes the mine's PrePivot and any authored scale or roll.
+	const FString MeshName = Mesh->GetName();
+	FVector Lens;
+	if (MeshName.Contains(TEXT("lasertrig_standard")))
+	{
+		Lens = FVector(4.81, 0.0, 1.15);
+	}
+	else if (MeshName.Contains(TEXT("lasertrig_blind")))
+	{
+		Lens = FVector(4.74, 0.0, 0.0);
+	}
+	else if (MeshName.Contains(TEXT("proxy_mine")))
+	{
+		Lens = FVector(9.07, 0.0, 0.0);
+	}
+	else
+	{
+		return Start;
+	}
+
+	const FVector Aperture = Emitter->GetComponentTransform().TransformPosition(Lens);
+	// A beam intercepted right against the emitter must never be drawn backwards from its lens.
+	return FVector::DotProduct(End - Aperture, End - Start) > 0.0 ? Aperture : Start;
+}
+
 void UScctMarkersSubsystem::UpdateLasers()
 {
 	int32 Total = World->GetLasers(LaserBuffer.GetData(), LaserBuffer.Num());
@@ -545,8 +601,9 @@ void UScctMarkersSubsystem::UpdateLasers()
 			continue;
 		}
 
-		const FVector Start(Laser.StartX, Laser.StartY, Laser.StartZ);
+		const FVector SimulatedStart(Laser.StartX, Laser.StartY, Laser.StartZ);
 		const FVector End(Laser.EndX, Laser.EndY, Laser.EndZ);
+		const FVector Start = LaserAperture(Laser, SimulatedStart, End);
 		const double Length = FVector::Dist(Start, End);
 		if (Length < 1.0)
 		{
@@ -557,7 +614,7 @@ void UScctMarkersSubsystem::UpdateLasers()
 		if (Beam.Core == INDEX_NONE && Beam.Vision == INDEX_NONE && bLog)
 		{
 			UE_LOG(LogOpenSCCT, Log, TEXT("Markers: %.1f s laser beam %d (%s) from (%.0f, %.0f, %.0f) to (%.0f, %.0f, %.0f), heat %.2f%s"), MatchSeconds, Laser.Id, Laser.Kind == 1 ? TEXT("mine") : TEXT("tripwire"),
-				Start.X, Start.Y, Start.Z, End.X, End.Y, End.Z, Laser.Heat, bVisionOnly ? TEXT(", vision modes only") : TEXT(""));
+				SimulatedStart.X, SimulatedStart.Y, SimulatedStart.Z, End.X, End.Y, End.Z, Laser.Heat, bVisionOnly ? TEXT(", vision modes only") : TEXT(""));
 		}
 		Beam.SeenFrame = Frame;
 		const FQuat Along = FRotationMatrix::MakeFromZ(End - Start).ToQuat();
@@ -601,7 +658,10 @@ void UScctMarkersSubsystem::UpdateLasers()
 		if (Beam.Core == INDEX_NONE)
 		{
 			Beam.Core = Acquire(Cores);
-			Beam.Halo = Acquire(Halos);
+			if (LaserRibbonMaterial == nullptr)
+			{
+				Beam.Halo = Acquire(Halos);
+			}
 			Beam.Ends[0] = Acquire(Lamps);
 			Beam.Ends[1] = Acquire(Lamps);
 		}
@@ -623,10 +683,24 @@ void UScctMarkersSubsystem::UpdateLasers()
 				Material->SetScalarParameterValue(MarkerShimmerParameter, Shimmer);
 			}
 		};
-		// The engine's cylinder is a metre tall along Z and a metre across.
-		Place(Cores, Beam.Core, Middle, FVector(BeamCoreWidth / 100.0, BeamCoreWidth / 100.0, Length / 100.0), 26.0f, 1.2f, 0.0f);
-		Place(Halos, Beam.Halo, Middle, FVector(BeamHaloWidth / 100.0, BeamHaloWidth / 100.0, Length / 100.0), 0.5f, 3.0f, 1.0f);
-		Place(Lamps, Beam.Ends[0], Start, FVector(BeamEndSize / 100.0), 5.0f, 3.0f, 0.0f);
+		if (LaserRibbonMaterial != nullptr)
+		{
+			UStaticMeshComponent* Component = Cores.Components[Beam.Core].Get();
+			UMaterialInstanceDynamic* Material = Cores.Materials[Beam.Core].Get();
+			if (Component != nullptr && Material != nullptr)
+			{
+				ScctLaserBeam::Place(*Component, Start, End, Eye, BeamRibbonWidth);
+				Material->SetVectorParameterValue(MarkerColorParameter, MarkerAlarm);
+				Material->SetScalarParameterValue(MarkerIntensityParameter, BeamRibbonIntensity * Strength);
+			}
+		}
+		else
+		{
+			Place(Cores, Beam.Core, Middle, FVector(BeamCoreWidth / 100.0, BeamCoreWidth / 100.0, Length / 100.0), 8.0f, 2.5f, 0.0f);
+			Place(Halos, Beam.Halo, Middle, FVector(BeamHaloWidth / 100.0, BeamHaloWidth / 100.0, Length / 100.0), 0.5f, 3.0f, 1.0f);
+		}
+		const float SourceSize = Start.Equals(SimulatedStart) ? BeamEndSize : BeamSourceSize;
+		Place(Lamps, Beam.Ends[0], Start, FVector(SourceSize / 100.0), 5.0f, 3.0f, 0.0f);
 		Place(Lamps, Beam.Ends[1], End, FVector(BeamEndSize / 100.0), 5.0f, 3.0f, 0.0f);
 	}
 

@@ -957,6 +957,13 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 			TGuardValue<float> SpawnAge(Sprites.SpawnAge, bRestoring ? Record.Age : 0.0f);
 			EmitStickyGas(*Fx, Place.GetRotation());
 		}
+		else if (Fx->Style == EStyle::BarrelSmoke)
+		{
+			if (!bHidden)
+			{
+				EmitBarrelSmoke(*Fx, bHistorical ? Record.LifeSpan : Fx->Age);
+			}
+		}
 		else if (!bHidden && !bVolumeSmoke && !bFlicDrawn && Fx->Style != EStyle::None && Record.Kind == EScctEffectKind::Emitter)
 		{
 			const FVector Velocity(Record.VelX, Record.VelY, Record.VelZ);
@@ -1150,15 +1157,15 @@ void UScctEffectsSubsystem::EmitGrenadeCloud(FActorFx& Fx)
 {
 	// As many as the emitter's rate has let out by now, to its fifteen; none is ever let out again.
 	const int32 Due = FMath::Min(GrenadeCloudSprites, FMath::CeilToInt32(Fx.Age * GrenadeCloudPerSecond));
-	if (Fx.CloudSprites == 0 && Due > 0)
+	if (Fx.EmittedSprites == 0 && Due > 0)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("Effects: smoke grenade cloud at (%.0f, %.0f, %.0f): %d sprites of %s, %.0f s"),
 			Fx.Location.X, Fx.Location.Y, Fx.Location.Z, GrenadeCloudSprites, bCloudPicture ? TEXT("the game's picture") : TEXT("plain grey discs"), GrenadeCloudLife);
 	}
-	for (; Fx.CloudSprites < Due; ++Fx.CloudSprites)
+	for (; Fx.EmittedSprites < Due; ++Fx.EmittedSprites)
 	{
 		// Born a little into its life when the cloud was first seen late, so every sprite ends with the cloud.
-		const float Born = FMath::Max(Fx.Age - Fx.CloudSprites / GrenadeCloudPerSecond, 0.0f);
+		const float Born = FMath::Max(Fx.Age - Fx.EmittedSprites / GrenadeCloudPerSecond, 0.0f);
 		if (Born >= GrenadeCloudLife)
 		{
 			continue;
@@ -1193,12 +1200,43 @@ void UScctEffectsSubsystem::EmitGrenadeCloud(FActorFx& Fx)
 	}
 }
 
+void UScctEffectsSubsystem::EmitBarrelSmoke(FActorFx& Fx, float EmissionAge)
+{
+	// SSmokeCanonEmitter stays alive for four seconds, but its sub-emitter spends fifteen slots in one second.
+	// The slots never respawn. The last particle fades within 0.8 seconds of its birth.
+	constexpr int32 ParticleCount = 15;
+	constexpr float ParticlesPerSecond = 15.0f;
+	const int32 Due = FMath::Min(ParticleCount, FMath::FloorToInt32(EmissionAge * ParticlesPerSecond));
+	for (; Fx.EmittedSprites < Due; ++Fx.EmittedSprites)
+	{
+		const float BirthTime = (Fx.EmittedSprites + 1) / ParticlesPerSecond;
+		const float Age = FMath::Max(0.0f, Fx.Age - BirthTime);
+		const float Life = Random.FRandRange(0.6f, 0.8f);
+		if (Age >= Life)
+		{
+			continue;
+		}
+		FScctFxParticle& Particle = Sprites.Spawn(EScctFxLayer::Smoke);
+		Particle.SeekAge = Age;
+		Particle.Position = Fx.Location;
+		Particle.Velocity = FVector(0.0, 0.0, Random.FRandRange(10.0f, 30.0f));
+		Particle.Color = FLinearColor(0.6f, 0.6f, 0.62f, 0.22f);
+		Particle.Life = Life;
+		Particle.SizeStart = 3.0f;
+		Particle.SizeEnd = Random.FRandRange(16.0f, 30.0f);
+		Particle.Rotation = Random.FRandRange(0.0f, UE_TWO_PI);
+		Particle.Spin = Random.FRandRange(-1.0f, 1.0f);
+		Particle.FadeIn = 0.1f / Life;
+		Particle.FadeOutStart = Particle.FadeIn;
+	}
+}
+
 void UScctEffectsSubsystem::EmitStickyGas(FActorFx& Fx, const FQuat& Facing)
 {
 	// SStickyCamEmitter.StikyCamEmitter0 in shared/fx/effects.json. One dose emits fifteen
 	// world-space sprites along the mounted camera's +X, at 500/s, with no respawns.
 	const int32 Due = FMath::Min(15, FMath::FloorToInt32(Fx.Age * 500.0f));
-	for (; Fx.CloudSprites < Due; ++Fx.CloudSprites)
+	for (; Fx.EmittedSprites < Due; ++Fx.EmittedSprites)
 	{
 		FScctFxParticle& Particle = Sprites.Spawn(EScctFxLayer::StickyGas);
 		Particle.Position = Fx.Location;
@@ -1760,7 +1798,7 @@ UScctEffectsSubsystem::EStyle UScctEffectsSubsystem::FindStyle(int32 ClassId)
 		{ TEXT("MineProxEmitter"), EStyle::Explosion },
 		{ TEXT("Chaff"), EStyle::Chaff },
 		{ TEXT("Flare"), EStyle::Flare },
-		{ TEXT("SmokeCanon"), EStyle::Wisp },
+		{ TEXT("SmokeCanon"), EStyle::BarrelSmoke },
 		{ TEXT("Launch"), EStyle::Wisp },
 		{ TEXT("Poison"), EStyle::Gas },
 		{ TEXT("SStickyCamEmitter"), EStyle::StickyGas },

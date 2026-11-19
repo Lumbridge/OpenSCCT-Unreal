@@ -128,7 +128,7 @@ struct FScctWorldLaser
 {
 	int32 Id;     // stable while the beam lives: the simulation ActorId of its tripwire, or of the mine beam
 	int32 Kind;   // 0 an SLaserTrigger's tripwire, 1 a mine's beam
-	int32 NameId; // the tripwire's map name, 0 for a mine beam
+	int32 ObjectId; // tripwire map NameId, or owning mine ActorId (0 if unavailable; was always 0 for mines)
 	int32 Flags;  // EScctWorldLaserFlags
 	float StartX, StartY, StartZ; // cm
 	float EndX, EndY, EndZ;       // cm
