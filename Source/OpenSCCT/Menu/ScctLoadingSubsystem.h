@@ -4,6 +4,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "ScctLoadingSubsystem.generated.h"
 
+class SBorder;
 class SWidget;
 class UTexture2D;
 struct FWorldContext;
@@ -11,7 +12,7 @@ struct FWorldContext;
 /** What the loading page says about the level that is on its way. */
 struct FScctLoadingPage
 {
-	/** The map as every page names it ("ENHANCED AQUARIUS"); empty for the front end. */
+	/** The map as every page names it ("ENHANCED AQUARIUS"), or the game's name in the front end. */
 	FString Title;
 
 	/** One line under the title: the mode and the side played, or where the travel goes. */
@@ -60,6 +61,9 @@ public:
 
 	/** The page as a widget: the same one for the movie player and for -ScctLoadingHold. */
 	static TSharedRef<SWidget> MakePage(const FScctLoadingPage& Page);
+
+	/** The front-end loading page in an opaque border that can stay behind the menu while its backdrop loads. */
+	TSharedRef<SBorder> MakeFrontEndCover() const;
 
 	/**
 	 * The page of a round of Map (an OpenSCCT map's folder name) for a side (0 spy, 1 merc, -1 watching): the map's

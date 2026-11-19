@@ -4,6 +4,7 @@
 #include "GameFramework/GameModeBase.h"
 #include "ScctFrontEndGameMode.generated.h"
 
+class SBorder;
 class UScctFrontEndWidget;
 class UScctMenuBackdrop;
 class ULevelStreamingDynamic;
@@ -46,6 +47,10 @@ private:
 	void ShowMenu();
 	void MoveCamera();
 	void RevealBackdrop();
+	void RemoveLoadingCover();
+
+	/** Covers the first rendered frame, then masks the temporary scene underneath the interactive menu. */
+	TSharedPtr<SBorder> LoadingCover;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UScctFrontEndWidget> Menu;
@@ -66,9 +71,8 @@ private:
 	float Seconds = 0.0f;
 
 	/**
-	 * The imported map streaming in behind the menu. It loads hidden while the level's own scene stays on screen,
-	 * and takes its place (with its camera) once it is loaded and its shaders are ready, so the menu never sits on
-	 * a black or untextured picture while the map loads.
+	 * The imported map streaming in behind the menu. It loads hidden under the cover and takes its place, with
+	 * its camera, once it is visible and has had time to compile shaders.
 	 */
 	UPROPERTY(Transient)
 	TObjectPtr<ULevelStreamingDynamic> BackdropLevel;

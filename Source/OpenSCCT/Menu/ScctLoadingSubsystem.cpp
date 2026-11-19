@@ -35,6 +35,16 @@
 namespace
 {
 	const TCHAR* const LoadingFrontEndLevel = TEXT("L_FrontEnd");
+	const FSlateColorBrush LoadingBackground(FLinearColor(0.004f, 0.006f, 0.009f, 1.0f));
+
+	FScctLoadingPage DescribeFrontEnd()
+	{
+		FScctLoadingPage Page;
+		Page.Title = TEXT("OpenSCCT Unreal");
+		Page.Status = TEXT("Loading main menu");
+		Page.Trivia = ScctSplashTrivia::Pick();
+		return Page;
+	}
 
 	/** A text of the play table, whatever its length. */
 	template <typename TCall>
@@ -183,7 +193,7 @@ namespace
 			}
 
 			const TSharedRef<SOverlay> Layers = SNew(SOverlay);
-			Layers->AddSlot()[ SNew(SImage).Image(&WhiteBrush).ColorAndOpacity(FLinearColor(0.004f, 0.006f, 0.009f, 1.0f)) ];
+			Layers->AddSlot()[ SNew(SImage).Image(&LoadingBackground) ];
 			if (bPicture)
 			{
 				// The map's own picture, large and dark, behind everything: the page has the map's colours.
@@ -323,15 +333,23 @@ TSharedRef<SWidget> UScctLoadingSubsystem::MakePage(const FScctLoadingPage& Page
 	return SNew(SScctLoadingPage, Page);
 }
 
+TSharedRef<SBorder> UScctLoadingSubsystem::MakeFrontEndCover() const
+{
+	return SNew(SBorder)
+		.BorderImage(&LoadingBackground)
+		.Padding(0.0f)
+		.Visibility(EVisibility::HitTestInvisible)
+		[
+			MakePage(bHasPending ? Pending : DescribeFrontEnd())
+		];
+}
+
 FScctLoadingPage UScctLoadingSubsystem::DescribeLoad(const FWorldContext& Context, const FString& MapName)
 {
-	FScctLoadingPage Page;
 	const FString Level = FPackageName::GetShortName(MapName);
 	if (Level.Equals(LoadingFrontEndLevel, ESearchCase::IgnoreCase))
 	{
-		// On the way back to the menu: no map and no side, so a Splinter Cell fact instead of a tip.
-		Page.Trivia = ScctSplashTrivia::Pick();
-		return Page;
+		return DescribeFrontEnd();
 	}
 
 	// The options the level is opened with: the travel's URL (noted while it waited), or the command line's for

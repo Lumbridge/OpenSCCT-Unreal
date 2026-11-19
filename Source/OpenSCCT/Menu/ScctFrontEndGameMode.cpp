@@ -5,6 +5,7 @@
 
 #include "Blueprint/UserWidget.h"
 #include "Demo/ScctDemoPlayback.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/LevelStreamingDynamic.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -25,6 +26,8 @@
 #include "OpenSCCT.h"
 #include "Play/ScctViewPawn.h"
 #include "ShaderCompiler.h"
+#include "Widgets/Layout/SBorder.h"
+#include "Widgets/SNullWidget.h"
 
 namespace
 {
@@ -158,6 +161,18 @@ void AScctFrontEndGameMode::StartPlay()
 {
 	Super::StartPlay();
 
+	if (UGameInstance* Instance = GetGameInstance())
+	{
+		UGameViewportClient* Viewport = Instance->GetGameViewportClient();
+		UScctLoadingSubsystem* Loading = Instance->GetSubsystem<UScctLoadingSubsystem>();
+		if (Viewport != nullptr && Loading != nullptr)
+		{
+			// Under the menu so it can be used as soon as its widget has been built.
+			LoadingCover = Loading->MakeFrontEndCover();
+			Viewport->AddViewportWidgetContent(LoadingCover.ToSharedRef(), 0);
+		}
+	}
+
 	if (!bTookEditorMap && !ScctLaunchOptions::EditorMap().IsEmpty())
 	{
 		return;
@@ -181,7 +196,7 @@ void AScctFrontEndGameMode::StartPlay()
 			continue;
 		}
 
-		// Loaded hidden: the level's own scene stays until the map can be drawn (RevealBackdrop).
+		// Loaded hidden: the cover stays behind the menu until the map can be drawn (RevealBackdrop).
 		Streaming->SetShouldBeVisible(false);
 		BackdropLevel = Streaming;
 		BackdropMap = Backdrop.Map;
@@ -189,7 +204,7 @@ void AScctFrontEndGameMode::StartPlay()
 		BackdropRotation = FRotator(Backdrop.Pitch, Backdrop.Yaw, 0.0f);
 		BackdropSway = Backdrop.Sway;
 		BackdropStarted = FPlatformTime::Seconds();
-		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: backdrop %s is loading; the level's own scene shows until it is ready"), Backdrop.Map);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: backdrop %s is loading behind the cover"), Backdrop.Map);
 		return;
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: no imported map to show behind the menu; using the level's own scene"));
@@ -206,6 +221,10 @@ void AScctFrontEndGameMode::Tick(float DeltaSeconds)
 	ShowMenu();
 	RevealBackdrop();
 	MoveCamera();
+	if (IsValid(Menu) && !IsValid(BackdropLevel))
+	{
+		RemoveLoadingCover();
+	}
 
 	// The live backdrop, once the menu and the still are up (the still is settled when nothing is waited for any more).
 	if (IsValid(Menu))
@@ -220,11 +239,25 @@ void AScctFrontEndGameMode::Tick(float DeltaSeconds)
 
 void AScctFrontEndGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	RemoveLoadingCover();
 	if (IsValid(LiveBackdrop))
 	{
 		LiveBackdrop->Shutdown(GetWorld());
 	}
 	Super::EndPlay(EndPlayReason);
+}
+
+void AScctFrontEndGameMode::RemoveLoadingCover()
+{
+	if (LoadingCover.IsValid())
+	{
+		const UGameInstance* Instance = GetGameInstance();
+		if (UGameViewportClient* Viewport = Instance != nullptr ? Instance->GetGameViewportClient() : nullptr)
+		{
+			Viewport->RemoveViewportWidgetContent(LoadingCover.ToSharedRef());
+		}
+		LoadingCover.Reset();
+	}
 }
 
 void AScctFrontEndGameMode::SetStillCamera(const FVector& Location, const FRotator& Rotation, float Sway)
@@ -304,6 +337,11 @@ void AScctFrontEndGameMode::ShowMenu()
 		return;
 	}
 	Menu->AddToViewport(20);
+	if (LoadingCover.IsValid())
+	{
+		// Keep the temporary scene hidden, and leave the menu itself unobstructed.
+		LoadingCover->SetContent(SNullWidget::NullWidget);
+	}
 
 	FInputModeUIOnly Mode;
 	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
