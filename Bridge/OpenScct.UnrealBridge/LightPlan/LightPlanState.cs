@@ -347,14 +347,15 @@ public sealed class LightPlanState : IDisposable
                     }
                 }
 
+                float lightRadius = FlareLighting.RenderRadius(actor);
                 if (spySurface)
                 {
                     float modulation = FieldModulation((int)actor.LightType, actor.LightPeriod, actor.LightPhase, time);
                     surfaceLight += LiveSurfaceLight(effect, actor.Location, actor.Rotation, actor.LightHue, actor.LightSaturation,
-                        actor.LightBrightness * modulation, actor.LightRadius, actor.LightCone, centre, shadowWorld);
+                        actor.LightBrightness * modulation, lightRadius, actor.LightCone, centre, shadowWorld);
                     continue;
                 }
-                float score = ActorLightRules.Score(effect, actor.Location, actor.Rotation, actor.LightBrightness, actor.LightRadius, actor.LightCone,
+                float score = ActorLightRules.Score(effect, actor.Location, actor.Rotation, actor.LightBrightness, lightRadius, actor.LightCone,
                     centre, radius);
                 if (score > 0f)
                 {
@@ -414,14 +415,14 @@ public sealed class LightPlanState : IDisposable
                 location = actor.Location;
                 rotation = actor.Rotation;
                 colour = ActorLightRules.Colour(actor.LightHue, actor.LightSaturation, actor.LightBrightness);
-                lightRadius = actor.LightRadius;
+                lightRadius = FlareLighting.RenderRadius(actor);
                 cone = actor.LightCone;
                 period = actor.LightPeriod;
                 phase = actor.LightPhase;
                 drawn = FieldModulation(type, period, phase, time);
             }
 
-            // The level, exactly as AiLightField.Evaluate sums it: the mean of the light type for "around", its
+            // Sum light like AiLightField.Evaluate: the mean of the light type for "around", its
             // value now (a flicker at its mean) on the side that faces the viewer.
             around += ActorLightRules.Term(effect, location, rotation, colour, lightRadius, cone, centre, null) * ActorLightRules.MeanModulation(type);
             facing += ActorLightRules.Term(effect, location, rotation, colour, lightRadius, cone, centre, normal) *
@@ -682,12 +683,13 @@ public sealed class LightPlanState : IDisposable
         foreach (Actor actor in _runtime)
         {
             int lightZone = collision?.GetZoneIndex(actor.Location) ?? actor.Region.ZoneNumber;
+            float lightRadius = FlareLighting.RenderRadius(actor);
             bool present = !actor.bDeleteMe &&
                 ActorLightRules.LightsActors(actor.bApplyToInGameLighting, actor.bDynamicLight, (int)actor.LightType, (int)actor.LightEffect) &&
                 (!actor.bAffectOwnZoneOnly || zone < 0 || lightZone < 0 || zone == lightZone) && pawn.bSpecialLit == actor.bSpecialLit &&
                 (pawn.bUseDynamicLights || !actor.bDynamicLight) && !pawn.IgnoredEchelonLights.Contains(actor) &&
-                Intersects((int)actor.LightEffect, actor.Location, actor.LightRadius, centre, radius);
-            _shadowLights.Add(new ActorShadowLight(actor, actor.Location, actor.Rotation, actor.LightBrightness, actor.LightRadius, actor.LightCone,
+                Intersects((int)actor.LightEffect, actor.Location, lightRadius, centre, radius);
+            _shadowLights.Add(new ActorShadowLight(actor, actor.Location, actor.Rotation, actor.LightBrightness, lightRadius, actor.LightCone,
                 (int)actor.LightEffect, actor.bActorShadows, actor.bStatic, actor.bDynamicLight, present, !actor.bDeleteMe));
         }
 

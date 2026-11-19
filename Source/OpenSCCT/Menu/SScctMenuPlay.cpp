@@ -485,7 +485,7 @@ namespace
 				.Look(EScctButtonLook::Menu)
 				.Text(FText::FromString(TEXT("EQUIPMENT")))
 				.SubText_Lambda([this] { return FText::FromString(SScctGearPage::SummaryLine(bMerc ? 1 : 0)); })
-				.Description(FText::FromString(TEXT("The gadgets (and for a mercenary the weapon) your side takes into the match. The sidearm is the stepper under Rules.")))
+				.Description(FText::FromString(TEXT("Choose the gadgets and weapons you take into the match. Mercenaries can use their equipped pistol when sidearms are enabled under Rules.")))
 				.OnPressed(FSimpleDelegate::CreateLambda([this] { Host.Open(bMerc ? TEXT("gear/merc") : TEXT("gear/spy")); })));
 
 			Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Bots")) ];
@@ -538,13 +538,11 @@ namespace
 				.Description(FText::FromString(TEXT("No time limit, unlimited lives and a 5 second respawn, unless set above, with unlimited ammunition, gadgets and mask air, instant gear changes and Switch Team in the match menu. For learning a map.")))
 				.Get([this] { return bPractice; })
 				.Set([this](bool bValue) { bPractice = bValue; }));
-			Add(SNew(SScctStepper)
-				.Label(FText::FromString(TEXT("Mercenaries' sidearm")))
-				.Description(FText::FromString(TEXT("The sidearm a mercenary carries besides his rifle (OpenSCCT's sidearms), or none.")))
-				.Options({ TEXT("None"), TEXT("Pistol"), TEXT("Suppressed"), TEXT("Automatic"), TEXT(".44 Magnum"), TEXT("Desert Eagle") })
-				.Wrap(false)
-				.Get([this] { return SidearmIndex; })
-				.Set([this](int32 Value) { SidearmIndex = Value; }));
+			Add(SNew(SScctToggle)
+				.Label(FText::FromString(TEXT("Mercenary sidearms")))
+				.Description(FText::FromString(TEXT("Allow mercenaries to use the pistol they selected in Equipment.")))
+				.Get([this] { return bSidearms; })
+				.Set([this](bool bValue) { bSidearms = bValue; }));
 			Add(SNew(SScctToggle)
 				.Label(FText::FromString(TEXT("Additional rifles")))
 				.Description(FText::FromString(TEXT("The mercenaries may pick OpenSCCT's additional rifles.")))
@@ -608,9 +606,7 @@ namespace
 			if (bPractice) { Url += TEXT("?Practice=1?UnlimitedGear=1"); }
 			if (bResponsiveSmoke) { Url += TEXT("?ResponsiveSmoke=1"); }
 			if (MatchPlayers > 0) { Url += FString::Printf(TEXT("?MatchPlayers=%d"), MatchPlayers); }
-			// AScctGameMode's ?Sidearms and ?Sidearm: the match allows sidearms and the local merc carries this one.
-			static const TCHAR* const SidearmKeys[] = { TEXT(""), TEXT("unsuppressed"), TEXT("suppressed"), TEXT("automatic"), TEXT("magnum44"), TEXT("desert_eagle") };
-			if (SidearmIndex > 0 && SidearmIndex < UE_ARRAY_COUNT(SidearmKeys)) { Url += FString::Printf(TEXT("?Sidearms=1?Sidearm=%s"), SidearmKeys[SidearmIndex]); }
+			if (bSidearms) { Url += TEXT("?Sidearms=1"); }
 			if (bRifles) { Url += TEXT("?Rifles=1"); }
 			if (TimeLimit >= 0) { Url += FString::Printf(TEXT("?TimeLimit=%d"), TimeLimit); }
 			if (SpyLives >= 0) { Url += FString::Printf(TEXT("?SpyLives=%d"), SpyLives); }
@@ -638,7 +634,13 @@ namespace
 			GConfig->GetInt(PlaySection, TEXT("MercLives"), MercLives, Ini);
 			GConfig->GetInt(PlaySection, TEXT("Respawn"), Respawn, Ini);
 			GConfig->GetBool(PlaySection, TEXT("Practice"), bPractice, Ini);
-			GConfig->GetInt(PlaySection, TEXT("Sidearm"), SidearmIndex, Ini);
+			if (!GConfig->GetBool(PlaySection, TEXT("Sidearms"), bSidearms, Ini))
+			{
+				// A pistol selected in the old Rules menu enabled sidearms for the match.
+				int32 SavedSidearm = 0;
+				GConfig->GetInt(PlaySection, TEXT("Sidearm"), SavedSidearm, Ini);
+				bSidearms = SavedSidearm >= 1 && SavedSidearm <= 5;
+			}
 			GConfig->GetBool(PlaySection, TEXT("Rifles"), bRifles, Ini);
 			GConfig->GetBool(PlaySection, TEXT("ResponsiveSmoke"), bResponsiveSmoke, Ini);
 			GConfig->GetInt(PlaySection, TEXT("MatchPlayers"), MatchPlayers, Ini);
@@ -646,7 +648,6 @@ namespace
 			ModeIndex = FMath::Clamp(ModeIndex, 0, 3);
 			Bots = FMath::Clamp(Bots, 0, 15);
 			Skill = FMath::Clamp(Skill, 0, 3);
-			SidearmIndex = FMath::Clamp(SidearmIndex, 0, 5);
 		}
 
 		void Save() const
@@ -665,7 +666,7 @@ namespace
 			GConfig->SetInt(PlaySection, TEXT("MercLives"), MercLives, Ini);
 			GConfig->SetInt(PlaySection, TEXT("Respawn"), Respawn, Ini);
 			GConfig->SetBool(PlaySection, TEXT("Practice"), bPractice, Ini);
-			GConfig->SetInt(PlaySection, TEXT("Sidearm"), SidearmIndex, Ini);
+			GConfig->SetBool(PlaySection, TEXT("Sidearms"), bSidearms, Ini);
 			GConfig->SetBool(PlaySection, TEXT("Rifles"), bRifles, Ini);
 			GConfig->SetBool(PlaySection, TEXT("ResponsiveSmoke"), bResponsiveSmoke, Ini);
 			GConfig->SetInt(PlaySection, TEXT("MatchPlayers"), MatchPlayers, Ini);
@@ -684,7 +685,7 @@ namespace
 		int32 MercLives = -1;
 		int32 Respawn = -1;
 		bool bPractice = false;
-		int32 SidearmIndex = 0;
+		bool bSidearms = false;
 		bool bRifles = false;
 		bool bResponsiveSmoke = false;
 		int32 MatchPlayers = 0;

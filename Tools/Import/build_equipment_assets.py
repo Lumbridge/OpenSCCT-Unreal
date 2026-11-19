@@ -149,6 +149,9 @@ def build_laser_beam():
     length = scalar(material, "LengthCm", 100.0, -1020, 300)
     length.set_editor_property("use_custom_primitive_data", True)
     length.set_editor_property("primitive_data_index", 0)
+    attached_muzzle = scalar(material, "AttachedMuzzle", 0.0, -1020, 570)
+    attached_muzzle.set_editor_property("use_custom_primitive_data", True)
+    attached_muzzle.set_editor_property("primitive_data_index", 1)
     tint = vector(material, "Color", (1.0, 0.03, 0.02, 1.0), -1020, -150)
     intensity = scalar(material, "Intensity", 1.0, -1020, 0)
     weapon_profile = scalar(material, "WeaponProfile", 0.0, -1020, 440)
@@ -157,7 +160,7 @@ def build_laser_beam():
     profile.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
     inputs = []
     for name, node in (("Local", local), ("LengthCm", length), ("Tint", tint),
-                       ("Intensity", intensity), ("WeaponProfile", weapon_profile)):
+                       ("Intensity", intensity), ("WeaponProfile", weapon_profile), ("AttachedMuzzle", attached_muzzle)):
         pin = unreal.CustomInput()
         pin.set_editor_property("input_name", name)
         inputs.append((pin, node))
@@ -169,7 +172,8 @@ def build_laser_beam():
     profile.set_editor_property("code", """
         float distanceFromMuzzle = saturate(Local.x * 0.01 + 0.5) * LengthCm;
         float distanceFromImpact = max(LengthCm - distanceFromMuzzle, 0.0);
-        float muzzleFadeCm = lerp(8.0, 5.0, WeaponProfile);
+        // A broad fade reads as a gap when the ray starts at the visible opening of a nearby gun.
+        float muzzleFadeCm = lerp(lerp(8.0, 5.0, WeaponProfile), 0.65, AttachedMuzzle);
         float muzzle = smoothstep(0.0, max(min(muzzleFadeCm, LengthCm * 0.25), 0.01), distanceFromMuzzle);
         float impact = smoothstep(0.0, max(min(5.0, LengthCm * 0.20), 0.01), distanceFromImpact);
         float endFade = muzzle * impact;

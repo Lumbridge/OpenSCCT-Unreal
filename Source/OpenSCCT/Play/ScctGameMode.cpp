@@ -36,7 +36,7 @@ namespace
 			|| Value.Equals(TEXT("no"), ESearchCase::IgnoreCase) || Value.Equals(TEXT("off"), ESearchCase::IgnoreCase));
 	}
 
-	/** ?Sidearm=: the simulation's number of a sidearm by its name (EScctSidearm), or a number; -1 for none. */
+	/** ?Sidearm=: an optional override by name or number (EScctSidearm); -1 uses Equipment. */
 	int32 ParseSidearm(const FString& Value, int32 Default)
 	{
 		static const TCHAR* const Names[] = { TEXT("suppressed"), TEXT("automatic"), TEXT("magnum44"), TEXT("desert_eagle"), TEXT("unsuppressed") };

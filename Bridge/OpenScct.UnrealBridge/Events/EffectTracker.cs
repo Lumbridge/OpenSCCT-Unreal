@@ -8,7 +8,9 @@ using OpenScct.Core.Engine;
 using OpenScct.Core.Uc;
 using OpenScct.Game.Combat;
 using OpenScct.Game.Equipment;
+using OpenScct.Game.Lighting;
 using OpenScct.Game.SBase;
+using OpenScct.UnrealBridge.LightPlan;
 using OpenScctGame.Play.Session;
 using OpenScctGame.Render.Data;
 using K = OpenScct.Game.Equipment.K;
@@ -34,9 +36,6 @@ internal sealed class EffectTracker
 
     /// <summary>A step longer than this in one tick was a placement, not a move: no blend (as the pawns).</summary>
     private const float CutDistanceSquared = 40000f;
-
-    /// <summary>A light reaches 25 x (LightRadius + 1) units (RenderK.LightRadiusUnits in the Godot client).</summary>
-    private const float LightRadiusUnits = 25f;
 
     // Effect classes the fx step lists only since a later converter version (FxLibrary.AddLateClasses).
     private static readonly (string Class, int Kind)[] s_lateClasses =
@@ -384,7 +383,7 @@ internal sealed class EffectTracker
             LightBrightness = LightBrightnessOf(a),
             LightHue = a.LightHue,
             LightSaturation = a.LightSaturation,
-            LightRadius = LightRadiusUnits * (a.LightRadius + 1f),
+            LightRadius = ActorLightRules.WorldRadius(FlareLighting.RenderRadius(a)),
         };
     }
 

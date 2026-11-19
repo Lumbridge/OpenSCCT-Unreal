@@ -115,12 +115,11 @@ struct FScctLocalMatchOptions
 	bool bSidearms = false;
 
 	/**
-	 * The sidearm the local merc carries when bSidearms is on, in the simulation's numbering (EScctSidearm in
-	 * Runtime/ScctPlayApi.h): 0 suppressed pistol, 1 automatic pistol, 2 .44 Magnum, 3 Desert Eagle, 4 unsuppressed
-	 * pistol; -1 for none. The simulation hands a merc no sidearm unless his machine names one.
+	 * Optional override for direct launches, in the simulation's numbering (EScctSidearm in Runtime/ScctPlayApi.h).
+	 * -1 uses the pistol selected in Equipment. The match's bSidearms rule still controls whether a pistol is given.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
-	int32 Sidearm = 4;
+	int32 Sidearm = -1;
 
 	/** The mercs may pick OpenSCCT's additional rifles. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")

@@ -126,9 +126,8 @@ bool UScctSessionSubsystem::StartMatch(const FScctLocalMatchOptions& Options)
 	Start.RespawnPlusOne = FMath::Max(Options.RespawnSeconds, -1) + 1;
 	Start.MatchPlayers = FMath::Clamp(Options.MatchPlayers, 0, 24);
 
-	// The match only allows sidearms; which one the local merc carries is his own gear, asked of this machine when
-	// the server hands out the kit.
-	if (const FScctPlayApi* Play = ScctFeature<FScctPlayApi>())
+	// The server asks for the equipped pistol when handing out the kit. Only an explicit launch option overrides it.
+	if (const FScctPlayApi* Play = ScctFeature<FScctPlayApi>(); Play != nullptr && Options.Sidearm >= 0)
 	{
 		Play->SetSidearm(Options.Sidearm);
 	}

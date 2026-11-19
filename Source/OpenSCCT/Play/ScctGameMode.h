@@ -16,8 +16,8 @@ class UScctMatchMenuWidget;
  *   ?Bots=3             how many bots fill the match
  *   ?Difficulty=hard    the bots' skill: easy, normal, hard or expert (or 1 to 4); default normal
  *   ?Sidearms=1         the mercs carry OpenSCCT's sidearms (G, SwapWeapon, draws it)
- *   ?Sidearm=magnum44   the local merc's own: suppressed, automatic, magnum44, desert_eagle, unsuppressed (the
- *                       default) or none
+ *   ?Sidearm=magnum44   override the equipped pistol for a direct launch: suppressed, automatic, magnum44,
+ *                       desert_eagle or unsuppressed
  *   ?Rifles=1           the mercs may pick OpenSCCT's additional rifles
  *   ?Practice=1         practice rules: no time limit, unlimited lives, 5 s respawn
  *   ?ResponsiveSmoke=1  smoke grenades fill the shared simulated cloud (Play/ScctEffectsSmokeVolume.cpp draws it)

@@ -2,7 +2,8 @@
 
 #include "Components/StaticMeshComponent.h"
 
-void ScctLaserBeam::Place(UStaticMeshComponent& Beam, const FVector& Start, const FVector& End, const FVector& Eye, double Width)
+void ScctLaserBeam::Place(UStaticMeshComponent& Beam, const FVector& Start, const FVector& End, const FVector& Eye, double Width,
+	bool bAttachedMuzzle)
 {
 	const FVector Along = End - Start;
 	const double Length = Along.Size();
@@ -20,4 +21,5 @@ void ScctLaserBeam::Place(UStaticMeshComponent& Beam, const FVector& Start, cons
 	Beam.SetWorldTransform(FTransform(Rotation, Start + Along * 0.5, FVector(Length / 100.0, Width / 100.0, 1.0)));
 	// M_ScctLaserBeam reads the length for its muzzle and tip fades.
 	Beam.SetCustomPrimitiveDataFloat(0, static_cast<float>(Length));
+	Beam.SetCustomPrimitiveDataFloat(1, bAttachedMuzzle ? 1.0f : 0.0f);
 }

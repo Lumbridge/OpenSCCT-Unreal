@@ -661,6 +661,7 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 	const FVector End(Pawn.LaserEndX, Pawn.LaserEndY, Pawn.LaserEndZ);
 	const FVector TracedStart(Pawn.LaserStartX, Pawn.LaserStartY, Pawn.LaserStartZ);
 	FVector Start = TracedStart;
+	bool bAttachedMuzzle = false;
 	if (bBeam)
 	{
 		// Leave the impact at the bridge's traced point. Match the near end to the weapon as posed for this frame.
@@ -671,6 +672,7 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 			{
 				const FVector Eye = GetCamera().GetLocation();
 				Start = Eye + (Source.GetLocation() - Eye) * DrawnFirstPersonScale;
+				bAttachedMuzzle = true;
 			}
 			else if (!Proxy.IsFirstPerson() && (Pawn.Flags & EScctEquipmentFlags::TorchInCamera) == 0
 				&& (Pawn.Flags & EScctEquipmentFlags::WeaponInHand) != 0)
@@ -679,6 +681,7 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 				if (Gun.IsShown() && Gun.GetBody()->IsVisible() && Gun.FindMercLaserMount(Source))
 				{
 					Start = Source.GetLocation();
+					bAttachedMuzzle = true;
 				}
 			}
 		}
@@ -750,7 +753,7 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		{
 			if (LaserBeamMaterial != nullptr)
 			{
-				ScctLaserBeam::Place(*Beam, Start, End, GetCamera().GetLocation(), LaserRibbonWidth);
+				ScctLaserBeam::Place(*Beam, Start, End, GetCamera().GetLocation(), LaserRibbonWidth, bAttachedMuzzle);
 			}
 			else
 			{

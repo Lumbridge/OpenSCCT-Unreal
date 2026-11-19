@@ -500,6 +500,13 @@ public sealed class EquipmentFeature
             (start, end) = DistantBeam(merc, _session.Alpha);
         }
 
+        // The sight stops on visible surfaces, including thin props that the bullet trace passes through.
+        // Keep the existing endpoint when it is nearer, including hits on pawns.
+        if (GadgetWorld.Line(merc, end, start, ETraceFlags.TRACE_World | ETraceFlags.TRACE_VisibleSurface, out FCheckResult surface))
+        {
+            end = surface.Location;
+        }
+
         e.LaserStartX = start.X;
         e.LaserStartY = start.Y;
         e.LaserStartZ = start.Z;

@@ -94,6 +94,18 @@ void FScctEquipmentView::Show(AActor& Owner, const FScctEquipmentModel* NewModel
 	{
 		MercLaserBone = Model->MeshBoneByName(TEXT("FX"));
 		MercLaserBoreOffset = ScctMercLaserMount::BoreOffset(Model->Name);
+		if (MercLaserBone != INDEX_NONE && Model->Name.StartsWith(TEXT("SWeaponFirst.")) && !MercLaserBoreOffset.IsNearlyZero())
+		{
+			// The stock rifles share animation that can move FX away from the mesh's muzzle. The barrel itself
+			// is rigidly skinned to the gun body, so express the measured opening in that bone's bind space.
+			const FReferenceSkeleton& Skeleton = Model->Mesh->GetRefSkeleton();
+			const int32 GunBody = Skeleton.GetParentIndex(MercLaserBone);
+			if (GunBody != INDEX_NONE)
+			{
+				MercLaserBoreOffset = Skeleton.GetRefBonePose()[MercLaserBone].TransformPosition(MercLaserBoreOffset);
+				MercLaserBone = GunBody;
+			}
+		}
 	}
 	for (const TStrongObjectPtr<USkeletalMesh>& Extra : Model->ExtraMeshes)
 	{
