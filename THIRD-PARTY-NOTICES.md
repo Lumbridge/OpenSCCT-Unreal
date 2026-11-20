@@ -14,7 +14,7 @@ into every release folder. Update it when the bridge gains a package or the rele
 ## NuGet packages in the bridge (`OpenSCCTUnreal\Binaries\Bridge`)
 
 The bridge (`Bridge/OpenScct.UnrealBridge`) and the OpenSCCT assemblies it is built with
-(https://github.com/Lumbridge/OpenSCCT) use these packages at run time:
+(https://github.com/OpenSCCT/OpenSCCT) use these packages at run time:
 
 | Package | Version | Project | Licence |
 |---|---|---|---|

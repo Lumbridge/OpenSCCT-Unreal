@@ -37,7 +37,7 @@
 namespace
 {
 	const TCHAR* const ConfigSection = TEXT("OpenSCCT.MapPacks");
-	const TCHAR* const DefaultIndexUrl = TEXT("https://raw.githubusercontent.com/Lumbridge/OpenSCCT-Unreal-Content/main/index.json");
+	const TCHAR* const DefaultIndexUrl = TEXT("https://raw.githubusercontent.com/OpenSCCT/OpenSCCT-Unreal-Content/main/index.json");
 	const TCHAR* const IndexFormat = TEXT("openscct.unreal-content");
 	const int32 IndexFormatVersion = 1;
 	const TCHAR* const InstalledFormat = TEXT("openscct.unreal-packs-installed");

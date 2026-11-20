@@ -128,7 +128,7 @@ public sealed class MenuDashboard
     public const long ChangelogEveryMs = 600_000;
     private const long FailedRetryMs = 120_000;
     private const long VersionRetryMs = 60_000;
-    public const string ReleasesUrl = "https://github.com/Lumbridge/OpenSCCT/releases";
+    public const string ReleasesUrl = "https://github.com/OpenSCCT/OpenSCCT/releases";
 
     private readonly SocialBridge _owner;
     private readonly long _epoch = Stopwatch.GetTimestamp();

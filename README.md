@@ -1,8 +1,16 @@
 # OpenSCCT Unreal
 
 OpenSCCT on Unreal Engine 5.8: the same game, servers and netcode as
-[OpenSCCT](https://github.com/Lumbridge/OpenSCCT), with a new Unreal presentation built for looks
+[OpenSCCT](https://github.com/OpenSCCT/OpenSCCT), with a new Unreal presentation built for looks
 rather than 1:1 parity with the original.
+
+The [OpenSCCT project directory](https://github.com/OpenSCCT/OpenSCCT) covers the original
+PS2 disc edition, the original PC/Steam edition and this modern Unreal client.
+
+For a custom Versus map, build the project with [OpenSCCT Editor](https://github.com/OpenSCCT/OpenSCCT-Editor)
+and choose **Play in Unreal**. To run a compiled map from outside the editor, start the client with
+`"--svm-maps=<folder containing your map folders>"`. The client reads the map's SVMap files and
+`render/world.glb`. For distribution through the cooked content catalog, see the [map pak guide](docs/MAP-PAKS.md).
 
 ## How it fits together
 

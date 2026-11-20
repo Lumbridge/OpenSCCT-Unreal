@@ -30,11 +30,11 @@ Unreal fails.
 
 ## Calls made (mine, open to correction)
 
-- **Repo**: `Lumbridge/OpenSCCT-Unreal`, public. Its GitHub releases are what the OpenSCCT launcher installs.
+- **Repo**: `OpenSCCT/OpenSCCT-Unreal`, public. Its GitHub releases are what the OpenSCCT launcher installs.
   Project `OpenSCCTUnreal`, game module `OpenSCCT`.
 - **Runtime hosting**: the full .NET runtime through `hostfxr`, not NativeAOT, so the simulation runs
   unmodified whatever it does with reflection. The bridge exposes a flat C interface.
-- **OpenSCCT source**: referenced from a sibling checkout of `Lumbridge/OpenSCCT` at a pinned commit, not
+- **OpenSCCT source**: referenced from a sibling checkout of `OpenSCCT/OpenSCCT` at a pinned commit, not
   copied in.
 - **Content**: original game content is never committed, as in OpenSCCT. Maps are imported locally from a
   converted `.content` folder into `Content/Imported/` (ignored by Git). Releases bundle the imported maps, cooked,

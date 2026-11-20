@@ -139,7 +139,7 @@ pwsh Tools/Package-Release.ps1 -Local -CheckContentOnly
 
 ## Where releases are published
 
-`-Repository` defaults to `Lumbridge/OpenSCCT-Unreal`, this repository, which is public, as it must be: players'
+`-Repository` defaults to `OpenSCCT/OpenSCCT-Unreal`, this repository, which is public, as it must be: players'
 launchers read releases without a token. `-Repository ''` writes no `publish.ps1`.
 
 ## The launcher side

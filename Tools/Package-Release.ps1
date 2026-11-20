@@ -69,7 +69,7 @@ next to this repo (the bridge project's own default).
 
 .PARAMETER Repository
 The GitHub repository (owner/name) the release is published to. Players' launchers read its releases without a
-token, so it must be public. Default Lumbridge/OpenSCCT-Unreal. Pass -Repository '' to write no publish.ps1.
+token, so it must be public. Default OpenSCCT/OpenSCCT-Unreal. Pass -Repository '' to write no publish.ps1.
 
 .PARAMETER CheckContentOnly
 Run only the provenance check of the source assets and stop.
@@ -101,7 +101,7 @@ param(
     [string]$Out = '',
     [string]$Engine = $(if ($env:UE_ROOT) { $env:UE_ROOT } else { 'F:\UE_5.8' }),
     [string]$OpenScct = '',
-    [string]$Repository = 'Lumbridge/OpenSCCT-Unreal',
+    [string]$Repository = 'OpenSCCT/OpenSCCT-Unreal',
     [switch]$NoDotNet,
     [string[]]$Base = @(),
     [string]$StoreTag = 'unreal-files-1',
@@ -481,7 +481,7 @@ $readme = @(
     'OpenSCCT Unreal uses the Unreal(R) Engine. Unreal(R) is a trademark or registered trademark of Epic Games, Inc. in',
     'the United States of America and elsewhere. Unreal(R) Engine, Copyright 1998 - 2026, Epic Games, Inc. All rights',
     'reserved.', '',
-    "OpenSCCT $openScctVersion (commit $openScctCommit) runs the simulation: https://github.com/Lumbridge/OpenSCCT", '',
+    "OpenSCCT $openScctVersion (commit $openScctCommit) runs the simulation: https://github.com/OpenSCCT/OpenSCCT", '',
     'The textures from ambientCG (ambientcg.com) and Poly Haven (polyhaven.com) are CC0.', '',
     'THIRD-PARTY-NOTICES.md lists the third-party components this release ships and their licences.'
 )

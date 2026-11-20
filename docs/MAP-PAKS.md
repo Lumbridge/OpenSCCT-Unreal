@@ -1,7 +1,7 @@
 # Map paks
 
 The imported maps are cooked into IoStore containers that
-[OpenSCCT-Unreal-Content](https://github.com/Lumbridge/OpenSCCT-Unreal-Content) publishes (its `docs/FORMAT.md` is
+[OpenSCCT-Unreal-Content](https://github.com/OpenSCCT/OpenSCCT-Unreal-Content) publishes (its `docs/FORMAT.md` is
 the contract). A player who downloads one gets the map's Unreal level without the editor.
 
 ## The cook

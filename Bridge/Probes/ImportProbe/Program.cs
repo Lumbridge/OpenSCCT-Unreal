@@ -206,9 +206,9 @@ foreach (string line in details.Split('\n'))
 Check(details.Contains("Source: OpenSCCT game", StringComparison.Ordinal) && details.Contains("Session: Menus", StringComparison.Ordinal),
     "the details name the game, its version and the menus");
 string featureUrl = ReportExports.Url(BridgeReportLink.FeatureRequest);
-Check(featureUrl.StartsWith("https://github.com/Lumbridge/OpenSCCT/issues/new?template=feature_request.yml&environment=", StringComparison.Ordinal),
+Check(featureUrl.StartsWith("https://github.com/OpenSCCT/OpenSCCT/issues/new?template=feature_request.yml&environment=", StringComparison.Ordinal),
     "feature requests open the GitHub template with game details");
-Check(ReportExports.Url(BridgeReportLink.Issues) == "https://github.com/Lumbridge/OpenSCCT/issues",
+Check(ReportExports.Url(BridgeReportLink.Issues) == "https://github.com/OpenSCCT/OpenSCCT/issues",
     "browse existing issues opens the issue list");
 
 Console.WriteLine(failures == 0 ? "All checks passed." : $"{failures} check(s) FAILED.");

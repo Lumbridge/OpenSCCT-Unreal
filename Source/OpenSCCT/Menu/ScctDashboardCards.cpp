@@ -23,7 +23,7 @@ namespace
 {
 	/** The player website (the Godot client's ProjectLinks.Website). */
 	const TCHAR* const ScctDashboardWebsite = TEXT("https://master.lumbridge.co.uk");
-	const TCHAR* const ScctDashboardReleases = TEXT("https://github.com/Lumbridge/OpenSCCT/releases");
+	const TCHAR* const ScctDashboardReleases = TEXT("https://github.com/OpenSCCT/OpenSCCT/releases");
 
 	/** The Play offline page's saved choices (Menu/SScctMenuPlay.cpp). */
 	const TCHAR* const ScctDashboardPlaySection = TEXT("OpenSCCT.Play");
