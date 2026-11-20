@@ -238,6 +238,9 @@ internal static unsafe class Probe
         check(started != 0, $"a local match on {map} as a merc");
         if (started == 0)
         {
+            char* error = stackalloc char[2048];
+            bridge.LastError(error, 2048);
+            Console.WriteLine(new string(error));
             return;
         }
 
@@ -266,6 +269,35 @@ internal static unsafe class Probe
         s = State();
         check(s.OwnSide == 0 && s.Rule.Contains("other side"), "the spy tab is the other side's kit");
         bridge.Stop();
+
+        BridgeStartOptions practice = default;
+        practice.Size = sizeof(BridgeStartOptions);
+        practice.Merc = 1;
+        practice.Flags = BridgeStartFlags.OfflineRules | BridgeStartFlags.UnlimitedGear;
+        for (int i = 0; i < Math.Min(map.Length, BridgeStartOptions.MapCapacity - 1); i++)
+            practice.Map[i] = map[i];
+        check(bridge.StartLocalEx(&practice) != 0, "starts a practice session for attachment testing");
+        var join = Stopwatch.StartNew();
+        while (join.Elapsed.TotalSeconds < 10 &&
+               !OpenScct.UnrealBridge.Test.GrabAreaReader.IsPracticeRound(Exports.Current?.Session))
+        {
+            bridge.Update();
+            System.Threading.Thread.Sleep(5);
+        }
+        api.Open(1, GearEditor.MatchContext);
+        const string practiceGun = "Svm.CompactSMG";
+        fixed (char* practicePath = practiceGun)
+        {
+            int before = WeaponCareerView.GetKills(practiceGun);
+            check(before == 0 && api.SetAttachmentMask(practicePath, WeaponAttachments.Acog) == 1 && api.Apply() == 1,
+                "a zero-kill practice player can equip the ACOG");
+            var source = new StoreLoadoutSource(Exports.Current!.Session.Client.World.Level);
+            check(source.Attachments(practiceGun) == WeaponAttachments.Acog, "practice spawn receives the selected optic");
+            bridge.Stop();
+            api.Open(1, GearEditor.MenuContext);
+            check(WeaponCareerView.GetKills(practiceGun) == before && api.GetAttachmentMask(practicePath) == 0,
+                "leaving practice restores the career lock without awarding kills");
+        }
     }
 
     private static void CheckAttachmentCatalogue(string folder, Action<bool, string> check)

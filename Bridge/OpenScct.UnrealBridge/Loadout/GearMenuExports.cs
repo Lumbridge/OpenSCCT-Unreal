@@ -244,13 +244,13 @@ public static class GearEditor
     {
         if (WeaponAttachments.Key(weaponClass) is not { } key) return 0;
         int mask = s_attachmentEdits.GetValueOrDefault(key, LoadoutStore.Current.AttachmentMasks.GetValueOrDefault(key));
-        return WeaponAttachments.EarnedSelection(key, mask, WeaponCareerView.GetKills(key));
+        return WeaponAttachments.EarnedSelection(key, mask, LoadoutServices.MenuAttachmentUnlockKills(key));
     }
 
     public static bool SetAttachmentMask(string weaponClass, int mask)
     {
         if (Side != 1 || WeaponAttachments.Key(weaponClass) is not { } key ||
-            !WeaponAttachments.IsValid(key, mask, WeaponCareerView.GetKills(key))) return false;
+            !WeaponAttachments.IsValid(key, mask, LoadoutServices.MenuAttachmentUnlockKills(key))) return false;
         if (LoadoutStore.Current.AttachmentMasks.GetValueOrDefault(key) == mask) s_attachmentEdits.Remove(key);
         else s_attachmentEdits[key] = mask;
         return true;
@@ -271,7 +271,7 @@ public static class GearEditor
     public static void Apply()
     {
         foreach ((string weapon, int mask) in s_attachmentEdits)
-            if (!WeaponAttachments.IsValid(weapon, mask, WeaponCareerView.GetKills(weapon)))
+            if (!WeaponAttachments.IsValid(weapon, mask, LoadoutServices.MenuAttachmentUnlockKills(weapon)))
                 throw new InvalidOperationException($"Attachment selection is no longer available for {LoadoutGear.NameOf(weapon)}.");
         LoadoutStore.SaveChoice(Draft());
         Open(s_side, s_context);

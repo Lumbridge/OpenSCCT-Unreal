@@ -47,6 +47,13 @@ public static class LoadoutServices
     internal static void HookOnLoad() => Hook();
 #pragma warning restore CA2255
 
+    internal static int AttachmentUnlockKills(string weapon, Level? level) =>
+        level?.GetService<OpenScct.Game.Modes.PracticeRules>()?.On == true
+            ? int.MaxValue : WeaponCareerView.GetKills(weapon);
+
+    internal static int MenuAttachmentUnlockKills(string weapon) =>
+        AttachmentUnlockKills(weapon, Exports.Current?.Session.Client.World.Level);
+
     /// <summary>Adds the saved gear, the gear change's answer and the profile choices to <paramref name="level"/>.</summary>
     public static void Install(Level level)
     {
@@ -82,7 +89,7 @@ public sealed class StoreLoadoutSource(Level level) : ILoadoutSource
     public ClassRef Sidearm() => new(LoadoutStore.Current.MercSidearm);
 
     public int Attachments(string weaponClass) => WeaponAttachments.EarnedSelection(weaponClass,
-        LoadoutStore.Current.AttachmentMasks.GetValueOrDefault(weaponClass), WeaponCareerView.GetKills(weaponClass));
+        LoadoutStore.Current.AttachmentMasks.GetValueOrDefault(weaponClass), LoadoutServices.AttachmentUnlockKills(weaponClass, level));
 
     public ClassRef Weapon(bool Spy)
     {

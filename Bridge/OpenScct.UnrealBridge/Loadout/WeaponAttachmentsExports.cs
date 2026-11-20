@@ -54,15 +54,15 @@ public static unsafe class WeaponAttachmentsExports
             if (state == null) return 0;
             *state = default;
             if (weaponClass == null || WeaponAttachments.Key(new string(weaponClass)) is not { } key) return 0;
-            int kills = WeaponCareerView.GetKills(key);
-            state->Kills = kills;
+            int unlockKills = LoadoutServices.MenuAttachmentUnlockKills(key);
+            state->Kills = WeaponCareerView.GetKills(key);
             state->Budget = WeaponAttachments.Budget;
             state->Supported = WeaponAttachments.Supported(key);
             state->BaseMagazine = WeaponAttachments.MagazineCapacity(key, 0);
             state->NativeOpticPower = MercRifles.Find(key)?.NativeOpticPower ?? 1f;
-            state->Available = WeaponAttachments.Available(key, kills);
+            state->Available = WeaponAttachments.Available(key, unlockKills);
             int saved = LoadoutStore.Current.AttachmentMasks.GetValueOrDefault(key);
-            state->Equipped = WeaponAttachments.EarnedSelection(key, saved, kills);
+            state->Equipped = WeaponAttachments.EarnedSelection(key, saved, unlockKills);
             for (int i = 0; i < BridgeWeaponAttachmentState.Count; i++)
             {
                 state->Costs[i] = WeaponAttachments.Points(1 << i);
@@ -79,7 +79,7 @@ public static unsafe class WeaponAttachmentsExports
         try
         {
             if (weaponClass == null || WeaponAttachments.Key(new string(weaponClass)) is not { } key ||
-                !WeaponAttachments.IsValid(key, mask, WeaponCareerView.GetKills(key))) return 0;
+                !WeaponAttachments.IsValid(key, mask, LoadoutServices.MenuAttachmentUnlockKills(key))) return 0;
             var choice = LoadoutStore.Current.Clone();
             if (mask == 0) choice.AttachmentMasks.Remove(key);
             else choice.AttachmentMasks[key] = mask;
