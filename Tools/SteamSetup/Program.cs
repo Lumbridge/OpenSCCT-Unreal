@@ -21,7 +21,8 @@ internal static class Program
                 Environment.GetEnvironmentVariable(UnrealSteamInstall.ContentDirectoryVariable) ?? UnrealSteamInstall.DefaultDirectory);
             string recipe = UnrealSteamInstall.ReadRecipe(tools) ??
                 throw new InvalidDataException("The Unreal converter is missing or damaged. Repair or extract the complete Unreal release.");
-            if (!args.Contains("--rebuild", StringComparer.Ordinal) && UnrealSteamInstall.ActiveRoot(directory, recipe) is not null)
+            bool rebuild = args.Contains("--rebuild", StringComparer.Ordinal);
+            if (!rebuild && UnrealSteamInstall.ActiveRoot(directory, recipe) is not null)
             {
                 Console.WriteLine("Unreal game files are ready.");
                 return 0;
@@ -32,7 +33,8 @@ internal static class Program
             if (source is null) throw new InvalidDataException("Select the installed Steam copy of Splinter Cell Chaos Theory (app 13570).");
             await BuildAsync(source, directory, tools, recipe, cancel.Token);
             Console.WriteLine("Unreal game files are ready.");
-            if (interactive) Message("Setup is complete. Return to OpenSCCT Unreal and select Play.", 0x40);
+            if (interactive) Message(rebuild ? "Setup is complete. Restart OpenSCCT Unreal to use the rebuilt game files." :
+                "Setup is complete. Return to OpenSCCT Unreal and select Play.", 0x40);
             return 0;
         }
         catch (OperationCanceledException) { Console.Error.WriteLine("Setup cancelled."); return 2; }
@@ -64,6 +66,14 @@ internal static class Program
         string builds = Path.Combine(directory, SteamContentInstall.BuildsDirectory);
         Directory.CreateDirectory(builds);
         using var buildLock = OpenLock(directory);
+        // Dedicated servers and editors can hold a previous generation for the life of their match.
+        if (!UnrealIsRunning())
+        {
+            string? current = SteamContentInstall.ActiveRoot(directory);
+            foreach (string existing in Directory.EnumerateDirectories(builds))
+                if (!string.Equals(existing, current, StringComparison.OrdinalIgnoreCase) && Guid.TryParseExact(Path.GetFileName(existing), "N", out _))
+                    TryDelete(existing, builds);
+        }
         string id = Guid.NewGuid().ToString("N");
         string output = Path.Combine(builds, id);
         Directory.CreateDirectory(output);
@@ -83,14 +93,33 @@ internal static class Program
                 throw new InvalidDataException($"Conversion did not produce {missing}. See {logPath}.");
             cancel.ThrowIfCancellationRequested();
             File.Copy(Path.Combine(tools, UnrealSteamInstall.RecipeFile), Path.Combine(output, UnrealSteamInstall.RecipeFile));
+            if (UnrealSteamInstall.ReadRecipe(output) != recipe)
+                throw new IOException("The Unreal converter changed during setup. Run setup again with the updated installation.");
             AtomicFile.WriteAllText(Path.Combine(directory, SteamContentInstall.PointerFile),
                 JsonSerializer.Serialize(new { format = SteamContentInstall.Format, build = id }));
             published = true;
         }
         finally
         {
-            if (!published) SafeDelete.Tree(output, builds);
+            if (!published) TryDelete(output, builds);
         }
+    }
+
+    private static bool UnrealIsRunning()
+    {
+        foreach (string name in new[] { "OpenSCCTUnreal", "OpenSCCTUnreal-Win64-Shipping", "UnrealEditor", "svm-server" })
+        {
+            var processes = Process.GetProcessesByName(name);
+            foreach (var process in processes) process.Dispose();
+            if (processes.Length > 0) return true;
+        }
+        return false;
+    }
+
+    private static void TryDelete(string directory, string builds)
+    {
+        try { SafeDelete.Tree(directory, builds); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Console.Error.WriteLine($"Could not remove {directory}: {ex.Message}"); }
     }
 
     private static bool Inside(string path, string parent)

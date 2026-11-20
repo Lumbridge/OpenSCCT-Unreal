@@ -22,6 +22,8 @@ public static class ContentPaths
     /// <summary>The desktop modernisations read base assets only from the selected local conversion.</summary>
     public static bool LocalBaseOnly { get; private set; }
 
+    private static bool IncludeGodotOptionalMaps { get; set; }
+
     /// <summary>A complete local base was available when the desktop game was configured.</summary>
     public static bool SteamBaseReady { get; private set; }
 
@@ -70,7 +72,7 @@ public static class ContentPaths
             // Listed even before the first download, so a catalog made now finds maps downloaded later.
             roots.Add(Path.Combine(PacksFolder, "svmap"));
             // Flatpak keeps its own writable packs and can read maps installed by the host launcher.
-            if (LocalBaseOnly && Existing(Environment.GetEnvironmentVariable("OPENSCCT_GODOT_OPTIONAL_MAPS")) is { } hostMaps &&
+            if (IncludeGodotOptionalMaps && Existing(Environment.GetEnvironmentVariable("OPENSCCT_GODOT_OPTIONAL_MAPS")) is { } hostMaps &&
                 !roots.Contains(hostMaps)) roots.Add(hostMaps);
 
             roots.AddRange(BuiltInMapRoots);
@@ -122,18 +124,22 @@ public static class ContentPaths
             chosen = checkoutContent is not null && Directory.Exists(Path.Combine(checkoutContent, "shared"))
                 ? checkoutContent : SteamContentInstall.ActiveRoot(managed);
         }
-        SetPaths(chosen, exeDir, packRoot, localOnly: true);
+        SetPaths(chosen, exeDir, packRoot, localOnly: true, godotOptionalMaps: true);
     }
 
     /// <summary>Use the generation selected by Unreal's own setup.</summary>
-    public static void ConfigureUnreal(string? root, string? exeDir, string? packs) =>
-        SetPaths(root, exeDir, packs ?? DefaultPacksFolder, localOnly: true);
+    public static void ConfigureUnreal(string? root, string? exeDir, string? packs = null)
+    {
+        string content = Environment.GetEnvironmentVariable(UnrealSteamInstall.ContentDirectoryVariable) ?? UnrealSteamInstall.DefaultDirectory;
+        SetPaths(root, exeDir, packs ?? Path.Combine(content, "packs"), localOnly: true);
+    }
 
-    private static void SetPaths(string? chosen, string? exeDir, string packs, bool localOnly)
+    private static void SetPaths(string? chosen, string? exeDir, string packs, bool localOnly, bool godotOptionalMaps = false)
     {
         PacksFolder = string.IsNullOrWhiteSpace(packs) ? DefaultPacksFolder : Path.GetFullPath(packs);
         Root = Existing(string.IsNullOrWhiteSpace(chosen) ? null : chosen);
         LocalBaseOnly = localOnly;
+        IncludeGodotOptionalMaps = godotOptionalMaps;
         SteamBaseReady = localOnly && Root is not null && SteamContentInstall.IsComplete(Root);
         BuiltInMapRoots = Existing(string.IsNullOrWhiteSpace(exeDir) ? null : Path.Combine(exeDir, "maps")) is { } maps ? [maps] : [];
         Language = Root is null ? "en" : OpenScct.Maps.ContentBuildFile.LanguageTag(OpenScct.Maps.ContentBuildFile.Language(Root));

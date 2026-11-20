@@ -1,0 +1,9 @@
+{
+  "name": "OpenSCCT Unreal dedicated",
+  "port": 28900,
+  "lanPort": 28889,
+  "responsiveSmoke": true,
+  "rotation": [
+    { "map": "TestBox", "mode": "Story" }
+  ]
+}

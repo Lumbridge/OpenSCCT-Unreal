@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenSCCT Unreal dedicated server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=openscct-unreal-server
+WorkingDirectory=/var/lib/openscct-unreal-server
+ExecStart=/opt/openscct-unreal/server/current/svm-server --config /var/lib/openscct-unreal-server/server.json
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

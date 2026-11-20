@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using OpenScct.Maps;
 using OpenScct.Net;
 using OpenScct.Server.Online;
 
@@ -19,18 +20,12 @@ internal static class OnlineRun
 {
     public static int Run(ServerConfig config, string? configPath, double seconds)
     {
-        var roots = new List<string>();
         string baseDir = configPath is null ? Directory.GetCurrentDirectory() : Path.GetDirectoryName(Path.GetFullPath(configPath))!;
-        if (config.Maps is { Length: > 0 } extra)
-        {
-            roots.Add(Path.GetFullPath(Path.Combine(baseDir, extra)));
-        }
-
-        roots.AddRange(MapCatalog.CreateDefault().Roots);
-        var maps = new MapCatalog(roots.ToArray());
+        MapCatalog maps;
         List<LobbySetup> rotation;
         try
         {
+            maps = DedicatedMaps(baseDir, config.Maps);
             rotation = config.Setups(maps);
         }
         catch (InvalidOperationException e)
@@ -167,6 +162,33 @@ internal static class OnlineRun
         }
 
         return 0;
+    }
+
+    private static MapCatalog DedicatedMaps(string configDirectory, string? mapDirectory)
+    {
+        string packaged = AppContext.BaseDirectory;
+        string? recipe = UnrealSteamInstall.ReadRecipe(Path.Combine(packaged, "contenttools"));
+        string generations = Environment.GetEnvironmentVariable(UnrealSteamInstall.ContentDirectoryVariable)
+            ?? UnrealSteamInstall.DefaultDirectory;
+        string? content = UnrealSteamInstall.ActiveRoot(generations, recipe);
+        var roots = new List<string>();
+        if (!string.IsNullOrWhiteSpace(mapDirectory))
+        {
+            var maps = new DirectoryInfo(Path.GetFullPath(mapDirectory, configDirectory));
+            if (!maps.Exists) throw new InvalidOperationException($"The configured maps folder does not exist: {maps.FullName}");
+            roots.Add(maps.FullName);
+            if (maps.Name.Equals("svmap", StringComparison.OrdinalIgnoreCase) && maps.Parent is { } parent)
+            {
+                if (parent.Parent?.Name == SteamContentInstall.BuildsDirectory &&
+                    (recipe is null || UnrealSteamInstall.ReadRecipe(parent.FullName) != recipe || !SteamContentInstall.IsComplete(parent.FullName)))
+                    throw new InvalidOperationException("The configured maps belong to a different or incomplete content build. Select this Unreal release's content build.");
+                if (Directory.Exists(Path.Combine(parent.FullName, "shared"))) content = parent.FullName;
+            }
+        }
+        string community = Path.Combine(configDirectory, "community");
+        ContentPaths.ConfigureUnreal(content, packaged, community);
+        roots.AddRange(ContentPaths.MapRoots);
+        return new MapCatalog(roots.ToArray());
     }
 
     internal static void Log(string line) =>
