@@ -1,38 +1,15 @@
 # Releasing
 
-A release is a zip that the OpenSCCT launcher installs, plus a checksum and a launcher handshake file.
+A release includes a standalone Windows game ZIP, a checksum and metadata for players who update through the launcher.
 `Tools/Package-Release.ps1` makes all three. Its header comment lists every file it writes.
 
 ## What a release contains
 
-- The game is a Shipping Win64 build. Its starter is `OpenSCCTUnreal.exe` and the game itself is
-  `OpenSCCTUnreal/Binaries/Win64/OpenSCCTUnreal-Win64-Shipping.exe`. The game target is named `OpenSCCTUnreal` so
-  that the launcher, which finds a running Godot game by the process name `OpenSCCT`, never mistakes the Unreal game
-  for it.
-- This project's own content, cooked: the front end, materials, the merc rifle and the CC0 texture sets.
-  `Config/DefaultGame.ini` lists the front end in `MapsToCook` and always cooks `/Game/OpenSCCT`.
-- **The enhanced maps, bundled.** Every level imported on the release machine into
-  `Content/Imported/Maps/<Map>/<Map>.umap` is cooked into the release, with the characters, weapons and effects
-  under `Content/Imported/Chars` and `Content/Imported/Fx`: `Config/DefaultGame.ini` always cooks
-  `/Game/Imported/Maps`, `/Game/Imported/Chars` and `/Game/Imported/Fx` (the game loads characters and effects by
-  path), and since the cooker finds no `.umap` in those folders the script names the levels with `-MapsToCook`
-  (with the front end, which that list replaces). `UScctOnlineSubsystem::IsPlayable` and `LevelOf` prefer such a level, so a bundled map plays
-  as its enhanced version; a map that is not bundled is built at run time from the player's own content. The rule
-  is: bundled in releases, never committed. `Content/Imported` is local import output, ignored by Git, and the
-  release machine must have run the import: the script fails when `Content/Imported/Maps` holds no map, and when
-  staging's list of packed files (`Manifest_UFSFiles_Win64.txt`) lacks any of them. It lists the bundled maps in
-  its output, in `README.txt`, in `version.json` (`bundledMaps`) and in `notes.md`. The rest of the original game
-  (the other maps, characters, sounds) still comes from the player's converted content (the launcher's packs). The
-  script also fails when the paks folder holds a container other than `pakchunk0`: the map packs (docs/MAP-PAKS.md)
-  are cooked with `-CustomConfig=MapPaks`, which a release never passes, and are never shipped with it.
-- The C# bridge, built against the OpenSCCT checkout (`-OpenScct`, default `..\OSC-unreal-bridge`).
-- Import the Galil, FAMAS, AK-47 and M4A1-S from the Godot shared pack with
-  `Tools/Import/Import-Characters.ps1 -Content <converted packs folder> -RiflesOnly`. The full character import
-  also includes these rifles. Packaging checks the first- and third-person meshes, including their separate
-  arms, sights and skeletal material. The bridge plays the animations from the installed shared pack.
-- Runtime maps reuse the cooked skeletal props from other editions with the same source mesh. For maps with unique props, run `Tools/Import/Import-Map.ps1 -Map <map> -Content <converted content folder> -PropsOnly` before packaging. The stock tutorial packs with additional meshes are TME30, TME33 and TSP29.
+- The game cooks its tracked front end, runtime map, project materials, weapons and third-party art. The setup tool shipped with Unreal prepares retail maps, characters, equipment and sound from the player's Steam installation. The bridge ships the project's Hub and TestBox fixtures.
+- The release cook excludes `/Game/Imported`. `Tools/Test/Assert-ReleaseContent.ps1` checks the staged inventories, compares project packages with the tracked source list and hashes the loose fixtures against this repository’s Runtime fixtures. Each successful package leaves `cook-audit.json` alongside the release files.
+- The C# bridge builds directly from the source in `Runtime/`. The Windows package also includes its content setup tool, converter and Python runtime under `contenttools/`.
 - A private .NET 10 runtime in `Binaries/DotNet`, copied from the newest installed 10.x runtime. Players then need
-  no .NET installed. `-NoDotNet` leaves it out.
+  no .NET installed. Developers can omit it in a local-only package with `-NoDotNet`.
 - `Prerequisites/vc_redist.x64.exe`, the Visual C++ runtime installer from the engine.
 - `THIRD-PARTY-NOTICES.md`, copied from the repository root: the third-party components a release ships and their
   licences. Update it when the bridge gains a package or the release gains a component.
@@ -82,8 +59,11 @@ Godot game (`BuildFiles` and `DeltaInstaller` in OpenSCCT's launcher):
   shader library is written in hash order (`bDeterministicShaderCodeOrder`). Both keep unchanged parts byte-identical,
   so they cost nothing to update.
 - **Where blobs and patches live.** A store release shared by every version (`-StoreTag`, default
-  `unreal-files-1`). `publish.ps1` uploads only the files the store does not already have, and stops before the
-  store would pass GitHub's limit of 1000 assets per release. When it does, start `unreal-files-2`.
+  `unreal-files-2`). `publish.ps1` uploads only the files the store does not already have, and stops before the
+  store would pass GitHub's limit of 1000 assets per release. Advance to a new numbered store when needed.
+  A pre-migration base can supply executable deltas. The first Steam-based release writes a complete clean set
+  of blobs and replaces the legacy cooked containers as whole files. Each version's file list and checksum also
+  go on the `unreal-files-1` metadata release used by existing launchers and on the version release itself.
 
 Keep each published release's output folder under `Saved/Release/<version>`. The next release makes its patches
 from those files. `publish.ps1` writes `.published` into the folder once its uploads have succeeded, and a release
@@ -92,19 +72,20 @@ gets a `.local` marker instead, and only another local package uses it as a base
 of small files is named by its contents as well as its version, so packaging a version again never collides with a
 pack the store already has.
 
-## Which servers it can join
+## Simulation and dedicated servers
 
-The bridge speaks OpenSCCT's protocol. Before packaging, select an OpenSCCT checkout compatible with the live
-servers and containing the baseline in `Bridge/OpenScct.revision`. The baseline retains gameplay changes already
-shipped in Unreal, including the Spy bot tactics from 0.1.8. Pass `-OpenScct <checkout>` to use a different
-worktree. The script records the exact checkout revision and version in `version.json`, the launcher handshake,
-and the release notes. It checks the baseline and requires a clean checkout (`-Local` warns).
+The Unreal client and its dedicated server build from the same simulation source in `Runtime/`.
+The source was copied from OpenSCCT revision `647078c3559acc4b415c905eee367aee2c21c248` and is maintained in this repository.
+The release manifest records the Unreal commit and the Git tree of its runtime. The network handshake checks protocol compatibility.
+
+Run `pwsh Tools/Package-DedicatedServer.ps1 -Version <Unreal version> -Out Saved/Release/<Unreal version>`
+to produce the Linux and Windows standalone server archives and their checksums. See [dedicated server setup](../Deployment/Dedicated/README.md).
 
 ## Procedure
 
 1. Bump `ProjectVersion` in `Config/DefaultGame.ini` and commit. Push to `origin/main`.
-2. Prepare an OpenSCCT checkout containing the required baseline and compatible with the live servers.
-3. Run the script. It needs Unreal Engine 5.8 (`-Engine` or `UE_ROOT`, default `F:\UE_5.8`), the .NET 10 SDK, a
+2. Pull the Git LFS assets with `git lfs pull`.
+3. Initialize the pinned glTFRuntime plugin with `git submodule update --init --recursive` and run the script. It needs Unreal Engine 5.8 (`-Engine` or `UE_ROOT`, default `F:\UE_5.8`), the .NET 10 SDK, a
    clean tree and an unused tag:
 
    ```powershell
@@ -112,7 +93,7 @@ and the release notes. It checks the baseline and requires a clean checkout (`-L
    ```
 
    The build and cook take a long time. UAT's log is `Saved/Release/<version>/uat.log`.
-4. Try the extracted `OpenSCCT Unreal` folder on a machine without the engine.
+4. Try the extracted `OpenSCCT Unreal` folder on a clean profile. Run `OpenSCCTUnreal.exe`, use the built-in Steam content setup and join a match with the packaged server.
 5. Tag `v<version>`, edit `notes.md`, and run `publish.ps1`. It makes a **draft** release, which nobody sees until
    it is published on GitHub.
 
@@ -145,7 +126,7 @@ launchers read releases without a token. `-Repository ''` writes no `publish.ps1
 
 ## The launcher side
 
-The OpenSCCT launcher has an Unreal tab (`UnrealService` in OpenSCCT's
+The OpenSCCT launcher lists Unreal under Modernisations (`UnrealService` in OpenSCCT's
 `src/OpenScct.Launcher.Core/Unreal/UnrealService.cs`). It installs a release from its `launcher.json` and file list
 through the delta installer, which already applies the binary patches from the store release.
 

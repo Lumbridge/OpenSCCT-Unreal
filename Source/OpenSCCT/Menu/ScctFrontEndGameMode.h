@@ -2,9 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "Styling/SlateBrush.h"
 #include "ScctFrontEndGameMode.generated.h"
 
 class SBorder;
+class UTexture2D;
 class UScctFrontEndWidget;
 class UScctMenuBackdrop;
 class ULevelStreamingDynamic;
@@ -48,6 +50,12 @@ private:
 	void MoveCamera();
 	void RevealBackdrop();
 	void RemoveLoadingCover();
+	bool ShowLocalMapPicture();
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> LocalMapPicture;
+	FSlateBrush LocalMapBrush;
+	TSharedPtr<SWidget> LocalMapBackdrop;
 
 	/** Covers the first rendered frame, then masks the temporary scene underneath the interactive menu. */
 	TSharedPtr<SBorder> LoadingCover;

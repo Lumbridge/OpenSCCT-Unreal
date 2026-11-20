@@ -25,6 +25,7 @@
 #include "Materials/MaterialInterface.h"
 #include "OpenSCCT.h"
 #include "Play/ScctEffectsSubsystem.h"
+#include "Play/ScctRuntimeSkins.h"
 #include "Play/ScctEquipmentSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 
@@ -64,9 +65,6 @@ namespace
 	const FVector CasingStandInScale(0.009f, 0.009f, 0.024f);
 	const FLinearColor CasingBrass(0.55f, 0.36f, 0.09f);
 
-	/** The imported mesh's name reduced as the effects match asset names ("SGameplayObjects_Douille"). */
-	const TCHAR* const CasingMeshKey = TEXT("sgameplayobjectsdouille");
-
 	FVector AxisVector(int32 Axis)
 	{
 		return Axis == 0 ? FVector::XAxisVector : Axis == 1 ? FVector::YAxisVector : FVector::ZAxisVector;
@@ -82,10 +80,7 @@ bool UScctEffectsSubsystem::EnsureCasingMesh()
 	bCasingMeshLooked = true;
 
 	FVector Scale(CasingSize);
-	if (const FSoftObjectPath* Asset = MeshAssets.Find(CasingMeshKey))
-	{
-		CasingMesh = Cast<UStaticMesh>(Asset->TryLoad());
-	}
+	CasingMesh = ScctRuntimeSkins::LoadEffectMesh(TEXT("SGameplayObjects.Douille"));
 	if (CasingMesh == nullptr)
 	{
 		CasingMesh = LoadObject<UStaticMesh>(nullptr, CasingStandInMeshPath);
@@ -96,7 +91,7 @@ bool UScctEffectsSubsystem::EnsureCasingMesh()
 			CasingStandInMaterial->SetVectorParameterValue(TEXT("Color"), CasingBrass);
 			CasingStandInMaterial->SetVectorParameterValue(TEXT("Glow"), FLinearColor::Black);
 		}
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Effects: no imported casing mesh SGameplayObjects_Douille (Tools/Effects/build_effect_assets.py imports it); casings are small brass cylinders"));
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Effects: no local casing mesh SGameplayObjects.Douille; casings are small brass cylinders"));
 	}
 	if (CasingMesh == nullptr)
 	{

@@ -2,6 +2,7 @@
 
 #include "Menu/ScctMenuPage.h"
 
+#include "HAL/PlatformProcess.h"
 #include "Menu/ScctDashboardCards.h"
 #include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctRejoinPrompt.h"
@@ -106,6 +107,13 @@ namespace
 				return Index;
 			};
 
+			if (FOpenSCCTModule::FindContentRoot().IsEmpty())
+			{
+				Add(Top, TEXT("Set up from Steam"), TEXT("Build original maps and assets"),
+					TEXT("Select your Steam installation of Chaos Theory. Setup reads the original files and saves the converted maps on this PC."),
+					[] { FOpenSCCTModule::OpenSteamSetup(); });
+			}
+
 			const int32 Play = AddGroup(TEXT("Play"), TEXT("Online, offline, host, hub"),
 				TEXT("Join an online server, play against bots, host a session or visit a hub."));
 			Add(Groups[Play].Entries, TEXT("Play online"), TEXT("Find a session the master lists, or join by address"),
@@ -145,8 +153,8 @@ namespace
 				TEXT("The demos recorded on this PC and the master's recent online demos: watch one with the playback bar, keep a download, delete one, or see a match's final scoreboard."),
 				[this] { Host.Open(TEXT("demos")); });
 
-			Add(Top, TEXT("Maps & Content"), TEXT("Download maps and shared content"),
-				TEXT("The maps of OpenSCCT-Content with what this PC has: download, update or remove a map, follow each download, and open the downloads folder."),
+			Add(Top, TEXT("Maps & Content"), TEXT("Manage community maps"),
+				TEXT("Download, update or remove community maps. Stock maps come from your installed Steam game."),
 				[this] { Host.Open(TEXT("content")); });
 			Add(Top, ScctUi::GameText(TEXT("All_Settings"), TEXT("TitlePage"), TEXT("Options")), TEXT("Video, audio, controls and key bindings"),
 				TEXT("Everything you can set: the picture, the sound, the mouse and the controller, every key of both sides, and your name."),

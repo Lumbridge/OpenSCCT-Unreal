@@ -129,13 +129,13 @@ def coordinated_parts(colours, retail, mesh, stem, pattern, *, return_regions=Fa
         for group,region in secondary_parts(mesh,layout).items():
             if not region.any():continue
             points=p[region];lo=points.min(0);span=np.maximum(np.ptp(points,axis=0),1e-5)
-            q=(p-lo)/span
+            q=(points-lo)/span
             if group==skeleton.HEAD:
                 # The spy's fabric head covering participates in the skin; merc
                 # skin is a separate atlas, only included in the skeleton finish.
                 stripe=(abs(q[...,0]-.5)<.10)&(q[...,1]>.66)
             elif group in (skeleton.FOOT_L,skeleton.FOOT_R):
-                stripe=((q[...,1]>.18)&(q[...,1]<.27))|((q[...,2]>.7)&(layout['N'][...,1]>.35))
+                stripe=((q[...,1]>.18)&(q[...,1]<.27))|((q[...,2]>.7)&(layout['N'][...,1][region]>.35))
             else:
                 stripe=(q[...,1]>.65)&(abs(q[...,0]-.5)<.32)
             regions.append((region,stripe,group))
@@ -150,7 +150,8 @@ def coordinated_parts(colours, retail, mesh, stem, pattern, *, return_regions=Fa
             yy=p[...,1];lo=yy[region].min();span=max(float(np.ptp(yy[region])),1e-5)
             stripe=((yy-lo)/span>.28)&((yy-lo)/span<.36)
             for piece in np.unique(gun.piece[region]):
-                regions.append((region&(gun.piece==piece),stripe,None))
+                part=region&(gun.piece==piece)
+                regions.append((part,stripe[part],None))
     touched=np.zeros((h,w),bool)
     lum=retail[...,:3].astype(np.float32) @ np.array([.3,.59,.11],np.float32)/255
     for region,stripe,group in regions:
@@ -161,17 +162,20 @@ def coordinated_parts(colours, retail, mesh, stem, pattern, *, return_regions=Fa
         tile=gunskin._tile(pattern,shape,tuple(palette))
         # All finishes use the authored RGB artwork, including nebulae, flames
         # and gold. Gold is no longer a pair of procedural engraving channels.
-        u,v=q[:,0],1-q[:,1]
-        if group in (skeleton.HAND_L,skeleton.HAND_R):u,v=q[:,2],q[:,0]
-        views=(gunskin._sample(tile,u,v),gunskin._sample(tile,q[:,2],1-q[:,1]),
-               gunskin._sample(tile,q[:,0],q[:,2]))
-        weights=abs(normal[:,[2,0,1]])**8
-        weights/=np.maximum(weights.sum(1,keepdims=True),1e-6)
-        motif=sum(view*weights[:,k:k+1] for k,view in enumerate(views))
         # Rubber/fabric keeps its own moulded/weave detail even when the main
         # finish is gold or lacquer (which intentionally uses different shading).
-        detail=np.clip(.55+.45*(lum[region]+.015)/(float(lum[region].mean())+.015),.4,1.5)
-        out[region]=motif*detail[:,None]*(.85+.15*stripe[region,None])
+        light=lum[region]
+        mean_light=float(light.mean())
+        indices=np.flatnonzero(region)
+        for start in range(0,len(q),gunskin._SAMPLE_PIXELS):
+            block=slice(start,start+gunskin._SAMPLE_PIXELS)
+            xyz=q[block]
+            u,v=xyz[:,0],1-xyz[:,1]
+            if group in (skeleton.HAND_L,skeleton.HAND_R):u,v=xyz[:,2],xyz[:,0]
+            planes=((u,v),(xyz[:,2],1-xyz[:,1]),(xyz[:,0],xyz[:,2]))
+            motif=gunskin._project_views(tile,normal[block],planes)
+            detail=np.clip(.55+.45*(light[block]+.015)/(mean_light+.015),.4,1.5)
+            out.reshape(-1,out.shape[-1])[indices[block]]=motif*detail[:,None]*(.85+.15*stripe[block,None])
         touched |= region
     out=np.clip(out,0,1)
     return (out,touched) if return_regions else out

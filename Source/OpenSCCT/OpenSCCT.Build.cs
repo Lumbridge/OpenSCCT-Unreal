@@ -64,13 +64,13 @@ public class OpenSCCT : ModuleRules
 			"SignalProcessing",
 			// Maps the editor never imported are built at run time from their glTF render files (Play/ScctRuntimeMapActor).
 			"GLTFCore",
+			// Runtime import of the locally converted skinned GLBs on packaged clients.
+			"glTFRuntime",
 			"ImageWrapper",
 			"MeshDescription",
 			"StaticMeshDescription",
 			// Cosmetic camo textures are loose PNGs read at run time (Play/ScctPawnLookSubsystem).
 			"ImageCore",
-			// The cooked map packs of OpenSCCT-Unreal-Content are downloaded at run time (Online/ScctMapPacks).
-			"HTTP",
 			"Json",
 			// The map's soft bodies are meshes whose vertices are rewritten each frame (Play/ScctLevelStateSoftBodies).
 			"ProceduralMeshComponent",
@@ -96,8 +96,6 @@ public class OpenSCCT : ModuleRules
 			PublicSystemLibraries.Add("dxgi.lib");
 			// Independent gamepad paddles and the viewport's Windows input-message origin filter.
 			PublicSystemLibraries.AddRange(new[] { "WindowsApp.lib", "Comctl32.lib" });
-			// The downloaded map packs are checked with SHA-256 from CNG (Online/ScctMapPacks).
-			PublicSystemLibraries.Add("bcrypt.lib");
 		}
 
 		// FSoundQualityInfo, which the engine's audio decoders fill.

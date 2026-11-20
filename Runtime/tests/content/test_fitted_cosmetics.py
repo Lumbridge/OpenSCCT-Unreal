@@ -1,4 +1,5 @@
 """Geometry-backed cosmetic regressions: no flat-atlas fallback or cross-material paint."""
+import concurrent.futures as cf
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +9,28 @@ from PIL import Image
 from svmbuild import cosmetics, skeleton
 from svmbuild.fitted import SurfaceMesh, coverage, body_group
 from svmbuild.sidearm_models import append, write
+
+
+def test_worker_memory_error_retries_only_missed_texture_after_pool_closes(monkeypatch):
+    from contextlib import contextmanager
+    pools = []
+    attempts = []
+
+    @contextmanager
+    def pool(max_workers, mp_context):
+        with cf.ThreadPoolExecutor(max_workers=1) as executor:
+            pools.append(max_workers)
+            yield executor
+
+    def write(name):
+        attempts.append(name)
+        if name == "under pressure" and len(pools) == 1:
+            raise MemoryError()
+
+    monkeypatch.setattr(cf, "ProcessPoolExecutor", pool)
+    cosmetics._write_textures([(write, "already done"), (write, "under pressure"), (write, "also done")], 3)
+    assert attempts == ["already done", "under pressure", "also done", "under pressure"]
+    assert pools == [3, 1]
 
 
 def test_authored_reader_keeps_separate_buffers_and_node_transforms(tmp_path):

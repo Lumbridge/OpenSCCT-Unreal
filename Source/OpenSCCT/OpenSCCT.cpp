@@ -4,6 +4,7 @@
 #include "Engine/Engine.h"
 #include "HAL/PlatformMisc.h"
 #include "Misc/CoreDelegates.h"
+#include "Misc/MessageDialog.h"
 #include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Parse.h"
@@ -96,7 +97,7 @@ void FOpenSCCTModule::ShutdownModule()
 	Api = {};
 }
 
-FString FOpenSCCTModule::FindContentRoot()
+static FString RequestedContentRoot()
 {
 	FString Root;
 	if (FParse::Value(FCommandLine::Get(), TEXT("ScctContent="), Root) && !Root.IsEmpty())
@@ -110,14 +111,44 @@ FString FOpenSCCTModule::FindContentRoot()
 		return ScctLaunchOptions::ContentRoot();
 	}
 
+#if WITH_EDITOR
 	Root = FPlatformMisc::GetEnvironmentVariable(TEXT("SVM_CONTENT"));
 	if (!Root.IsEmpty())
 	{
 		return Root;
 	}
+#endif
 
 	GConfig->GetString(TEXT("OpenSCCT"), TEXT("ContentRoot"), Root, GGameIni);
 	return Root;
+}
+
+FString FOpenSCCTModule::FindContentRoot()
+{
+	FOpenSCCTModule& Module = Get();
+	FString Error;
+	Module.FindBridge(Error);
+	return Module.ResolvedContentRoot;
+}
+
+void FOpenSCCTModule::OpenSteamSetup()
+{
+	const FString Project = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+	FString Setup = FPaths::Combine(Project, TEXT("../contenttools/setup/OpenScct.UnrealSetup.dll"));
+	FPaths::CollapseRelativeDirectories(Setup);
+	const FString DotNet = FPaths::Combine(Project, TEXT("Binaries/DotNet/dotnet.exe"));
+	if (FPaths::FileExists(DotNet) && FPaths::FileExists(Setup))
+	{
+		const FString Arguments = FString::Printf(TEXT("\"%s\""), *Setup);
+		FProcHandle Process = FPlatformProcess::CreateProc(*DotNet, *Arguments, false, false, false, nullptr, 0, nullptr, nullptr);
+		if (Process.IsValid())
+		{
+			FPlatformProcess::CloseProc(Process);
+			return;
+		}
+	}
+	FMessageDialog::Open(EAppMsgCategory::Error, EAppMsgType::Ok,
+		INVTEXT("Unreal setup could not start. Extract or repair the complete OpenSCCT Unreal release, including its contenttools folder."));
 }
 
 FString FOpenSCCTModule::FindBridgeDirectory()
@@ -203,20 +234,28 @@ const FScctBridgeApi* FOpenSCCTModule::FindBridge(FString& OutError)
 		return &Api;
 	}
 
-	// A missing or refused content folder is not final: the next call looks again (a setting may have changed).
-	const FString ContentRoot = FindContentRoot();
-	if (ContentRoot.IsEmpty() || !FPaths::DirectoryExists(ContentRoot))
+	// The standalone setup commits a generation after conversion completes.
+	// Several presentation subsystems ask per frame. Retry a missing or interrupted build periodically.
+	const double Now = FPlatformTime::Seconds();
+	if (Now < NextContentCheck)
 	{
-		OutError = FString::Printf(TEXT("The OpenSCCT content folder was not found ('%s'). Pass -ScctContent=<folder> or set SVM_CONTENT."), *ContentRoot);
+		OutError = LoggedBridgeError;
 		return nullptr;
 	}
-	if (Api.Configure(*ContentRoot) == 0)
+	NextContentCheck = Now + 2.0;
+	if (Api.Configure(*RequestedContentRoot()) == 0)
 	{
 		OutError = GetBridgeError();
 		return nullptr;
 	}
-
-	UE_LOG(LogOpenSCCT, Log, TEXT("OpenSCCT bridge %d ready, content at %s"), Api.Version, *ContentRoot);
+	using FGetRoot = int32(__cdecl*)(TCHAR*, int32);
+	auto GetRoot = static_cast<FGetRoot>(Host.GetFunction(CoreExports, TEXT("GetConfiguredContentRoot"), OutError));
+	if (GetRoot == nullptr) return nullptr;
+	TArray<TCHAR> Root;
+	Root.SetNumZeroed(GetRoot(nullptr, 0) + 1);
+	GetRoot(Root.GetData(), Root.Num());
+	ResolvedContentRoot = FString(Root.GetData());
+	UE_LOG(LogOpenSCCT, Log, TEXT("OpenSCCT bridge %d ready, content at %s"), Api.Version, *ResolvedContentRoot);
 	bConfigured = true;
 	LoggedBridgeError.Reset();
 	return &Api;

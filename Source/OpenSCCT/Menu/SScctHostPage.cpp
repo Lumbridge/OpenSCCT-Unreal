@@ -93,11 +93,7 @@ void SScctHostPage::Construct(const FArguments& InArgs)
 	}
 	if (Setup.IsEmpty() && !Maps.IsEmpty())
 	{
-		const FScctHostMap* First = FindMap(TEXT("SteeE"));
-		if (First == nullptr)
-		{
-			First = FindMap(TEXT("AquaE"));
-		}
+		const FScctHostMap* First = FindMap(TEXT("AQU03"));
 		bPlayersChosen = false;
 		Setup = ScctHostSetup::MapDefaults(First != nullptr ? *First : Maps[0], FString());
 	}
@@ -142,7 +138,7 @@ void SScctHostPage::Construct(const FArguments& InArgs)
 	{
 		Left->AddSlot().AutoHeight()
 		[
-			Ui::Text(Ui::ToText(TEXT("No map can be hosted: the OpenSCCT content folder was not found, or no installed map has been imported into this game.")),
+			Ui::Text(Ui::ToText(TEXT("Open the OpenSCCT launcher, choose Unreal under Modernisations and build your Steam game files to host a map.")),
 				12.0f, FSlateColor(ScctHudStyle::Danger()), ScctHudStyle::EWeight::Regular, true)
 		];
 	}

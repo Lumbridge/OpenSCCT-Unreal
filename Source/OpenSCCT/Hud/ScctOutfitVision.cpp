@@ -10,6 +10,8 @@
 #include "ImageUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Play/ScctPawnLookSubsystem.h"
+#include "Play/ScctRuntimeSkins.h"
+#include "Misc/Paths.h"
 #include "Runtime/ScctFeatures.h"
 
 namespace
@@ -37,7 +39,8 @@ bool FScctOutfitVision::Mark(UPoseableMeshComponent& Body, int32 Kind, bool bWet
 		State.Skin = Skin;
 		TArray<UTexture2D*> Masks;
 		bool bHasMask = false;
-		const bool bWearsModel = Mesh->GetPathName() == UScctPawnLookSubsystem::OutfitModelPath(Kind);
+		const FString Outfit = UScctPawnLookSubsystem::OutfitModelPath(Kind);
+		const bool bWearsModel = !Outfit.IsEmpty() && FPaths::IsSamePath(ScctRuntimeSkins::SourceOf(Mesh), Outfit);
 		for (const FSkeletalMaterial& Slot : Mesh->GetMaterials())
 		{
 			const FString Name = Slot.MaterialInterface ? Slot.MaterialInterface->GetName() : Slot.MaterialSlotName.ToString();

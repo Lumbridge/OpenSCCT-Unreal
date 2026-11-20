@@ -1,4 +1,5 @@
 #include "Play/ScctEquipmentModels.h"
+#include "Play/ScctRuntimeSkins.h"
 
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -114,18 +115,6 @@ const FString& FScctEquipmentModels::Name(const FScctEquipmentApi& Api, int32 Id
 	return Names.Add(Id, FScctEquipmentNames::Get(Api, Id));
 }
 
-FString FScctEquipmentModels::AssetPathOfFile(const FString& ContentPath, FString* OutPackage)
-{
-	// "shared/chars/SWeaponFirst/M160.glb" is /Game/Imported/Chars/SWeaponFirst/M160/SkeletalMeshes/M160.
-	const FString File = FPaths::GetBaseFilename(ContentPath);
-	const FString Package = FPaths::GetBaseFilename(FPaths::GetPath(ContentPath));
-	if (OutPackage != nullptr)
-	{
-		*OutPackage = Package;
-	}
-	return FString::Printf(TEXT("/Game/Imported/Chars/%s/%s/SkeletalMeshes/%s.%s"), *Package, *File, *File, *File);
-}
-
 const FScctEquipmentModel* FScctEquipmentModels::Find(const FScctEquipmentApi& Api, int32 MeshId, int32 MeshPathId, const FSoftObjectPath* Override)
 {
 	if (MeshId <= 0)
@@ -144,23 +133,33 @@ const FScctEquipmentModel* FScctEquipmentModels::Find(const FScctEquipmentApi& A
 	// Kept even when it fails, so a missing file is looked for and reported once.
 	TUniquePtr<FScctEquipmentModel>& Model = Models.Add(Key, MakeUnique<FScctEquipmentModel>());
 	Model->Name = MeshName;
-	const FString ImportedPath = AssetPathOfFile(Name(Api, MeshPathId), &Model->Package);
-	const FString AssetPath = bOverride ? Override->ToString() : ImportedPath;
+	const FString File = Name(Api, MeshPathId);
+	Model->Package = FPaths::GetCleanFilename(FPaths::GetPath(File));
+	const FString AssetPath = bOverride ? Override->ToString() : File;
 	if (MeshPathId <= 0)
 	{
 		UE_LOG(LogOpenSCCT, Warning, TEXT("Equipment: the content has no file for mesh '%s'; it is not drawn"), *MeshName);
 		return nullptr;
 	}
 
-	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *AssetPath, nullptr, LOAD_NoWarn);
-	if (Mesh == nullptr && bOverride)
+	const FString StockPrefix = TEXT("/Game/Imported/Chars/");
+	const bool bImportedStock = bOverride && AssetPath.StartsWith(StockPrefix);
+	USkeletalMesh* Mesh = bOverride && !bImportedStock ? LoadObject<USkeletalMesh>(nullptr, *AssetPath, nullptr, LOAD_NoWarn) : nullptr;
+	const bool bCookedOverride = Mesh != nullptr;
+	if (bImportedStock)
 	{
-		// The table's own choice is missing: the file the simulation names is better than nothing.
-		Mesh = LoadObject<USkeletalMesh>(nullptr, *ImportedPath, nullptr, LOAD_NoWarn);
+		TArray<FString> Segments;
+		AssetPath.Mid(StockPrefix.Len()).ParseIntoArray(Segments, TEXT("/"));
+		if (Segments.Num() >= 3) Mesh = ScctRuntimeSkins::Load(TEXT("shared/chars") / Segments[0] / (Segments[1] + TEXT(".glb")));
 	}
 	if (Mesh == nullptr)
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Equipment: no imported mesh %s for '%s'; run Tools/Import/Import-Characters.ps1"), *AssetPath, *MeshName);
+		// The table's own choice is missing: the file the simulation names is better than nothing.
+		Mesh = ScctRuntimeSkins::Load(File);
+	}
+	if (Mesh == nullptr)
+	{
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Equipment: could not load local mesh %s for '%s'"), *AssetPath, *MeshName);
 		return nullptr;
 	}
 
@@ -224,7 +223,7 @@ const FScctEquipmentModel* FScctEquipmentModels::Find(const FScctEquipmentApi& A
 	Model->Mesh.Reset(Mesh);
 
 	// The file's other meshes: everything skinned in the same folder that shares the skeleton.
-	if (IAssetRegistry* Registry = IAssetRegistry::Get())
+	if (IAssetRegistry* Registry = IAssetRegistry::Get(); bCookedOverride && Registry)
 	{
 		const FString Folder = FPackageName::GetLongPackagePath(Mesh->GetPackage()->GetName());
 		Registry->ScanPathsSynchronous({ Folder });
@@ -268,13 +267,8 @@ UMaterialInterface* FScctEquipmentModels::FindSkin(const FString& Package, const
 	{
 		Texture = Rest;
 	}
-	const FString AssetName = Texture.IsEmpty() ? FString::Printf(TEXT("MI_%s"), *TexturePackage) : FString::Printf(TEXT("MI_%s_%s"), *TexturePackage, *Texture);
-	const FString Path = FString::Printf(TEXT("/Game/Imported/Chars/%s/Skins/%s.%s"), *Package, *AssetName, *AssetName);
-	UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, *Path, nullptr, LOAD_NoWarn);
-	if (Material == nullptr)
-	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Equipment: no skin material %s for '%s'; run Tools/Import/Import-Characters.ps1"), *Path, *SkinName);
-	}
+	const FString File = Texture.IsEmpty() ? TexturePackage : TexturePackage + TEXT("_") + Texture;
+	UMaterialInterface* Material = ScctRuntimeSkins::LoadEquipmentSkin(Package, File);
 	return Skins.Add(Key, TStrongObjectPtr<UMaterialInterface>(Material)).Get();
 }
 

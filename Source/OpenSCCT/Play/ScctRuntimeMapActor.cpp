@@ -1,4 +1,5 @@
 #include "Play/ScctRuntimeMapActor.h"
+#include "Play/ScctRuntimeSkins.h"
 #include "Play/ScctEquipmentModels.h"
 #include "Animation/SkeletalMeshActor.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -1294,42 +1295,8 @@ ASkeletalMeshActor* AScctRuntimeMapActor::SpawnAnimatedProp(const FString& MeshN
 	{
 		return nullptr;
 	}
-	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
-	TArray<FString> Candidates;
-	if (bMapProp)
-	{
-		const FString Root = TEXT("/Game/Imported/Maps");
-		TArray<FString> Folders;
-		Registry.GetSubPaths(Root, Folders, false);
-		Folders.Sort();
-		const FString OwnFolder = Root / FPaths::GetCleanFilename(FPaths::GetPath(RenderFolder));
-		Folders.Remove(OwnFolder);
-		Folders.Insert(OwnFolder, 0);
-		const FString Suffix = FString(TEXT("Props")) / Package / Name / TEXT("SkeletalMeshes") / (Name + TEXT(".") + Name);
-		for (const FString& Folder : Folders)
-		{
-			Candidates.Add(Folder / Suffix);
-		}
-	}
-	else
-	{
-		// Maps can place shared characters and equipment as ordinary animated scenery.
-		Candidates.Add(FScctEquipmentModels::AssetPathOfFile(Source));
-	}
-	USkeletalMesh* Mesh = nullptr;
-	for (const FString& Candidate : Candidates)
-	{
-		const FAssetData Asset = Registry.GetAssetByObjectPath(FSoftObjectPath(Candidate));
-		if (Asset.IsValid() && (Mesh = Cast<USkeletalMesh>(Asset.GetAsset())) != nullptr)
-		{
-			break;
-		}
-	}
-	if (!Mesh)
-	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Runtime map: could not find the cooked skeletal prop %s"), *MeshName);
-		return nullptr;
-	}
+	USkeletalMesh* Mesh = ScctRuntimeSkins::Load(Source);
+	if (!Mesh) return nullptr;
 	const auto Metadata = ObjectOf(ObjectOf(Document, TEXT("extras")), TEXT("svmap"));
 	const FVector Origin = VectorOf(Metadata, TEXT("rotOrigin"), FVector::ZeroVector);
 	const FQuat Rotation = Placement.GetRotation() * RotatorOfUnits(Origin.X, Origin.Y, Origin.Z).Quaternion();

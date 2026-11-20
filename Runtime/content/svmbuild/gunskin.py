@@ -519,8 +519,23 @@ def _tile(pattern: str, shape: str, colours: tuple) -> np.ndarray:
     return load(pattern)
 
 
+_SAMPLE_PIXELS = 65536  # Bound temporary coordinate and RGB arrays per worker.
+
+
 def _sample(img: np.ndarray, u, v) -> np.ndarray:
-    """img (wrapping) at (u, v) in tile units, bilinear."""
+    """Sample a wrapping RGB tile with bilinear filtering at arbitrary UVs."""
+    u, v = np.broadcast_arrays(u, v)
+    if u.size <= _SAMPLE_PIXELS:
+        return _sample_block(img, u, v)
+    result = np.empty((*u.shape, img.shape[-1]), dtype=np.result_type(img.dtype, np.float32))
+    pixels = result.reshape(-1, img.shape[-1])
+    for start in range(0, u.size, _SAMPLE_PIXELS):
+        block = slice(start, start + _SAMPLE_PIXELS)
+        pixels[block] = _sample_block(img, u.flat[block], v.flat[block])
+    return result
+
+
+def _sample_block(img: np.ndarray, u, v) -> np.ndarray:
     n, m = img.shape[:2]
     x, y = u * m - 0.5, v * n - 0.5
     x0, y0 = np.floor(x), np.floor(y)
@@ -530,6 +545,13 @@ def _sample(img: np.ndarray, u, v) -> np.ndarray:
     top = img[y0, x0] * (1 - fx) + img[y0, x1] * fx
     bottom = img[y1, x0] * (1 - fx) + img[y1, x1] * fx
     return top * (1 - fy) + bottom * fy
+
+
+def _project_views(img, normals, planes):
+    """Blend three projections in face-normal order on a bounded group of texels."""
+    weights = np.abs(normals[..., [2, 0, 1]]) ** 8
+    weights /= np.maximum(weights.sum(-1, keepdims=True), 1e-6)
+    return sum(_sample(img, u, v) * weights[..., k:k + 1] for k, (u, v) in enumerate(planes))
 
 
 def _place(g: _Gun, tile_m: float):
@@ -851,33 +873,28 @@ def draw_suit(pattern: str, shape: str, colours: list[int], mesh: Mesh, texture:
     """A camo (h x w x 3, 0..1) for a body texture, laid on the body in its bind pose at the guns' scale (TILE_M):
     seen from the front and back, from the sides and from above, blended by how far each texel faces each way, so it
     runs on across the atlas's seams at one size all over the suit. The gold finishes keep the retail brightness."""
-    from . import cosmetics  # noqa: PLC0415
-
     layout = bake(mesh, texture, h, w)
     if layout is None:
         raise ValueError(f"{texture} is not a texture of the body's mesh")
     # The body's atlas shares islands between left and right and between front and back (a texel can be traced to
     # either side, triangle by triangle): the pattern is drawn on the body folded to one quarter, so every texel
     # agrees whichever side it shows on.
-    P = np.abs(layout["P"]) * np.array([1.0, 0.0, 1.0], np.float32) + layout["P"] * np.array([0.0, 1.0, 0.0], np.float32)
-    N = layout["N"]
-    x, y, z = P[..., 0], P[..., 1], P[..., 2]
     tile_m = TILE_M * _SUIT_SCALE.get(shape, _TILE_SCALE.get(shape, 1.0))
     img = _tile(pattern, shape, tuple(colours))
     top = float(mesh.pos[:, 1].max())
-    down = (top - y) / tile_m
-    fu, fv, su, sv = x / tile_m, down, z / tile_m + 0.37, down + 0.21
-    if shape in _ACROSS:
-        # Stripes run across each limb: turned to wrap round the torso, legs and head; the arms (out sideways in the
-        # bind pose) keep them upright.
-        flat = ~np.isin(layout["group"], (ARM_L, ARM_R, HAND_L, HAND_R))
-        fu, fv = np.where(flat, down, fu), np.where(flat, x / tile_m, fv)
-        su, sv = np.where(flat, down + 0.21, su), np.where(flat, z / tile_m + 0.37, sv)
-    views = (_sample(img, fu, fv),  # front and back
-             _sample(img, su, sv),  # sides
-             _sample(img, x / tile_m + 0.61, z / tile_m + 0.43))  # above and below
-    # Mostly one view per texel: blends only where the surface turns between them.
-    wts = np.abs(N[..., [2, 0, 1]]) ** 8
-    wts = wts / np.maximum(wts.sum(-1, keepdims=True), 1e-6)
-    out = sum(v * wts[..., k:k + 1] for k, v in enumerate(views))
+    out = np.empty((h, w, img.shape[-1]), dtype=np.result_type(img.dtype, layout["N"].dtype, np.float32))
+    rows = max(1, _SAMPLE_PIXELS // max(w, 1))
+    for start in range(0, h, rows):
+        band = slice(start, start + rows)
+        points = layout["P"][band]
+        x, y, z = np.abs(points[..., 0]), points[..., 1], np.abs(points[..., 2])
+        down = (top - y) / tile_m
+        fu, fv, su, sv = x / tile_m, down, z / tile_m + 0.37, down + 0.21
+        if shape in _ACROSS:
+            # Wrap the stripes around the torso, legs and head; keep them upright on the arms.
+            flat = ~np.isin(layout["group"][band], (ARM_L, ARM_R, HAND_L, HAND_R))
+            fu, fv = np.where(flat, down, fu), np.where(flat, x / tile_m, fv)
+            su, sv = np.where(flat, down + 0.21, su), np.where(flat, z / tile_m + 0.37, sv)
+        planes = ((fu, fv), (su, sv), (x / tile_m + 0.61, z / tile_m + 0.43))
+        out[band] = _project_views(img, layout["N"][band], planes)
     return out

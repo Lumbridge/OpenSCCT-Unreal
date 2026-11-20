@@ -62,6 +62,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "glTFRuntime",
+			"Enabled": true
+		},
+		{
 			"Name": "Interchange",
 			"Enabled": true
 		},

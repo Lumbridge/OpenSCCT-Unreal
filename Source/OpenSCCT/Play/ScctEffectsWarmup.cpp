@@ -20,6 +20,7 @@
 #include "OpenSCCT.h"
 #include "PipelineStateCache.h"
 #include "Play/ScctEffectsSubsystem.h"
+#include "Play/ScctRuntimeSkins.h"
 #include "Play/ScctLaserBeam.h"
 #include "Play/ScctLevelStateSubsystem.h"
 #include "Play/ScctSessionSubsystem.h"
@@ -187,13 +188,7 @@ int32 UScctEffectsSubsystem::SpawnWarmupSamples(const FVector& At, const FVector
 
 	// Every imported effect mesh, each shrunk into its cell of a grid across the view.
 	TArray<UStaticMesh*> Loaded;
-	for (const TPair<FString, FSoftObjectPath>& Asset : MeshAssets)
-	{
-		if (UStaticMesh* Mesh = Cast<UStaticMesh>(Asset.Value.TryLoad()))
-		{
-			Loaded.Add(Mesh);
-		}
-	}
+	ScctRuntimeSkins::LoadEffectMeshes(Loaded);
 	const int32 Rows = FMath::DivideAndRoundUp(Loaded.Num(), WarmupMeshColumns);
 	for (int32 Index = 0; Index < Loaded.Num(); ++Index)
 	{

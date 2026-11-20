@@ -658,9 +658,9 @@ void UScctHubSubsystem::HandleStateChange(EScctHubState Old, EScctHubState New)
 		bWasPresented = false;
 		ReportedSessionId = 0;
 		PresentedWorld.Reset();
-		if (FPackageName::DoesPackageExist(HubLevel))
+		if (UScctOnlineSubsystem::IsPlayable(TEXT("Hub")))
 		{
-			OpenLevel(FString::Printf(TEXT("%s?%s=1"), HubLevel, HubOption));
+			OpenLevel(FString::Printf(TEXT("%s?%s=1"), *UScctOnlineSubsystem::LevelOf(TEXT("Hub")), HubOption));
 		}
 	}
 	Touch();
@@ -710,13 +710,13 @@ void UScctHubSubsystem::FollowLevel()
 
 	if (IsUnderWay(State) && !MapToLoad.IsEmpty() && !bPresenting)
 	{
-		if (!FPackageName::DoesPackageExist(HubLevel))
+		if (!UScctOnlineSubsystem::IsPlayable(TEXT("Hub")))
 		{
 			// The bridge can play the hub, but there is nothing to draw it with.
-			UE_LOG(LogOpenSCCT, Error, TEXT("ScctHub: the hub level %s has not been imported (Tools/Import/Import-HubMap.ps1)"), HubLevel);
+			UE_LOG(LogOpenSCCT, Error, TEXT("ScctHub: the local Hub map is missing"));
 			Api->Leave();
 			DrainLog();
-			Notice = TEXT("The hub's level has not been imported into this game yet.");
+			Notice = TEXT("The local Hub map is missing. Repair the Unreal installation in the OpenSCCT launcher.");
 			Touch();
 			return;
 		}
@@ -725,7 +725,7 @@ void UScctHubSubsystem::FollowLevel()
 			// The cover is drawn first: the level load blocks the frames after it.
 			return;
 		}
-		OpenLevel(FString::Printf(TEXT("%s?%s=1"), HubLevel, HubOption));
+		OpenLevel(FString::Printf(TEXT("%s?%s=1"), *UScctOnlineSubsystem::LevelOf(TEXT("Hub")), HubOption));
 	}
 	else if (State == EScctHubState::Failed && bPresenting)
 	{

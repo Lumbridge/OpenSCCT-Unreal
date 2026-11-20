@@ -72,19 +72,11 @@ public:
 	 */
 	const FScctEquipmentModel* Find(const FScctEquipmentApi& Api, int32 MeshId, int32 MeshPathId, const FSoftObjectPath* Override = nullptr);
 
-	/**
-	 * The material of a skin the simulation names ("SGoggleTextures.beam_goggle.TRD_goggle_orange"): the instance
-	 * import_characters.py made of the skin's texture beside the meshes of Package
-	 * (/Game/Imported/Chars/<Package>/Skins/MI_<texture package>_<texture>). Null when it was never imported
-	 * (said once in the log).
-	 */
+	/** Make a role-specific material from its texture in the locally built equipment package. */
 	UMaterialInterface* FindSkin(const FString& Package, const FString& SkinName);
 
 	/** Loads every mesh of the bridge's catalog now, so none hitches a frame later, and logs what is missing. */
 	void LoadCatalog(const FScctEquipmentApi& Api);
-
-	/** The asset path of a content file ("shared/chars/SWeaponFirst/M160.glb") as import_characters.py stores it. */
-	static FString AssetPathOfFile(const FString& ContentPath, FString* OutPackage = nullptr);
 
 private:
 	TMap<int32, FString> Names;

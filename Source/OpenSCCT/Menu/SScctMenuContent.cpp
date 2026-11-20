@@ -143,7 +143,7 @@ namespace
 								+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
 								[
 									SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true)
-									.Text(FText::FromString(TEXT("Download maps and keep your shared game content up to date.")))
+									.Text(FText::FromString(TEXT("Stock game files are built from Steam. Optional community maps appear here.")))
 								]
 								+ SVerticalBox::Slot().AutoHeight()
 								[
@@ -158,7 +158,7 @@ namespace
 										SAssignNew(FolderButton, SScctButton)
 										.Look(EScctButtonLook::Chip)
 										.Text(FText::FromString(TEXT("OPEN FOLDER")))
-										.Description(FText::FromString(TEXT("Shows the folder downloaded maps and shared packs go into.")))
+										.Description(FText::FromString(TEXT("Shows the folder downloaded community maps go into.")))
 										.OnPressed(FSimpleDelegate::CreateSP(this, &SScctMenuContent::OpenFolder))
 									]
 									+ SHorizontalBox::Slot().AutoWidth()
@@ -171,17 +171,7 @@ namespace
 									]
 								])
 						]
-						+ SVerticalBox::Slot().AutoHeight()
-						[
-							ScctUi::Card(TEXT("Shared content"),
-								SNew(SVerticalBox)
-								+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)
-								[
-									SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
-									.Text(FText::FromString(TEXT("Characters, sounds and common files used across maps. Required packs download with each map.")))
-								]
-								+ SVerticalBox::Slot().AutoHeight()[ SAssignNew(SharedList, SVerticalBox) ])
-						]					]
+					]
 				]
 			];
 
@@ -366,25 +356,6 @@ namespace
 				];
 			}
 
-			SharedList->ClearChildren();
-			int32 SharedCount = 0;
-			for (const FScctContentRow& Row : Rows)
-			{
-				if (Row.bShared)
-				{
-					SharedList->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)[ BuildRow(Row) ];
-					++SharedCount;
-				}
-			}
-			if (SharedCount == 0)
-			{
-				SharedList->AddSlot().AutoHeight()
-				[
-					SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
-					.Text(FText::FromString(TEXT("The shared packs are listed once the content list is read.")))
-				];
-			}
-
 			if (!FocusedKey.IsEmpty())
 			{
 				if (const TWeakPtr<SWidget>* Again = RowFocus.Find(FocusedKey))
@@ -396,8 +367,8 @@ namespace
 				}
 			}
 
-			const FString Counts = FString::Printf(TEXT("%d maps listed, %d shown, %d downloaded, %d in the converted game files, %d with a picture, %d shared packs"),
-				Maps, Shown, Downloaded, InGame, Pictures, SharedCount);
+			const FString Counts = FString::Printf(TEXT("%d maps listed, %d shown, %d downloaded, %d in the converted game files, %d with a picture"),
+				Maps, Shown, Downloaded, InGame, Pictures);
 			if (Counts != LoggedCounts)
 			{
 				LoggedCounts = Counts;
@@ -627,7 +598,6 @@ namespace
 		TSharedPtr<SEditableTextBox> SearchBox;
 		TSharedPtr<SScrollBox> MapScroll;
 		TSharedPtr<SVerticalBox> MapList;
-		TSharedPtr<SVerticalBox> SharedList;
 		TArray<FScctContentRow> Rows;
 		TArray<FString> Categories;
 		TMap<FString, TWeakPtr<SWidget>> RowFocus;

@@ -915,8 +915,25 @@ def build_sky():
     return g.finish()
 
 
+def build_local_equipment_finish():
+    """Precompile the stock equipment finish switch. The runtime supplies the player's local textures."""
+    name = "MI_ScctEquipmentFinish"
+    path = MATERIALS + "/" + name
+    assets = unreal.EditorAssetLibrary
+    material = unreal.load_asset(path) if assets.does_asset_exist(path) else unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, MATERIALS, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+    editor = unreal.MaterialEditingLibrary
+    editor.set_material_instance_parent(material, unreal.load_asset(SURFACE))
+    editor.set_material_instance_static_switch_parameter_value(material, "UseWeaponFinish", True)
+    editor.update_material_instance(material)
+    if (not editor.get_material_instance_static_switch_parameter_value(material, "UseWeaponFinish")
+            or not assets.save_loaded_asset(material, only_if_is_dirty=False)):
+        raise RuntimeError("Could not save the local equipment material " + path)
+
+
 def build_all():
     build_surface()
+    build_local_equipment_finish()
     build_surface(scrolling_overlay=True)
     build_surface(translucent_sequence=True)
     build_modulate()

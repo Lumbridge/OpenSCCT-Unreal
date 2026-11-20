@@ -1,0 +1,89 @@
+#Requires -Version 7
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$Stage,
+    [Parameter(Mandatory)][string]$OpenScct,
+    [string]$Report
+)
+
+$ErrorActionPreference = 'Stop'
+$project = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+$stageRoot = (Resolve-Path -LiteralPath $Stage).Path
+$target = 'OpenSCCTUnreal'
+$projectPackages = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$tracked = @(git -c core.quotepath=false -C $project ls-files -- Content/OpenSCCT)
+if ($LASTEXITCODE -ne 0 -or !$tracked.Count) { throw 'Cannot read project-owned assets from Git.' }
+foreach ($path in $tracked) {
+    if ($path -match '\.(uasset|umap)$') { [void]$projectPackages.Add(($path -replace '\.(uasset|umap)$', '')) }
+}
+
+$plugin = Join-Path $project 'Plugins/glTFRuntime'
+$pluginAssets = @(git -C $plugin ls-files -- Content)
+if ($LASTEXITCODE -ne 0 -or !$pluginAssets.Count) { throw 'Missing pinned glTFRuntime assets.' }
+foreach ($path in $pluginAssets) {
+    if ($path -match '\.(uasset|umap)$') { [void]$projectPackages.Add("Plugins/glTFRuntime/" + ($path -replace '\.(uasset|umap)$', '')) }
+}
+$cooked = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($manifest in 'Manifest_UFSFiles_Win64.txt', 'Manifest_NonUFSFiles_Win64.txt') {
+    $file = Join-Path $stageRoot $manifest
+    if (!(Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing Unreal staging inventory $manifest." }
+    foreach ($line in [IO.File]::ReadLines($file)) {
+        $name = ($line -split "`t", 2)[0].Replace('\', '/')
+        if (![string]::IsNullOrWhiteSpace($name)) { [void]$seen.Add($name) }
+    }
+}
+# Non-UFS runtime dependencies can also be laid directly into the archive by packaging tools.
+foreach ($file in Get-ChildItem -LiteralPath (Join-Path $stageRoot $target) -Recurse -File) {
+    [void]$seen.Add([IO.Path]::GetRelativePath($stageRoot, $file.FullName).Replace('\', '/'))
+}
+foreach ($path in $seen) {
+    if ($path -notlike "$target/*") { continue }
+    $relative = $path.Substring($target.Length + 1)
+    if ($relative -match '(?:^|/)(?:Imported|shared|svmap|\.content|packs)(?:/|$)' -and $relative -notlike 'Binaries/DotNet/*') {
+        throw "Retail or converted content staged at $path."
+    }
+    if ($relative -match '\.(?:sdc|sds|usx|utx|utc|ukx|uax|uas|mux|u|umd|bik|gpr)$') {
+        throw "Original game package staged at $path."
+    }
+    if ($relative -notlike 'Binaries/Bridge/maps/*' -and $relative -match '\.(glb|gltf|ogg|wav|dds|png|jpg|jpeg|tga|bmp)$') {
+        throw "Unexpected loose media in the project staging inventory: $path."
+    }
+    if (($relative -like 'Content/*' -or $relative -like 'Plugins/*/Content/*') -and $relative -match '(?i)^(.+?)(?:\.m)?\.(uasset|umap|uexp|ubulk|uptnl)$') {
+        $packageName = $Matches[1]
+        if (!$projectPackages.Contains($packageName)) { throw "Untracked cooked project package at $path." }
+        [void]$cooked.Add($packageName)
+    }
+    if ($relative -like 'Binaries/Bridge/*' -and $relative -notlike 'Binaries/Bridge/maps/*' -and
+        $relative -notmatch '^Binaries/Bridge/[^/]+\.(?:dll|pdb|deps\.json|runtimeconfig\.json)$') {
+        throw "Unexpected loose bridge dependency at $path."
+    }
+}
+foreach ($required in 'Content/OpenSCCT/Maps/L_FrontEnd', 'Content/OpenSCCT/RuntimeMap/L_RuntimeMap') {
+    if (!$seen.Contains("$target/$required.umap")) { throw "Missing required cooked level $required." }
+}
+
+if (!$seen.Contains("$target/Plugins/glTFRuntime/Content/M_glTFRuntimeBase.uasset")) {
+    throw 'Missing cooked glTFRuntime material for local skeletal meshes.'
+}
+
+$fixtures = @{}
+foreach ($fixture in 'hub', 'hubmap', 'testbox') {
+    $fixtureFiles = @(git -c core.quotepath=false -C $OpenScct ls-files -- "fixtures/$fixture/")
+    if ($LASTEXITCODE -ne 0 -or !$fixtureFiles.Count) { throw "Missing source fixture $fixture." }
+    foreach ($file in $fixtureFiles) { $fixtures[$file.Substring('fixtures/'.Length)] = Join-Path $OpenScct $file }
+}
+$loose = @(Get-ChildItem -LiteralPath (Join-Path $stageRoot "$target/Binaries/Bridge/maps") -File -Recurse)
+$found = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($file in $loose) {
+    $key = [IO.Path]::GetRelativePath((Join-Path $stageRoot "$target/Binaries/Bridge/maps"), $file.FullName).Replace('\', '/')
+    if (!$fixtures.ContainsKey($key) -or (Get-FileHash -LiteralPath $file.FullName).Hash -ne (Get-FileHash -LiteralPath $fixtures[$key]).Hash) {
+        throw "Unexpected or modified loose map file $key."
+    }
+    [void]$found.Add($key)
+}
+$missing = @($fixtures.Keys | Where-Object { !$found.Contains($_) })
+if ($missing.Count) { throw "Missing project map fixture files: $($missing -join ', ')." }
+$result = [ordered]@{ cookedProjectPackages = @($cooked | Sort-Object); projectFixtureFiles = $found.Count }
+if ($Report) { $result | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $Report -Encoding utf8NoBOM }
+Write-Host "Verified $($cooked.Count) cooked project packages and $($found.Count) loose project fixture files."

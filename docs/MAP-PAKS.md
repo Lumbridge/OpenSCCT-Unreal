@@ -1,8 +1,8 @@
 # Map paks
 
-The imported maps are cooked into IoStore containers that
-[OpenSCCT-Unreal-Content](https://github.com/OpenSCCT/OpenSCCT-Unreal-Content) publishes (its `docs/FORMAT.md` is
-the contract). A player who downloads one gets the map's Unreal level without the editor.
+Players build stock Versus assets from their Steam installation. The OpenSCCT launcher can download reviewed community map sources and convert them with those local assets for Unreal's runtime map scene.
+
+The IoStore workflow below is for inspecting locally imported maps in a development checkout. Its output belongs in the checkout's `Saved/MapPaks/` folder.
 
 ## The cook
 
@@ -13,9 +13,7 @@ pwsh Tools/Cook/Cook-MapPaks.ps1 -Maps AquaE   # one map, for trying the pipelin
 
 It builds the editor and the game, then runs `RunUAT BuildCookRun -cook -stage -pak -iostore` headless with
 `-CustomConfig=MapPaks`. That layer (`Config/Custom/MapPaks`) is read only by this cook: it turns chunking on,
-clears the release's cook lists (its own `MapsToCook` and `DirectoriesToAlwaysCook` in place of the release's, which
-cooks all of `/Game/Imported/Maps`, `/Game/Imported/Chars` and `/Game/Imported/Fx` into the release's one container,
-and `!DirectoriesToNeverCook=ClearArray`), and makes `UScctMapPakAssetManager` (`Source/OpenSCCT/Cook`) the
+clears the release's project-only cook settings (`MapsToCook`, `DirectoriesToAlwaysCook` and `DirectoriesToNeverCook`), and makes `UScctMapPakAssetManager` (`Source/OpenSCCT/Cook`) the
 asset manager, which puts every package into exactly one container:
 
 | Container | Holds |
@@ -45,13 +43,4 @@ something from outside its map's folder, or when the cook made a container nobod
 
 A pack only loads in a game built from the same engine and the same project content it was cooked against. The cook
 id `<engine>-<ProjectVersion>-<Revision>` names that build (`-Revision` is bumped for every re-cook against the same
-ProjectVersion). A publish cooks every map in one run, since what counts as shared depends on which maps were cooked
-together.
-
-## Not done yet
-
-- Packing the containers into ZIPs, writing the index and publishing (`tools/ouc.py` in OpenSCCT-Unreal-Content).
-- The client: downloading, mounting at run time, the cook id check, and registering the mounted maps' assets with
-  the asset registry so the level's by-folder lookups find them.
-- Pairing a release with a cook: the game a pack is mounted in must come from the same cook (its `pakchunk0` and
-  shader libraries). `Tools/Package-Release.ps1` still cooks on its own.
+ProjectVersion). Cook the desired maps together so the local chunk assignment can identify their common dependencies.

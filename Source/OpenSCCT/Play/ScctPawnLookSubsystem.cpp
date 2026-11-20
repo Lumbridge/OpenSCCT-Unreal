@@ -1,4 +1,5 @@
 #include "Play/ScctPawnLookSubsystem.h"
+#include "Online/ScctMapFolders.h"
 #include "Play/ScctCosmeticMaterial.h"
 
 #include "Components/PoseableMeshComponent.h"
@@ -310,17 +311,17 @@ FString UScctPawnLookSubsystem::OutfitModelPath(int32 Kind)
 	const FString Model = ReadName(*Api, Outfit.Model);
 	if (Outfit.MapGlb != 0)
 	{
-		const FString Map = AssetName(ReadName(*Api, Outfit.Map));
-		const FString Stem = AssetName(FPaths::GetBaseFilename(Model));
-		return FString::Printf(TEXT("/Game/Imported/Outfits/%s/%s/SkeletalMeshes/%s.%s"), *Map, *Stem, *Stem, *Stem);
+		const FString Folder = ScctMapFolders::FolderOf(ReadName(*Api, Outfit.Map));
+		if (Folder.IsEmpty() || !FPaths::IsRelative(Model)) return {};
+		const FString Render = Folder / TEXT("render");
+		const FString File = FPaths::ConvertRelativePathToFull(Render, Model);
+		return FPaths::IsUnderDirectory(File, Render) ? File : FString();
 	}
-
 	FString Package, Mesh;
-	if (!Model.Split(TEXT("."), &Package, &Mesh) || Package.IsEmpty() || Mesh.IsEmpty())
-	{
-		return FString();
-	}
-	return FString::Printf(TEXT("/Game/Imported/Chars/%s/%s/SkeletalMeshes/%s.%s"), *Package, *Mesh, *Mesh, *Mesh);
+	if (!Model.Split(TEXT("."), &Package, &Mesh) || Package.IsEmpty() || Mesh.IsEmpty()
+		|| Package != AssetName(Package) || Mesh != AssetName(Mesh)) return {};
+	const FString Root = FOpenSCCTModule::FindContentRoot();
+	return Root.IsEmpty() ? FString() : Root / TEXT("shared/chars") / Package / (Mesh + TEXT(".glb"));
 }
 
 const FScctPawnLook* UScctPawnLookSubsystem::FindLook(int32 ActorId) const
@@ -522,8 +523,8 @@ FString UScctPawnLookSubsystem::OutfitArmsFor(const UMeshComponent& Mesh, int32 
 		return FString();
 	}
 
-	// /Game/Imported/Chars/<Package>/<Mesh>/SkeletalMeshes/<Mesh>: the bridge reads shared/chars/<Package>/<Mesh>.glb.
-	const FString AssetPath = Asset->GetPathName();
+	// Runtime and authored mesh packages use /Chars/<Package>/<Mesh> for the bridge texture lookup.
+	const FString AssetPath = Asset->GetOutermost()->GetName();
 	const FString CacheKey = FString::Printf(TEXT("%d|%s"), Kind, *AssetPath);
 	if (const FString* Found = OutfitArms.Find(CacheKey))
 	{

@@ -2,7 +2,7 @@
 #include "Play/ScctEchelonLightFilter.h"
 #include "Demo/ScctDemoPlayback.h"
 
-#include "AssetRegistry/AssetRegistryModule.h"
+#include "Play/ScctRuntimeSkins.h"
 #include "Components/DecalComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/PoseableMeshComponent.h"
@@ -120,22 +120,6 @@ namespace
 	const TCHAR* const GrenadeCloudPicture = TEXT("shared/fx/textures/sfx_smoke_grenade2.png");
 	const TCHAR* const StickyGasPicture = TEXT("shared/fx/textures/sfx_smoke_extincteur.png");
 	const TCHAR* const SolidMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxSolid.M_ScctFxSolid");
-	const TCHAR* const ImportedMeshFolder = TEXT("/Game/Imported/Fx");
-
-	/** A name reduced to its letters and digits: how imported assets are matched to the game's object paths. */
-	FString NameKey(const FString& Name)
-	{
-		FString Key;
-		for (const TCHAR Character : Name)
-		{
-			if (FChar::IsAlnum(Character))
-			{
-				Key.AppendChar(FChar::ToLower(Character));
-			}
-		}
-		return Key;
-	}
-
 	/** The simulation's light colour bytes: hue around the wheel, and saturation where 255 is white. */
 	FLinearColor LightColor(float Hue, float Saturation)
 	{
@@ -284,9 +268,9 @@ void UScctEffectsSubsystem::HandleMatchStarted()
 	Events->Begin();
 	if (EnsureScene())
 	{
-		UE_LOG(LogOpenSCCT, Log, TEXT("Effects: ready (%s, %d imported effect meshes, time scale %.2f%s)"),
+		UE_LOG(LogOpenSCCT, Log, TEXT("Effects: ready (%s, time scale %.2f%s)"),
 			Sprites.IsDrawable() ? TEXT("sprite materials found") : TEXT("sprite materials MISSING: run Tools/Effects/build_effect_assets.py"),
-			MeshAssets.Num(), TimeScale, bAutoFire ? TEXT(", auto fire on") : TEXT(""));
+			TimeScale, bAutoFire ? TEXT(", auto fire on") : TEXT(""));
 	}
 }
 
@@ -370,24 +354,7 @@ bool UScctEffectsSubsystem::EnsureScene()
 	Decals.SetNum(MaxImpactSlots);
 	DecalTints.SetNum(MaxImpactSlots);
 
-	// The effect meshes are original content imported on the player's machine, so they are found by looking, not
-	// by fixed references.
-	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
-	Registry.ScanPathsSynchronous({ ImportedMeshFolder }, false);
-	TArray<FAssetData> Found;
-	Registry.GetAssetsByPath(ImportedMeshFolder, Found, true);
-	for (const FAssetData& Asset : Found)
-	{
-		if (Asset.AssetClassPath == UStaticMesh::StaticClass()->GetClassPathName())
-		{
-			MeshAssets.Add(NameKey(Asset.AssetName.ToString()), Asset.GetSoftObjectPath());
-		}
-	}
-
-	if (const FSoftObjectPath* Cartridge = MeshAssets.Find(TEXT("sgameplayobjectsflaregrenade")))
-	{
-		FlareCartridge = Cast<UStaticMesh>(Cartridge->TryLoad());
-	}
+	FlareCartridge = ScctRuntimeSkins::LoadEffectMesh(TEXT("SGameplayObjects.flare_grenade"));
 	bSceneReady = true;
 	return true;
 }
@@ -1857,20 +1824,11 @@ UStaticMesh* UScctEffectsSubsystem::FindMesh(int32 MeshId)
 		return *Known;
 	}
 
-	// "SGameplayObjects.Gadgets.frag_grenade" was imported as the mesh "SGameplayObjects_frag_grenade".
 	const FString& Path = GetName(MeshId);
-	int32 FirstDot = INDEX_NONE, LastDot = INDEX_NONE;
-	UStaticMesh* Mesh = nullptr;
-	if (Path.FindChar(TEXT('.'), FirstDot) && Path.FindLastChar(TEXT('.'), LastDot))
-	{
-		if (const FSoftObjectPath* Asset = MeshAssets.Find(NameKey(Path.Left(FirstDot) + Path.Mid(LastDot + 1))))
-		{
-			Mesh = Cast<UStaticMesh>(Asset->TryLoad());
-		}
-	}
+	UStaticMesh* Mesh = ScctRuntimeSkins::LoadEffectMesh(Path);
 	if (Mesh == nullptr)
 	{
-		UE_LOG(LogOpenSCCT, Log, TEXT("Effects: no imported mesh for '%s' (Tools/Effects/build_effect_assets.py imports them); a stand-in shape is drawn"), *Path);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Effects: no locally converted mesh for '%s'; a stand-in shape is drawn"), *Path);
 	}
 	return Meshes.Add(MeshId, Mesh);
 }

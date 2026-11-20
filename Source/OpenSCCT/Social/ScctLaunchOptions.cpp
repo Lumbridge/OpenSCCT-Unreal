@@ -267,7 +267,7 @@ void ScctLaunchOptions::Apply()
 	}
 	if (!Parsed.MapDownloads.IsEmpty())
 	{
-		FPlatformMisc::SetEnvironmentVar(TEXT("OPENSCCT_PACKS"), *Parsed.MapDownloads);
+		FPlatformMisc::SetEnvironmentVar(TEXT("OPENSCCT_UNREAL_PACKS"), *Parsed.MapDownloads);
 		UE_LOG(LogOpenSCCT, Log, TEXT("Launch: downloaded maps and packs are kept in %s"), *Parsed.MapDownloads);
 	}
 	if (!Parsed.Content.IsEmpty())

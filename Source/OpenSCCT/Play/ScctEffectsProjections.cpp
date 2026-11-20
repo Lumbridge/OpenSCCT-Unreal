@@ -9,6 +9,8 @@
 
 #include "Components/DecalComponent.h"
 #include "Engine/Texture2D.h"
+#include "ImageUtils.h"
+#include "Misc/Paths.h"
 #include "GameFramework/Actor.h"
 #include "Hud/ScctVisionSubsystem.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -29,7 +31,6 @@ namespace
 	constexpr float OpacityStep = 0.01f;
 
 	const TCHAR* const ProjectionMaterialPath = TEXT("/Game/OpenSCCT/Effects/M_ScctFxProjection.M_ScctFxProjection");
-	const TCHAR* const ProjectionTextureFolder = TEXT("/Game/Imported/Fx/Textures");
 }
 
 UTexture2D* UScctEffectsSubsystem::FindProjectionTexture(int32 AssetId)
@@ -39,13 +40,23 @@ UTexture2D* UScctEffectsSubsystem::FindProjectionTexture(int32 AssetId)
 		return *Found;
 	}
 	const FString& Name = GetName(AssetId);
-	UTexture2D* Texture = Name.IsEmpty() ? nullptr
-		: LoadObject<UTexture2D>(nullptr, *FString::Printf(TEXT("%s/%s.%s"), ProjectionTextureFolder, *Name, *Name), nullptr, LOAD_NoWarn | LOAD_Quiet);
-	if (Texture == nullptr)
+	const FString Root = FOpenSCCTModule::FindContentRoot();
+	UTexture2D* Texture = nullptr;
+	if (!Root.IsEmpty() && !Name.IsEmpty() && Name == FPaths::GetCleanFilename(Name))
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Effects: projection texture '%s' is not imported (run Tools/Effects/Build-EffectAssets.ps1 -Content <content>): those projections are not drawn"),
-			Name.IsEmpty() ? TEXT("(not in the content's effect table)") : *Name);
+		const FString Folder = Root / TEXT("shared/fx/textures");
+		const FString File = FPaths::ConvertRelativePathToFull(Folder, Name + TEXT(".png"));
+		if (FPaths::IsUnderDirectory(File, Folder) && FPaths::FileExists(File))
+		{
+			Texture = FImageUtils::ImportFileAsTexture2D(File);
+			if (Texture)
+			{
+				Texture->AddressX = Texture->AddressY = TA_Clamp;
+				Texture->UpdateResource();
+			}
+		}
 	}
+	if (!Texture) UE_LOG(LogOpenSCCT, Warning, TEXT("Effects: local projection texture '%s' is missing"), *Name);
 	ProjectionTextures.Add(AssetId, Texture);
 	return Texture;
 }

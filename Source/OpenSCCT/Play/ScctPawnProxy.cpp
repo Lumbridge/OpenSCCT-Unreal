@@ -1,4 +1,5 @@
 #include "Play/ScctPawnProxy.h"
+#include "Play/ScctRuntimeSkins.h"
 
 #include "Components/PoseableMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -13,10 +14,10 @@
 
 namespace
 {
-	// The imported original models, by pawn kind (0 spy, 1 merc). See Tools/Import/import_characters.py.
+	// The original models, converted on this machine from Steam (0 spy, 1 merc).
 	const TCHAR* const ModelPaths[] = {
-		TEXT("/Game/Imported/Chars/SPerso/ATT_01/SkeletalMeshes/ATT_01.ATT_01"),
-		TEXT("/Game/Imported/Chars/SPerso/DEF_01/SkeletalMeshes/DEF_01.DEF_01"),
+		TEXT("shared/chars/SPerso/ATT_01.glb"),
+		TEXT("shared/chars/SPerso/DEF_01.glb"),
 	};
 
 	// The models face the character file's +Z, which the importer turns into Unreal's +Y: a quarter turn from
@@ -81,13 +82,11 @@ void AScctPawnProxy::SetKind(int32 NewKind, TConstArrayView<FScctBridgeBoneInfo>
 
 	// A map outfit's model, when the map dresses the team in one (the bridge poses its skeleton).
 	const FString OutfitPath = UScctPawnLookSubsystem::OutfitModelPath(Kind);
-	USkeletalMesh* Model = OutfitPath.IsEmpty() ? nullptr : LoadObject<USkeletalMesh>(nullptr, *OutfitPath, nullptr, LOAD_NoWarn);
-	UE_CLOG(!OutfitPath.IsEmpty(), LogOpenSCCT, Log, TEXT("Pawn kind %d wears the map's outfit model %s%s"), Kind, *OutfitPath,
-		Model != nullptr ? TEXT("") : TEXT(": NOT IMPORTED (Tools/Import/Import-Outfits.ps1), the stock mesh is drawn"));
-	Model = Model != nullptr ? Model : Kind >= 0 && Kind < UE_ARRAY_COUNT(ModelPaths) ? LoadObject<USkeletalMesh>(nullptr, ModelPaths[Kind]) : nullptr;
+	USkeletalMesh* Model = OutfitPath.IsEmpty() ? nullptr : ScctRuntimeSkins::Load(OutfitPath);
+	if (!Model && Kind >= 0 && Kind < UE_ARRAY_COUNT(ModelPaths)) Model = ScctRuntimeSkins::Load(ModelPaths[Kind]);
 	if (Model == nullptr)
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("No character model for pawn kind %d; run Tools/Import/import_characters.py"), Kind);
+		UE_LOG(LogOpenSCCT, Warning, TEXT("No locally built Steam character model for pawn kind %d"), Kind);
 		return;
 	}
 

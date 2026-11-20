@@ -48,7 +48,7 @@ UMaterialInstanceDynamic* ScctCosmeticMaterial::Create(UObject* Outer, UMaterial
 			Instance->SetScalarParameterValue(TEXT("Coated"), 1.f);
 			UTexture* Packed = nullptr;
 			const bool bHasSourceMap = Source->GetTextureParameterValue(TEXT("MetallicRoughnessTexture"), Packed) && Packed &&
-				Packed->GetPathName().StartsWith(TEXT("/Game/Imported/Chars/OpenScctRifles/"));
+				Packed->GetPathName().Contains(TEXT("/Chars/OpenScctRifles/"));
 			Instance->SetScalarParameterValue(TEXT("HasSourceORM"), bHasSourceMap ? 1.f : 0.f);
 		}
 		if (FPaths::FileExists(MaskPath))

@@ -5,7 +5,7 @@ Packages an OpenSCCT Unreal release: the zip the OpenSCCT launcher installs, its
 draft notes and (with -Repository) the command that uploads them as a draft GitHub release.
 
 .DESCRIPTION
-Builds the C# bridge against the OpenSCCT checkout, lays a private .NET runtime next to it, then has Unreal build,
+Builds the C# bridge against the simulation in Runtime/, lays a private .NET runtime next to it, then has Unreal build,
 cook, stage and archive the game (RunUAT BuildCookRun) and writes the release folder:
 
   OpenSCCT Unreal\
@@ -13,7 +13,7 @@ cook, stage and archive the game (RunUAT BuildCookRun) and writes the release fo
     OpenSCCTUnreal\Binaries\Win64\     the game (OpenSCCTUnreal-Win64-Shipping.exe)
     OpenSCCTUnreal\Binaries\Bridge\    the bridge and OpenSCCT's assemblies
     OpenSCCTUnreal\Binaries\DotNet\    the private .NET runtime (players need none installed)
-    OpenSCCTUnreal\Content\Paks\       the cooked project content and enhanced maps
+    OpenSCCTUnreal\Content\Paks\       the cooked project frontend, runtime scene, materials and models
     Engine\                            the engine's staged files
     Prerequisites\vc_redist.x64.exe    the Visual C++ runtime installer
     README.txt                         what it is, the notices
@@ -38,11 +38,8 @@ release also gets a patch from that release's version of it (Tools/ReleaseDelta,
 a few MB instead of 66, the cooked content to under 1 MB for a handful of changed assets instead of 494. Launchers that
 do not know patches ignore them and take the blob.
 
-A release bundles the enhanced maps: every level imported on this machine into Content/Imported/Maps/<Map>/<Map>.umap
-is cooked with what it refers to (DirectoriesToAlwaysCook in Config/DefaultGame.ini). The script fails when
-Content/Imported/Maps holds no map (run the import first) or when any of them is missing from the staged files, and
-lists them in README.txt, version.json (bundledMaps) and notes.md. Content/Imported is git-ignored and never
-committed; the provenance check covers every other asset. docs/RELEASING.md has the whole procedure.
+The setup tool included with the game builds retail maps and shared assets from the player's Steam installation. The release cook uses
+project-owned sources. Its manifests and built-in loose fixtures are checked before packaging.
 
 .PARAMETER Version
 The version to package. Default: ProjectVersion in Config/DefaultGame.ini, which it must match. A pre-release adds a
@@ -62,10 +59,6 @@ The output folder. Default Saved/Release/<version>.
 .PARAMETER Engine
 The Unreal Engine 5.8 root (the folder holding Engine\). Default: UE_ROOT, else F:\UE_5.8.
 
-.PARAMETER OpenScct
-The OpenSCCT checkout the bridge is built against. It must retain the baseline recorded in Bridge/OpenScct.revision.
-Its protocol hash decides which servers the game can join. Default: ..\OSC-unreal-bridge next to this repo.
-
 .PARAMETER Repository
 The GitHub repository (owner/name) the release is published to. Players' launchers read its releases without a
 token, so it must be public. Default OpenSCCT/OpenSCCT-Unreal. Pass -Repository '' to write no publish.ps1.
@@ -74,14 +67,14 @@ token, so it must be public. Default OpenSCCT/OpenSCCT-Unreal. Pass -Repository 
 Run only the provenance check of the source assets and stop.
 
 .PARAMETER NoDotNet
-Do not ship a private .NET runtime: players then need the .NET 10 runtime installed.
+Omit the private .NET runtime and standalone setup from a developer-only local package.
 
 .PARAMETER Base
 Earlier releases to make patches from and whose blobs this release reuses: their output folders (holding the
 OpenSCCT Unreal folder and unreal-files\). Default: the two newest older versions under Saved/Release.
 
 .PARAMETER StoreTag
-The release that holds the blobs and patches, shared by every version. Default unreal-files-1.
+The release that holds the blobs and patches, shared by every version. Default unreal-files-2.
 
 .PARAMETER BuildDrive
 The drive letter the game is built from (see the build step). Always the same letter, so the same code builds the same
@@ -99,11 +92,10 @@ param(
     [string]$Configuration = 'Shipping',
     [string]$Out = '',
     [string]$Engine = $(if ($env:UE_ROOT) { $env:UE_ROOT } else { 'F:\UE_5.8' }),
-    [string]$OpenScct = '',
     [string]$Repository = 'OpenSCCT/OpenSCCT-Unreal',
     [switch]$NoDotNet,
     [string[]]$Base = @(),
-    [string]$StoreTag = 'unreal-files-1',
+    [string]$StoreTag = 'unreal-files-2',
     [ValidatePattern('^[A-Za-z]$')]
     [string]$BuildDrive = 'U',
     [switch]$CheckContentOnly
@@ -167,6 +159,16 @@ function Test-ContentProvenance([string]$contentRoot) {
     }
 }
 
+$plugin = Join-Path $repo 'Plugins/glTFRuntime'
+$pin = [string](git -C $repo ls-files --stage -- Plugins/glTFRuntime)
+if ($pin -notmatch '^160000 ([0-9a-f]{40}) ' -or !(Test-Path -LiteralPath (Join-Path $plugin 'glTFRuntime.uplugin'))) {
+    Fail 'Initialize the glTFRuntime dependency with git submodule update --init --recursive.'
+}
+$pinnedCommit = $Matches[1]
+if ((git -C $plugin rev-parse HEAD) -ne $pinnedCommit -or (git -C $plugin diff --name-only HEAD -- Content Source)) {
+    Fail "Initialize the glTFRuntime dependency at $pinnedCommit before packaging."
+}
+
 $provenanceWatch = [Diagnostics.Stopwatch]::StartNew()
 $provenance = @(Test-ContentProvenance (Join-Path $repo 'Content'))
 $provenanceWatch.Stop()
@@ -177,43 +179,6 @@ if ($provenance.Count -gt 0) {
     Write-Host ('No source asset comes from converted original content ({0:0.0} s).' -f $provenanceWatch.Elapsed.TotalSeconds)
 }
 if ($CheckContentOnly) { return }
-
-# --- Bundled maps --------------------------------------------------------------------------------------------------
-# The enhanced maps: every level the release machine imported into Content/Imported/Maps/<Map>/<Map>.umap is cooked
-# (DirectoriesToAlwaysCook in Config/DefaultGame.ini) and shipped. Content/Imported is git-ignored local import output:
-# without it a release would ship no maps at all.
-$importedMaps = Join-Path $repo 'Content/Imported/Maps'
-$bundledMaps = @(Get-ChildItem -LiteralPath $importedMaps -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -ne 'Hub' -and (Test-Path -LiteralPath (Join-Path $_.FullName "$($_.Name).umap")) } | ForEach-Object Name | Sort-Object)
-if ($bundledMaps.Count -eq 0) {
-    Fail "no imported maps in $importedMaps (no <Map>\<Map>.umap): run the map import on this machine first, a release bundles the enhanced maps"
-}
-if (-not (Test-Path -LiteralPath (Join-Path $importedMaps 'Hub/Hub.umap'))) {
-    Fail 'the Hub level is missing: run Tools/Import/Import-HubMap.ps1 -Content <converted packs folder> before packaging'
-}
-$mapsToCook = $bundledMaps + @('Hub')
-Write-Host "Bundling $($bundledMaps.Count) enhanced maps: $($bundledMaps -join ', ')"
-
-# Each first-person file contains separate skinned arms and rifle meshes. The FAMAS and M4 also
-# have a sight mesh in both perspectives. The runtime loads these parts by path and skeleton.
-$rifleMeshes = [ordered]@{
-    ak47 = @('ak47'); ak47_first = @('ak47_first', 'ak47_parts')
-    famas = @('famas', 'FamasNativeSightParts'); famas_first = @('famas_first', 'famas_parts', 'Object_83')
-    galil = @('galil'); galil_first = @('galil_first', 'galil_parts')
-    m4a1s = @('m4a1s', 'MicroRedDot'); m4a1s_first = @('m4a1s_first', 'm4a1s_parts', 'Object_83')
-}
-foreach ($model in 'compactsmg', 'pumpshotgun', 'boltrifle', 'designatedmarksman') {
-    $rifleMeshes[$model] = @($model)
-    $rifleMeshes["${model}_first"] = @("${model}_first", "${model}_parts")
-}
-$rifleFolder = 'Content/Imported/Chars/OpenScctRifles'
-$rifleAssets = @("$rifleFolder/Materials/M_RifleGltf.uasset") + @(foreach ($model in $rifleMeshes.Keys) {
-    foreach ($part in $rifleMeshes[$model]) { "$rifleFolder/$model/SkeletalMeshes/$part.uasset" }
-})
-$missingRifleAssets = @($rifleAssets | Where-Object { -not (Test-Path -LiteralPath (Join-Path $repo $_)) })
-if ($missingRifleAssets.Count) {
-    Fail "additional rifle assets missing: run Tools/Import/Import-Characters.ps1 -Content <converted packs folder> -RiflesOnly before packaging. Missing: $($missingRifleAssets -join ', ')"
-}
 
 # --- Version -------------------------------------------------------------------------------------------------------
 $gameIni = Get-Content -LiteralPath (Join-Path $repo 'Config/DefaultGame.ini') -Raw
@@ -249,20 +214,13 @@ if (-not $Local) {
     if (git -C $repo ls-remote --tags origin "refs/tags/v$Version") { Fail "the tag v$Version already exists on origin" }
 }
 
-if (-not $OpenScct) { $OpenScct = Join-Path (Split-Path -Parent $repo) 'OSC-unreal-bridge' }
-$OpenScct = [IO.Path]::GetFullPath($OpenScct)
-if (-not (Test-Path -LiteralPath (Join-Path $OpenScct 'src/OpenScct.Server/OpenScct.Server.csproj'))) { Fail "no OpenSCCT checkout at $OpenScct (pass -OpenScct)" }
-$openScctCommit = ([string](git -C $OpenScct rev-parse HEAD)).Trim()
-$openScctBaseline = (Get-Content -LiteralPath (Join-Path $repo 'Bridge/OpenScct.revision') -Raw).Trim()
-git -C $OpenScct merge-base --is-ancestor $openScctBaseline $openScctCommit 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Warn-Or-Fail "the OpenSCCT checkout $OpenScct is at $openScctCommit and is missing required baseline $openScctBaseline. Pass -OpenScct with a checkout that includes it."
-}
-$openScctDescribe = ([string](git -C $OpenScct describe --tags --always HEAD 2>$null)).Trim()
-$openScctProps = Get-Content -LiteralPath (Join-Path $OpenScct 'Directory.Build.props') -Raw
-$openScctVersion = [regex]::Match($openScctProps, '<VersionPrefix>([^<]+)</VersionPrefix>').Groups[1].Value
-if (-not $openScctVersion) { Fail "no VersionPrefix in $OpenScct\Directory.Build.props" }
-if (git -C $OpenScct status --porcelain) { Warn-Or-Fail "the OpenSCCT checkout $OpenScct has changes: the bridge would not be the commit it records" }
+$runtimeRoot = Join-Path $repo 'Runtime'
+$runtimeTree = ([string](git -C $repo rev-parse 'HEAD:Runtime')).Trim()
+if ($LASTEXITCODE -ne 0 -or $runtimeTree -notmatch '^[0-9a-f]{40,64}$') { Fail 'the release must contain the committed Runtime source tree' }
+$runtimeProps = [xml](Get-Content -LiteralPath (Join-Path $runtimeRoot 'Directory.Build.props') -Raw)
+$runtimeVersion = [string]($runtimeProps.Project.PropertyGroup.VersionPrefix | Where-Object { $_ } | Select-Object -First 1)
+if (-not $runtimeVersion) { Fail 'the local Runtime source has no simulation version' }
+if ($NoDotNet -and -not $Local) { Fail 'public builds must include the private runtime for the game and its Steam setup tool' }
 
 $uat = Join-Path $Engine 'Engine/Build/BatchFiles/RunUAT.bat'
 if (-not (Test-Path -LiteralPath $uat)) { Fail "no Unreal Engine at $Engine (pass -Engine or set UE_ROOT)" }
@@ -272,7 +230,7 @@ if ("$($engineBuild.MajorVersion).$($engineBuild.MinorVersion)" -ne '5.8') { Fai
 $vcRedist = Join-Path $Engine 'Engine/Extras/Redist/en-us/vc_redist.x64.exe'
 if (-not (Test-Path -LiteralPath $vcRedist)) { Fail "no $vcRedist in the engine" }
 
-Write-Host "Packaging $product $Version ($Configuration, $commit; OpenSCCT $openScctVersion $openScctDescribe) into $Out$(if ($Local) { ' (local package)' })"
+Write-Host "Packaging $product $Version ($Configuration, $commit; simulation $runtimeVersion) into $Out$(if ($Local) { ' (local package)' })"
 $localMark = Join-Path $Out '.local'
 $publishedMark = Join-Path $Out '.published'
 foreach ($stale in @($folder, $archive, $storeDir, $zip, "$zip.sha256", (Join-Path $Out 'SHA256SUMS'), (Join-Path $Out $launcherName),
@@ -302,6 +260,7 @@ function Read-BaseRelease([string]$dir) {
     [pscustomobject]@{ Dir = $dir; Folder = (Join-Path $dir $folderName); Version = $v.version; Files = $v.files
         Key = (Get-SemKey $v.version); Published = (Test-Path -LiteralPath (Join-Path $dir '.published'))
         Local = (Test-Path -LiteralPath (Join-Path $dir '.local'))
+        SteamAssets = $v.contentSource -eq 'local-steam'
         List = $(if (Test-Path -LiteralPath $list) { (Get-Content -LiteralPath $list -Raw | ConvertFrom-Json).files } else { @() }) }
 }
 $ownKey = Get-SemKey $Version
@@ -345,7 +304,7 @@ $madeDotNet = $false
 try {
     Write-Host 'Building the bridge...'
     Invoke-Native 'dotnet build (bridge)' {
-        dotnet build (Join-Path $repo 'Bridge/OpenScct.UnrealBridge') -c Release "-p:OpenScctRoot=$OpenScct\" `
+        dotnet build (Join-Path $repo 'Bridge/OpenScct.UnrealBridge') -c Release `
             -p:ContinuousIntegrationBuild=true -nologo -v:q -clp:ErrorsOnly
     }
 
@@ -362,6 +321,7 @@ try {
         Write-Host "Laying out .NET $($runtime.Name)..."
         $madeDotNet = $true
         New-Item -ItemType Directory -Force -Path (Join-Path $dotNetFolder 'host/fxr'), (Join-Path $dotNetFolder 'shared/Microsoft.NETCore.App') | Out-Null
+        Copy-Item -LiteralPath (Join-Path $dotnetRoot 'dotnet.exe') -Destination $dotNetFolder
         Copy-Item -LiteralPath $fxr -Destination (Join-Path $dotNetFolder 'host/fxr') -Recurse
         Copy-Item -LiteralPath $runtime.FullName -Destination (Join-Path $dotNetFolder 'shared/Microsoft.NETCore.App') -Recurse
         foreach ($notice in 'LICENSE.txt', 'ThirdPartyNotices.txt') {
@@ -405,10 +365,7 @@ try {
         '-platform=Win64', "-clientconfig=$Configuration", "-target=$target", '-nocompileeditor',
         '-cook', '-stage', '-pak', '-iostore', '-compressed', '-nodebuginfo',
         '-archive', "-archivedirectory=$archive",
-        # DirectoriesToAlwaysCook finds no .umap, so the levels are named here; a map list on the command line replaces
-        # MapsToCook in Config/DefaultGame.ini, hence the front end and the runtime level (which builds every map
-        # without an imported level from the player's packs) too.
-        ('-MapsToCook=' + ((@('/Game/OpenSCCT/Maps/L_FrontEnd', '/Game/OpenSCCT/RuntimeMap/L_RuntimeMap') + @($mapsToCook | ForEach-Object { "/Game/Imported/Maps/$_/$_" })) -join '+'))
+        '-MapsToCook=/Game/OpenSCCT/Maps/L_FrontEnd+/Game/OpenSCCT/RuntimeMap/L_RuntimeMap'
     )
     if ($Configuration -eq 'Shipping') { $uatArgs += '-distribution' }
     & $uat @uatArgs *> (Join-Path $Out 'uat.log')
@@ -428,28 +385,9 @@ try {
     if ($madeDotNet -and (Test-Path -LiteralPath $dotNetFolder)) { Remove-Item -LiteralPath $dotNetFolder -Recurse -Force }
 }
 
-# Every imported map must be in the release. The cook writes into the Zen store, not loose files, so the check reads
-# staging's own list of what went into the paks (one line per file, with its staged path).
-$ufsManifest = Join-Path $staged 'Manifest_UFSFiles_Win64.txt'
-if (-not (Test-Path -LiteralPath $ufsManifest)) { Fail "staging wrote no ${ufsManifest}: cannot check what was cooked" }
-$stagedFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($l in [IO.File]::ReadLines($ufsManifest)) { [void]$stagedFiles.Add(($l -split "`t")[0].Replace('\', '/')) }
-$unbundled = @($mapsToCook | Where-Object { -not $stagedFiles.Contains("$target/Content/Imported/Maps/$_/$_.umap") })
-if ($unbundled.Count -gt 0) {
-    Fail "imported maps missing from the cook (see $ufsManifest; check DirectoriesToAlwaysCook=/Game/Imported/Maps in Config/DefaultGame.ini and $Out\uat.log): $($unbundled -join ', ')"
-}
-$unstagedRifles = @($rifleAssets | Where-Object { -not $stagedFiles.Contains("$target/$_") })
-if ($unstagedRifles.Count) { Fail "additional rifle assets missing from the cook (see ${ufsManifest}): $($unstagedRifles -join ', ')" }
-foreach ($hubAsset in @('Hub/manifest.json', 'Hub/sim/gameplay.json', 'Hub/sim/collision.bin', 'Hub/render/world.glb', 'Hub/render/scenery/CREDITS.txt', 'hubmap/hub.json', 'hubmap/areas.json')) {
-    if (-not (Test-Path -LiteralPath (Join-Path $staged "$target/Binaries/Bridge/maps/$hubAsset"))) {
-        Fail "the packaged hub is missing its loose map data: $hubAsset"
-    }
-}
-$importedCount = @($stagedFiles | Where-Object { $_ -like "$target/Content/Imported/*" }).Count
-Write-Host "Staged the Hub and $($bundledMaps.Count) enhanced maps ($importedCount files from /Game/Imported)."
-# The map packs (Tools/Cook/Cook-MapPaks.ps1, docs/MAP-PAKS.md) are downloaded by the game, never shipped with it: a
-# release cook is not chunked (Config/Custom/MapPaks is read only with -CustomConfig=MapPaks), so the only container is
-# pakchunk0. Any other chunk means the map pak settings reached this cook.
+& (Join-Path $PSScriptRoot 'Test/Assert-ReleaseContent.ps1') -Stage $staged -OpenScct $runtimeRoot -Report (Join-Path $Out 'cook-audit.json')
+# Map pak cooks are for local development. Release builds load player-prepared maps at runtime
+# and use the default cook configuration, with a single project chunk.
 $stagedPaks = Join-Path $staged "$target/Content/Paks"
 $chunks = @(Get-ChildItem -LiteralPath $stagedPaks -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -match '^pakchunk(\d+)' -and [int]$Matches[1] -ne 0 } | ForEach-Object Name)
@@ -475,12 +413,9 @@ $title = "$product $Version"
 $readme = @(
     $title, ('=' * $title.Length), '',
     'OpenSCCT on Unreal Engine 5: the OpenSCCT simulation and servers with an Unreal presentation.',
-    'Install and start it from the OpenSCCT launcher, or run OpenSCCTUnreal.exe.', '',
-    'This release includes the enhanced versions of these maps, converted from the original game:',
-    ($bundledMaps -join ', '), '',
-    'Everything else of the original game (the other maps, the characters, sounds and other content) is not included:',
-    'it comes from your own copy of the game, converted by OpenSCCT (the launcher''s content packs), and the game still',
-    'needs it.', '',
+    'Run OpenSCCTUnreal.exe to start the game.', '',
+    'Choose Set up from Steam in the Unreal front end and select your installation of Splinter Cell Chaos Theory.',
+    'Unreal loads the stock Versus maps, characters, sounds and equipment from that local build.', '',
     'If the game does not start, install the Visual C++ runtime: Prerequisites\vc_redist.x64.exe.',
     'It needs a DirectX 12 graphics card with Shader Model 6.', '',
     'OpenSCCT is a fan project. It is not affiliated with or endorsed by Ubisoft. Splinter Cell is a trademark of',
@@ -489,7 +424,7 @@ $readme = @(
     'OpenSCCT Unreal uses the Unreal(R) Engine. Unreal(R) is a trademark or registered trademark of Epic Games, Inc. in',
     'the United States of America and elsewhere. Unreal(R) Engine, Copyright 1998 - 2026, Epic Games, Inc. All rights',
     'reserved.', '',
-    "OpenSCCT $openScctVersion (commit $openScctCommit) runs the simulation: https://github.com/OpenSCCT/OpenSCCT", '',
+    "This Unreal build includes its own simulation and content tools. Source: https://github.com/OpenSCCT/OpenSCCT-Unreal/tree/$commit", '',
     'The textures from ambientCG (ambientcg.com) and Poly Haven (polyhaven.com) are CC0.', '',
     'THIRD-PARTY-NOTICES.md lists the third-party components this release ships and their licences.'
 )
@@ -501,6 +436,12 @@ Write-Text (Join-Path $folder 'README.txt') ($readme -join "`n")
 # The repository's list of the third-party components a release ships, with their licences.
 Copy-Item -LiteralPath (Join-Path $repo 'THIRD-PARTY-NOTICES.md') -Destination $folder
 & (Join-Path $PSScriptRoot 'Copy-GraphicsLicences.ps1') -Package $folder -Engine $Engine
+Copy-Item -LiteralPath (Join-Path $plugin 'LICENSE') -Destination (Join-Path $folder 'glTFRuntime-LICENSE.txt')
+
+if (-not $NoDotNet) {
+    Write-Host 'Packaging standalone Steam content setup...'
+    Invoke-Native 'Unreal content tools' { python (Join-Path $PSScriptRoot 'UnrealContent/package.py') (Join-Path $folder 'contenttools') }
+}
 
 # --- version.json --------------------------------------------------------------------------------------------------
 $entries = @(Get-ChildItem -LiteralPath $folder -Force | ForEach-Object Name) + 'version.json' | Sort-Object -Unique
@@ -516,9 +457,9 @@ $files = @(Get-ChildItem -LiteralPath $folder -Recurse -File -Force | Where-Obje
 $handshake = [ordered]@{
     launcherProtocol = 1
     product          = $product
-    # Which servers it can join: the bridge's OpenSCCT build.
-    openscctVersion  = $openScctVersion
-    openscctCommit   = $openScctCommit
+    # Older launchers display these fields. Source revisions now belong to the Unreal repository.
+    openscctVersion  = $runtimeVersion
+    openscctCommit   = $commit
 }
 $info = [ordered]@{
     format          = 1
@@ -530,11 +471,13 @@ $info = [ordered]@{
     engineVersion   = $engineVersion
     launcherProtocol = 1
     editorMapProtocol = 1
-    openscctVersion = $openScctVersion
-    openscctCommit  = $openScctCommit
+    openscctVersion = $runtimeVersion
+    openscctCommit  = $commit
     executable      = $starter
     gameExecutable  = "$target/Binaries/Win64/$gameExe"
-    bundledMaps     = $bundledMaps
+    runtimeTree     = $runtimeTree
+    contentSource   = 'local-steam'
+    bundledMaps     = @()
     built          = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     entries         = $entries
     files           = $files
@@ -543,7 +486,8 @@ $info = [ordered]@{
 
 # --- Checks --------------------------------------------------------------------------------------------------------
 # NOTICES.txt is the engine's own third-party notices, staged by UAT.
-$expected = @($starter, $target, 'Engine', 'NOTICES.txt', 'Prerequisites', 'README.txt', 'THIRD-PARTY-NOTICES.md', 'version.json')
+$expected = @($starter, $target, 'Engine', 'NOTICES.txt', 'Prerequisites', 'README.txt', 'THIRD-PARTY-NOTICES.md', 'glTFRuntime-LICENSE.txt', 'version.json')
+if (-not $NoDotNet) { $expected += 'contenttools' }
 $unexpected = $entries | Where-Object { $_ -notin $expected }
 $missing = $expected | Where-Object { $_ -notin $entries }
 if ($unexpected) { Warn-Or-Fail "unexpected entries in the folder: $($unexpected -join ', ')" }
@@ -558,7 +502,7 @@ if (-not $NoDotNet -and -not (Get-ChildItem -LiteralPath (Join-Path $folder "$ta
 
 # No path of the machine that built it (a user name, a checkout) may ship inside a program file or a text file. The
 # cooked paks are left out: they are large and hold no paths of their own.
-$needles = @($env:USERPROFILE, $repo, $OpenScct) | Where-Object { $_ } | ForEach-Object { $_; $_.Replace('\', '/') } | Sort-Object -Unique
+$needles = @($env:USERPROFILE, $repo) | Where-Object { $_ } | ForEach-Object { $_; $_.Replace('\', '/') } | Sort-Object -Unique
 $latin1 = [Text.Encoding]::Latin1
 $leaks = foreach ($file in Get-ChildItem -LiteralPath $folder -Recurse -File -Include '*.exe', '*.dll', '*.json', '*.ini', '*.txt', '*.xml') {
     $text = $latin1.GetString([IO.File]::ReadAllBytes($file.FullName))
@@ -591,7 +535,13 @@ New-Item -ItemType Directory -Force -Path $storeDir | Out-Null
 # A blob is an ordered table when made here, an object when read from a base release's list.
 function Test-Packed($blob) { if ($blob -is [Collections.IDictionary]) { $blob.Contains('member') } else { [bool]$blob.PSObject.Properties['member'] -and [bool]$blob.member } }
 $known = @{}
-foreach ($b in $bases) { foreach ($f in $b.List) { if (-not $known.ContainsKey($f.sha256)) { $known[$f.sha256] = $f.blob } } }
+# Older stores include mixed small-file archives and retail-bearing containers. Fresh installs use only the
+# audited asset channel. Existing players can still reuse byte-identical local files and binary deltas.
+foreach ($b in $bases | Where-Object SteamAssets) {
+    foreach ($f in $b.List) {
+        if (-not $known.ContainsKey($f.sha256)) { $known[$f.sha256] = $f.blob }
+    }
+}
 $packLimit = 256KB
 $packPath = Join-Path $storeDir $packName
 $pack = $null
@@ -650,6 +600,7 @@ $jobs = @{}
 foreach ($e in $listEntries) {
     if ($e.size -lt $patchMin) { continue }
     foreach ($b in $bases) {
+        if (!$b.SteamAssets -and $e.path -match '\.(pak|utoc|ucas)$') { continue }
         $old = $b.Files | Where-Object path -eq $e.path | Select-Object -First 1
         if (-not $old -or $old.sha256 -eq $e.sha256) { continue }
         $method = 'diff'
@@ -718,14 +669,19 @@ foreach ($b in $bases) {
 # --- Notes and the publish command ---------------------------------------------------------------------------------
 $previous = git -C $repo describe --tags --abbrev=0 --match 'v*' HEAD 2>$null
 $log = if ($LASTEXITCODE -eq 0 -and $previous) { git -C $repo log --no-merges "$previous..HEAD" --format='- %s' } else { @('- First release.') }
-$notes = @($title, '', "Built against OpenSCCT $openScctVersion ($openScctDescribe): it joins servers of that version.", '',
+$notes = @($title, '', "Includes the Unreal-owned simulation ($runtimeVersion) and local content setup.", '',
     '## Changes', '') + $log + @('', '## Maps', '',
-    "Includes the enhanced versions of these $($bundledMaps.Count) maps, converted from the original game: $($bundledMaps -join ', ').",
-    'Everything else still comes from your own converted content (the launcher''s content packs).', '', '## Download', '',
-    'Install it from the OpenSCCT launcher. Or download the zip, extract it and run OpenSCCTUnreal.exe.')
+    'Open the Unreal front end and choose Set up from Steam to build your local content.', '', '## Download', '',
+    'Download the Windows game ZIP, extract it and run OpenSCCTUnreal.exe. The Linux and Windows server archives run independently.')
 Write-Text (Join-Path $Out 'notes.md') ($notes -join "`n")
 
 if (-not $Local -and $Repository) {
+    & (Join-Path $PSScriptRoot 'Package-DedicatedServer.ps1') -Version $Version -Out $Out | Out-Host
+    $serverNames = @("OpenSCCT-Unreal-Server-$Version-linux-x64.tar.gz", "OpenSCCT-Unreal-Server-$Version-win-x64.zip")
+    foreach ($name in $serverNames) {
+        $checksum = (Get-Content -Raw -LiteralPath (Join-Path $Out "$name.sha256")).Trim()
+        [IO.File]::AppendAllText((Join-Path $Out 'SHA256SUMS'), "$checksum`n", $utf8)
+    }
     $pre = if ($isPrerelease) { ' --prerelease' } else { '' }
     $publish = @(
         '# Uploads the blobs and patches to the shared store release, then this package as a DRAFT release. Review the',
@@ -738,9 +694,27 @@ if (-not $Local -and $Repository) {
         "`$new = @(Get-ChildItem -LiteralPath `$store -File | Where-Object { `$_.Name -notlike '*-files.json*' -and `$_.Name -notin `$have } | ForEach-Object FullName)",
         "if (`$have.Count + `$new.Count -gt 990) { throw `"$StoreTag would pass GitHub's 1000 assets per release (`$(`$have.Count) there, `$(`$new.Count) new): start unreal-files-<n+1> with -StoreTag.`" }",
         "if (`$new.Count -gt 0) { gh release upload $StoreTag -R $Repository @new; if (`$LASTEXITCODE -ne 0) { throw 'upload to $StoreTag failed' } }",
-        "gh release create v$Version -R $Repository --draft --title '$title' --notes-file (Join-Path `$PSScriptRoot 'notes.md')$pre ``",
+        '# Older launchers locate update metadata in unreal-files-1. The file list names each clean blob store.',
+        "`$locator = 'unreal-files-1'",
+        "`$metadata = @((Join-Path `$store '$listName'), (Join-Path `$store '$listName.sha256'))",
+        "`$locatorAssets = @((gh release view `$locator -R $Repository --json assets | ConvertFrom-Json).assets)",
+        "if (`$LASTEXITCODE -ne 0) { throw 'Cannot read the launcher metadata release.' }",
+        "foreach (`$file in `$metadata) {",
+        "    `$name = Split-Path -Leaf `$file",
+        "    `$asset = `$locatorAssets | Where-Object name -eq `$name | Select-Object -First 1",
+        "    if (`$asset) {",
+        "        `$sha = 'sha256:' + (Get-FileHash -LiteralPath `$file).Hash.ToLowerInvariant()",
+        "        if (`$asset.digest -ne `$sha) { throw `"Existing launcher metadata differs: `$name`" }",
+        "    } else {",
+        "        gh release upload `$locator -R $Repository `$file",
+        "        if (`$LASTEXITCODE -ne 0) { throw `"Cannot upload launcher metadata `$name.`" }",
+        "    }",
+        "}",
+        "gh release create v$Version -R $Repository --target $commit --draft --title '$title' --notes-file (Join-Path `$PSScriptRoot 'notes.md')$pre ``",
         "    (Join-Path `$PSScriptRoot '$zipName') (Join-Path `$PSScriptRoot '$zipName.sha256') (Join-Path `$PSScriptRoot 'SHA256SUMS') (Join-Path `$PSScriptRoot '$launcherName') ``",
-        "    (Join-Path `$store '$listName') (Join-Path `$store '$listName.sha256')",
+        "    (Join-Path `$store '$listName') (Join-Path `$store '$listName.sha256') ``",
+        "    (Join-Path `$PSScriptRoot '$($serverNames[0])') (Join-Path `$PSScriptRoot '$($serverNames[0]).sha256') ``",
+        "    (Join-Path `$PSScriptRoot '$($serverNames[1])') (Join-Path `$PSScriptRoot '$($serverNames[1]).sha256')",
         "if (`$LASTEXITCODE -ne 0) { throw 'creating the draft release failed' }",
         '# The next release makes its patches from this one and reuses its blobs: only once they are on GitHub.',
         "Set-Content -LiteralPath (Join-Path `$PSScriptRoot '.published') -Value 'Uploaded to $Repository ($StoreTag, v$Version).'"

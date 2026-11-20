@@ -46,12 +46,7 @@ public:
 	/** Registers the cosmetics options (also done by every subsystem start; registering twice is harmless). */
 	static void RegisterSettings();
 
-	/**
-	 * The skeletal mesh asset a pawn kind (0 spy, 1 merc) is drawn with when the map dresses the team in a model
-	 * of its own (empty when it does not, or the bridge has no look table): a stock mesh by its asset path
-	 * ("SPerso.DEF_01": /Game/Imported/Chars/SPerso/DEF_01/...), or the map's glb as Tools/Import/import_outfits.py
-	 * imports it (/Game/Imported/Outfits/<Map>/<Name>/SkeletalMeshes/<Name>).
-	 */
+	/** Absolute path to the installed team outfit GLB, or empty when the map uses the stock character. */
 	static FString OutfitModelPath(int32 Kind);
 
 	/** The look of a pawn as of this frame, or null. */

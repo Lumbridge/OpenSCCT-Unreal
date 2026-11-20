@@ -1,4 +1,5 @@
 #include "Menu/ScctArmouryPreviewStage.h"
+#include "Play/ScctRuntimeSkins.h"
 
 #include "Components/PointLightComponent.h"
 #include "Components/PoseableMeshComponent.h"
@@ -271,11 +272,11 @@ void AScctArmouryPreviewStage::LoadModel(const FString& Asset, int32 Kind, int32
 
 	FString Package, Name;
 	USkeletalMesh* Model = Asset.Split(TEXT("."), &Package, &Name)
-		? LoadObject<USkeletalMesh>(nullptr, *FString::Printf(TEXT("/Game/Imported/Chars/%s/%s/SkeletalMeshes/%s.%s"), *Package, *Name, *Name, *Name), nullptr, LOAD_NoWarn)
+		? ScctRuntimeSkins::Load(TEXT("shared/chars") / Package / (Name + TEXT(".glb")))
 		: nullptr;
 	if (Model == nullptr)
 	{
-		UE_LOG(LogOpenSCCT, Warning, TEXT("Armoury preview: no imported model for %s (Tools/Import/import_characters.py); the item's flat picture is shown"), *Asset);
+		UE_LOG(LogOpenSCCT, Warning, TEXT("Armoury preview: no local Steam model for %s; the item's flat picture is shown"), *Asset);
 		Body->SetVisibility(false);
 		return;
 	}

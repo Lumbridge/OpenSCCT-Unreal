@@ -1,4 +1,6 @@
 #include "Play/ScctLevelStateSubsystem.h"
+#include "Play/ScctRuntimeSkins.h"
+#include "Animation/AnimSequence.h"
 #include "Play/ScctEchelonLightFilter.h"
 #include "Demo/ScctDemoPlayback.h"
 #include "Play/ScctStudioProp.h"
@@ -777,7 +779,8 @@ UStaticMesh* UScctLevelStateSubsystem::FindMesh(const FString& Name)
 	{
 		Path = MeshAssets.Find(LevelPackageKey(Name));
 	}
-	UStaticMesh* Mesh = Path != nullptr ? Cast<UStaticMesh>(Path->TryLoad()) : nullptr;
+	UStaticMesh* Mesh = ScctRuntimeSkins::LoadEffectMesh(Name);
+	if (!Mesh && Path) Mesh = Cast<UStaticMesh>(Path->TryLoad());
 	LoadedMeshes.Add(Key, Mesh);
 	return Mesh;
 }
@@ -1697,10 +1700,17 @@ void UScctLevelStateSubsystem::BindProp(FPropState& State, const FScctWorldAnima
 UAnimSequenceBase* UScctLevelStateSubsystem::FindPropSequence(const ASkeletalMeshActor& Actor, const FString& Sequence)
 {
 	const USkeletalMeshComponent* Component = Actor.GetSkeletalMeshComponent();
-	const UObject* Mesh = Component != nullptr ? Component->GetSkinnedAsset() : nullptr;
+	USkeletalMesh* Mesh = Component != nullptr ? Component->GetSkeletalMeshAsset() : nullptr;
 	if (Mesh == nullptr || Sequence.IsEmpty())
 	{
 		return nullptr;
+	}
+
+	if (!ScctRuntimeSkins::SourceOf(Mesh).IsEmpty())
+	{
+		UAnimSequence* Local = ScctRuntimeSkins::LoadAnimation(Mesh, Sequence);
+		if (Local) PropAssets.AddUnique(Local);
+		return Local;
 	}
 
 	// The importer brings a prop's sequences in beside its mesh (Tools/Import/scct_fx.py, prop_assets).

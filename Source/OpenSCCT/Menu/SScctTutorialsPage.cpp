@@ -409,7 +409,7 @@ namespace
 			bMerc = bTutorialVisitLastMerc;
 			UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
 
-			// The host list's maps that play Story and can be played here; AquaE first selected, as the page does.
+			// The host list's maps that play Story and can be played here; AQU03 first selected, as the page does.
 			int32 StoryIndex = 0;
 			for (int32 Mode = 0; Mode < 4; ++Mode)
 			{
@@ -429,7 +429,7 @@ namespace
 				}
 			}
 			const auto Has = [this](const FString& Id) { return Maps.ContainsByPredicate([&Id](const FString& Map) { return Map.Equals(Id, ESearchCase::IgnoreCase); }); };
-			Selected = Has(TutorialVisitLastMap) ? TutorialVisitLastMap : Has(TEXT("AquaE")) ? FString(TEXT("AquaE")) : Maps.Num() > 0 ? Maps[0] : FString();
+			Selected = Has(TutorialVisitLastMap) ? TutorialVisitLastMap : Has(TEXT("AQU03")) ? FString(TEXT("AQU03")) : Maps.Num() > 0 ? Maps[0] : FString();
 
 			const TSharedRef<SVerticalBox> List = SNew(SVerticalBox);
 			for (const FString& Map : Maps)

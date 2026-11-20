@@ -8,6 +8,12 @@
 #include "Engine/GameViewportClient.h"
 #include "Engine/LevelStreamingDynamic.h"
 #include "Engine/World.h"
+#include "Engine/Texture2D.h"
+#include "ImageUtils.h"
+#include "Hub/ScctHubSubsystem.h"
+#include "Play/ScctSessionSubsystem.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Layout/SScaleBox.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Menu/SScctGearPage.h"
@@ -208,7 +214,37 @@ void AScctFrontEndGameMode::StartPlay()
 		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: backdrop %s is loading behind the cover"), Backdrop.Map);
 		return;
 	}
-	UE_LOG(LogOpenSCCT, Log, TEXT("Menu: no imported map to show behind the menu; using the level's own scene"));
+	if (!ShowLocalMapPicture())
+		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: no local map picture or level available; using the front-end scene"));
+}
+
+bool AScctFrontEndGameMode::ShowLocalMapPicture()
+{
+	const UGameInstance* Instance = GetGameInstance();
+	auto* Viewport = Instance ? Instance->GetGameViewportClient() : nullptr;
+	const FString Root = FOpenSCCTModule::FindContentRoot();
+	if (!Viewport || Root.IsEmpty()) return false;
+	for (const TCHAR* Map : { TEXT("AQU03"), TEXT("CLU04"), TEXT("BNK11") })
+	{
+		const FString File = Root / TEXT("shared/maps/images") / Map / TEXT("loading-spy.png");
+		if (!FPaths::FileExists(File)) continue;
+		LocalMapPicture = FImageUtils::ImportFileAsTexture2D(File);
+		if (!LocalMapPicture) continue;
+		LocalMapBrush.SetResourceObject(LocalMapPicture);
+		LocalMapBrush.SetImageSize(FVector2f(LocalMapPicture->GetSizeX(), LocalMapPicture->GetSizeY()));
+		LocalMapBrush.DrawAs = ESlateBrushDrawType::Image;
+		LocalMapBackdrop = SNew(SScaleBox)
+			.Stretch(EStretch::ScaleToFill)
+			.Clipping(EWidgetClipping::ClipToBounds)
+			.Visibility(EVisibility::HitTestInvisible)
+			[
+				SNew(SImage).Image(&LocalMapBrush)
+			];
+		Viewport->AddViewportWidgetContent(LocalMapBackdrop.ToSharedRef(), -1);
+		UE_LOG(LogOpenSCCT, Log, TEXT("Menu: showing locally converted %s artwork behind the menu"), Map);
+		return true;
+	}
+	return false;
 }
 
 void AScctFrontEndGameMode::Tick(float DeltaSeconds)
@@ -220,6 +256,14 @@ void AScctFrontEndGameMode::Tick(float DeltaSeconds)
 	}
 	Seconds += DeltaSeconds;
 	ShowMenu();
+	if (LocalMapBackdrop.IsValid())
+	{
+		const auto* Session = GetWorld()->GetSubsystem<UScctSessionSubsystem>();
+		const auto* Hub = UScctHubSubsystem::Get(GetWorld());
+		const auto* Online = UScctOnlineSubsystem::Get(GetWorld());
+		const bool bWorldView = (Session && Session->IsBackdrop()) || (Hub && Hub->IsVisiting()) || (Online && Online->IsVisiting());
+		LocalMapBackdrop->SetVisibility(bWorldView ? EVisibility::Collapsed : EVisibility::HitTestInvisible);
+	}
 	RevealBackdrop();
 	MoveCamera();
 	if (IsValid(Menu) && !IsValid(BackdropLevel))
@@ -241,6 +285,13 @@ void AScctFrontEndGameMode::Tick(float DeltaSeconds)
 void AScctFrontEndGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	RemoveLoadingCover();
+	if (LocalMapBackdrop.IsValid())
+	{
+		const UGameInstance* Instance = GetGameInstance();
+		if (auto* Viewport = Instance ? Instance->GetGameViewportClient() : nullptr)
+			Viewport->RemoveViewportWidgetContent(LocalMapBackdrop.ToSharedRef());
+		LocalMapBackdrop.Reset();
+	}
 	if (IsValid(LiveBackdrop))
 	{
 		LiveBackdrop->Shutdown(GetWorld());

@@ -1,8 +1,7 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Cooks the imported maps into the IoStore containers OpenSCCT-Unreal-Content publishes: one shared pack for the
-imported content every map uses and one pack per map.
+Cooks imported maps into local IoStore containers for development inspection.
 
 .DESCRIPTION
 Runs headless: UnrealBuildTool builds the editor and the game, then RunUAT BuildCookRun cooks, stages and paks with
@@ -34,7 +33,7 @@ id (<engine>-<ProjectVersion>-<Revision>) names that build.
 
 .PARAMETER Maps
 The map codes to cook (folders of Content/Imported/Maps holding <Code>/<Code>.umap). Default: every imported map but
-TestRange. A publish cooks every map in one run: what counts as shared depends on which maps were cooked together.
+TestRange. Cook maps together to identify their common dependencies.
 
 .PARAMETER Revision
 The n of the cook id, bumped for every re-cook against the same ProjectVersion. It must be CookRevision of
@@ -111,7 +110,7 @@ if (-not $gameVersion) { Fail 'no ProjectVersion in Config/DefaultGame.ini' }
 $cookRevision = [regex]::Match($gameIni, '(?ms)^\[OpenSCCT\.MapPacks\][^\[]*?^CookRevision=(\d+)\s*$').Groups[1].Value
 if (-not $cookRevision) { Fail 'no CookRevision under [OpenSCCT.MapPacks] in Config/DefaultGame.ini' }
 if ($Revision -eq 0) { $Revision = [int]$cookRevision }
-if ($Revision -ne [int]$cookRevision) { Fail "-Revision $Revision is not CookRevision=$cookRevision of Config/DefaultGame.ini, so the game would not use these packs: bump CookRevision instead" }
+if ($Revision -ne [int]$cookRevision) { Fail "-Revision $Revision is not CookRevision=$cookRevision of Config/DefaultGame.ini; update CookRevision to label a new local cook" }
 $cookId = "$engineVersion-$gameVersion-$Revision"
 $commit = ([string](git -C $repo rev-parse HEAD)).Trim()
 $dirty = [bool](git -C $repo status --porcelain --untracked-files=no)

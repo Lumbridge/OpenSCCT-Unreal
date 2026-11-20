@@ -1,6 +1,14 @@
 // The runner's own checks and the boot test (the Godot client's SelfTestFailSmoke and BootSmoke).
 
 #include "OpenSCCT.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
+#include "StaticMeshResources.h"
+#include "Engine/Texture2D.h"
+#include "Materials/MaterialInterface.h"
+#include "Play/ScctRuntimeSkins.h"
+#include "Rendering/SkeletalMeshRenderData.h"
+#include "Rendering/SkeletalMeshLODRenderData.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 #include "Test/ScctTest.h"
@@ -8,6 +16,48 @@
 
 namespace
 {
+	/** Check actual GPU-ready rigs and base textures from the player's Steam build, including both first-person roles. */
+	class FScctLocalSteamSkins : public IScctTest
+	{
+	public:
+		virtual FScctTestResult Step(FScctTestContext&) override
+		{
+			const TCHAR* Files[] = { TEXT("SPerso/ATT_01"), TEXT("SPerso/DEF_01"), TEXT("SPerso/ATT_01_fp"),
+				TEXT("SWeaponFirst/1DEF_01"), TEXT("SWeaponFirst/1DEF_Uzi"), TEXT("SWeaponFirst/M160"),
+				TEXT("OpenScctRifles/pumpshotgun"), TEXT("OpenScctRifles/pumpshotgun_first"), TEXT("OpenScctRifles/compactsmg_first") };
+			for (const TCHAR* ModelName : Files)
+			{
+				const FString Relative = FString(TEXT("shared/chars")) / (FString(ModelName) + TEXT(".glb"));
+				USkeletalMesh* Mesh = ScctRuntimeSkins::Load(Relative);
+				if (!Mesh || Mesh->GetRefSkeleton().GetNum() < 2 || ScctRuntimeSkins::SourceOf(Mesh).IsEmpty())
+					return FScctTestResult::Fail(TEXT("Missing local skeleton for ") + Relative);
+				const FSkeletalMeshRenderData* Data = Mesh->GetResourceForRendering();
+				if (!Data || !Data->LODRenderData.Num() || !Data->LODRenderData[0].GetNumVertices()
+					|| Data->LODRenderData[0].RenderSections.IsEmpty())
+					return FScctTestResult::Fail(TEXT("Missing render sections for ") + Relative);
+				const bool bLongGun = Relative.Contains(TEXT("/OpenScctRifles/"));
+				bool bTextured = false;
+				for (const FSkeletalMaterial& Slot : Mesh->GetMaterials())
+				{
+					const auto HasLocalTexture = [&Slot](const TCHAR* Parameter)
+					{
+						UTexture* Image = nullptr;
+						return Slot.MaterialInterface && Slot.MaterialInterface->GetTextureParameterValue(Parameter, Image) &&
+							Image && Image->GetOutermost()->GetName().StartsWith(TEXT("/Temp/OpenSCCTSteam/"));
+					};
+					bTextured |= bLongGun ? HasLocalTexture(TEXT("GunBase")) && HasLocalTexture(TEXT("GunNormal")) && HasLocalTexture(TEXT("GunORM")) :
+						HasLocalTexture(TEXT("BaseColor"));
+				}
+				if (!bTextured) return FScctTestResult::Fail(TEXT("Missing locally loaded material inputs for ") + Relative);
+			}
+			UStaticMesh* Effect = ScctRuntimeSkins::LoadEffectMesh(TEXT("SGameplayObjects.Gadgets.flare_grenade"));
+			if (!Effect || !Effect->GetRenderData() || Effect->GetRenderData()->LODResources.IsEmpty() ||
+				!Effect->GetRenderData()->LODResources[0].GetNumVertices())
+				return FScctTestResult::Fail(TEXT("Missing locally built effect mesh geometry"));
+			return FScctTestResult::Pass(TEXT("9 local rigs have bones, geometry and textures; the local flare effect also has geometry"));
+		}
+	};
+
 	/** Passes at once: the runner, its output and exit code 0 work. */
 	class FScctSelfTestPass : public IScctTest
 	{
@@ -149,3 +199,5 @@ namespace
 SCCT_TEST("selftest-pass", FScctSelfTestPass);
 SCCT_TEST("selftest-fail", FScctSelfTestFail);
 SCCT_TEST("boot", FScctBootTest);
+
+SCCT_TEST("local-steam-skins", FScctLocalSteamSkins);

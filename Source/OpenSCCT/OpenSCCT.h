@@ -64,6 +64,9 @@ public:
 	/** The converted content folder: -ScctContent=, else the SVM_CONTENT variable, else the project setting. */
 	static FString FindContentRoot();
 
+	/** Open the offline converter included with the Unreal game. */
+	static void OpenSteamSetup();
+
 	/** Where the built bridge is: Binaries/Bridge under the project, in the editor and in a packaged game. */
 	static FString FindBridgeDirectory();
 
@@ -89,6 +92,8 @@ private:
 
 	/** The content folder was accepted; until then every GetBridge tries it again. */
 	bool bConfigured = false;
+	FString ResolvedContentRoot;
+	double NextContentCheck = 0.0;
 
 	/** Why the runtime or the table could not be loaded. Final for the run. */
 	FString StartError;

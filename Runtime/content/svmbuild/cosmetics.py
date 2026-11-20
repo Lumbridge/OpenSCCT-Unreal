@@ -1653,7 +1653,7 @@ _WORKER_BYTES = 1.6 * 1024 ** 3
 
 
 def _available_memory() -> int | None:
-    """Physical memory free now, in bytes (None when it cannot be read)."""
+    """Available allocation headroom in bytes, or None if the OS cannot report it."""
     try:
         if os.name == "nt":
             import ctypes  # noqa: PLC0415
@@ -1669,7 +1669,7 @@ def _available_memory() -> int | None:
             status.dwLength = ctypes.sizeof(_Status)
             if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
                 return None
-            return int(status.ullAvailPhys)
+            return int(min(status.ullAvailPhys, status.ullAvailPageFile))
         return int(os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"))
     except (AttributeError, OSError, ValueError):
         return None
@@ -1678,9 +1678,6 @@ def _available_memory() -> int | None:
 def build_all(chars_dir: Path) -> dict:
     """Writes every target's camos next to its retail texture (a texture the install lacks is skipped) and a swatch per
     pattern under chars/thumbs. The work is spread over worker processes."""
-    import concurrent.futures as cf  # noqa: PLC0415
-    import multiprocessing as mp  # noqa: PLC0415
-
     from PIL import Image  # noqa: PLC0415
 
     from . import gunskin  # noqa: PLC0415
@@ -1725,10 +1722,27 @@ def build_all(chars_dir: Path) -> dict:
     if free is not None:
         # A 2048 camo holds about 1.5 GB at its peak; leave room for whatever else is running (the maps' workers).
         workers = max(1, min(workers, int(free * 0.8 // _WORKER_BYTES)))
-    with cf.ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn")) as pool:
-        # Queued together, so the swatches fill the workers the last camos leave idle.
-        camo_futures = [pool.submit(_paint_job, j) for j in jobs]
-        thumb_futures = [pool.submit(_thumb_job, t) for t in thumbs]
-        done = [f.result() for f in camo_futures]
-        done_thumbs = [f.result() for f in thumb_futures]
-    return {"camos": len(done), "thumbs": len(done_thumbs), "skipped": skipped}
+    work = [(_paint_job, job) for job in jobs] + [(_thumb_job, job) for job in thumbs]
+    _write_textures(work, workers)
+    return {"camos": len(jobs), "thumbs": len(thumbs), "skipped": skipped}
+
+
+def _write_textures(work, workers):
+    import concurrent.futures as cf
+    import multiprocessing as mp
+
+    retry = []
+    context = mp.get_context("spawn")
+    with cf.ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
+        futures = {pool.submit(fn, job): (fn, job) for fn, job in work}
+        for future in cf.as_completed(futures):
+            try:
+                future.result()
+            except MemoryError:
+                retry.append(futures[future])
+    # Other map workers and graphics programs can consume memory after the initial budget check.
+    # Keep completed textures and repeat only missed outputs with the other paint processes gone.
+    if retry:
+        with cf.ProcessPoolExecutor(max_workers=1, mp_context=context) as pool:
+            for fn, job in retry:
+                pool.submit(fn, job).result()

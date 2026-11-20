@@ -8,7 +8,7 @@
  *
  *   --svm-content=<dir>          the converted content folder (as -ScctContent=)
  *   --svm-game-root=<dir>        the original game's folder (Packages, System): the bridge reads it as SVM_GAME_ROOT
- *   --svm-map-downloads=<dir>    where downloaded maps and packs are kept (the bridge's packs folder, OPENSCCT_PACKS)
+ *   --svm-map-downloads=<dir>    where Unreal keeps optional downloaded maps (OPENSCCT_UNREAL_PACKS)
  *   --svm-maps=<dir>             one more folder of maps, searched first (repeatable; as -ScctMaps=)
  *   --priority=<name>            idle, low, below, normal, medium, above, high
  *   --affinity=<cpus>            a mask (0xF, 15) or a list of CPUs (0,2-3)

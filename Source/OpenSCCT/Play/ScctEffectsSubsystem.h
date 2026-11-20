@@ -37,7 +37,7 @@ class UTexture2D;
  *     texture each, laid on the surface the bridge found for it, riding that surface like an impact mark and fading
  *     out at the end of its life (Play/ScctEffectsProjections.cpp);
  *   - effect actors: grenades, mines and gadgets as their original meshes (imported by
- *     Tools/Effects/build_effect_assets.py; a small glowing stand-in shape where a mesh is missing), explosions,
+ *     the locally converted Steam files; a small glowing stand-in shape where a mesh is missing), explosions,
  *     smoke, sparks, flares and trails as particles, and the lights the simulation gives them. The PS2 modem's
  *     destruction preset (Ps2ModemEffect) is drawn as its own three emitters (Play/ScctEffectsDevices.cpp);
  *   - the spy's smoke grenade cloud (SSmokeEmitter) as the original emitter makes it: fifteen sprites of the game's
@@ -531,7 +531,6 @@ private:
 	TMap<int32, FString> Names;
 	TMap<int32, EStyle> Styles;
 	TMap<int64, FName> DrawnBones;
-	TMap<FString, FSoftObjectPath> MeshAssets;
 
 	TArray<FScctShot> ShotBuffer;
 	TArray<FScctEffectActor> ActorBuffer;

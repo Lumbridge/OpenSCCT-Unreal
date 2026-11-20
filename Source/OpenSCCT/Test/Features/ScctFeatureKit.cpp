@@ -1,4 +1,5 @@
 #include "Test/Features/ScctFeatureKit.h"
+#include "Online/ScctOnlineSubsystem.h"
 
 #include "Engine/World.h"
 #include "Hud/ScctHudModel.h"
@@ -82,7 +83,7 @@ namespace ScctFeatureKit
 
 	FString MapLevel(const FString& Map)
 	{
-		return FString::Printf(TEXT("/Game/Imported/Maps/%s/%s"), *Map, *Map);
+		return UScctOnlineSubsystem::LevelPackageOfMap(Map);
 	}
 
 	int64 GetClientTicks(const FScctTestContext& Context)

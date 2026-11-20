@@ -51,8 +51,8 @@ namespace
 			MapIndex = FMath::Max(MapIds.IndexOfByKey(SavedMap), 0);
 			if (MapIds.IsValidIndex(MapIndex) && SavedMap.IsEmpty())
 			{
-				// AquaE first when it is there: the map everything was first seen on.
-				MapIndex = FMath::Max(MapIds.IndexOfByPredicate([](const FString& Id) { return Id.Equals(TEXT("AquaE"), ESearchCase::IgnoreCase); }), 0);
+				// Start on the Aquarium from the Steam installation.
+				MapIndex = FMath::Max(MapIds.IndexOfByPredicate([](const FString& Id) { return Id.Equals(TEXT("AQU03"), ESearchCase::IgnoreCase); }), 0);
 			}
 			SelectDefaultMode();
 
@@ -68,7 +68,11 @@ namespace
 							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 22.0f)
 							[
 								SNew(STextBlock).Font(ScctUi::Body()).ColorAndOpacity(ScctHudStyle::Text()).AutoWrapText(true).LineHeightPercentage(1.2f)
-								.Text(FText::FromString(TEXT("No map can be played here yet. Either the OpenSCCT content folder was not found, or no map has been imported into this game.\n\nConvert your copy of the game with OpenSCCT, then import a map: Tools\\Import\\Import-Map.ps1 -Map AquaE -Content <content folder> (see the README).")))
+								.Text(INVTEXT("Select Set up from Steam to build the original maps from your installed copy of Chaos Theory. Return to Play when setup finishes."))
+							]
+							+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(0.0f, 0.0f, 0.0f, 8.0f)
+							[
+								SNew(SScctButton).Text(INVTEXT("SET UP FROM STEAM")).OnPressed(FSimpleDelegate::CreateLambda([] { FOpenSCCTModule::OpenSteamSetup(); }))
 							]
 							+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)
 							[

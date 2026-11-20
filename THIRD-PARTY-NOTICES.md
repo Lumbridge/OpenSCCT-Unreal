@@ -27,6 +27,10 @@ OpenSCCT adapted the following artists' models for the character rigs, material 
 | .NET runtime 10 (.NET Foundation and contributors) | `OpenSCCTUnreal\Binaries\DotNet` | MIT: https://github.com/dotnet/runtime/blob/main/LICENSE.TXT. Its `LICENSE.txt` and `ThirdPartyNotices.txt` ship in that folder. |
 | Microsoft Visual C++ Redistributable | `Prerequisites\vc_redist.x64.exe` | Microsoft Software License Terms for the Visual C++ Redistributable: https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/ |
 
+## glTFRuntime
+
+The Unreal game uses glTFRuntime to read player-built glTF assets. The plugin and its materials are distributed under the MIT License. Copyright © 2020 Roberto De Ioris. The release includes `glTFRuntime-LICENSE.txt`. [Upstream source](https://github.com/rdeioris/glTFRuntime).
+
 ## NuGet packages in the bridge (`OpenSCCTUnreal\Binaries\Bridge`)
 
 The bridge (`Bridge/OpenScct.UnrealBridge`) and the OpenSCCT assemblies it is built with
