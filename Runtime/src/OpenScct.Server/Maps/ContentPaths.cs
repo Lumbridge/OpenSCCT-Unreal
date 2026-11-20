@@ -125,6 +125,10 @@ public static class ContentPaths
         SetPaths(chosen, exeDir, packRoot, localOnly: true);
     }
 
+    /// <summary>Use the generation selected by Unreal's own setup.</summary>
+    public static void ConfigureUnreal(string? root, string? exeDir, string? packs) =>
+        SetPaths(root, exeDir, packs ?? DefaultPacksFolder, localOnly: true);
+
     private static void SetPaths(string? chosen, string? exeDir, string packs, bool localOnly)
     {
         PacksFolder = string.IsNullOrWhiteSpace(packs) ? DefaultPacksFolder : Path.GetFullPath(packs);

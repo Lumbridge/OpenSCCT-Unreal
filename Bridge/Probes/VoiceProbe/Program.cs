@@ -12,14 +12,14 @@ using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Online;
 using OpenScct.UnrealBridge.Voice;
 
-// VoiceProbe <content root> <OpenSCCT checkout> [port]
+// VoiceProbe <content root> [runtime folder] [port]
 //
 // Checks the voice bridge the way Unreal uses it, through the function table VoiceExports.GetApi fills (the same
 // unmanaged entries, called through their pointers), once a frame:
 //   1. the struct sizes ScctVoiceApi.h asserts;
 //   2. the microphone test without a server: a 440 Hz tone into SubmitCapture, two seconds recorded through the
 //      bridge's own relay, then read back with ReadFrame, and the same live;
-//   3. a real dedicated server (svm-server, the OpenSCCT checkout's src/OpenScct.Server.Cli) on localhost with two
+//   3. a real dedicated server (svm-server, the bundled Runtime's src/OpenScct.Server.Cli) on localhost with two
 //      players in its lobby: the bridge's visit (OnlineBridge, ticked through the online table's Update, which ticks
 //      the visit's voice after it) and a plain OpenSCCT OnlineClient with its own OnlineVoice, as the Godot client and
 //      the bots have. First the bridge's player talks (the tone into SubmitCapture) and the other hears him, then the
@@ -55,7 +55,7 @@ internal static unsafe class Probe
     public static int Run(string[] args)
     {
         string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
-        string openScct = args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.OpenScctCheckout();
+        string openScct = args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.RuntimeRoot();
         int port = args.Length > 2 ? int.Parse(args[2], CultureInfo.InvariantCulture) : 28951;
 
         bool ok = CheckLayout();

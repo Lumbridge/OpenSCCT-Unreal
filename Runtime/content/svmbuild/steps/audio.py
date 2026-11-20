@@ -79,8 +79,9 @@ class AudioStep(Step):
         stats['sidearm_audio'] = install_sidearm_audio(out_dir)
         from ..rifles import install_audio as install_rifles
         stats['rifles'] = install_rifles(out_dir)
-        from ..user_gun_audio import install as install_user_guns
-        stats['user_guns'] = install_user_guns(out_dir)
+        from .. import user_gun_audio
+        if (user_gun_audio.SOURCE / "manifest.json").is_file():
+            stats['user_guns'] = user_gun_audio.install(out_dir)
         flat = {k: v for k, v in stats.items() if not isinstance(v, (dict, list))}
         flat["detail"] = stats
         return StepOutput(stats=flat)

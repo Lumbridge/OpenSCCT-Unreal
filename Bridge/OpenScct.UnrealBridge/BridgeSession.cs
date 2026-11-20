@@ -159,8 +159,20 @@ public sealed class BridgeSession : IDisposable
         // The runtime Unreal hosts has no base directory of its own, so the default catalog cannot find them there.
         // OPENSCCT_PACKS moves the downloaded packs' folder (default %LOCALAPPDATA%\OpenSCCT\packs), so a test process
         // can run without the maps downloaded on this machine (a lobby guest that lacks the host's map).
-        ContentPaths.Configure(contentRoot, exeDir: Path.GetDirectoryName(typeof(BridgeSession).Assembly.Location),
-            packs: Environment.GetEnvironmentVariable("OPENSCCT_PACKS"));
+        string? bridge = Path.GetDirectoryName(typeof(BridgeSession).Assembly.Location);
+        string directory = Environment.GetEnvironmentVariable(OpenScct.Maps.UnrealSteamInstall.ContentDirectoryVariable)
+            ?? OpenScct.Maps.UnrealSteamInstall.DefaultDirectory;
+        string? requested = string.IsNullOrWhiteSpace(contentRoot) ? null : Path.GetFullPath(contentRoot);
+        // Older launchers request shared packs or a Godot generation. Use the local Unreal conversion for those launches.
+        bool managed = requested is null || new DirectoryInfo(requested).Parent?.Name == OpenScct.Maps.SteamContentInstall.BuildsDirectory
+            || Path.GetFileName(Path.TrimEndingDirectorySeparator(requested)).Equals("packs", StringComparison.OrdinalIgnoreCase);
+        if (managed)
+        {
+            string? tools = bridge is null ? null : Path.GetFullPath(Path.Combine(bridge, "..", "..", "..", "contenttools"));
+            string? recipe = tools is null ? null : OpenScct.Maps.UnrealSteamInstall.ReadRecipe(tools);
+            requested = OpenScct.Maps.UnrealSteamInstall.ActiveRoot(directory, recipe);
+        }
+        ContentPaths.ConfigureUnreal(requested, bridge, Environment.GetEnvironmentVariable("OPENSCCT_PACKS"));
     }
 
     /// <summary>Hosts <paramref name="map"/> locally and joins it. Blocks while the map loads.</summary>

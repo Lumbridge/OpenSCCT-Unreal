@@ -5,8 +5,8 @@ Makes the TestBox fixture level /Game/OpenSCCT/Test/TestBox (headless: no editor
 .DESCRIPTION
 TestBox is OpenSCCT's synthetic test map (svmbuild.testbox): a walled box with rooms, a sliding door and four player
 starts, nothing of the original game. Tools\Test\make_testbox.py draws the level from the fixture's render world;
-the bridge ships the fixture's simulation files in Binaries\Bridge\maps\TestBox (built with the bridge), which is
-also where this script takes the fixture from unless -Fixture names another folder. The level is in Git, so this is
+the source fixture lives in Runtime\fixtures\testbox. The bridge also ships its simulation files in
+Binaries\Bridge\maps\TestBox. The level is in Git, so this is
 only needed when the fixture changes.
 
 .EXAMPLE
@@ -20,14 +20,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $project = (Resolve-Path "$PSScriptRoot\..\..").Path
-if (-not $Fixture) {
-    $Fixture = Join-Path $project 'Binaries\Bridge\maps\TestBox'
-    if (-not (Test-Path (Join-Path $Fixture 'render\world.glb'))) {
-        $Fixture = Join-Path $project '..\OSC-unreal-bridge\fixtures\testbox'
-    }
-}
+if (-not $Fixture) { $Fixture = Join-Path $project 'Runtime\fixtures\testbox' }
 if (-not (Test-Path (Join-Path $Fixture 'render\world.glb'))) {
-    throw "No TestBox fixture at $Fixture (build the bridge, or pass -Fixture)."
+    throw "No TestBox fixture at $Fixture (check Runtime\fixtures or pass -Fixture)."
 }
 $Fixture = (Resolve-Path $Fixture).Path
 

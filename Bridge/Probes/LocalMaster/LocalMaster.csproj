@@ -11,17 +11,17 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <RootNamespace>OpenScct.Master</RootNamespace>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
-    <OpenScctRoot Condition="'$(OpenScctRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\OSC-unreal-bridge\</OpenScctRoot>
+    <BundledRuntime>$(MSBuildThisFileDirectory)..\..\..\Runtime\</BundledRuntime>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="$(OpenScctRoot)src\OpenScct.Net\OpenScct.Net.csproj" />
+    <ProjectReference Include="$(BundledRuntime)src\OpenScct.Net\OpenScct.Net.csproj" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
     <PackageReference Include="AWSSDK.S3" Version="4.0.23.4" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="$(OpenScctRoot)src\OpenScct.Master\**\*.cs" Exclude="$(OpenScctRoot)src\OpenScct.Master\Program.cs;$(OpenScctRoot)src\OpenScct.Master\obj\**;$(OpenScctRoot)src\OpenScct.Master\bin\**" Link="Master\%(RecursiveDir)%(Filename)%(Extension)" />
-    <Compile Include="$(OpenScctRoot)shared\ProjectLinks.cs" Link="Project\ProjectLinks.cs" />
-    <EmbeddedResource Include="$(OpenScctRoot)src\OpenScct.Master\Admin\assets\*" LogicalName="admin/%(Filename)%(Extension)" />
-    <EmbeddedResource Include="$(OpenScctRoot)src\OpenScct.Master\Web\assets\*" LogicalName="web/%(Filename)%(Extension)" />
+    <Compile Include="$(BundledRuntime)src\OpenScct.Master\**\*.cs" Exclude="$(BundledRuntime)src\OpenScct.Master\Program.cs;$(BundledRuntime)src\OpenScct.Master\obj\**;$(BundledRuntime)src\OpenScct.Master\bin\**" Link="Master\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(BundledRuntime)shared\ProjectLinks.cs" Link="Project\ProjectLinks.cs" />
+    <EmbeddedResource Include="$(BundledRuntime)src\OpenScct.Master\Admin\assets\*" LogicalName="admin/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="$(BundledRuntime)src\OpenScct.Master\Web\assets\*" LogicalName="web/%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

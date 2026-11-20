@@ -12,7 +12,7 @@ using OpenScct.UnrealBridge.Events;
 using OpenScct.UnrealBridge.Hud;
 using OpenScct.UnrealBridge.Online;
 
-// OnlineProbe <content root> <OpenSCCT checkout> [first map] [second map] [seconds in the second match] [port] [master url] [invite key]
+// OnlineProbe <content root> [runtime folder] [first map] [second map] [seconds in the second match] [port] [master url] [invite key]
 // OnlineProbe host [content root] [map] [port] [lan port] [upnp]   (hosting from the game: see HostProbe.cs)
 // OnlineProbe setup [content root] [map]                           (Create Session's rules: see SetupProbe.cs)
 // OnlineProbe endround [content root] [map] [seconds]               (the round table's EndLocalRound: see EndRoundProbe.cs)
@@ -20,7 +20,7 @@ using OpenScct.UnrealBridge.Online;
 // OnlineProbe rejoin                                                (the rejoin record and table: see RejoinProbe.cs)
 // OnlineProbe nade [content root] [map] [port]                      (where the grenade preview is refused: see NadeGateProbe.cs)
 //
-// Starts a real dedicated server (svm-server, the OpenSCCT checkout's src/OpenScct.Server.Cli) on localhost with
+// Starts a real dedicated server (svm-server, the bundled Runtime's src/OpenScct.Server.Cli) on localhost with
 // bots filling the sides, and visits it the way Unreal does: through the function table OnlineExports.GetApi fills
 // (the same unmanaged entries, called through their pointers), once a frame. It checks, in this order:
 //   1. the struct sizes the C++ header asserts;
@@ -60,7 +60,7 @@ internal static unsafe class Probe
     public static int Run(string[] args)
     {
         string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
-        string openScct = args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.OpenScctCheckout();
+        string openScct = args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.RuntimeRoot();
         string firstMap = args.Length > 2 ? args[2] : "AquaE";
         string secondMap = args.Length > 3 ? args[3] : "ClubE";
         double secondMatchSeconds = args.Length > 4 ? double.Parse(args[4], CultureInfo.InvariantCulture) : 10;

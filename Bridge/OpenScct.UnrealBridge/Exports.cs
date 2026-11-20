@@ -299,6 +299,11 @@ public static unsafe class Exports
         try
         {
             BridgeSession.Configure(contentRoot == null ? "" : new string(contentRoot));
+            if (!OpenScct.Server.ContentPaths.SteamBaseReady)
+            {
+                s_lastError = "Select Set up from Steam in OpenSCCT Unreal to build the game files from your installed copy of Chaos Theory.";
+                return 0;
+            }
             return 1;
         }
         catch (Exception e)
@@ -628,15 +633,22 @@ public static unsafe class Exports
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int LastError(char* buffer, int capacity)
     {
-        string error = s_lastError;
+        return WriteText(s_lastError, buffer, capacity);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    public static int GetConfiguredContentRoot(char* buffer, int capacity) =>
+        WriteText(OpenScct.Server.ContentPaths.Root ?? string.Empty, buffer, capacity);
+
+    private static int WriteText(string text, char* buffer, int capacity)
+    {
         if (buffer != null && capacity > 0)
         {
-            int count = Math.Min(error.Length, capacity - 1);
-            error.AsSpan(0, count).CopyTo(new Span<char>(buffer, count));
+            int count = Math.Min(text.Length, capacity - 1);
+            text.AsSpan(0, count).CopyTo(new Span<char>(buffer, count));
             buffer[count] = '\0';
         }
-
-        return error.Length;
+        return text.Length;
     }
 
     /// <summary>

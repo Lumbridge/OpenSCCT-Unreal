@@ -16,12 +16,11 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <OutputPath>$(MSBuildThisFileDirectory)..\..\Binaries\Bridge\</OutputPath>
-    <!-- The OpenSCCT checkout the bridge is built against (override with -p:OpenScctRoot=...). -->
-    <OpenScctRoot Condition="'$(OpenScctRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\OSC-unreal-bridge\</OpenScctRoot>
+    <BundledRuntime>$(MSBuildThisFileDirectory)..\..\Runtime\</BundledRuntime>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="$(OpenScctRoot)src\OpenScct.Server\OpenScct.Server.csproj" />
-    <ProjectReference Include="$(OpenScctRoot)src\OpenScct.Bots\OpenScct.Bots.csproj" />
+    <ProjectReference Include="$(BundledRuntime)src\OpenScct.Server\OpenScct.Server.csproj" />
+    <ProjectReference Include="$(BundledRuntime)src\OpenScct.Bots\OpenScct.Bots.csproj" />
   </ItemGroup>
   <!-- Discord Rich Presence over the local Discord app's pipe (Social/DiscordPresence.cs), the version the Godot
        client uses (OpenSCCT's Directory.Packages.props). -->
@@ -31,53 +30,53 @@
   </ItemGroup>
   <!-- The play session lives in the Godot project but has no Godot in it; it is linked, as OpenSCCT's map sweep does. -->
   <ItemGroup>
-    <Compile Include="$(OpenScctRoot)game\Scripts\Play\Session\*.cs" Link="Linked\PlaySession\%(Filename)%(Extension)" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Play\Session\*.cs" Link="Linked\PlaySession\%(Filename)%(Extension)" />
     <!-- Placed mesh emitters use the same map reader, particle simulation and placements as the Godot view. -->
-    <Compile Include="$(OpenScctRoot)game\Scripts\Render\Data\FxDoc.cs" Link="Linked\Particles\FxDoc.cs" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\Render\Particles\ParticleParams.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\Render\Particles\ParticleEmitterSim.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\Render\Particles\ParticleSystemSim.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\Render\Particles\ParticleGeometry.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\Play\DrawnTime.cs" Link="Linked\Particles\DrawnTime.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Render\Data\FxDoc.cs" Link="Linked\Particles\FxDoc.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Render\Particles\ParticleParams.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Render\Particles\ParticleEmitterSim.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Render\Particles\ParticleSystemSim.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Render\Particles\ParticleGeometry.cs" Link="Linked\Particles\%(Filename)%(Extension)" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Play\DrawnTime.cs" Link="Linked\Particles\DrawnTime.cs" />
     <!-- The strategic map's data and page state (floors, snapshot camera, markers), Godot-free like the session. -->
-    <Compile Include="$(OpenScctRoot)game\Scripts\UI\StrategicMapModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
+    <Compile Include="$(BundledRuntime)game\Scripts\UI\StrategicMapModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
     <!-- The in-match menu's rules (which entries show for whom, the confirmations), Godot-free. -->
-    <Compile Include="$(OpenScctRoot)game\Scripts\UI\InGameMenuModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
+    <Compile Include="$(BundledRuntime)game\Scripts\UI\InGameMenuModel.cs" Link="Linked\UI\%(Filename)%(Extension)" />
     <!-- Create Session's rules (Online/HostSetupModel.cs): the Godot page's model, which has no Godot in it either. -->
-    <Compile Include="$(OpenScctRoot)game\Scripts\UI\CreateSessionModel.cs" Link="Linked\UI\CreateSessionModel.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\UI\CreateSessionModel.cs" Link="Linked\UI\CreateSessionModel.cs" />
     <!-- The lobby's extras (Online/LobbyExtras.cs): the round scoreboard's columns and words and the map briefing's
          pages, both Godot-free models of the Godot pages. -->
-    <Compile Include="$(OpenScctRoot)game\Scripts\UI\RoundScoreboardModel.cs" Link="Linked\UI\RoundScoreboardModel.cs" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\UI\BriefingPages.cs" Link="Linked\UI\BriefingPages.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\UI\RoundScoreboardModel.cs" Link="Linked\UI\RoundScoreboardModel.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\UI\BriefingPages.cs" Link="Linked\UI\BriefingPages.cs" />
     <!-- The lobby's line about a changed setup (Online/OnlineBridge.SetupNotice.cs): the Godot lobby's words and its
          list of the setup rows that differ, both Godot-free. -->
-    <Compile Include="$(OpenScctRoot)game\Scripts\UI\LobbyPresentation.cs" Link="Linked\UI\LobbyPresentation.cs" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\UI\LobbyRoomModel.cs" Link="Linked\UI\LobbyRoomModel.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\UI\LobbyPresentation.cs" Link="Linked\UI\LobbyPresentation.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\UI\LobbyRoomModel.cs" Link="Linked\UI\LobbyRoomModel.cs" />
     <!-- Demo playback's chase camera (Demo/DemoPlayback.cs), Godot-free like the session. -->
-    <Compile Include="$(OpenScctRoot)game\Scripts\Play\Demo\DemoChaseCamera.cs" Link="Linked\Demo\DemoChaseCamera.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Play\Demo\DemoChaseCamera.cs" Link="Linked\Demo\DemoChaseCamera.cs" />
     <!-- The first-person weapon of a merc watched in a demo, rebuilt from his recorded third-person one
          (Equipment/FirstPersonModels.cs, MercFirstPerson.DrawObserved); Godot-free like the session. -->
-    <Compile Include="$(OpenScctRoot)game\Scripts\Views\ObservedWeaponViewModel.cs" Link="Linked\Views\ObservedWeaponViewModel.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Views\ObservedWeaponViewModel.cs" Link="Linked\Views\ObservedWeaponViewModel.cs" />
     <!-- Shared project links and local game details for the Help & feedback page. -->
-    <Compile Include="$(OpenScctRoot)shared\ProjectLinks.cs" Link="Linked\Shared\ProjectLinks.cs" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\UI\GameReportState.cs" Link="Linked\UI\GameReportState.cs" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\UI\PlayerLocationReport.cs" Link="Linked\UI\PlayerLocationReport.cs" />
+    <Compile Include="$(BundledRuntime)shared\ProjectLinks.cs" Link="Linked\Shared\ProjectLinks.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\UI\GameReportState.cs" Link="Linked\UI\GameReportState.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\UI\PlayerLocationReport.cs" Link="Linked\UI\PlayerLocationReport.cs" />
     <!-- The developer console's commands (ConsoleExports.cs): the Godot console's own parser, help and rules,
          with the settings file it reads its keys from; Godot-free. -->
-    <Compile Include="$(OpenScctRoot)game\Scripts\UI\ConsoleCommands.cs" Link="Linked\UI\ConsoleCommands.cs" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\Options\SettingsConsole.cs" Link="Linked\Options\SettingsConsole.cs" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\Options\GameSettings.cs" Link="Linked\Options\GameSettings.cs" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\Options\CrosshairSettings.cs" Link="Linked\Options\CrosshairSettings.cs" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\Options\DisplayFrameCap.cs" Link="Linked\Options\DisplayFrameCap.cs" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\Options\HudEditorSettings.cs" Link="Linked\Options\HudEditorSettings.cs" />
-    <Compile Include="$(OpenScctRoot)game\Scripts\Options\TelemetrySettings.cs" Link="Linked\Options\TelemetrySettings.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\UI\ConsoleCommands.cs" Link="Linked\UI\ConsoleCommands.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Options\SettingsConsole.cs" Link="Linked\Options\SettingsConsole.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Options\GameSettings.cs" Link="Linked\Options\GameSettings.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Options\CrosshairSettings.cs" Link="Linked\Options\CrosshairSettings.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Options\DisplayFrameCap.cs" Link="Linked\Options\DisplayFrameCap.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Options\HudEditorSettings.cs" Link="Linked\Options\HudEditorSettings.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\Options\TelemetrySettings.cs" Link="Linked\Options\TelemetrySettings.cs" />
     <!-- The Stats page's rows (Social/CareerModel.cs): the Godot StatsScreen's model, Godot-free. -->
-    <Compile Include="$(OpenScctRoot)game\Scripts\UI\StatsModel.cs" Link="Linked\UI\StatsModel.cs" />
+    <Compile Include="$(BundledRuntime)game\Scripts\UI\StatsModel.cs" Link="Linked\UI\StatsModel.cs" />
   </ItemGroup>
   <!-- Original OpenSCCT maps go in maps/ next to the bridge, a root it searches in both the editor and the packaged game. -->
   <ItemGroup>
-    <None Include="$(OpenScctRoot)fixtures\testbox\**\*" Link="maps\TestBox\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="$(OpenScctRoot)fixtures\hub\**\*" Link="maps\Hub\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="$(OpenScctRoot)fixtures\hubmap\**\*" Link="maps\hubmap\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(BundledRuntime)fixtures\testbox\**\*" Link="maps\TestBox\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(BundledRuntime)fixtures\hub\**\*" Link="maps\Hub\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(BundledRuntime)fixtures\hubmap\**\*" Link="maps\hubmap\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

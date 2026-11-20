@@ -30,27 +30,17 @@ public static class DevPaths
                 $"The OpenSCCT content folder was not found ('{root}'). Pass it as the probe's content argument or set SVM_CONTENT.");
     }
 
-    /// <summary>
-    /// The OpenSCCT checkout: <paramref name="given"/> when it is not null (returned unchanged), else the OPENSCCT_ROOT
-    /// variable, else OSC-unreal-bridge beside this repository, as the bridge's csproj assumes. A default that
-    /// does not exist throws with a message naming both ways to set it.
-    /// </summary>
-    public static string OpenScctCheckout(string? given = null)
+    /// <summary>The bundled source tree used to build the probes and their server.</summary>
+    public static string RuntimeRoot()
     {
-        if (given is not null)
-        {
-            return given;
-        }
+        string? repo = RepositoryRoot();
+        if (repo is null)
+            throw new DirectoryNotFoundException($"No OpenSCCTUnreal.uproject above {AppContext.BaseDirectory}.");
 
-        string? variable = Environment.GetEnvironmentVariable("OPENSCCT_ROOT");
-        string? root = !string.IsNullOrWhiteSpace(variable) ? variable
-            : RepositoryRoot() is { } repo ? Path.GetFullPath(Path.Combine(repo, "..", "OSC-unreal-bridge"))
-            : null;
-        return root is not null && Directory.Exists(root)
-            ? root
-            : throw new DirectoryNotFoundException(
-                $"The OpenSCCT checkout was not found ('{root ?? "no OpenSCCTUnreal.uproject above " + AppContext.BaseDirectory}'). "
-                + "Pass it as the probe's checkout argument or set OPENSCCT_ROOT.");
+        string runtime = Path.Combine(repo, "Runtime");
+        if (!File.Exists(Path.Combine(runtime, "src", "OpenScct.Server.Cli", "OpenScct.Server.Cli.csproj")))
+            throw new DirectoryNotFoundException($"The bundled server project is missing from {runtime}.");
+        return runtime;
     }
 
     /// <summary>The folder holding OpenSCCTUnreal.uproject above the running program, or null.</summary>

@@ -3,10 +3,10 @@
 Imports the hub's map into the Unreal project as the level /Game/Imported/Maps/Hub/Hub (headless).
 
 .DESCRIPTION
-The hub is an OpenSCCT addition: its map is not converted from the original game but kept in the OpenSCCT checkout
+The hub is an OpenSCCT addition: its map is not converted from the original game but kept in the bundled Runtime
 as fixtures/hub, in the same SVMap layout as a converted map. Import-Map.ps1 reads a map from <content>\svmap\<Map>
 and the shared packs from <content>\shared, so this script lays out such a folder under Saved\ScctImport\HubContent
-from two junctions (svmap\Hub to the checkout's fixtures\hub, shared to the converted content's shared) and imports
+from two junctions (svmap\Hub to Runtime\fixtures\hub, shared to the converted content's shared) and imports
 from there. The bridge finds the hub map in the same folder when a hub is joined (HubBridge's map roots).
 
 .EXAMPLE
@@ -14,8 +14,8 @@ Tools\Import\Import-HubMap.ps1 -Content C:\path\to\.content
 #>
 param(
     [string] $Content = $env:SVM_CONTENT,
-    # The OpenSCCT checkout the bridge is built against (its fixtures\hub is the hub map).
-    [string] $OpenScct = "$PSScriptRoot\..\..\..\OSC-unreal-bridge",
+    # The bundled runtime includes the authored fixtures\hub map.
+    [string] $OpenScct = "$PSScriptRoot\..\..\Runtime",
     [string] $Engine = 'F:\UE_5.8'
 )
 
@@ -23,11 +23,11 @@ $ErrorActionPreference = 'Stop'
 $project = (Resolve-Path "$PSScriptRoot\..\..").Path
 if (-not $Content) { throw 'Pass -Content <converted content folder> or set SVM_CONTENT.' }
 $hub = Join-Path $OpenScct 'fixtures\hub'
-if (-not (Test-Path (Join-Path $hub 'manifest.json'))) { throw "No hub map at $hub (pass -OpenScct <OpenSCCT checkout>)." }
+if (-not (Test-Path (Join-Path $hub 'manifest.json'))) { throw "No hub map at $hub (check the bundled Runtime fixtures)." }
 $shared = Join-Path $Content 'shared'
 if (-not (Test-Path $shared)) { throw "No shared packs at $shared." }
 
-# Junctions, not copies: the hub map follows the checkout, and nothing is written into either source.
+# Junctions, not copies: the hub map follows its source fixture, and nothing is written into either source.
 $root = Join-Path $project 'Saved\ScctImport\HubContent'
 New-Item -ItemType Directory -Force (Join-Path $root 'svmap') | Out-Null
 function Set-Junction([string] $Path, [string] $Target) {

@@ -6,7 +6,7 @@ using System.Threading;
 using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Hub;
 
-// HubProbe <content root> <OpenSCCT checkout> [port] [seconds in the hub] [master url] [invite key] [host [hold seconds] | join [hub name] | social]
+// HubProbe <content root> [runtime folder] [port] [seconds in the hub] [master url] [invite key] [host [hold seconds] | join [hub name] | social]
 //
 // Visits a hub the way Unreal does, through the function table HubExports.GetApi fills (the same unmanaged entries,
 // called through their pointers), once a frame at about 60 Hz:
@@ -33,7 +33,7 @@ internal static unsafe partial class Probe
     public static int Run(string[] args)
     {
         string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
-        string openScct = args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.OpenScctCheckout();
+        string openScct = args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.RuntimeRoot();
         int port = args.Length > 2 ? int.Parse(args[2], CultureInfo.InvariantCulture) : 28936;
         double inHubSeconds = args.Length > 3 ? double.Parse(args[3], CultureInfo.InvariantCulture) : 6;
         string? masterUrl = args.Length > 4 ? args[4] : null;

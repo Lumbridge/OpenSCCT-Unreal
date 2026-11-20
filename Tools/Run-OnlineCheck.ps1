@@ -3,20 +3,20 @@
 Proves the game against a real OpenSCCT dedicated server, with nobody at the keyboard and no window.
 
 .DESCRIPTION
-Starts OpenSCCT's own dedicated server (src/OpenScct.Server.Cli of an OpenSCCT checkout, as Bridge/Probes/OnlineProbe
+Starts the bundled dedicated server (Runtime/src/OpenScct.Server.Cli, as Bridge/Probes/OnlineProbe
 does: loopback only, a port of its own, bots filling the sides), then starts the game off-screen at its front end
 with -ScctJoin so it connects, says ready, travels into the round and plays. Screenshots go to
 Saved\ScctShots\<Tag>\ and the log to Saved\Logs\online-<Tag>.log (the server's output to online-<Tag>.server.txt).
 Only the server process this script started is stopped at the end.
 
-The server project must have been built once: dotnet build -c Release --no-dependencies src/OpenScct.Server.Cli
+The server project must have been built once: dotnet build -c Release Runtime/src/OpenScct.Server.Cli
 
 .EXAMPLE
-Tools\Run-OnlineCheck.ps1 -Content C:\path\to\.content -OpenScct C:\path\to\OpenSCCT -Map AquaE -Side spy
+Tools\Run-OnlineCheck.ps1 -Content C:\path\to\.content -Map AquaE -Side spy
 
 .EXAMPLE
 # The join made from the menus, as a player makes it.
-Tools\Run-OnlineCheck.ps1 -Content C:\path\to\.content -OpenScct C:\path\to\OpenSCCT -Tag menujoin -MenuDo "wait 8; page address; wait 1; type 127.0.0.1:28961; press CONNECT; wait 10; shot lobby; press READY; wait 30; shot match; quit"
+Tools\Run-OnlineCheck.ps1 -Content C:\path\to\.content -Tag menujoin -MenuDo "wait 8; page address; wait 1; type 127.0.0.1:28961; press CONNECT; wait 10; shot lobby; press READY; wait 30; shot match; quit"
 
 .EXAMPLE
 # A join that cannot work: no server is started and the port is one nothing listens on.
@@ -24,7 +24,7 @@ Tools\Run-OnlineCheck.ps1 -Content C:\path\to\.content -NoServer -Port 28999 -Ta
 #>
 param(
     [string] $Content = $env:SVM_CONTENT,
-    [string] $OpenScct = '',
+    [string] $OpenScct = "$PSScriptRoot\..\Runtime",
     [string] $Map = 'AquaE',
     [string] $SecondMap = 'ClubE',
     [ValidateSet('spy', 'merc', 'watch', '')] [string] $Side = 'spy',
@@ -79,7 +79,6 @@ $server = $null
 $work = $null
 try {
     if (-not $NoServer) {
-        if (-not $OpenScct) { throw 'Pass -OpenScct <OpenSCCT checkout> (its src/OpenScct.Server.Cli built in Release).' }
         $work = Join-Path ([IO.Path]::GetTempPath()) "scct-online-check-$PID"
         New-Item -ItemType Directory -Force $work | Out-Null
         $config = Join-Path $work 'svm-server.json'
@@ -101,7 +100,7 @@ try {
         $start.RedirectStandardInput = $true
         $start.UseShellExecute = $false
         $start.CreateNoWindow = $true
-        # --no-build: the OpenSCCT projects are shared with other work and are never rebuilt from here.
+        # --no-build: the check runs the previously built bundled server.
         $cli = Join-Path $OpenScct 'src\OpenScct.Server.Cli'
         $start.Arguments = "/c dotnet run --no-build -c Release --project `"$cli`" -- --config `"$config`" > `"$serverLog`" 2>&1"
         $start.Environment['SVM_CONTENT'] = $Content

@@ -1,0 +1,36 @@
+name: Unreal standalone build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  managed-and-content:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: Runtime/global.json
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Fetch this edition's converter artwork
+        run: git lfs pull --include="Runtime/content/assets/cosmetics/**,Runtime/content/assets/rifles/export/**,Runtime/content/assets/sidearms/export/**,Runtime/content/assets/weapons/export/**,Runtime/content/assets/sidearm_audio/export/**,Art/Weapons/LongGuns/Export/textures/**"
+      - name: Run the Unreal bridge bindings probe
+        working-directory: Runtime
+        run: dotnet run --project ../Bridge/Probes/BindingsProbe --configuration Release
+      - name: Build the dedicated server
+        working-directory: Runtime
+        run: dotnet build src/OpenScct.Server.Cli --configuration Release
+      - name: Build Steam setup
+        working-directory: Runtime
+        run: dotnet build ../Tools/SteamSetup --configuration Release
+      - name: Verify dependencies and converter source
+        run: python Tools/Test/test_standalone_runtime.py
