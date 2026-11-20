@@ -12,7 +12,8 @@
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../Runtime/src/OpenScct.Launcher.Core/OpenScct.Launcher.Core.csproj">
+    <ProjectReference Include="../../Runtime/src/OpenScct.Launcher.Core/OpenScct.Launcher.Core.csproj;
+                               ../../Runtime/src/OpenScct.Maps/OpenScct.Maps.csproj">
       <AdditionalProperties Condition="'$(Configuration)' == 'Release'">DebugType=none;DebugSymbols=false</AdditionalProperties>
     </ProjectReference>
   </ItemGroup>
