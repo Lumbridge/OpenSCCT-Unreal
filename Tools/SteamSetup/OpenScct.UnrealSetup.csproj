@@ -6,7 +6,14 @@
     <Nullable>enable</Nullable>
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../Runtime/src/OpenScct.Launcher.Core/OpenScct.Launcher.Core.csproj" />
+    <ProjectReference Include="../../Runtime/src/OpenScct.Launcher.Core/OpenScct.Launcher.Core.csproj">
+      <AdditionalProperties Condition="'$(Configuration)' == 'Release'">DebugType=none;DebugSymbols=false</AdditionalProperties>
+    </ProjectReference>
   </ItemGroup>
 </Project>

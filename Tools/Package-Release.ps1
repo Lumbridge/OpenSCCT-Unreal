@@ -675,13 +675,15 @@ $notes = @($title, '', "Includes the Unreal-owned simulation ($runtimeVersion) a
     'Download the Windows game ZIP, extract it and run OpenSCCTUnreal.exe. The Linux and Windows server archives run independently.')
 Write-Text (Join-Path $Out 'notes.md') ($notes -join "`n")
 
-if (-not $Local -and $Repository) {
+if (-not $Local) {
     & (Join-Path $PSScriptRoot 'Package-DedicatedServer.ps1') -Version $Version -Out $Out | Out-Host
     $serverNames = @("OpenSCCT-Unreal-Server-$Version-linux-x64.tar.gz", "OpenSCCT-Unreal-Server-$Version-win-x64.zip")
     foreach ($name in $serverNames) {
         $checksum = (Get-Content -Raw -LiteralPath (Join-Path $Out "$name.sha256")).Trim()
         [IO.File]::AppendAllText((Join-Path $Out 'SHA256SUMS'), "$checksum`n", $utf8)
     }
+}
+if (-not $Local -and $Repository) {
     $pre = if ($isPrerelease) { ' --prerelease' } else { '' }
     $publish = @(
         '# Uploads the blobs and patches to the shared store release, then this package as a DRAFT release. Review the',

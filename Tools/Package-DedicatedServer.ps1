@@ -60,7 +60,10 @@ try {
         $publish = Join-Path $work $rid
         Push-Location $runtimeRoot
         try {
-            dotnet publish $project -c Release -r $rid --self-contained true -o $publish -nologo -v quiet
+            # Keep developer builds, including their existing PDBs, out of each server package.
+            dotnet publish $project -c Release -r $rid --self-contained true -o $publish -nologo -v quiet `
+                --artifacts-path (Join-Path $work "build-$rid") -p:DebugType=none -p:DebugSymbols=false `
+                -p:CopyOutputSymbolsToPublishDirectory=false
             if ($LASTEXITCODE -ne 0) { throw "Dedicated server publish for $rid failed ($LASTEXITCODE)." }
         } finally { Pop-Location }
 
@@ -80,6 +83,9 @@ try {
             $name = "OpenSCCT-Unreal-Server-$Version-$rid.zip"
             [IO.Compression.ZipFile]::CreateFromDirectory($publish, (Join-Path $work $name))
         }
+        $packed = Join-Path $work $name
+        python -B (Join-Path $repo 'Tools/Test/verify_dedicated_package.py') $packed $work
+        if ($LASTEXITCODE -ne 0) { throw "$name failed its dedicated server package inspection." }
         $archive = Join-Path $destination $name
         $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $work $name)).Hash.ToLowerInvariant()
         Move-Item -LiteralPath (Join-Path $work $name) -Destination $archive -Force

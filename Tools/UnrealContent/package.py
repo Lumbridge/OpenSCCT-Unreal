@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 
@@ -23,6 +24,9 @@ MEDIA = {".jpg", ".png", ".glb", ".wav"}
 TEXT = {".txt", ".md", ".py", ".json"}
 RECEIPT = "unreal-steam-builder.json"
 SETUP = "OpenScct.UnrealSetup.dll"
+SETUP_FILES = {SETUP, "OpenScct.UnrealSetup.deps.json", "OpenScct.UnrealSetup.runtimeconfig.json",
+               "OpenScct.Launcher.Core.dll", "OpenScct.Maps.dll"}
+PYTHON_BUILD_SUFFIXES = {".lib", ".pdb", ".pyc", ".whl"}
 
 
 def sha256(path):
@@ -76,6 +80,62 @@ def check_sources(path, names):
     return digest.hexdigest()
 
 
+def has_debug_symbols(image):
+    """Read the PE debug directory, where even a separate PDB can leave an absolute build path."""
+    pe, = struct.unpack_from("<I", image, 0x3c)
+    if image[:2] != b"MZ" or image[pe:pe + 4] != b"PE\0\0":
+        raise ValueError("Invalid setup DLL")
+    optional = pe + 24
+    magic, = struct.unpack_from("<H", image, optional)
+    if magic not in (0x10b, 0x20b):
+        raise ValueError("Invalid setup DLL optional header")
+    directories = optional + (96 if magic == 0x10b else 112)
+    directory_count, = struct.unpack_from("<I", image, directories - 4)
+    if directory_count <= 6:
+        return False
+    debug_rva, debug_size = struct.unpack_from("<II", image, directories + 6 * 8)
+    if not debug_size:
+        return False
+    sections, = struct.unpack_from("<H", image, pe + 6)
+    header_size, = struct.unpack_from("<H", image, pe + 20)
+    for section in range(sections):
+        offset = optional + header_size + 40 * section
+        _, address, raw_size, raw_offset = struct.unpack_from("<IIII", image, offset + 8)
+        if address <= debug_rva and debug_rva + debug_size <= address + raw_size:
+            start = raw_offset + debug_rva - address
+            records = struct.iter_unpack("<IIHHIIII", image[start:start + debug_size])
+            return any(record[4] in (2, 17) for record in records)  # CodeView or embedded Portable PDB
+    raise ValueError("Invalid setup DLL debug directory")
+
+
+def python_build_files(folder):
+    # The interpreter's standard library stays zipped. Loose bytecode and link libraries
+    # supplied by a wheel can contain build-host paths and are unused for conversion.
+    return (path for path in folder.rglob("*") if path.suffix.lower() in PYTHON_BUILD_SUFFIXES and path.is_file())
+
+
+def check_setup(folder):
+    entries = list(folder.iterdir())
+    files = {entry.name for entry in entries}
+    if files != SETUP_FILES:
+        raise ValueError(f"Unexpected setup payload: extra={sorted(files - SETUP_FILES)}, "
+                         f"missing={sorted(SETUP_FILES - files)}")
+    local_paths = {str(PROJECT), str(Path.home())}
+    for entry in entries:
+        if entry.is_symlink() or not entry.is_file():
+            raise ValueError(f"Expected a regular setup file: {entry.name}")
+        payload = entry.read_bytes()
+        if entry.suffix == ".dll" and has_debug_symbols(payload):
+            raise ValueError(f"Setup DLL contains debug symbols or a PDB reference: {entry.name}")
+        payload = payload.lower()
+        for local in local_paths:
+            if len(local) <= 3:
+                continue
+            for path in (local.replace("\\", "/"), local.replace("/", "\\")):
+                if any(path.lower().encode(encoding) in payload for encoding in ("utf-8", "utf-16le")):
+                    raise ValueError(f"Setup payload contains a local build path: {entry.name}")
+
+
 def receipt_for(folder, names):
     expected = {"python", "repo", "setup", "steam-builder-v1", RECEIPT}
     extras = {p.name for p in folder.iterdir()} - expected
@@ -84,7 +144,10 @@ def receipt_for(folder, names):
     paths = {file.relative_to(folder / "repo").as_posix() for file in (folder / "repo").rglob("*") if file.is_file()}
     if paths != set(names):
         raise ValueError(f"Unexpected converter payload: extra={sorted(paths - set(names))}, missing={sorted(set(names) - paths)}")
-    for name in ("python/python.exe", "python/LICENSE.txt", "steam-builder-v1", f"setup/{SETUP}"):
+    check_setup(folder / "setup")
+    if unexpected := next(python_build_files(folder / "python"), None):
+        raise ValueError(f"Unexpected Python build artifact: {unexpected.relative_to(folder)}")
+    for name in ("python/python.exe", "python/LICENSE.txt", "steam-builder-v1"):
         if not (folder / name).is_file():
             raise ValueError(f"Incomplete Unreal content tools: {name}")
     if (folder / "steam-builder-v1").read_text(encoding="ascii").strip() != "win-x64":
@@ -120,8 +183,11 @@ def package(output):
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
         stage = Path(temporary) / "contenttools"
         packager.package(stage, "win-x64")
+        for path in python_build_files(stage / "python"):
+            path.unlink()
         subprocess.run(["dotnet", "publish", str(PROJECT / "Tools/SteamSetup/OpenScct.UnrealSetup.csproj"),
                         "-c", "Release", "-r", "win-x64", "--self-contained", "false", "-p:UseAppHost=false",
+                        "--artifacts-path", str(Path(temporary) / "dotnet"), "-p:DebugType=none", "-p:DebugSymbols=false",
                         "-o", str(stage / "setup")], check=True)
         receipt = receipt_for(stage, names)
         write_receipt(stage, receipt)
