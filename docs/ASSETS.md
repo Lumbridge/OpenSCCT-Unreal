@@ -62,8 +62,8 @@ stars of `M_ScctSky` are drawn by the material. Neither comes from a download.
 
 The Halvard HV-68 "Warden" is our own work: a fictional bullpup carbine with fictional markings, modelled, unwrapped,
 textured and rigged by the scripts in `Art/Weapons/MercRifle/` (`Build-MercRifle.ps1` runs them) and imported by
-`Tools/Import/Import-MercRifle.ps1`. Its geometry, its four textures and everything under
-`Content/OpenSCCT/Weapons/` are generated there; nothing in them is downloaded or taken from the original game.
+`Tools/Import/Import-MercRifle.ps1`. Those scripts generate the Halvard geometry and its four textures in
+`Content/OpenSCCT/Weapons/MercRifle/`.
 The scripts lean on two things that ship with Blender 5.2 and are not copied into this repo:
 
 | Item | Source | Licence | Used for |
@@ -72,6 +72,9 @@ The scripts lean on two things that ship with Blender 5.2 and are not copied int
 | `studio.exr` (`datafiles/studiolights/world/`) | bundled with Blender | CC0 1.0 | the environment the beauty renders in `Art/Weapons/MercRifle/renders/` reflect; not used by the game |
 
 "Halvard Defense Systems", "HV-68 Warden", "HX-2 Holo" and the 6.8x43 calibre are invented for this game.
+
+The other eight mercenary primaries use adapted models and first-person gloves. Each source, artist,
+licence and adaptation is listed in the [release artwork credits](../THIRD-PARTY-NOTICES.md#mercenary-weapon-artwork).
 
 ## Effects (Tools/Import, Content/OpenSCCT/Effects)
 

@@ -68,7 +68,7 @@ public static class LoadoutGear
         STeamInfo team;
         bool fromTeam = ownTeam is not null && (ownTeam is STeamAttaquant) == spy;
         int level = 1;
-        bool unrestricted = true, sidearms = true, rifles = false;
+        bool unrestricted = true, sidearms = true, rifles = true;
         if (fromTeam)
         {
             team = ownTeam!;
@@ -120,14 +120,16 @@ public static class LoadoutGear
 
         if (!spy)
         {
+            string equipped = MercPrimarySelection.Choose(saved.MercWeapon, team.ClassWeapon.Select(w => w.Path ?? ""),
+                path => (!MercPrimarySelection.RequiresRifleOption(path) || rifles) && EquipmentUnlocks.LevelAllows(path, level, unrestricted));
             foreach (ClassRef w in team.ClassWeapon)
             {
                 string path = w.Path ?? "";
-                bool rifle = MercRifles.Find(path) is not null;
-                bool hostAllows = !rifle || rifles;
-                bool levelOk = !rifle || EquipmentUnlocks.LevelAllows(path, level, unrestricted);
+                if (MercPrimarySelection.IsLegacy(path)) continue;
+                bool hostAllows = !MercPrimarySelection.RequiresRifleOption(path) || rifles;
+                bool levelOk = EquipmentUnlocks.LevelAllows(path, level, unrestricted);
                 items.Add(new GearItem(path, NameOf(path), GearKind.Weapon, EquipmentUnlocks.RequiredLevel(path),
-                    Flags(hostAllows, levelOk, Same(saved.MercWeapon, path))));
+                    Flags(hostAllows, levelOk, Same(equipped, path))));
             }
 
             foreach (SidearmDefinition pistol in Sidearms.All.OrderBy(p => p.Level))

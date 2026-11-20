@@ -24,6 +24,7 @@ return mode switch
     "demo" => DemoCheck.Run(args[1..]),
     "dashboard" => DashboardCheck.Run(args[1..]),
     "career" => CareerCheck.Run(args[1..]),
+    "weapon-finishes" => WeaponFinishCheck.Run(),
     "forward" => Forward(args.Length > 1 ? args[1] : string.Empty),
     "list" => List(args.Length > 1 ? args[1] : WebsiteJoin.OfficialMasterUrl),
     _ => States(args.Length > 1 ? args[1] : OpenScct.UnrealBridge.DevPaths.ContentRoot()),

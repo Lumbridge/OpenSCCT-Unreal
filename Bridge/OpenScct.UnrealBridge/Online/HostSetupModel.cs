@@ -59,6 +59,9 @@ public enum SetupText
     /// "reset"). Returns the new setup line.
     /// </summary>
     EditAlternate = 8,
+
+    /// <summary>Restore options saved for a new player-hosted game with the current standard session features.</summary>
+    NormalizeNewHost = 9,
 }
 
 /// <summary>
@@ -82,6 +85,7 @@ public static class HostSetupModel
             SetupText.Modes => string.Join(',', ModesOf(Model(online, $"?MapName={argument}", maxPlayers).Modes)),
             SetupText.Defaults => Defaults(online, options, argument, maxPlayers),
             SetupText.Normalize => Model(online, options, maxPlayers).Setup.ToOptions(),
+            SetupText.NormalizeNewHost => Model(online, options, maxPlayers).Setup.WithStandardFeatures().ToOptions(),
             SetupText.Describe => Model(online, options, maxPlayers).Setup.Describe(),
             SetupText.Rows => Rows(Model(online, options, maxPlayers)),
             SetupText.Edit => Edit(online, Model(online, options, maxPlayers), argument ?? string.Empty),
@@ -185,8 +189,7 @@ public static class HostSetupModel
         (SessionRow.SpyLives, "SpyLives"), (SessionRow.MercLives, "MercLives"), (SessionRow.Respawn, "Respawn"),
         (SessionRow.ActiveDisks, "ActiveDisks"), (SessionRow.DisksToTake, "DisksToTake"), (SessionRow.Bots, "Bots"),
         (SessionRow.BotsPerSide, "BotsPerSide"), (SessionRow.SpyBots, "SpyBots"), (SessionRow.MercBots, "MercBots"),
-        (SessionRow.BotSkill, "BotSkill"), (SessionRow.Practice, "Practice"), (SessionRow.Sidearms, "Sidearms"),
-        (SessionRow.Rifles, "Rifles"), (SessionRow.ResponsiveSmoke, "ResponsiveSmoke"),
+        (SessionRow.BotSkill, "BotSkill"), (SessionRow.Practice, "Practice"),
     ];
 
     private static string Rows(CreateSessionModel model)

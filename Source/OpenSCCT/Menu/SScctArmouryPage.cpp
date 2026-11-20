@@ -10,13 +10,18 @@
 #include "Menu/ScctCareerPages.h"
 
 #include "Menu/ScctMenuSubsystem.h"
+#include "Menu/ScctMenuStyle.h"
 #include "Menu/SScctArmouryPreview.h"
+#include "Menu/SScctAttachmentPanel.h"
+#include "Menu/SScctGearPage.h"
+#include "Runtime/ScctLoadoutApi.h"
 #include "Runtime/ScctArmouryPreviewApi.h"
 #include "Settings/ScctSettings.h"
 #include "Social/ScctArmourySubsystem.h"
 #include "Widgets/Colors/SColorBlock.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SWrapBox.h"
@@ -64,7 +69,7 @@ namespace
 			const auto SideChip = [this](const TCHAR* Caption, int32 InSide)
 			{
 				return SNew(SScctButton).Look(EScctButtonLook::Chip).Text(FText::FromString(Caption))
-					.Selected_Lambda([this, InSide] { return Side == InSide; })
+					.Selected_Lambda([this, InSide] { return !bAttachments && Side == InSide; })
 					.Description(FText::FromString(InSide == 0 ? TEXT("The spy's suit, goggle light and pistol.") : TEXT("The mercenary's armour, torch and lamp, and each gun.")))
 					.OnPressed(FSimpleDelegate::CreateLambda([this, InSide] { SetSide(InSide); }));
 			};
@@ -108,12 +113,17 @@ namespace
 					[
 						ScctUi::Card(TEXT("Your collection"),
 							SNew(SVerticalBox)
-							+ SVerticalBox::Slot().AutoHeight()[ ScctCareerUi::Line(TEXT("Select an equipment slot, then an item. Unlocked items are equipped when picked; servers check your look against your account when you join."), ScctUi::Small(), ScctHudStyle::TextDim()) ]
+							+ SVerticalBox::Slot().AutoHeight()[
+								SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
+								.Text_Lambda([this] { return FText::FromString(bAttachments
+									? TEXT("Choose a weapon to configure its attachments. The saved setup goes on when you equip that weapon.")
+									: TEXT("Choose a slot. Point at a finish to preview it, then select an unlocked finish to equip it.")); })
+							]
 							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
 							[
 								SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctUi::Accent()).AutoWrapText(true)
 								.Text_Lambda([this] { return FText::FromString(StatusLine); })
-								.Visibility_Lambda([this] { return StatusLine.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+								.Visibility_Lambda([this] { return bAttachments || StatusLine.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
 							]
 							+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)
 							[
@@ -137,6 +147,12 @@ namespace
 								SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.0f, 8.0f))
 								+ SWrapBox::Slot()[ First ]
 								+ SWrapBox::Slot()[ SideChip(TEXT("MERCENARY"), 1) ]
+								+ SWrapBox::Slot()[
+									SNew(SScctButton).Look(EScctButtonLook::Chip).Text(FText::FromString(TEXT("WEAPON ATTACHMENTS")))
+									.Selected_Lambda([this] { return bAttachments; })
+									.Description(FText::FromString(TEXT("Equip attachments and see unlock progress for each mercenary weapon.")))
+									.OnPressed(FSimpleDelegate::CreateSP(this, &SScctArmouryPage::ShowAttachments))
+								]
 								+ SWrapBox::Slot()[ Toggle(TEXT("HIDE OTHERS' COSMETICS"), TEXT("Every other player is drawn in the retail look."), ArmouryPageHideOthers) ]
 								+ SWrapBox::Slot()[ Toggle(TEXT("HIDE MY COSMETICS FROM OTHERS"), TEXT("Your look is shown on your own screen only: servers get the retail look."), ArmouryPageHideMine) ]
 							],
@@ -148,18 +164,22 @@ namespace
 						SNew(SHorizontalBox)
 						+ SHorizontalBox::Slot().FillWidth(1.6f).Padding(0.0f, 0.0f, 16.0f, 0.0f)
 						[
-							SNew(SScrollBox) + SScrollBox::Slot()[ SAssignNew(List, SBox) ]
+							SAssignNew(ListScroll, SScrollBox).ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll)
+							+ SScrollBox::Slot()[ SAssignNew(List, SBox) ]
 						]
 						+ SHorizontalBox::Slot().FillWidth(1.0f)
 						[
-							SNew(SScrollBox)
+							SNew(SScrollBox).Visibility_Lambda([this] { return bAttachments ? EVisibility::Collapsed : EVisibility::Visible; })
 							+ SScrollBox::Slot().Padding(0.0f, 0.0f, 0.0f, 10.0f)
 							[
 								ScctUi::Card(TEXT("Preview"),
 									SNew(SVerticalBox)
 									+ SVerticalBox::Slot().AutoHeight()
 									[
-										SNew(SBox).HeightOverride(330.0f)
+										SNew(SBox).HeightOverride_Lambda([this]() -> FOptionalSize
+										{
+											return Slot == EScctCosmeticSlot::Body || Slot == EScctCosmeticSlot::Light ? 300.0f : 218.0f;
+										})
 										[
 											SNew(SOverlay)
 											+ SOverlay::Slot()[ SNew(SColorBlock).Color(FLinearColor(0.0f, 0.0f, 0.0f, 1.0f)) ]
@@ -204,10 +224,18 @@ namespace
 		}
 
 		virtual FString GetTitle() const override { return TEXT("Armoury"); }
-		virtual FString GetKicker() const override { return TEXT("Cosmetics"); }
+		virtual FString GetKicker() const override { return TEXT("Equipment"); }
 		virtual bool HasTabs() const override { return true; }
 		virtual void StepTab(int32 Direction) override
 		{
+			if (bAttachments)
+			{
+				if (!Weapons.IsEmpty())
+				{
+					SelectWeapon((WeaponIndex + Direction + Weapons.Num()) % Weapons.Num());
+				}
+				return;
+			}
 			const int32 At = Slots.IndexOfByKey(Slot);
 			if (Slots.Num() > 0)
 			{
@@ -218,17 +246,134 @@ namespace
 		/** "armoury/merc" opens on the mercenary's side. */
 		virtual void ShowSub(const FString& Sub) override
 		{
-			if (Sub.StartsWith(TEXT("merc"), ESearchCase::IgnoreCase))
+			if (Sub.StartsWith(TEXT("item/"), ESearchCase::IgnoreCase))
+			{
+				PendingPreview = Sub.Mid(5);
+				OpenReward();
+			}
+			else if (Sub.Equals(TEXT("attachments"), ESearchCase::IgnoreCase))
+			{
+				ShowAttachments();
+			}
+			else if (Sub.StartsWith(TEXT("merc"), ESearchCase::IgnoreCase))
 			{
 				SetSide(1);
 			}
 		}
 
 	private:
+		void OpenReward()
+		{
+			const auto* Api = ScctFeature<FScctArmouryPreviewApi>();
+			if (!Api || !bBuilt || PendingPreview.IsEmpty()) { return; }
+			FScctArmouryPreviewItem Item = {};
+			const FString Id = MoveTemp(PendingPreview);
+			if (!Api->GetItem(*Id, &Item, nullptr, 0, nullptr, 0)) { return; }
+			bAttachments = false;
+			Side = Item.Side;
+			Slot = Item.Slot;
+			PinnedPreview = Id;
+			RebuildSide();
+			for (const auto& Entry : RowButtons)
+			{
+				if (Entry.Value == Id)
+				{
+					DefaultFocus = Entry.Key;
+					ListScroll->ScrollDescendantIntoView(Entry.Key.Pin(), false, EDescendantScrollDestination::IntoView);
+					break;
+				}
+			}
+		}
+
+		void ShowAttachments()
+		{
+			bAttachments = true;
+			const FScctLoadoutApi* Loadout = ScctFeature<FScctLoadoutApi>();
+			const FScctWeaponAttachmentsApi* Attachments = ScctFeature<FScctWeaponAttachmentsApi>();
+			FScctGearRules Rules = {};
+			TArray<FScctGearItem> Items;
+			if (Loadout)
+			{
+				Items.SetNumZeroed(Loadout->ListGear(1, &Rules, nullptr, 0));
+				Loadout->ListGear(1, &Rules, Items.GetData(), Items.Num());
+			}
+			const auto Chips = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6, 6));
+			Weapons.Reset();
+			int32 EquippedWeaponIndex = 0;
+			for (const FScctGearItem& Item : Items)
+			{
+				if (Item.Kind != EScctGearKind::Weapon && Item.Kind != EScctGearKind::Sidearm) { continue; }
+				FScctWeaponAttachmentState Info = {};
+				if (!Attachments || !Attachments->GetState(Item.Path, &Info)) { continue; }
+				const int32 Index = Weapons.Add(Item);
+				if (Item.Kind == EScctGearKind::Weapon && (Item.Flags & EScctGearFlags::Equipped)) { EquippedWeaponIndex = Index; }
+				Chips->AddSlot()[
+					SNew(SScctButton).Look(EScctButtonLook::Chip).Text(FText::FromString(Item.Name))
+					.Selected_Lambda([this, Index] { return WeaponIndex == Index; }).Colour(ScctHudStyle::Accent(1))
+					.OnPressed(FSimpleDelegate::CreateSP(this, &SScctArmouryPage::SelectWeapon, Index))
+				];
+			}
+			SlotChips->SetContent(Chips);
+			SelectWeapon(EquippedWeaponIndex);
+		}
+
+		void SelectWeapon(int32 Index)
+		{
+			if (!Weapons.IsValidIndex(Index))
+			{
+				List->SetContent(ScctMenuStyle::Label(TEXT("Weapon progression is unavailable.")));
+				return;
+			}
+			WeaponIndex = Index;
+			const FString Weapon(Weapons[Index].Path);
+			const auto Body = SNew(SHorizontalBox);
+			Body->AddSlot().FillWidth(2.0f)
+			[
+				SNew(SScctAttachmentPanel).Weapon(Weapon).WeaponName(FString(Weapons[Index].Name))
+				.OnChoose([Weapon](int32 Mask)
+				{
+					const FScctWeaponAttachmentsApi* Api = ScctFeature<FScctWeaponAttachmentsApi>();
+					return Api && Api->SetEquipped(*Weapon, Mask) != 0;
+				})
+			];
+			FScctGearIntel Intel = {};
+			const FScctGearMenuApi* Gear = ScctFeature<FScctGearMenuApi>();
+			if (Gear && Gear->GetIntel(*Weapon, &Intel))
+			{
+				const auto Details = SNew(SVerticalBox);
+				if (const FSlateBrush* Icon = SScctGearPage::IconOf(Intel))
+				{
+					Details->AddSlot().AutoHeight().Padding(0, 0, 0, 10)
+					[
+						SNew(SBox).HeightOverride(112.0f)
+						[ SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[SNew(SImage).Image(Icon)] ]
+					];
+				}
+				if (Intel.Role[0]) { Details->AddSlot().AutoHeight()[ScctMenuStyle::Label(Intel.Role, ScctHudStyle::Accent(1))]; }
+				Details->AddSlot().AutoHeight().Padding(0, 5, 0, 8)
+				[
+					ScctMenuStyle::Text(FText::FromString(Intel.Description), 13, FSlateColor(ScctHudStyle::Text()), ScctHudStyle::EWeight::Regular, true)
+				];
+				for (int32 Stat = 0; Stat < FMath::Min(Intel.StatCount, FScctGearIntel::MaxStats); ++Stat)
+				{
+					if (FCString::Strcmp(Intel.StatCaption[Stat], TEXT("DAMAGE 0 M")) == 0)
+					{
+						Details->AddSlot().AutoHeight()[ScctMenuStyle::Label(FString::Printf(TEXT("Damage at 0 m   ·   %s"), Intel.StatValue[Stat]))];
+						break;
+					}
+				}
+				Body->AddSlot().FillWidth(1.0f).Padding(24, 0, 0, 0).VAlign(VAlign_Center)[Details];
+			}
+			List->SetContent(ScctUi::Card(TEXT("Weapon attachments"), Body));
+		}
+
 		void SetSide(int32 InSide)
 		{
-			if (InSide != Side)
+			if (InSide != Side || bAttachments)
 			{
+				bAttachments = false;
+				PinnedPreview.Reset();
+				Notice.Reset();
 				Side = InSide;
 				Slot = 0;
 				RebuildSide();
@@ -237,14 +382,17 @@ namespace
 
 		void SetSlot(int32 InSlot)
 		{
+			PinnedPreview.Reset();
+			Notice.Reset();
 			Slot = InSlot;
 			RebuildList();
+			ListScroll->ScrollToStart();
 		}
 
 		EActiveTimerReturnType Watch(double, float)
 		{
 			const UScctArmourySubsystem* Armoury = UScctArmourySubsystem::GetCurrent();
-			if (Armoury == nullptr)
+			if (bAttachments || Armoury == nullptr)
 			{
 				return EActiveTimerReturnType::Continue;
 			}
@@ -252,6 +400,7 @@ namespace
 			if (!bBuilt && Armoury->IsReady())
 			{
 				RebuildSide();
+				OpenReward();
 			}
 			else if (Info.Revision != ShownRevision)
 			{
@@ -272,7 +421,7 @@ namespace
 
 		EActiveTimerReturnType WatchPointed(double, float)
 		{
-			UpdatePreview();
+			if (!bAttachments) { UpdatePreview(); }
 			return EActiveTimerReturnType::Continue;
 		}
 
@@ -302,22 +451,24 @@ namespace
 				}
 			}
 
-			const FString Worn = Equipped.FindRef(Slot);
-			const FString Shown = bPointed ? Pointed : Worn;
+			const FString Chosen = Equipped.FindRef(Slot);
+			const FString Worn = Chosen.IsEmpty() ? DefaultFinishId : Chosen;
+			const FString Shown = bPointed ? (Pointed.IsEmpty() ? DefaultFinishId : Pointed) : !PinnedPreview.IsEmpty() ? PinnedPreview : Worn;
 			const bool bCharacter = Slot == EScctCosmeticSlot::Body || Slot == EScctCosmeticSlot::Light;
 			Preview->Show(Side, Slot,
 				!bCharacter || Slot == EScctCosmeticSlot::Body ? Shown : Equipped.FindRef(EScctCosmeticSlot::Body),
 				Slot == EScctCosmeticSlot::Light ? Shown : Equipped.FindRef(EScctCosmeticSlot::Light));
 
-			if (Shown != PreviewItem || (bPointed && Shown != Worn) != bTrying || PreviewCaption.IsEmpty())
+			if (Shown != PreviewItem || (Shown != Worn) != bTrying || PreviewCaption.IsEmpty())
 			{
 				PreviewItem = Shown;
-				bTrying = bPointed && Shown != Worn;
+				bTrying = Shown != Worn;
 				const FScctArmouryRow* Row = Rows.IsValid() ? Rows->FindByPredicate([&Shown](const FScctArmouryRow& R) { return R.Id == Shown; }) : nullptr;
-				const FString Name = Row != nullptr ? Row->Name.ToUpper() : FString(TEXT("RETAIL"));
-				PreviewCaption = bTrying
-					? FString::Printf(TEXT("TRYING ON: %s%s  ·  not equipped"), *Name, Row != nullptr && !Row->IsUnlocked() ? TEXT("  ·  LOCKED") : TEXT(""))
-					: FString::Printf(TEXT("EQUIPPED: %s  ·  point at an item to try it on, drag to turn"), *Name);
+				const FString Name = Row ? Row->Name.ToUpper() : (!Shown.IsEmpty() && Shown == DefaultFinishId) ? DefaultFinishName.ToUpper() : FString(TEXT("RETAIL"));
+				PreviewCaption = Name + (bTrying
+					? (Row && !Row->IsUnlocked() ? TEXT("  ·  Locked") : TEXT("  ·  Available to equip"))
+					: TEXT("  ·  Equipped"));
+				if (Row && !Row->IsUnlocked()) { PreviewCaption += TEXT("\n") + Row->Tip; }
 			}
 		}
 
@@ -380,9 +531,13 @@ namespace
 			const auto NoneChosen = [Shared] { return !Shared->ContainsByPredicate([](const FScctArmouryRow& R) { return R.IsChosen(); }); };
 			Row(ArmourySwatch(0x6f7a72, 0x3a423d, 40.0f),
 				SNew(SScctButton).Look(EScctButtonLook::Secondary).FillWidth(true)
-				.Text_Lambda([NoneChosen] { return FText::FromString(NoneChosen() ? TEXT("RETAIL  ·  EQUIPPED") : TEXT("RETAIL")); })
+				.Text_Lambda([this, NoneChosen]
+				{
+					const FString Base = DefaultFinishName.IsEmpty() ? TEXT("RETAIL") : TEXT("SHARED  ·  ") + DefaultFinishName.ToUpper();
+					return FText::FromString(NoneChosen() ? Base + TEXT("  ·  EQUIPPED") : Base);
+				})
 				.Selected_Lambda(NoneChosen)
-				.Description(FText::FromString(TEXT("The original look.")))
+				.Description(FText::FromString(TEXT("Use the default finish for this slot.")))
 				.OnPressed(FSimpleDelegate::CreateLambda([this, InSide, InSlot] { Pick(InSide, InSlot, FString()); })), FString());
 			for (int32 Index = 0; Index < Shared->Num(); ++Index)
 			{
@@ -419,10 +574,12 @@ namespace
 			if (!Armoury->Choose(InSide, InSlot, Id))
 			{
 				const FScctArmouryRow* Row = Rows.IsValid() ? Rows->FindByPredicate([&Id](const FScctArmouryRow& R) { return R.Id == Id; }) : nullptr;
-				Notice = Row != nullptr ? Row->Name + TEXT(": ") + Row->Tip : FString(TEXT("That item is locked."));
+				PinnedPreview = Id;
+				Notice = Row != nullptr ? Row->Tip : FString(TEXT("That finish is locked."));
 			}
 			else
 			{
+				PinnedPreview.Reset();
 				Notice.Reset();
 			}
 			Refresh();
@@ -456,38 +613,46 @@ namespace
 			}
 			const FString Sync = Armoury->GetText(EScctArmouryText::Status);
 			StatusLine = !Notice.IsEmpty() ? Notice
-				: (Info.Flags & EScctArmouryFlags::AccountKnown) == 0
-					? ((Info.Flags & EScctArmouryFlags::HasMaster) != 0
-						? TEXT("Sign in on the Account page and earn achievements on official servers to unlock these.")
-						: TEXT("Cosmetics are unlocked by achievements on an official master server; none is set up."))
-				: FString::Printf(TEXT("%d / %d looks available for this slot.%s%s"), Owned + 1, (Rows.IsValid() ? Rows->Num() : 0) + 1, Sync.IsEmpty() ? TEXT("") : TEXT("  "), *Sync);
+				: FString::Printf(TEXT("%d / %d finishes available.%s%s"), Owned + 1, (Rows.IsValid() ? Rows->Num() : 0) + 1, Sync.IsEmpty() ? TEXT("") : TEXT("  "), *Sync);
 
 			// The kit: what is equipped on every slot of the side.
 			const TSharedRef<SVerticalBox> KitBox = SNew(SVerticalBox);
 			Equipped.Reset();
+			DefaultFinishId.Reset();
+			DefaultFinishName.Reset();
+			const FString SharedSlot = Armoury->GetText(EScctArmouryText::SharedFinishSlot, Side, Slot);
+			const int32 Fallback = SharedSlot.IsEmpty() ? INDEX_NONE : FCString::Atoi(*SharedSlot);
 			for (const int32 Each : Slots)
 			{
 				const TArray<FScctArmouryRow> Items = Armoury->ItemsOf(Side, Each);
 				const FScctArmouryRow* Chosen = Items.FindByPredicate([](const FScctArmouryRow& R) { return R.IsChosen(); });
 				Equipped.Add(Each, Chosen != nullptr ? Chosen->Id : FString());
+				const FString Shared = Armoury->GetText(EScctArmouryText::SharedFinishSlot, Side, Each);
+				const TArray<FScctArmouryRow> Defaults = !Chosen && !Shared.IsEmpty() ? Armoury->ItemsOf(Side, FCString::Atoi(*Shared)) : TArray<FScctArmouryRow>();
+				const FScctArmouryRow* Worn = Chosen ? Chosen : Defaults.FindByPredicate([](const FScctArmouryRow& R) { return R.IsChosen(); });
+				if (Each == Fallback && Chosen)
+				{
+					DefaultFinishId = Chosen->Id;
+					DefaultFinishName = Chosen->Name;
+				}
 				KitBox->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
 				[
 					SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 10.0f, 0.0f)
 					[
-						Chosen != nullptr ? ArmouryPicture(Chosen->Id, Chosen->Item.Rgb, Chosen->Item.Rgb2, 26.0f) : ArmourySwatch(0x6f7a72, 0x3a423d, 26.0f)
+						Worn ? ArmouryPicture(Worn->Id, Worn->Item.Rgb, Worn->Item.Rgb2, 26.0f) : ArmourySwatch(0x6f7a72, 0x3a423d, 26.0f)
 					]
 					+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
 					[
-						ScctCareerUi::StatRow(Armoury->GetText(EScctArmouryText::SlotName, Side, Each), Chosen != nullptr ? Chosen->Name.ToUpper() : FString(TEXT("RETAIL")))
+						ScctCareerUi::StatRow(Armoury->GetText(EScctArmouryText::SlotName, Side, Each), Worn ? Worn->Name.ToUpper() : FString(TEXT("RETAIL")))
 					]
 				];
 			}
 			KitBox->AddSlot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
 			[
 				ScctCareerUi::Line((Info.Flags & EScctArmouryFlags::HideMine) != 0
-					? TEXT("Hide my cosmetics is on: servers get the retail look, and this kit is drawn on your own screen only.")
-					: TEXT("This kit is sent to the server when you join, and to the lobby or hub you are in when you change it."), ScctUi::Small(), ScctHudStyle::TextFaint())
+					? TEXT("Other players see your default appearance.")
+					: TEXT("Private weapon finishes stay on this profile. Online matches use your account's finishes."), ScctUi::Small(), ScctHudStyle::TextDim())
 			];
 			Kit->SetContent(ScctUi::Card(Side == 0 ? TEXT("Your spy kit") : TEXT("Your mercenary kit"), KitBox, FMargin(20.0f, 14.0f)));
 			PreviewCaption.Reset();
@@ -495,6 +660,9 @@ namespace
 		}
 
 		int32 Side = 0;
+		bool bAttachments = false;
+		int32 WeaponIndex = 0;
+		TArray<FScctGearItem> Weapons;
 		int32 Slot = 0;
 		TArray<int32> Slots;
 		TSharedPtr<TArray<FScctArmouryRow>> Rows;
@@ -506,6 +674,7 @@ namespace
 		FString Notice;
 		TSharedPtr<SBox> SlotChips;
 		TSharedPtr<SBox> List;
+		TSharedPtr<SScrollBox> ListScroll;
 		TSharedPtr<SBox> Kit;
 		TSharedPtr<SScctArmouryPreview> Preview;
 		/** The buttons of the listed items with their ids (empty: retail), to see which one is pointed at. */
@@ -514,6 +683,10 @@ namespace
 		TMap<int32, FString> Equipped;
 		/** The item of the viewed slot the preview shows, whether that is a try-on, and the line under the preview. */
 		FString PreviewItem;
+		FString DefaultFinishId;
+		FString DefaultFinishName;
+		FString PinnedPreview;
+		FString PendingPreview;
 		bool bTrying = false;
 		FString PreviewCaption;
 	};

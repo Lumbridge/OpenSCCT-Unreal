@@ -1,5 +1,6 @@
 #include "Play/ScctLightRules.h"
 
+#include "Components/DecalComponent.h"
 #include "Components/ExponentialHeightFogComponent.h"
 #include "Components/LightComponent.h"
 #include "Components/PointLightComponent.h"
@@ -8,6 +9,7 @@
 #include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Animation/SkeletalMeshActor.h"
+#include "Engine/DecalActor.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/ExponentialHeightFog.h"
 #include "Engine/Light.h"
@@ -15,6 +17,7 @@
 #include "Engine/StaticMeshActor.h"
 #include "Engine/Texture.h"
 #include "Engine/World.h"
+#include "GameFramework/WorldSettings.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/Material.h"
@@ -24,6 +27,7 @@
 #include "OpenSCCT.h"
 #include "Play/ScctEchelonLightFilter.h"
 #include "Play/ScctLightPlan.h"
+#include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 #include "Runtime/ScctLightPlanApi.h"
 #include "Runtime/ScctWorldApi.h"
@@ -33,8 +37,13 @@ namespace
 	const TCHAR* const LightRulesCollection = TEXT("/Game/OpenSCCT/Materials/MPC_ScctLight.MPC_ScctLight");
 	/** Put on a light actor once it is dressed, so a second match in the same world (the menu's backdrop) leaves it. */
 	const FName LightRulesDressedTag(TEXT("ScctLightPlan"));
+	const FName LightRulesHazeTag(TEXT("ScctHazeOnly"));
 	const FName LightRulesSurfaceMaster(TEXT("M_ScctSurface"));
 	const FName LightRulesLightmap(TEXT("Lightmap"));
+	const FName LumenWorldTag(TEXT("ScctLumenLighting"));
+	const FName LumenFixtureTag(TEXT("ScctLumenFixture"));
+	const FName TankFixtureTag(TEXT("ScctTankFixture"));
+	const FName RecoveredFixtureTag(TEXT("ScctRecoveredFixture"));
 	/** The surface material's custom primitive data slot that says "these vertex colours are baked light". */
 	constexpr int32 LightRulesBakedVertexSlot = 1;
 
@@ -52,6 +61,8 @@ namespace
 		TEXT("Under scct.Light.Plan 1: what the stored baked light (lightmaps, vertex colours) is multiplied by. The original stored it halved: 2."));
 	TAutoConsoleVariable<float> CVarLightBakedGain(TEXT("scct.Light.BakedGain"), 1.0f,
 		TEXT("Under scct.Light.Plan 1: a factor on the baked light term, in display units (1: as the original)."));
+	TAutoConsoleVariable<float> CVarReferenceIndirect(TEXT("scct.Light.ReferenceIndirect"), 1.0f,
+		TEXT("Amount of the authored diffuse field recovered on maps rebuilt from surviving fixtures. Zero isolates native direct and indirect lighting."));
 	TAutoConsoleVariable<float> CVarLightBakedSaturation(TEXT("scct.Light.BakedSaturation"), 1.0f,
 		TEXT("Under scct.Light.Plan 1: 1 the baked light keeps its own colour, 0 it is grey."));
 	TAutoConsoleVariable<float> CVarLightBounceGate(TEXT("scct.Light.BounceGate"), 0.35f,
@@ -85,9 +96,33 @@ namespace
 	struct FLightRulesShown
 	{
 		TWeakObjectPtr<UWorld> World;
-		float Values[5] = { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f };
+		float Values[6] = {};
 	};
 	FLightRulesShown LightRulesShown;
+
+	// Without diffuse GI or distance-field AO, Low applies its cubemap to enclosed rooms.
+	// This small share leaves some ambient return while preserving measured shadow cover.
+	constexpr float UnoccludedSkyShare = 0.08f;
+	TMap<TWeakObjectPtr<USkyLightComponent>, float> RebuiltSkyIntensities;
+	bool bDimmedRebuiltSkies = false;
+
+	bool UsesUnoccludedSky()
+	{
+		static const auto* Quality = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("sg.GlobalIlluminationQuality"));
+		return Quality && Quality->GetValueOnGameThread() == 0;
+	}
+
+	void RefreshRebuiltSkies()
+	{
+		const bool bDim = UsesUnoccludedSky();
+		if (bDim == bDimmedRebuiltSkies) return;
+		bDimmedRebuiltSkies = bDim;
+		for (auto It = RebuiltSkyIntensities.CreateIterator(); It; ++It)
+		{
+			if (auto* Sky = It.Key().Get()) Sky->SetIntensity(It.Value() * (bDim ? UnoccludedSkyShare : 1.f));
+			else It.RemoveCurrent();
+		}
+	}
 
 	float LightRulesFalloff(int32 Kind, float X)
 	{
@@ -116,13 +151,18 @@ namespace
 
 	void LightRulesPush(UWorld* World, bool bForce)
 	{
-		const float Wanted[5] =
+		// The authored light field sets the shadow boundaries. A native bake can add bounce
+		// inside those boundaries, including where a projector illuminates the geometry.
+		const bool bRebuilt = World->GetWorldSettings()->ActorHasTag(LumenWorldTag);
+		const float Wanted[6] =
 		{
-			FMath::Max(CVarLightLightmapScale.GetValueOnGameThread(), 0.0f),
-			FMath::Max(CVarLightBakedGain.GetValueOnGameThread(), 0.0f),
+			bRebuilt ? 0.0f : FMath::Max(CVarLightLightmapScale.GetValueOnGameThread(), 0.0f),
+			bRebuilt ? FMath::Clamp(CVarReferenceIndirect.GetValueOnGameThread(), 0.0f, 1.0f)
+				: FMath::Max(CVarLightBakedGain.GetValueOnGameThread(), 0.0f),
 			FMath::Clamp(CVarLightBakedSaturation.GetValueOnGameThread(), 0.0f, 2.0f),
 			FMath::Clamp(CVarLightBounceGate.GetValueOnGameThread(), 0.0f, 1.0f),
 			FMath::Max(CVarLightAmbientFloor.GetValueOnGameThread(), 0.0f),
+			bRebuilt ? 2.0f : 1.0f,
 		};
 		if (!bForce && LightRulesShown.World.Get() == World && FMemory::Memcmp(Wanted, LightRulesShown.Values, sizeof(Wanted)) == 0)
 		{
@@ -138,7 +178,7 @@ namespace
 			FMemory::Memcpy(LightRulesShown.Values, Wanted, sizeof(Wanted));
 			return;
 		}
-		Instance->SetScalarParameterValue(TEXT("Plan"), 1.0f);
+		Instance->SetScalarParameterValue(TEXT("Plan"), Wanted[5]);
 		Instance->SetScalarParameterValue(TEXT("BakedScale"), Wanted[0]);
 		Instance->SetScalarParameterValue(TEXT("BakedGain"), Wanted[1]);
 		Instance->SetScalarParameterValue(TEXT("BakedSaturation"), Wanted[2]);
@@ -146,7 +186,8 @@ namespace
 		Instance->SetScalarParameterValue(TEXT("Floor"), Wanted[4]);
 		LightRulesShown.World = World;
 		FMemory::Memcpy(LightRulesShown.Values, Wanted, sizeof(Wanted));
-		UE_LOG(LogOpenSCCT, Log, TEXT("LightRules: surfaces show the baked light whole: scale %.2f, gain %.2f, saturation %.2f, bounce gate %.2f, ambient floor share %.2f."),
+		UE_LOG(LogOpenSCCT, Log, TEXT("LightRules: %s surfaces, baked scale %.2f, gain %.2f, saturation %.2f, bounce gate %.2f, ambient floor share %.2f."),
+			bRebuilt ? TEXT("live fixture") : TEXT("source lightmap"),
 			Wanted[0], Wanted[1], Wanted[2], Wanted[3], Wanted[4]);
 	}
 
@@ -164,6 +205,64 @@ namespace
 			Light->bAllowMegaLights = bAllow;
 			Light->MarkRenderStateDirty();
 		}
+	}
+
+	void SetSourceApertureFrustum(USpotLightComponent& Spot, const FScctLightInfo& Info)
+	{
+		// The source light is placed at its rectangular near plane, ahead of the virtual apex.
+		const float Depth = Info.EchelonRange + Info.ApexDistance;
+		const float Extent = FMath::Sqrt(FMath::Square(Info.SpotWidth) + FMath::Square(Info.SpotHeight));
+		const float HalfAngle = FMath::RadiansToDegrees(FMath::Atan(Extent / Depth));
+		const FVector Origin(Info.X, Info.Y, Info.Z);
+		Spot.SetWorldLocation(Origin - Spot.GetForwardVector() * Info.ApexDistance);
+		Spot.SetAttenuationRadius(Depth);
+		Spot.SetOuterConeAngle(FMath::Clamp(HalfAngle, 5.0f, 80.0f));
+		Spot.SetInnerConeAngle(Spot.OuterConeAngle);
+		Spot.SetSourceRadius(0.0f);
+		Spot.SetSoftSourceRadius(0.0f);
+		// The virtual apex lengthens the light path to the floor. This radial falloff fits the
+		// retail shadow-to-light contrast at the floor of both recovered Hospital skylights.
+		Spot.SetLightFalloffExponent(0.65f);
+	}
+
+	bool DressSideStairsProjection(UWorld& World, USpotLightComponent& Spot, const FScctLightInfo& Info)
+	{
+		auto* Filter = World.GetSubsystem<UScctEchelonLightFilter>();
+		UMaterialInterface* Function = Spot.LightFunctionMaterial;
+		if (!Filter || !Function || Function->GetBaseMaterial()->GetFName() != TEXT("M_MounE_SideStairsFloorLight")
+			|| Info.ApexDistance <= 0.0f || Info.EchelonRange <= 1.0f)
+		{
+			return false;
+		}
+		UDecalComponent* Floor = nullptr;
+		for (TActorIterator<ADecalActor> It(&World); It; ++It)
+		{
+			if (It->GetLevel() == Spot.GetOwner()->GetLevel() && It->ActorHasTag(TEXT("ScctSideStairsFloor")))
+			{
+				Floor = It->GetDecal();
+				break;
+			}
+		}
+		if (!Floor || !Floor->GetDecalMaterial())
+		{
+			return false;
+		}
+
+		SetSourceApertureFrustum(Spot, Info);
+
+		// The floor is near 90% of this shaft's reach. A lower peak and shallower radial falloff
+		// match the photographed floor contrast without pushing the shaft's light across the hall.
+		Spot.SetIntensity(Spot.Intensity * 0.468f);
+		const FLinearColor Light = Spot.GetLightColor();
+		const float Grey = Light.GetLuminance();
+		Spot.SetLightColor(FMath::Lerp(FLinearColor(Grey, Grey, Grey), Light, 0.72f));
+
+		// This function uses world-space receiver positions, which cannot be baked into the 2D
+		// light-function atlas. The native deferred light still takes shadows from moving geometry.
+		LightRulesMegaLights(&Spot, false);
+		Spot.SetLightFunctionDisabledBrightness(0.0f);
+		Filter->SetSideStairsProjection(Spot, *Floor);
+		return true;
 	}
 
 	/** True when a mesh is drawn with the surface material and carries none of the original's baked light. */
@@ -193,6 +292,18 @@ namespace
 			}
 		}
 		return bSurface;
+	}
+}
+
+void FScctLightRules::SetMercCameraSurfaces(UWorld& World, bool bEnabled)
+{
+	UMaterialParameterCollection* Collection = LoadObject<UMaterialParameterCollection>(nullptr, LightRulesCollection);
+	if (Collection)
+	{
+		if (UMaterialParameterCollectionInstance* Instance = World.GetParameterCollectionInstance(Collection))
+		{
+			Instance->SetScalarParameterValue(TEXT("BodycamSurfaces"), bEnabled ? 1.f : 0.f);
+		}
 	}
 }
 
@@ -274,6 +385,11 @@ bool FScctLightRules::BodyAids()
 	return !FScctLightPlan::IsOn() || CVarLightBodyAids.GetValueOnGameThread() > 0;
 }
 
+bool FScctLightRules::IsHazeOnly(const ULightComponent& Light)
+{
+	return Light.ComponentHasTag(LightRulesHazeTag);
+}
+
 void FScctLightRules::Tick(UWorld* World)
 {
 	if (auto* Filter = World ? World->GetSubsystem<UScctEchelonLightFilter>() : nullptr)
@@ -282,11 +398,12 @@ void FScctLightRules::Tick(UWorld* World)
 	}
 	if (World != nullptr && FScctLightPlan::IsOn())
 	{
+		RefreshRebuiltSkies();
 		LightRulesPush(World, false);
 	}
 }
 
-bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr<AActor>>& TaggedLights, TFunctionRef<const FString&(int32)> NameOf)
+bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr<AActor>>& TaggedLights, TFunctionRef<const FString&(int32)> NameOf, TSet<int32>& NativeFixtureIds)
 {
 	if (World == nullptr || !FScctLightPlan::IsOn())
 	{
@@ -321,13 +438,17 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 	const float Gain = FMath::Max(CVarLightLampGain.GetValueOnGameThread(), 0.0f);
 	const bool bCharacterLamps = CVarLightCharacterLamps.GetValueOnGameThread() > 0;
 	const bool bLog = CVarLightRulesLog.GetValueOnGameThread() > 0;
+	const auto* Session = World->GetSubsystem<UScctSessionSubsystem>();
+	const bool bMountHospital = Session && FCString::Stricmp(Session->GetSessionInfo().Map, TEXT("MounE")) == 0;
 
 	int32 ByClass[EScctLightClass::Count] = {};
 	int32 NumWithoutActor = 0, NumAlready = 0, NumCapped = 0, NumOnBodies = 0, NumHaze = 0, NumOff = 0, NumLive = 0;
+	const bool bRebuilt = World->GetWorldSettings()->ActorHasTag(LumenWorldTag);
 	bool bUnbakedSun = false;
 	float MostIntensity = 0.0f;
-	for (const FScctLightInfo& Info : Lights)
+	for (int32 LightIndex = 0; LightIndex < Lights.Num(); ++LightIndex)
 	{
+		const FScctLightInfo& Info = Lights[LightIndex];
 		// Static sunlight is already in the world's baked lighting. Only an unbaked
 		// sun can also light those surfaces through the level's directional light.
 		bUnbakedSun |= (Info.Flags & EScctLightInfoFlags::Sun) != 0 && (Info.Flags & EScctLightInfoFlags::Hidden) == 0
@@ -344,7 +465,17 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 			++NumWithoutActor;
 			continue;
 		}
-		if (Actor->Tags.Contains(LightRulesDressedTag))
+		const bool bNativeFixture = bRebuilt && Info.Class == EScctLightClass::Baked && Actor->ActorHasTag(LumenFixtureTag);
+		const bool bTankFixture = bRebuilt && (Info.Class == EScctLightClass::Baked || Info.Class == EScctLightClass::CharactersOnly)
+			&& Actor->ActorHasTag(TankFixtureTag);
+		const bool bRecoveredFixture = bRebuilt && Info.Class == EScctLightClass::CharactersOnly && Actor->ActorHasTag(RecoveredFixtureTag);
+		if (bNativeFixture || bTankFixture || bRecoveredFixture)
+		{
+			NativeFixtureIds.Add(LightIndex);
+			bUnbakedSun |= (Info.Flags & EScctLightInfoFlags::Sun) != 0;
+		}
+		// The tank reconstruction already fit this light to the transmitting pane.
+		if (bTankFixture || Actor->ActorHasTag(TEXT("ScctNativeBakedLamp")) || Actor->Tags.Contains(LightRulesDressedTag))
 		{
 			++NumAlready;
 			continue;
@@ -360,8 +491,8 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 		{
 		case EScctLightClass::Projector:
 		case EScctLightClass::Dynamic: Role = 1; break;
-		case EScctLightClass::Baked: Role = bLightsActors && bCharacterLamps ? 2 : 3; break;
-		case EScctLightClass::CharactersOnly: Role = bLightsActors && bCharacterLamps ? 2 : 0; break;
+		case EScctLightClass::Baked: Role = bNativeFixture ? 1 : (bLightsActors && bCharacterLamps ? 2 : 3); break;
+		case EScctLightClass::CharactersOnly: Role = bRecoveredFixture ? 1 : (bLightsActors && bCharacterLamps ? 2 : 0); break;
 		default: Role = 0; break;
 		}
 
@@ -371,7 +502,12 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 		{
 			Falloff = Info.Attenuation == 0 ? EFalloff::Flat : Info.Attenuation == 2 ? EFalloff::Late : EFalloff::Linear;
 		}
-		const FFit Solved = Fit(Peak, Falloff, Cap, Gain);
+		FFit Solved = Fit(Peak, Falloff, Cap, Gain);
+		if (bRecoveredFixture)
+		{
+			// The preparation tool stores the measured share on the original fixture.
+			Solved.Intensity *= FMath::Clamp(Light->DiffuseScale, 0.0f, 1.0f);
+		}
 		if (Role == 0 || Solved.Intensity <= 0.0f)
 		{
 			LightRulesOff(Light);
@@ -407,7 +543,13 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 				// A level built at run time has no projected rectangle yet (the plan's projector step): the cone
 				// that holds the patch. The importer's dress (its light function) already has the rectangle.
 				auto* Filter = World->GetSubsystem<UScctEchelonLightFilter>();
-				if (Info.EchelonRange > 1.0f && (!Light->LightFunctionMaterial || (Filter && Filter->AddedToUnshapedLight(Light))))
+				const bool bSideStairsProjection = bMountHospital && Name == TEXT("Light3517") && Info.CookieNameId == 0
+					&& (Info.Flags & EScctLightInfoFlags::Static) != 0 && DressSideStairsProjection(*World, *Spot, Info);
+				if (Actor->ActorHasTag(TEXT("ScctSourceAperture")) && Info.ApexDistance > 0.0f && Info.EchelonRange > 1.0f)
+				{
+					SetSourceApertureFrustum(*Spot, Info);
+				}
+				else if (!bSideStairsProjection && Info.EchelonRange > 1.0f && (!Light->LightFunctionMaterial || (Filter && Filter->AddedToUnshapedLight(Light))))
 				{
 					const float Half = FMath::RadiansToDegrees(FMath::Atan(FMath::Sqrt(FMath::Square(Info.SpotWidth) + FMath::Square(Info.SpotHeight)) / Info.EchelonRange));
 					Spot->SetOuterConeAngle(FMath::Clamp(Half, 5.0f, 80.0f));
@@ -443,10 +585,16 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 		default:
 			// In the lightmaps already: it lights no surface and bounces nothing, and the air still glows in it.
 			// A light with no diffuse and no highlight keeps its haze only outside MegaLights (engine checks).
+			Light->ComponentTags.AddUnique(LightRulesHazeTag);
 			Light->SetLightingChannels(true, false, false);
 			Light->SetDiffuseScale(0.0f);
 			Light->SetSpecularScale(0.0f);
 			Light->SetIndirectLightingIntensity(0.0f);
+			// Fog only samples an occlusion shadow for local lights that explicitly cast volumetric shadows.
+			if (!Light->bCastVolumetricShadow)
+			{
+				Light->SetCastShadows(false);
+			}
 			LightRulesMegaLights(Light, false);
 			++NumHaze;
 			break;
@@ -454,7 +602,8 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 		if (bLog)
 		{
 			UE_LOG(LogOpenSCCT, Log, TEXT("SCCT_LIGHT_RULE %s class=%d role=%s peak=%.3f reach=%.0f intensity=%.3f (was %.3f) exponent=%.2f%s"),
-				*Name, Class, Role == 1 ? TEXT("live") : Role == 2 ? TEXT("bodies") : TEXT("haze"), Peak, Info.WorldRadius, Solved.Intensity, Before, Solved.Exponent,
+				*Name, Class, Role == 1 ? TEXT("live") : Role == 2 ? TEXT("bodies") : TEXT("haze"), Peak,
+				Point ? Point->AttenuationRadius : Info.WorldRadius, Light->Intensity, Before, Point ? Point->LightFalloffExponent : Solved.Exponent,
 				Solved.bCapped ? TEXT(" capped") : TEXT(""));
 		}
 	}
@@ -463,6 +612,10 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 	// the moon goes, the height fog's own glow goes, and the sky light stays for what the gate lets through.
 	const float MoonShare = FMath::Max(CVarLightMoon.GetValueOnGameThread(), 0.0f);
 	const float SkyShare = FMath::Max(CVarLightSkyLight.GetValueOnGameThread(), 0.0f);
+	for (auto It = RebuiltSkyIntensities.CreateIterator(); It; ++It)
+	{
+		if (!It.Key().IsValid()) It.RemoveCurrent();
+	}
 	const float FogShare = FMath::Max(CVarLightFogInscatter.GetValueOnGameThread(), 0.0f);
 	int32 NumMoons = 0, NumSkies = 0, NumFogs = 0;
 	for (TActorIterator<ADirectionalLight> It(World); It; ++It)
@@ -488,7 +641,13 @@ bool FScctLightRules::DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr
 			continue;
 		}
 		It->Tags.Add(LightRulesDressedTag);
-		Light->SetIntensity(Light->Intensity * SkyShare);
+		float Intensity = Light->Intensity * SkyShare;
+		if (It->GetLevel()->GetWorldSettings()->ActorHasTag(LumenWorldTag))
+		{
+			RebuiltSkyIntensities.Add(Light, Intensity);
+			if (UsesUnoccludedSky()) Intensity *= UnoccludedSkyShare;
+		}
+		Light->SetIntensity(Intensity);
 		Light->SetVolumetricScatteringIntensity(Light->VolumetricScatteringIntensity * FogShare);
 		++NumSkies;
 	}

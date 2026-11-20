@@ -14,14 +14,17 @@
 #include "Engine/Light.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "MaterialShared.h"
 #include "Misc/CommandLine.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
+#include "Misc/ScopeExit.h"
 #include "NiagaraActor.h"
 #include "NiagaraComponent.h"
 #include "Online/ScctOnlineSubsystem.h"
@@ -342,6 +345,7 @@ void UScctLevelStateSubsystem::HandleMatchStarted()
 
 	// The lighting plan dresses the level's lights before any is bound: a bound light's strength is what it has then.
 	bLightPlanDressed = false;
+	NativeFixtureIds.Reset();
 	LightPlanWaited = 0;
 	DressForLightPlan();
 
@@ -480,6 +484,29 @@ void UScctLevelStateSubsystem::IndexLevel()
 			}
 		}
 	}
+	MapMaterialAssets.Reset();
+	MapColorAssets.Reset();
+	if (MapFolder == TEXT("/Game/Imported/Maps/MounE"))
+	{
+		// This imported level has sharper versions of a few props from the shared gameplay pack.
+		Assets.Reset();
+		ScanLevelFolder(MapFolder / TEXT("HospitalSharedMaterials"), UMaterialInterface::StaticClass(), Assets);
+		for (const FAssetData& Asset : Assets)
+		{
+			MapMaterialAssets.Add(Asset.AssetName, Asset.GetSoftObjectPath());
+		}
+		Assets.Reset();
+		ScanLevelFolder(MapFolder / TEXT("HospitalSharedColors"), UTexture2D::StaticClass(), Assets);
+		for (const FAssetData& Asset : Assets)
+		{
+			MapColorAssets.Add(Asset.AssetName, Asset.GetSoftObjectPath());
+		}
+		if (!MapMaterialAssets.IsEmpty() || !MapColorAssets.IsEmpty())
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("Level state: indexed %d local prop materials and %d colour textures for MounE"),
+				MapMaterialAssets.Num(), MapColorAssets.Num());
+		}
+	}
 
 	UE_LOG(LogOpenSCCT, Log, TEXT("Level state: the level has %d tagged actors (%d movable meshes, %d lights), %d corona cards, %d particle emitters that follow the simulation's triggers, %d wet-ground decals and %d tagged effect actors in all; %d imported meshes and %d materials can be swapped in (%s)"),
 		TaggedActors.Num() + TaggedLights.Num(), MovableTags.Num(), NumLights, TaggedCoronas.Num(), TaggedEmitters.Num(), TaggedWetGround.Num(), NumEffectActors, MeshAssets.Num(), MaterialAssets.Num(), *MapFolder);
@@ -493,6 +520,7 @@ void UScctLevelStateSubsystem::RestoreLevel()
 {
 	const UWorld* ThisWorld = GetWorld();
 	const bool bTearingDown = ThisWorld == nullptr || ThisWorld->bIsTearingDown;
+	const auto* ReceiverFilter = !bTearingDown ? ThisWorld->GetSubsystem<UScctEchelonLightFilter>() : nullptr;
 
 	// The lamps before the actors: a lamp mesh that also wore a skin has all its slots cleared by its actor below.
 	for (FLightState& State : LightStates)
@@ -509,7 +537,10 @@ void UScctLevelStateSubsystem::RestoreLevel()
 		{
 			Light->SetIntensity(State.OriginalIntensity);
 			Light->SetLightColor(State.OriginalColor);
-			Light->SetVisibility(State.bOriginalVisible);
+			if (!ReceiverFilter || !ReceiverFilter->ManagesSideStairsVisibility(*Light))
+			{
+				Light->SetVisibility(State.bOriginalVisible);
+			}
 			if (State.bLightFunctionHeld)
 			{
 				// The importer's own rhythm again, for the level without a match.
@@ -556,6 +587,7 @@ void UScctLevelStateSubsystem::RestoreLevel()
 		Actor->SetActorHiddenInGame(State.bOriginalHidden);
 		if (UStaticMeshComponent* Mesh = State.Mesh.Get())
 		{
+			RestoreMapMaterials(State);
 			if (Mesh->GetStaticMesh() != State.OriginalMesh.Get() && State.OriginalMesh.IsValid())
 			{
 				Mesh->SetStaticMesh(State.OriginalMesh.Get());
@@ -715,6 +747,12 @@ AActor* UScctLevelStateSubsystem::FindLevelActor(const FString& Name) const
 {
 	const TWeakObjectPtr<AActor>* Found = TaggedActors.Find(FScctWorld::LevelTag(*Name));
 	return Found != nullptr ? Found->Get() : nullptr;
+}
+
+ULightComponent* UScctLevelStateSubsystem::FindLevelLight(const FString& Name) const
+{
+	const ALight* Actor = Cast<ALight>(TaggedLights.FindRef(FScctWorld::LevelTag(*Name)).Get());
+	return Actor ? Actor->GetLightComponent() : nullptr;
 }
 
 UStaticMesh* UScctLevelStateSubsystem::FindMesh(const FString& Name)
@@ -1188,6 +1226,7 @@ void UScctLevelStateSubsystem::ApplyMesh(FActorState& State, int32 MeshId)
 		}
 		return;
 	}
+	RestoreMapMaterials(State);
 	Component->SetStaticMesh(Mesh);
 	if (State.bSkinned) Component->EmptyOverrideMaterials();
 	State.WornSkins.Reset();
@@ -1214,6 +1253,8 @@ void UScctLevelStateSubsystem::ApplySkins(FActorState& State)
 	UStaticMesh* Mesh = Component ? Component->GetStaticMesh() : nullptr;
 	int32 Skins[ScctWorldSkinSlots] = {};
 	if (!Mesh) return;
+	RestoreMapMaterials(State);
+	ON_SCOPE_EXIT { ApplyMapMaterials(State); };
 	if (!World->GetActorSkins(State.Info.NameId, Skins, ScctWorldSkinSlots) ||
 		(State.WornSkins.IsEmpty() && !Algo::AnyOf(Skins, [](int32 Id) { return Id != 0; })))
 	{
@@ -1269,7 +1310,7 @@ void UScctLevelStateSubsystem::DressForLightPlan()
 	{
 		return;
 	}
-	if (!FScctLightRules::DressLevel(GetWorld(), TaggedLights, [this](int32 Id) -> const FString& { return GetName(Id); }))
+	if (!FScctLightRules::DressLevel(GetWorld(), TaggedLights, [this](int32 Id) -> const FString& { return GetName(Id); }, NativeFixtureIds))
 	{
 		++LightPlanWaited;
 		return;
@@ -1297,6 +1338,8 @@ void UScctLevelStateSubsystem::DressForLightPlan()
 
 void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 {
+	static const IConsoleVariable* VolumetricFog = IConsoleManager::Get().FindConsoleVariable(TEXT("r.VolumetricFog"));
+	const bool bNativeFog = VolumetricFog == nullptr || VolumetricFog->GetInt() != 0;
 	// One read a frame: the flicker draws a new value and the strobe flips on every read.
 	int32 Total = World->GetLights(LightBuffer.GetData(), LightBuffer.Num());
 	if (Total > LightBuffer.Num())
@@ -1368,19 +1411,26 @@ void UScctLevelStateSubsystem::UpdateLights(float DeltaSeconds)
 		if (ULightComponent* Light = State.Light.Get())
 		{
 			ULightComponent* Fill = State.MidwayFill.Get();
-			if (!FMath::IsNearlyEqual(State.Shown, State.AppliedScale, 0.003f) || (State.Shown == 0.0f) != (State.AppliedScale == 0.0f))
+			const bool bScaleChanged = !FMath::IsNearlyEqual(State.Shown, State.AppliedScale, 0.003f)
+				|| (State.Shown == 0.0f) != (State.AppliedScale == 0.0f);
+			if (bScaleChanged)
 			{
 				State.AppliedScale = State.Shown;
 				Light->SetIntensity(State.OriginalIntensity * State.Shown);
-				const bool bVisible = State.Shown > 0.0f;
-				if (Light->IsVisible() != bVisible)
-				{
-					Light->SetVisibility(bVisible);
-				}
 				if (Fill != nullptr)
 				{
 					Fill->SetIntensity(State.OriginalIntensity * State.Shown * MidwayFillShare);
-					Fill->SetVisibility(bVisible);
+					Fill->SetVisibility(State.Shown > 0.0f);
+				}
+			}
+			// A renderer or preset switch can change whether native fog needs this lamp mid-match.
+			if (bScaleChanged || State.bHazeOnly)
+			{
+				const bool bVisible = State.Shown > 0.0f
+					&& (!State.bHazeOnly || (bNativeFog && Light->VolumetricScatteringIntensity > 0.0f));
+				if (Light->IsVisible() != bVisible)
+				{
+					Light->SetVisibility(bVisible);
 				}
 			}
 
@@ -1790,6 +1840,7 @@ void UScctLevelStateSubsystem::BindLight(FLightState& State, const FScctWorldLig
 	State.OriginalIntensity = Light->Intensity;
 	State.OriginalColor = Light->GetLightColor();
 	State.bOriginalVisible = Light->IsVisible();
+	State.bHazeOnly = FScctLightRules::IsHazeOnly(*Light);
 	if (FScctLightPlan::IsOn() && Session != nullptr && FCString::Stricmp(Session->GetSessionInfo().Map, TEXT("MoonD")) == 0
 		&& Name.Equals(TEXT("PlazaFlood2"), ESearchCase::IgnoreCase))
 	{

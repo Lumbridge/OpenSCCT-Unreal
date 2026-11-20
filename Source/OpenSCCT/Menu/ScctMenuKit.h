@@ -5,23 +5,29 @@
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
 #include "Menu/ScctMenuSubsystem.h"
+#include "Types/SlateEnums.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/SLeafWidget.h"
 
 class SBox;
+class SComboButton;
 class SEditableTextBox;
 class SScrollBox;
 class SVerticalBox;
+class ITableRow;
+class STableViewBase;
+template <typename ItemType> class SListView;
 
 // The menus' widget set, in one visual language with the HUD (Hud/ScctHudStyle.h; docs/DESIGN.md "Menus").
 //
 // Every control here can be reached and worked with the mouse, the keyboard and a controller:
 //   - arrows, D-pad and left stick move the focus (Slate's own navigation between focusable widgets);
 //   - Enter, Space and the controller's A press the focused control;
-//   - Left and Right change the value of a stepper, a slider or a switch;
+//   - Enter or A opens a dropdown, and Up and Down navigate its choices;
+//   - Left and Right change the value of a slider or a switch;
 //   - pointing at a control focuses it, so there is one highlight, not a hover and a focus that disagree;
-//   - Escape and the controller's B are not handled here: they bubble to the page host, which goes back.
+//   - Escape and the controller's B dismiss open dropdowns, or go back through the page host.
 // A control tells the page what it is for (its description) when it takes the focus, and makes the content's own
 // interface sounds.
 namespace ScctUi
@@ -246,7 +252,7 @@ protected:
 	mutable float Lit = 0.0f;
 };
 
-/** One of a few named values, changed with Left and Right: "<  HIGH  >". */
+/** A dropdown for one of a list of named values. */
 class SScctStepper : public SScctOptionRow
 {
 public:
@@ -254,29 +260,37 @@ public:
 		SLATE_ARGUMENT(FText, Label)
 		SLATE_ARGUMENT(FText, Description)
 		SLATE_ARGUMENT(TArray<FString>, Options)
-		/** The options, asked again whenever the row is drawn, when they can change (instead of Options). */
+		/** Live options for a row whose available choices can change (instead of Options). */
 		SLATE_ARGUMENT(TFunction<TArray<FString>()>, GetOptions)
 		SLATE_ARGUMENT(TFunction<int32()>, Get)
 		SLATE_ARGUMENT(TFunction<void(int32)>, Set)
+		/** Legacy option kept for existing callers. A dropdown chooses a value directly. */
 		SLATE_ARGUMENT(bool, Wrap)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
-	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
+	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 
 protected:
-	virtual bool Adjust(int32 Direction) override;
-	virtual void Press() override { Adjust(1); }
-	virtual void ClickControl(float Alpha) override { Adjust(Alpha < 0.5f ? -1 : 1); }
+	virtual void Press() override;
 
 private:
 	TArray<FString> CurrentOptions() const;
+	FText CurrentText() const;
+	TSharedRef<SWidget> MakeChoiceList();
+	TSharedRef<ITableRow> MakeChoiceRow(TSharedPtr<FString> Item, const TSharedRef<STableViewBase>& Owner);
+	FReply OnChoiceKeyDown(const FGeometry& Geometry, const FKeyEvent& Event);
+	void OnChoiceChanged(TSharedPtr<FString> Item, ESelectInfo::Type SelectInfo);
+	void FocusChoices();
+	void CommitChoice(const TSharedPtr<FString>& Item);
 
 	TArray<FString> Options;
 	TFunction<TArray<FString>()> GetOptions;
 	TFunction<int32()> Get;
 	TFunction<void(int32)> Set;
-	bool bWrap = true;
+	TArray<TSharedPtr<FString>> Choices;
+	TSharedPtr<SComboButton> Dropdown;
+	TSharedPtr<SListView<TSharedPtr<FString>>> ChoiceList;
 };
 
 /** A number on a track, changed with Left and Right or by dragging. */

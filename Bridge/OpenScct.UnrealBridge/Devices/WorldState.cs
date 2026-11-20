@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using OpenScct.Content;
 using OpenScct.Content.Loading;
 using OpenScct.Core;
@@ -59,6 +60,7 @@ public sealed class WorldState
     private readonly List<Follower> _followers = [];
     private readonly Dictionary<int, Follower> _followerByName = new();
     private readonly List<LightState> _lights = [];
+    private readonly List<int> _varyingLights = [];
     private readonly List<Marker> _markers = [];
     private readonly List<Animated> _animated = [];
     private readonly List<BridgeWorldEvent> _events = [];
@@ -74,6 +76,9 @@ public sealed class WorldState
     private float _time;
     private float _strobeTime = float.NaN;
     private bool _strobeOff;
+    private BridgeWorldLight[] _lightRows = [];
+    private long _lightRevision;
+    private (long Tick, float Time, float Alpha, bool Strobe) _lightSample = (-1, 0f, 0f, false);
 
     private WorldState(BridgeSession session)
     {
@@ -226,6 +231,21 @@ public sealed class WorldState
             _renderBoneLights.TryGetValue(light.Name, out (int Prop, int Bone) bone);
             _lights.Add(new LightState(light, Intern(light.Name), _slotById.GetValueOrDefault(light.Name), bone.Prop, bone.Bone));
         }
+
+        _lightRows = new BridgeWorldLight[_lights.Count];
+        _varyingLights.Clear();
+        for (int i = 0; i < _lights.Count; i++)
+        {
+            if (_lights[i].IsConstant)
+            {
+                _lightRows[i] = _lights[i].Draw(0f, false, 0f);
+            }
+            else
+            {
+                _varyingLights.Add(i);
+            }
+        }
+        _lightRevision++;
 
         // The first state is the map's, not a change: take it without events.
         _loaded = loaded;
@@ -699,10 +719,9 @@ public sealed class WorldState
             _strobeOff = !_strobeOff;
         }
 
-        int count = Math.Min(lights.Length, _lights.Count);
-        for (int i = 0; i < count; i++)
+        if (!lights.IsEmpty)
         {
-            lights[i] = _lights[i].Draw(time, _strobeOff, alpha);
+            LightRows(time, alpha)[..Math.Min(lights.Length, _lights.Count)].CopyTo(lights);
         }
 
         return _lights.Count;
@@ -714,15 +733,49 @@ public sealed class WorldState
     /// </summary>
     public int PeekLights(Span<BridgeWorldLight> lights)
     {
-        float alpha = Math.Clamp(_session.Alpha, 0f, 1f);
-        float time = _time + (alpha * TickSeconds);
-        int count = Math.Min(lights.Length, _lights.Count);
-        for (int i = 0; i < count; i++)
+        if (!lights.IsEmpty)
         {
-            lights[i] = _lights[i].Draw(time, _strobeOff, alpha);
+            ReadOnlySpan<BridgeWorldLight> rows = PeekLightRows(out _);
+            rows[..Math.Min(lights.Length, rows.Length)].CopyTo(lights);
         }
 
         return _lights.Count;
+    }
+
+    internal ReadOnlySpan<BridgeWorldLight> PeekLightRows(out long revision)
+    {
+        float alpha = Math.Clamp(_session.Alpha, 0f, 1f);
+        ReadOnlySpan<BridgeWorldLight> rows = LightRows(_time + (alpha * TickSeconds), alpha);
+        revision = _lightRevision;
+        return rows;
+    }
+
+    private ReadOnlySpan<BridgeWorldLight> LightRows(float time, float alpha)
+    {
+        var sample = (_session.Ticks, time, alpha, _strobeOff);
+        if (_varyingLights.Count == 0 || sample == _lightSample)
+        {
+            return _lightRows;
+        }
+        _lightSample = sample;
+
+        bool changed = false;
+        foreach (int index in _varyingLights)
+        {
+            BridgeWorldLight row = _lights[index].Draw(time, _strobeOff, alpha);
+            // All fields are 32-bit, with no padding. Compare the exact data handed to the renderer.
+            if (!MemoryMarshal.AsBytes(_lightRows.AsSpan(index, 1))
+                .SequenceEqual(MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(in row, 1))))
+            {
+                _lightRows[index] = row;
+                changed = true;
+            }
+        }
+        if (changed)
+        {
+            _lightRevision++;
+        }
+        return _lightRows;
     }
 
     /// <summary>
@@ -1226,6 +1279,8 @@ public sealed class WorldState
                 Switch(world, trigger, first);
             }
         }
+
+        public bool IsConstant => _slot is null && (!_on || _type is not (2 or 3 or 4 or 5 or 7));
 
         /// <summary>Where the light's actor is, and the bone it hangs on (AttachedEffects.Follower and Place).</summary>
         private void Place(WorldState world, Actor actor)

@@ -1,7 +1,6 @@
 #include "Play/ScctMapLightSprites.h"
 
 #include "Components/LightComponent.h"
-#include "Engine/Light.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/Texture2D.h"
 #include "EngineUtils.h"
@@ -181,14 +180,29 @@ void UScctMapLightSprites::Load()
 	const FObject Beams = Document(Render / TEXT("lightbeams.json"));
 	const TArray<TSharedPtr<FJsonValue>>* Rows;
 	TMap<FString, float> Scatter;
-	if (Beams && Beams->TryGetArrayField(TEXT("beams"), Rows))
+	if (Beams && Beams->TryGetArrayField(TEXT("beams"), Rows) && !Rows->IsEmpty())
 	{
+		// A shaft drawn by its own mesh already has the projector's authored aperture and occlusion.
+		const FName VisibleShaftTag(TEXT("ScctVisibleMapShaft"));
+		TArray<FVector> CoveredOrigins;
+		for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
+		{
+			if (It->ActorHasTag(VisibleShaftTag)) CoveredOrigins.Add(It->GetActorLocation());
+		}
+
 		for (const auto& Value : *Rows)
 		{
 			const FObject Beam = Value->AsObject();
-			if (!Flag(Beam, TEXT("lightOn"), true)) continue;
+			if (!Beam || !Flag(Beam, TEXT("lightOn"), true)) continue;
+			const FString Name = String(Beam, TEXT("name"));
+			const FVector Origin = Location(Beam);
+			if (Name.IsEmpty() || CoveredOrigins.ContainsByPredicate([&Origin](const FVector& Point)
+			{
+				return Point.Equals(Origin, 1.0);
+			})) continue;
+
 			const double Strength = 4 * FMath::Sqrt(FMath::Max(Number(Beam, TEXT("alpha"), 1), 1.0));
-			Scatter.Add(String(Beam, TEXT("name")), Strength * Number(Beam, TEXT("falloffScale"), 1));
+			Scatter.Add(Name, Strength * Number(Beam, TEXT("falloffScale"), 1));
 		}
 	}
 
@@ -207,15 +221,20 @@ void UScctMapLightSprites::Load()
 		const FString Name = String(Light, TEXT("name"));
 		if (Name.IsEmpty()) continue;
 		AActor* Placed = Level ? Level->FindLevelActor(Name) : nullptr;
-		if (const float* Strength = Scatter.Find(Name))
+		if (const float* Strength = Scatter.Find(Name);
+			Strength && Level && Number(Light, TEXT("effect"), 0) == 22 && !Flag(Light, TEXT("hidden")))
 		{
-			if (auto* Lamp = Cast<ALight>(Placed))
+			if (ULightComponent* Component = Level->FindLevelLight(Name))
 			{
-				ULightComponent* Component = Lamp->GetLightComponent();
-				OriginalScatter.Add(Component, Component->VolumetricScatteringIntensity);
 				const float Gain = String(Light, TEXT("echelon_texture_uri")).IsEmpty() ? 1.f : 0.3f;
-				Component->SetVolumetricScatteringIntensity(Number(Light, TEXT("effect"), 0) == 22
-					? FMath::Clamp(*Strength * Gain, 0.f, 16.f) : 0.f);
+				const float BeamScatter = FMath::Clamp(*Strength * Gain, 0.f, 16.f);
+				if (!FMath::IsNearlyEqual(Component->VolumetricScatteringIntensity, BeamScatter))
+				{
+					OriginalScatter.FindOrAdd(Component, Component->VolumetricScatteringIntensity);
+					UE_LOG(LogOpenSCCT, Verbose, TEXT("Map light shaft %s: scattering %.3f -> %.3f"),
+						*Name, Component->VolumetricScatteringIntensity, BeamScatter);
+					Component->SetVolumetricScatteringIntensity(BeamScatter);
+				}
 			}
 		}
 

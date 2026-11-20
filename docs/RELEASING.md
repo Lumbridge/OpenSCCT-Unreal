@@ -94,15 +94,16 @@ pack the store already has.
 
 ## Which servers it can join
 
-The bridge speaks OpenSCCT's protocol, and the protocol hash is computed from OpenSCCT's code. A release therefore
-joins only servers built from the same OpenSCCT code as its bridge. Before packaging, check out the commit the live
-servers run in the OpenSCCT checkout. The script records that commit and version in `version.json`, in the launcher
-handshake and in the release notes. It refuses an OpenSCCT checkout with uncommitted changes (`-Local` only warns).
+The bridge speaks OpenSCCT's protocol. Before packaging, select an OpenSCCT checkout compatible with the live
+servers and containing the baseline in `Bridge/OpenScct.revision`. The baseline retains gameplay changes already
+shipped in Unreal, including the Spy bot tactics from 0.1.8. Pass `-OpenScct <checkout>` to use a different
+worktree. The script records the exact checkout revision and version in `version.json`, the launcher handshake,
+and the release notes. It checks the baseline and requires a clean checkout (`-Local` warns).
 
 ## Procedure
 
 1. Bump `ProjectVersion` in `Config/DefaultGame.ini` and commit. Push to `origin/main`.
-2. Check out the live servers' OpenSCCT commit in the bridge checkout.
+2. Prepare an OpenSCCT checkout containing the required baseline and compatible with the live servers.
 3. Run the script. It needs Unreal Engine 5.8 (`-Engine` or `UE_ROOT`, default `F:\UE_5.8`), the .NET 10 SDK, a
    clean tree and an unused tag:
 

@@ -255,6 +255,10 @@ void FScctHudModel::AddMessage(const FScctHudMessage& Message)
 
 void FScctHudModel::Advance(float DeltaSeconds)
 {
+	for (int32 Index = 0; Index < ScctHudArrowCount; ++Index)
+	{
+		SoundArrowAge[Index] = bHasState && State.ArrowSeconds[Index] > 0.0f ? SoundArrowAge[Index] + DeltaSeconds : 0.0f;
+	}
 	using namespace ScctHudStyle;
 
 	Clock += DeltaSeconds;

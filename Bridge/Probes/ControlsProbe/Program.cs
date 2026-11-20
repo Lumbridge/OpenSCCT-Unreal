@@ -4,6 +4,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using OpenScct.Core.Engine;
+using OpenScct.Game.Equipment;
+using OpenScct.Game.SBase;
 using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Controls;
 using OpenScctGame.Play.Session;
@@ -21,6 +24,20 @@ void Check(bool ok, string what)
 {
     Console.WriteLine($"   {(ok ? "ok    " : "FAILED")} {what}");
     failures += ok ? 0 : 1;
+}
+
+if (args.Contains("--aim-timing"))
+{
+    BridgeSession.Configure(content);
+    var timing = new Driver(BridgeSession.StartLocal(map, "Story", merc: true, bots: 0));
+    try
+    {
+        if (!timing.WaitForPawn()) throw new InvalidOperationException("No local merc for aim timing: " + timing.Bridge.Failure);
+        timing.Run(.35);
+        AimTimingChecks.Run(timing, Check);
+        return failures == 0 ? 0 : 1;
+    }
+    finally { timing.Bridge.Dispose(); }
 }
 
 // ---- The default tables, and that they survive a save and a load -------------------------------------------------
@@ -118,7 +135,7 @@ Check(stock.SpyKbm.FreeLook == 1.4f && stock.SpyKbm.Look == 1f && stock.MercKbm.
 unsafe
 {
     // The sizes Source/OpenSCCT/Runtime/ScctControlsApi.h asserts for its mirrors.
-    Check(sizeof(BridgeRawInput) == 192 && sizeof(BridgeKeyEdge) == 16 && sizeof(BridgeLookView) == 68 && sizeof(BridgeLocalCommand) == 12 &&
+    Check(sizeof(BridgeRawInput) == 200 && sizeof(BridgeKeyEdge) == 16 && sizeof(BridgeLookView) == 76 && sizeof(BridgeLocalCommand) == 12 &&
         sizeof(BridgeLookSettings) == 72 && sizeof(BridgeControlSettings) == 372 && sizeof(ControlsApi) == 152,
         $"struct sizes for the C++ mirror: raw input {sizeof(BridgeRawInput)}, look view {sizeof(BridgeLookView)}, local command {sizeof(BridgeLocalCommand)}, look settings {sizeof(BridgeLookSettings)}, control settings {sizeof(BridgeControlSettings)}, table {sizeof(ControlsApi)}");
 }
@@ -562,6 +579,167 @@ bool fire = input.Get("bFire") == 1;
 probe.RightTrigger = 0f;
 probe.Run(0.1);
 Check(probe.ButtonTicks("bReload") >= 1 && fire && probe.Saw("Fire") == 1, "merc pad: X reloads, the right trigger fires");
+unsafe
+{
+    var raw = new BridgeRawInput { Flags = BridgeRawInputFlags.Play | BridgeRawInputFlags.AllowMercFreeLook, DeltaSeconds = 1f / 60f };
+    probe.Controls.Frame(in raw);
+    var mouseBefore = probe.Controls.Keys.PendingMouse;
+    float padBefore = input.MouseX;
+    raw.Keys[(int)BridgeKey.Alt] = 1;
+    raw.MouseX = 10f;
+    raw.RightX = .75f;
+    bool held = probe.Controls.Frame(in raw) && probe.Controls.MercAimTurn == System.Numerics.Vector2.Zero;
+    raw.Keys[(int)BridgeKey.Alt] = 0;
+    bool release = probe.Controls.Frame(in raw) && probe.Controls.MercAimTurn == System.Numerics.Vector2.Zero;
+    bool stayed = probe.Controls.Keys.PendingMouse == mouseBefore && input.MouseX == padBefore;
+    bool ordinary = !probe.Controls.Frame(in raw) && probe.Controls.Keys.PendingMouse.X == mouseBefore.X + raw.MouseX
+        && input.MouseX > padBefore && probe.Controls.MercAimTurn.X > 0f;
+    Check(held && release && stayed && ordinary, "free-look takes the release frame's mouse and stick samples, and normal aim resumes on the very next frame");
+
+    var pc = probe.Bridge.Session.LocalController!;
+    probe.Controls.Keys.FillTick(input, pc);
+    input.MouseX = input.MouseY = 0f;
+    pc.LocalMyDesiredRotation = new OpenScct.Core.FRotator(OpenScct.Game.Movement.MovementK.PitchMax - 6, 0, 0);
+    raw.MouseX = raw.RightX = 0f;
+    raw.MouseY = probe.Bridge.Session.Mouse.InvertY ? -100f : 100f;
+    probe.Controls.Frame(in raw);
+    float reached = probe.Controls.MercAimTurn.Y;
+    probe.Controls.Frame(in raw);
+    Check(reached == FRotatorDegrees(6) && probe.Controls.MercAimTurn.Y == 0f,
+        "two render frames before a tick report only the pitch travel available up to the stop");
+
+    ControlsStore.Bindings = new ControlBindings();
+    var pawn = pc.SBPawn!;
+    SidearmEquipment.Give(pawn, SidearmKind.Unsuppressed);
+    Check(SidearmEquipment.Select(pawn, 1, force: true), "select the merc sidearm for optic checks");
+    if (pawn.MyWeapon is MercSidearm pistol)
+    {
+        pawn.WeaponSwitchUntil = pawn.Level.TimeSeconds;
+        void Settle(ref BridgeRawInput sample)
+        {
+            for (int frame = 0; frame < 45; frame++)
+            {
+                probe.Controls.Frame(in sample);
+                probe.Controls.Keys.FillTick(input, pc);
+            }
+        }
+        foreach (bool allowFreeLook in new[] { false, true })
+        {
+            raw = new BridgeRawInput { Flags = BridgeRawInputFlags.Play, DeltaSeconds = 1f / 60f };
+            if (allowFreeLook) raw.Flags |= BridgeRawInputFlags.AllowMercFreeLook;
+            foreach (var sidearm in Sidearms.All)
+            {
+                pistol.Kind = (int)sidearm.Kind;
+                pistol.Configure(fill: true);
+                foreach (int optic in new[] { 0, WeaponAttachments.RedDot, WeaponAttachments.Acog })
+                {
+                    WeaponAttachments.Apply(pistol, optic);
+                    raw.Keys[(int)BridgeKey.RightMouse] = 0;
+                    Settle(ref raw);
+                    raw.Keys[(int)BridgeKey.RightMouse] = 1;
+                    Settle(ref raw);
+                    var view = probe.Controls.GetView(16f / 9f, 0f);
+                    Check(view.RifleAimBlend > .95f && pistol.AimRequested && input.Get("bAltFire") == 0 &&
+                        view.OpticMagnification == 1f && Math.Abs(view.ScopeLensPower - (optic == WeaponAttachments.Acog ? 4f : 0f)) < .01f,
+                        $"{sidearm.Name}, free-look input={allowFreeLook}, optic={optic}: aim {view.RifleAimBlend:F3}, lens power {view.ScopeLensPower:F2}");
+                }
+            }
+            raw.Keys[(int)BridgeKey.RightMouse] = 0;
+            Settle(ref raw);
+            pistol.ClipAmmo = pistol.Ammo = 0;
+            raw.Keys[(int)BridgeKey.RightMouse] = 1;
+            Settle(ref raw);
+            Check(pistol.AimRequested, "an empty pistol can still be aimed");
+            pistol.Configure(fill: true);
+            pistol.ReloadUntil = pawn.Level.TimeSeconds + 1f;
+            Settle(ref raw);
+            Check(probe.Controls.GetView(16f / 9f, 0f).RifleAimBlend < .01f, "pistol reload lowers its fitted optic");
+            pistol.SetAiming(pc, true);
+            Check(!pistol.AimRequested, "authority rejects aim during pistol reload");
+            pistol.ReloadUntil = 0f;
+            Settle(ref raw);
+            Check(!pistol.AimRequested, "a held button cannot reopen sights after a reload");
+            raw.Keys[(int)BridgeKey.RightMouse] = 0;
+            raw.Keys[(int)BridgeKey.V] = 1;
+            Settle(ref raw);
+            Check(input.Get("bAltFire") == 1 && probe.Controls.GetView(16f / 9f, 0f).RifleAimBlend < .01f,
+                "a pistol with an optic keeps its independent gadget binding");
+            raw.Keys[(int)BridgeKey.V] = 0;
+            Settle(ref raw);
+        }
+        WeaponAttachments.Apply(pistol, 0);
+        raw = new BridgeRawInput { Flags = BridgeRawInputFlags.Play | BridgeRawInputFlags.AllowMercFreeLook, DeltaSeconds = 1f / 60f };
+        Settle(ref raw);
+        raw.Keys[(int)BridgeKey.RightMouse] = 1;
+        Settle(ref raw);
+        raw.Flags = BridgeRawInputFlags.MercMenuView;
+        Settle(ref raw);
+        Check(!pistol.AimRequested && probe.Controls.GetView(16f / 9f, 0f).RifleAimBlend > .99f,
+            "pause releases gameplay aim while preserving the visible pistol pose");
+        raw.Flags = BridgeRawInputFlags.Play | BridgeRawInputFlags.AllowMercFreeLook;
+        raw.Keys[(int)BridgeKey.RightMouse] = 0;
+        Settle(ref raw);
+        raw.Keys[(int)BridgeKey.RightMouse] = 1;
+        Settle(ref raw);
+        Check(SidearmEquipment.Select(pawn, 0, force: true) && !pistol.AimRequested, "holstering immediately clears pistol aim");
+        pawn.WeaponSwitchUntil = pawn.Level.TimeSeconds;
+        Settle(ref raw);
+        Check(pawn.MyWeapon is SWeaponDefense { AimRequested: false }, "the incoming primary does not inherit held sidearm aim");
+        raw.Keys[(int)BridgeKey.RightMouse] = 0;
+        Settle(ref raw);
+        foreach (int slot in new[] { 1, 0 })
+        {
+            Check(SidearmEquipment.Select(pawn, slot, force: true), $"select weapon slot {slot} for ACOG");
+            pawn.WeaponSwitchUntil = pawn.Level.TimeSeconds;
+            var scopedGun = (SWeaponDefense)pawn.MyWeapon!;
+            foreach (bool allowFreeLook in new[] { false, true })
+            {
+                raw = new BridgeRawInput { Flags = BridgeRawInputFlags.Play, DeltaSeconds = 1f / 60f };
+                if (allowFreeLook) raw.Flags |= BridgeRawInputFlags.AllowMercFreeLook;
+                WeaponAttachments.Apply(scopedGun, WeaponAttachments.Acog);
+                Settle(ref raw);
+                var wideHip = probe.Controls.GetView(16f / 9f, 0f);
+                var narrowHip = probe.Controls.GetView(4f / 3f, 0f);
+                raw.Keys[(int)BridgeKey.RightMouse] = 1;
+                Settle(ref raw);
+                var wideAim = probe.Controls.GetView(16f / 9f, 0f);
+                var narrowAim = probe.Controls.GetView(4f / 3f, 0f);
+                Check(Math.Abs(wideHip.HorizontalFov - wideAim.HorizontalFov) < .01f &&
+                    Math.Abs(narrowHip.VerticalFov - narrowAim.VerticalFov) < .01f &&
+                    Math.Abs(wideAim.ScopeLensPower - 4f) < .01f && Math.Abs(narrowAim.ScopeLensPower - 4f) < .01f &&
+                    wideAim.RifleAimBlend > .99f,
+                    $"{scopedGun.GetType().Name} ACOG, free-look input={allowFreeLook}: 4x lens with stable peripheral FOV at 16:9 and 4:3");
+                pc.bBinocularVision = true;
+                Check(probe.Controls.GetView(16f / 9f, 0f).ScopeLensPower == 0f, "binoculars release the scoped render target");
+                pc.bBinocularVision = false;
+                if (scopedGun is MercSidearm reloading)
+                    reloading.ReloadUntil = pawn.Level.TimeSeconds + 1f;
+                else
+                {
+                    scopedGun.ClipAmmo = Math.Max(0, scopedGun.ClipMaxAmmo - 1);
+                    scopedGun.Ammo = Math.Max(scopedGun.Ammo, scopedGun.ClipMaxAmmo + 1);
+                    scopedGun.GotoState("s_Reloading");
+                    Check(scopedGun.IsInState("s_Reloading"), "partially spent primary starts its reload");
+                }
+                Settle(ref raw);
+                var reloadView = probe.Controls.GetView(16f / 9f, 0f);
+                Check(reloadView.RifleAimBlend < .01f && reloadView.OpticMagnification == 1f,
+                    "reload takes the eye out of the optic and preserves the peripheral FOV");
+                if (scopedGun is MercSidearm done) done.ReloadUntil = 0f;
+                scopedGun.GotoState("s_Selected");
+                raw.Keys[(int)BridgeKey.RightMouse] = 0;
+                Settle(ref raw);
+                raw.Keys[(int)BridgeKey.RightMouse] = 1;
+                Settle(ref raw);
+                WeaponAttachments.Apply(scopedGun, 0);
+                Settle(ref raw);
+                var ironAim = probe.Controls.GetView(16f / 9f, 0f);
+                Check(ironAim.ScopeLensPower == 0f && ironAim.RifleAimBlend > .99f,
+                    $"{scopedGun.GetType().Name}, free-look input={allowFreeLook}: removing ACOG retains aimed iron sights");
+            }
+        }
+    }
+}
 Check(probe.Bridge.Failure is null, "no failure in the session");
 probe.Bridge.Dispose();
 

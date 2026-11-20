@@ -35,14 +35,21 @@
   "effect": {"kind": "plain", "rough_dark": 0.9, "rough_bright": 0.6, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.0},
   "screen": {"kind": "plain", "rough_dark": 0.25, "rough_bright": 0.1, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.0, "emissive": 1.0},
   "lamp": {"kind": "plain", "rough_dark": 0.4, "rough_bright": 0.2, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.3, "emissive": 3.0},
-  "glass": {"kind": "glass", "rough_dark": 0.06, "rough_bright": 0.03, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.0, "opacity_floor": 0.12},
+  "glass": {"kind": "glass", "rough_dark": 0.06, "rough_bright": 0.03, "metallic": 0.0, "specular": 0.9, "macro_normal": 0.0, "opacity_floor": 0.12},
+  "tank_glass": {"kind": "glass", "rough_dark": 0.09, "rough_bright": 0.09, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.0, "opacity": 0.34, "opacity_floor": 0.015, "glance_opacity": 0.35, "emissive": 0.1},
+  "tank_backdrop": {"kind": "plain", "rough_dark": 1.0, "rough_bright": 1.0, "metallic": 0.0, "specular": 0.0, "macro_normal": 0.0, "emissive": 2.25, "tint": [1.0, 2.0, 1.0], "backscatter": 0.0095},
   "water": {"kind": "water", "rough_dark": 0.05, "rough_bright": 0.03, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.0},
   "haze": {"kind": "haze", "rough_dark": 1.0, "rough_bright": 1.0, "metallic": 0.0, "specular": 0.0, "macro_normal": 0.0},
+  "tank_haze": {"kind": "haze", "opacity": 1.0, "soft_depth": 0.0, "emissive": 1.0},
   "deep_water": {"kind": "plain", "rough_dark": 0.9, "rough_bright": 0.6, "metallic": 0.0, "specular": 0.5, "macro_normal": 0.0, "emissive": 0.12, "tint": [1.0, 1.5, 0.55]}
  },
  "overrides": {
-  "Aquarium_TXT.Aquarium.Aqua_simufogPAN": "haze",
-  "Aquarium_TXT.Aquarium.aqua_blue": "deep_water"
+  "Aquarium_TXT.Aquarium.Aqua_simufogPAN": "tank_haze",
+  "Aquarium_TXT.Aquarium.aqua_blue": "deep_water",
+  "Aquarium_TXT.Aquarium.aqua_degrade01": "tank_backdrop",
+  "Aquarium_TXT.Aquarium.aqua_degradevitre02": "tank_glass",
+  "Aquarium_TXT.Aquarium.vitreclean01_2": "tank_glass",
+  "Aquarium_TXT.Aquarium.vitreclean01_2_0_2": "tank_glass"
  },
  "materials": {
   "Aquarium_TXT.Aquarium.Aqua_simufogPAN": "glass",

@@ -1,5 +1,6 @@
 #include "Play/ScctFirstPersonView.h"
 
+#include "Camera/CameraComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/PoseableMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -9,11 +10,15 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Play/ScctMercOpticCap.h"
 #include "Play/ScctEquipmentData.h"
 #include "Play/ScctEquipmentModels.h"
 #include "Play/ScctExposure.h"
+#include "Play/ScctPlayerController.h"
 #include "Play/ScctPoseAim.h"
+#include "Play/ScctViewPawn.h"
 #include "Runtime/ScctPoseAimApi.h"
+#include "Runtime/ScctWeaponAttachmentsApi.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -53,6 +58,9 @@ AScctFirstPersonView::AScctFirstPersonView()
 
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
+	MercOpticCap = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MercOpticCap"));
+	MercOpticCap->SetupAttachment(Root);
+	ScctMercOpticCap::Configure(*MercOpticCap);
 
 	FlashRoot = CreateDefaultSubobject<USceneComponent>(TEXT("FlashRoot"));
 	FlashRoot->SetupAttachment(Root);
@@ -96,20 +104,247 @@ AScctFirstPersonView::AScctFirstPersonView()
 
 void AScctFirstPersonView::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector)
 {
-	// The camo suit keeps the materials it took off the view model.
-	CastChecked<AScctFirstPersonView>(InThis)->CloakLook.AddReferencedObjects(Collector);
+	AScctFirstPersonView* View = CastChecked<AScctFirstPersonView>(InThis);
+	View->CloakLook.AddReferencedObjects(Collector);
+	for (FSightBinding& Binding : View->SightBindings)
+	{
+		Collector.AddReferencedObject(Binding.Original);
+	}
 	Super::AddReferencedObjects(InThis, Collector);
+}
+
+FTransform AScctFirstPersonView::MercWeaponPose(const FString& Model, float Aim, float Speed, bool bFresh, const FScctWeaponMotion& Motion, float DeltaSeconds)
+{
+	const bool bStock = Model.StartsWith(TEXT("SWeaponFirst.1DEF_"));
+	if (!bStock && !Model.StartsWith(TEXT("OpenScctRifles.")))
+	{
+		return FTransform::Identity;
+	}
+	// Carry the authored hand and rifle animation in the same frame through reload and idle.
+	// The reload clip supplies all motion relative to that grip.
+	const float Ease = bFresh ? 1.0f : 1.0f - FMath::Exp(-12.0f * DeltaSeconds);
+	CarryPace = FMath::Lerp(CarryPace, FMath::Clamp(Speed / 280.0f, 0.0f, 1.0f), Ease);
+	FVector Carry(-9.0, bStock ? -8.0 : -10.5, -7.5 - 2.0 * CarryPace);
+	if (Model == TEXT("OpenScctRifles.compactsmg_first"))
+	{
+		// Its short receiver sits behind the lower edge in the long-rifle carry pose.
+		const float Idle = Motion.bFiring || Motion.bReloading ? 0.0f : 1.0f - CarryPace;
+		CompactIdleBlend = bFresh ? Idle : FMath::Lerp(CompactIdleBlend, Idle, Ease);
+		Carry += FVector(4.5, 1.2, 3.2) * CompactIdleBlend;
+	}
+	else if (Model == TEXT("OpenScctRifles.boltrifle_first"))
+	{
+		Carry += FVector(0, -3.4, 7.75);
+	}
+	else if (Model == TEXT("OpenScctRifles.designatedmarksman_first"))
+	{
+		Carry += FVector(0, -3.4, 8.15);
+	}
+	const int32 Attachments = Motion.AttachmentMask;
+	FTransform Shoulder = FTransform::Identity;
+	if ((Attachments & EScctWeaponAttachment::Optics) == EScctWeaponAttachment::RedDot && Model == TEXT("OpenScctRifles.m4a1s_first"))
+	{
+		// At 26 cm the rear ring stays ahead of the near plane throughout the recoil animation.
+		// At that distance the hood and the view through its 5.7 cm tube have the reference proportions.
+		Shoulder.SetTranslation(FVector(8.0, 0, 0));
+	}
+	else if (!(Attachments & EScctWeaponAttachment::Optics) && Model == TEXT("SWeaponFirst.1DEF_01"))
+	{
+		// The stock FN has a solid upper receiver. Look just over its top, measured from the idle
+		// mesh in eye space. The yellow panel on this model is attached to the left forearm.
+		const FVector ReceiverTop(13.62, 12.63, -4.83);
+		const FVector Bore = FVector(0.9998, -0.01685, -0.01055).GetSafeNormal();
+		const FQuat Align = FQuat::FindBetweenNormals(Bore, FVector::ForwardVector);
+		Shoulder = FTransform(Align, FVector(15.0, 0, -1.2) - Align.RotateVector(ReceiverTop));
+	}
+	// Other rifles already have a sight socket and eye relief in the bridge. At full ADS their
+	// authored sight pose is used directly. Never track the moving muzzle back to the crosshair:
+	// that would cancel recoil, reloads and the motion of the original clips.
+	FTransform Pose;
+	Pose.Blend(FTransform(Carry), Shoulder, FMath::Clamp(Aim, 0.0f, 1.0f));
+	// The hands lead the stock into the shoulder, then settle. On lowering, the heavier stock
+	// follows for a little longer. Both terms go to zero while the button is held or released.
+	const float FollowRate = Aim > ShoulderFollow ? 11.0f : 7.5f;
+	ShoulderFollow = bFresh ? Aim : FMath::Lerp(ShoulderFollow, Aim, 1.0f - FMath::Exp(-FollowRate * DeltaSeconds));
+	const float Travel = Aim - ShoulderFollow;
+	const FQuat Settle = FRotator(4.0f * Travel, 0, -2.0f * Travel).Quaternion();
+	const FVector Grip(10.0, 0, -14.0);
+	Pose = Pose * FTransform(Settle, Grip - Settle.RotateVector(Grip));
+	return Pose;
+}
+
+void AScctFirstPersonView::SetSightProjection(UCameraComponent* Camera, float Aim, float RaisedHalfTan)
+{
+	if (SightCamera.Get() != Camera)
+	{
+		if (UCameraComponent* Previous = SightCamera.Get())
+		{
+			Previous->SetEnableFirstPersonFieldOfView(false);
+		}
+		SightCamera = Camera;
+	}
+	SightFocalScale = 1.0f;
+	if (Camera)
+	{
+		const float WorldHalfTan = FMath::Tan(FMath::DegreesToRadians(Camera->FieldOfView * 0.5f));
+		const float Raise = FMath::SmoothStep(0.0f, 1.0f, Aim);
+		SightFocalScale = FMath::Lerp(1.0f, WorldHalfTan / RaisedHalfTan, Raise);
+		const float HalfTan = WorldHalfTan / SightFocalScale;
+		Camera->SetFirstPersonFieldOfView(FMath::RadiansToDegrees(2.0f * FMath::Atan(HalfTan)));
+		Camera->SetEnableFirstPersonFieldOfView(Raise > UE_SMALL_NUMBER);
+	}
+}
+
+FVector AScctFirstPersonView::ProjectSocket(const FVector& World, float FirstPersonScale) const
+{
+	const UCameraComponent* Camera = SightCamera.Get();
+	const FTransform& Eye = Camera ? Camera->GetComponentTransform() : LastCamera;
+	FVector Relative = Eye.InverseTransformPositionNoScale(World);
+	Relative.Y *= SightFocalScale;
+	Relative.Z *= SightFocalScale;
+	return Eye.TransformPositionNoScale(Relative * FirstPersonScale);
+}
+
+void AScctFirstPersonView::SetStockSight(EStockSight Mode)
+{
+	if (StockSight == Mode) return;
+	for (const FHiddenSightSection& Section : HiddenSightMaterials)
+	{
+		if (UPoseableMeshComponent* Mesh = Section.Mesh.Get())
+		{
+			Mesh->ShowMaterialSection(Section.Slot, INDEX_NONE, true, Section.Lod);
+		}
+	}
+	HiddenSightMaterials.Reset();
+	StockSight = Mode;
+	if (Mode == EStockSight::Visible) return;
+
+	// All five MicroRedDot material families are exclusive to the authored M4 optic.
+	// Walk every slot: import can split the shell over several slots or follower components.
+	Parts[0].ForEachMesh([this, Mode](UMeshComponent& Component)
+	{
+		UPoseableMeshComponent* Mesh = Cast<UPoseableMeshComponent>(&Component);
+		if (!Mesh) return;
+		const TArray<FName> Slots = Mesh->GetMaterialSlotNames();
+		for (int32 Slot = 0; Slot < Slots.Num(); ++Slot)
+		{
+			const FString Name = Slots[Slot].ToString();
+			if (!Name.StartsWith(TEXT("OpenScctRifles_Optic"))) continue;
+			if (Mode == EStockSight::ReplaceHousing && (Name.StartsWith(TEXT("OpenScctRifles_OpticLens"))
+				|| Name.StartsWith(TEXT("OpenScctRifles_OpticReticle")))) continue;
+			for (int32 Lod = 0; Lod < Mesh->GetNumLODs(); ++Lod)
+			{
+				if (Mesh->IsMaterialSectionShown(Slot, Lod))
+				{
+					Mesh->ShowMaterialSection(Slot, INDEX_NONE, false, Lod);
+					HiddenSightMaterials.Add({Mesh, Slot, Lod});
+				}
+			}
+		}
+	});
+}
+
+void AScctFirstPersonView::SetM4SightGlass(bool bEnabled)
+{
+	if (bEnabled == bM4SightGlass)
+	{
+		return;
+	}
+	bM4SightGlass = bEnabled;
+	if (!bEnabled)
+	{
+		for (const FSightBinding& Binding : SightBindings)
+		{
+			if (UMeshComponent* Mesh = Binding.Mesh.Get())
+			{
+				// The suit snapshots the underlying materials. Release its snapshot before changing a slot.
+				CloakLook.Apply(*Mesh, 0.0f);
+				if (Mesh->GetMaterial(Binding.Slot) == M4SightGlass)
+				{
+					Mesh->SetMaterial(Binding.Slot, Binding.Original);
+				}
+			}
+		}
+		SightBindings.Reset();
+		return;
+	}
+	if (!M4SightGlass)
+	{
+		M4SightGlass = LoadObject<UMaterialInterface>(nullptr,
+			TEXT("/Game/OpenSCCT/Materials/M_ScctMercSightLens.M_ScctMercSightLens"), nullptr, LOAD_NoWarn);
+	}
+	if (M4SightGlass)
+	{
+		static const FName LensSlot(TEXT("OpenScctRifles_OpticLens"));
+		Parts[0].ForEachMesh([this](UMeshComponent& Mesh)
+		{
+			const TArray<FName> Slots = Mesh.GetMaterialSlotNames();
+			for (int32 Slot = 0; Slot < Slots.Num(); ++Slot)
+			{
+				if (Slots[Slot] == LensSlot)
+				{
+					CloakLook.Apply(Mesh, 0.0f);
+					SightBindings.Add({&Mesh, Slot, Mesh.GetMaterial(Slot)});
+					Mesh.SetMaterial(Slot, M4SightGlass);
+				}
+			}
+		});
+	}
 }
 
 void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentModels& Models, const UScctWeaponSet* Weapons,
 	const FScctFirstPerson& View, const FTransform& Camera, float Cloak, const FScctWeaponMotion& Motion, float DeltaSeconds)
 {
-	SetActorTransform(Camera);
+	const int32 PartCount = View.Kind != EScctFirstPersonKind::None ? FMath::Clamp(View.PartCount, 0, 2) : 0;
+	const auto* Player = Cast<AScctPlayerController>(GetWorld()->GetFirstPlayerController());
+	const auto* ViewPawn = Player ? Cast<AScctViewPawn>(Player->GetViewTarget()) : nullptr;
+	const bool bMercWeapon = View.Kind == EScctFirstPersonKind::Merc && PartCount > 0;
+	FTransform WeaponFrame = Camera;
+	const bool bM4 = bMercWeapon
+		&& Models.Name(Api, View.Parts[0].Mesh) == TEXT("OpenScctRifles.m4a1s_first");
+	const bool bAcog = (Motion.AttachmentMask & EScctWeaponAttachment::Acog) != 0;
+	const bool bHasDot = !bAcog && (Motion.AttachmentMask & EScctWeaponAttachment::RedDot) != 0;
+	const bool bHasOptic = bHasDot || bAcog;
+	const bool bM4Sight = bM4 && bHasDot;
+	const float Aim = Player && View.Kind == EScctFirstPersonKind::Merc ? Player->GetLookView().RifleAimBlend : 0.0f;
+	if (bMercWeapon)
+	{
+		const bool bFresh = !bShown || MercWeaponActor != View.ActorId || PartMeshes[0] != View.Parts[0].Mesh;
+		const float Speed = !bFresh && DeltaSeconds > UE_SMALL_NUMBER
+			? static_cast<float>(FVector::Dist2D(LastCamera.GetLocation(), Camera.GetLocation()) / DeltaSeconds) : 0.0f;
+		const FString& Model = Models.Name(Api, View.Parts[0].Mesh);
+		WeaponFrame = MercWeaponPose(Model, Aim, Speed, bFresh, Motion, DeltaSeconds) * Camera;
+	}
+	const float ScopePower = Player && View.Kind == EScctFirstPersonKind::Merc && !bHasDot ? Player->GetLookView().ScopeLensPower : 0.0f;
+	UCameraComponent* Lens = (bM4Sight || ScopePower > 0.0f) && ViewPawn ? ViewPawn->FindComponentByClass<UCameraComponent>() : nullptr;
+	// The raised precision eyepieces fill about 46% of the viewport height at their
+	// authored eye relief. Only the weapon uses this focal length.
+	SetSightProjection(Lens, Aim, ScopePower > 0.0f ? 0.194f : 0.260f);
+	if (Lens && !FMath::IsNearlyEqual(SightFocalScale, 1.0f))
+	{
+		// Aiming is independent of chest-camera rotation. Keep the physical dot on the simulation's
+		// ray by undoing the sight projection on that ray alone. The gun's own recoil remains visible.
+		const FQuat ViewRotation = Lens->GetComponentQuat();
+		const FVector AimRay = Camera.GetRotation().GetForwardVector();
+		FVector Ray = ViewRotation.UnrotateVector(AimRay);
+		Ray.Y /= SightFocalScale;
+		Ray.Z /= SightFocalScale;
+		const FQuat Correction = FQuat::FindBetweenNormals(AimRay, ViewRotation.RotateVector(Ray.GetSafeNormal()));
+		WeaponFrame.SetLocation(Camera.GetLocation() + Correction.RotateVector(WeaponFrame.GetLocation() - Camera.GetLocation()));
+		WeaponFrame.SetRotation(Correction * WeaponFrame.GetRotation());
+	}
+	MercWeaponActor = bMercWeapon ? View.ActorId : 0;
+	if (!bM4 || PartMeshes[0] != View.Parts[0].Mesh) SetStockSight(EStockSight::Visible);
+	if (!bM4Sight || (PartCount > 0 && PartMeshes[0] != View.Parts[0].Mesh))
+	{
+		SetM4SightGlass(false);
+		ScctMercOpticCap::Update(*MercOpticCap, nullptr);
+	}
+	SetActorTransform(WeaponFrame);
 	LastCamera = Camera;
 	bHasMuzzle = false;
 	bHasLaser = false;
 
-	const int32 PartCount = View.Kind != EScctFirstPersonKind::None ? FMath::Clamp(View.PartCount, 0, 2) : 0;
 	// The part that is the weapon: the merc's one model, the spy's second (the first is his arms).
 	const int32 WeaponPart = View.Kind == EScctFirstPersonKind::Spy ? 1 : 0;
 	const bool bWasShown = bShown;
@@ -150,6 +385,12 @@ void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentM
 		{
 			continue;
 		}
+		if (Index == 0 && bM4)
+		{
+			SetM4SightGlass(bM4Sight);
+			SetStockSight(!bHasDot ? EStockSight::Removed : bM4Sight && ScctMercOpticCap::HasHousing(*MercOpticCap)
+				? EStockSight::ReplaceHousing : EStockSight::Visible);
+		}
 
 		UPoseableMeshComponent* Body = Drawn.GetBody();
 		// A model can come with a scale of its own above its skeleton (OpenSCCT's pistols are authored a hundred
@@ -183,6 +424,36 @@ void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentM
 			}
 		}
 		Drawn.ApplyPose(TConstArrayView<FScctBridgeBone>(PoseBuffer.GetData(), Bones));
+		const bool bMercGun = Index == 0 && View.Kind == EScctFirstPersonKind::Merc;
+		Drawn.UpdateRailModule(bMercGun ? Motion.AttachmentMask : INDEX_NONE);
+		if (bMercGun && Aim > 0.0f && !(bM4 && bHasDot))
+		{
+			// Use the animated reference so the sights retain walk, reload and recoil motion.
+			static const FName Ads(TEXT("ADS"));
+			FTransform Reference, Selected;
+			bool bHasReference = Body->DoesSocketExist(Ads);
+			if (bHasReference)
+				Reference = Body->GetSocketTransform(Ads);
+			else if (bHasOptic || Models.Name(Api, Part.Mesh).StartsWith(TEXT("OpenScctSidearms.")))
+				bHasReference = Drawn.FindPoint(NAME_None, TEXT("FX"), Reference);
+			FQuat Alignment = FQuat::Identity;
+			if (bHasReference && (Drawn.FindAttachmentSight(Selected) || Drawn.FindIronSight(Reference, Selected, Alignment)))
+			{
+				if (!Alignment.IsIdentity())
+				{
+					const FQuat Turn = FQuat::Slerp(FQuat::Identity, Alignment, Aim);
+					const FVector Pivot = Selected.GetLocation();
+					WeaponFrame.SetLocation(Pivot + Turn.RotateVector(WeaponFrame.GetLocation() - Pivot));
+					WeaponFrame.SetRotation(Turn * WeaponFrame.GetRotation());
+				}
+				WeaponFrame.AddToTranslation((Reference.GetLocation() - Selected.GetLocation()) * Aim);
+				SetActorTransform(WeaponFrame);
+			}
+		}
+		if (Index == 0 && bM4Sight)
+		{
+			ScctMercOpticCap::Update(*MercOpticCap, Body);
+		}
 		if (Index == WeaponPart && Drawn.HasReplacement())
 		{
 			// A model drawn in place of the original gun: its parts move with the simulation and the left hand
@@ -200,15 +471,20 @@ void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentM
 		{
 			if (Part.MuzzleBone >= 0)
 			{
-				Muzzle = FScctPose::ToUnreal(Part.Muzzle) * Camera;
+				Muzzle = FScctPose::ToUnreal(Part.Muzzle) * WeaponFrame;
 				bHasMuzzle = true;
 			}
 			if (Part.LaserBone >= 0)
 			{
-				Laser = FScctPose::ToUnreal(Part.Laser) * Camera;
+				Laser = FScctPose::ToUnreal(Part.Laser) * WeaponFrame;
 				bHasLaser = true;
 			}
 			FTransform Socket;
+			if (bMercGun && Drawn.FindMuzzle(Socket))
+			{
+				Muzzle = Socket;
+				bHasMuzzle = true;
+			}
 			if (Drawn.HasReplacement())
 			{
 				if (Drawn.FindPoint(Drawn.GetRow()->MuzzleSocket, TEXT(""), Socket))
@@ -224,17 +500,24 @@ void AScctFirstPersonView::Present(const FScctEquipmentApi& Api, FScctEquipmentM
 			}
 		}
 
-		// The rifle's rate-of-fire display is a material of its own per setting (material slot 3 of the merc's model).
+		// The stock rifle has a firing-mode display. Other meshes can use that section index for an optic.
 		if (Index == 0 && View.Kind == EScctFirstPersonKind::Merc && RateOfFireSkin != View.RateOfFireSkin && Drawn.GetModel() != nullptr)
 		{
 			RateOfFireSkin = View.RateOfFireSkin;
-			UMaterialInterface* Skin = View.RateOfFireSkin > 0 ? Models.FindSkin(Drawn.GetModel()->Package, Models.Name(Api, View.RateOfFireSkin)) : nullptr;
-			if (Body->GetNumMaterials() > 3 && (Skin != nullptr || View.RateOfFireSkin <= 0))
+			static const FName DisplayName(TEXT("SWeaponTex_SI_rof_single"));
+			const int32 DisplaySlot = Body->GetMaterialIndex(DisplayName);
+			if (DisplaySlot != INDEX_NONE)
 			{
-				Body->SetMaterial(3, Skin);
+				UMaterialInterface* Skin = View.RateOfFireSkin > 0 ? Models.FindSkin(Drawn.GetModel()->Package, Models.Name(Api, View.RateOfFireSkin)) : nullptr;
+				if (Skin != nullptr || View.RateOfFireSkin <= 0)
+				{
+					Body->SetMaterial(DisplaySlot, Skin);
+				}
 			}
 		}
 	}
+
+	UpdatePrecisionImage(ScopePower > 0.0f && bShown ? Parts[0].GetMountedOptic() : nullptr, Lens, ScopePower, bAcog);
 
 	// A wall between the eye and the spy pistol's sockets: the pistol stays where it is drawn, but its flash and laser
 	// do not start inside or beyond the wall (SpyFirstPersonView.TryGetSocket of the Godot client).
@@ -293,6 +576,12 @@ void AScctFirstPersonView::LogViewProbe(int32 Index, UPoseableMeshComponent& Bod
 
 void AScctFirstPersonView::Hide(float DeltaSeconds)
 {
+	UpdatePrecisionImage(nullptr, nullptr, 0.0f);
+	SetSightProjection(nullptr, 0.0f);
+	ScctMercOpticCap::Update(*MercOpticCap, nullptr);
+	SetM4SightGlass(false);
+	SetStockSight(EStockSight::Visible);
+	MercWeaponActor = 0;
 	if (bShown)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("First person: view model hidden"));
@@ -336,14 +625,22 @@ bool AScctFirstPersonView::FindCasingPort(FTransform& OutWorld) const
 	return false;
 }
 
-bool AScctFirstPersonView::FindMercLaserStart(FTransform& OutWorld) const
+bool AScctFirstPersonView::FindMercEmitter(bool bTorch, float FirstPersonScale, FTransform& OutWorld, bool bRequireRail) const
 {
 	const FScctEquipmentView& Gun = Parts[0];
-	if (bShown && Gun.IsShown() && Gun.GetBody()->IsVisible() && Gun.FindMercLaserMount(OutWorld))
+	FTransform Socket;
+	if (!bShown || !Gun.IsShown() || !Gun.GetBody()->IsVisible()
+		|| (!Gun.FindMercEmitter(bTorch, Socket, bRequireRail) && (bRequireRail || !FindLaserStart(Socket))))
 	{
-		return true;
+		return false;
 	}
-	return FindLaserStart(OutWorld);
+	// First-person FOV stretches Y and Z in camera space. Transform the socket axis too,
+	// so the light tracks the visible module through a raise, a turn and recoil.
+	const FVector At = ProjectSocket(Socket.GetLocation(), FirstPersonScale);
+	const FVector Forward = ProjectSocket(Socket.TransformPositionNoScale(FVector(100, 0, 0)), FirstPersonScale) - At;
+	const FVector Up = ProjectSocket(Socket.TransformPositionNoScale(FVector(0, 0, 100)), FirstPersonScale) - At;
+	OutWorld = FTransform(FRotationMatrix::MakeFromXZ(Forward, Up).ToQuat(), At);
+	return true;
 }
 
 bool AScctFirstPersonView::FindLaserStart(FTransform& OutWorld) const
@@ -421,7 +718,7 @@ FVector AScctFirstPersonView::FlashLightPlace() const
 	// simulation's collision is asked (FScctExposure::TraceLevel): Unreal's copy of the level has none, and a trace
 	// of it never met the wall.
 	const FVector Eye = LastCamera.GetLocation();
-	const FVector At = Muzzle.GetLocation() + Muzzle.GetRotation().GetForwardVector() * FlashLightAhead;
+	const FVector At = ProjectSocket(Muzzle.GetLocation() + Muzzle.GetRotation().GetForwardVector() * FlashLightAhead, 1.0f);
 	float Distance = 0.0f;
 	if (FScctExposure::TraceLevel(Eye, At, Distance))
 	{

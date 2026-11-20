@@ -9,8 +9,29 @@ public class OpenSCCT : ModuleRules
 
 		// Headers are included by their path from the module folder ("Play/ScctGameMode.h").
 		PublicIncludePaths.Add(ModuleDirectory);
+		// NVIDIA distributes its optional UE SDK separately. A checkout without it still builds and runs.
+		string NvidiaSdk = Path.Combine(EngineDirectory, "Plugins", "Marketplace");
+		bool HasNvidiaDlss = Target.Platform == UnrealTargetPlatform.Win64 && Target.Type != TargetType.Server
+			&& File.Exists(Path.Combine(NvidiaSdk, "DLSS", "DLSS.uplugin"))
+			&& File.Exists(Path.Combine(NvidiaSdk, "StreamlineDLSSG", "StreamlineDLSSG.uplugin"));
+		PrivateDefinitions.Add("SCCT_WITH_NVIDIA_DLSS=" + (HasNvidiaDlss ? "1" : "0"));
+		if (HasNvidiaDlss)
+		{
+			PrivateDependencyModuleNames.AddRange(new[] { "DLSSBlueprint", "StreamlineDLSSGBlueprint" });
+			// An editor build can also run a game or commandlet with optional plugins disabled.
+			// Resolve their SDK calls only after ScctNvidiaDlss has checked the modules are loaded.
+			if (Target.Type == TargetType.Editor)
+				PublicDelayLoadDLLs.AddRange(new[] { "UnrealEditor-DLSSBlueprint.dll", "UnrealEditor-StreamlineDLSSGBlueprint.dll" });
+		}
+		string AmdFsr = Path.Combine(EngineDirectory, "Plugins", "Marketplace", "FSR");
+		bool HasAmdFsr = Target.Platform == UnrealTargetPlatform.Win64 && Target.Type != TargetType.Server
+			&& File.Exists(Path.Combine(AmdFsr, "FSR.uplugin"));
+		PrivateDefinitions.Add("SCCT_WITH_AMD_FSR=" + (HasAmdFsr ? "1" : "0"));
+		if (HasAmdFsr)
+			PrivateIncludePaths.Add(Path.Combine(AmdFsr, "Source", "fidelityfx-sdk", "Kits", "FidelityFX", "upscalers", "include"));
 		// The runtime level and the editor importer use the same panorama, moon and fog definitions.
 		RuntimeDependencies.Add("$(ProjectDir)/Tools/Import/map_skies.json", StagedFileType.UFS);
+		RuntimeDependencies.Add("$(ProjectDir)/Tools/Import/surface_classes.json", StagedFileType.UFS);
 
 		PublicDependencyModuleNames.AddRange(new[]
 		{
@@ -71,6 +92,8 @@ public class OpenSCCT : ModuleRules
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PublicSystemLibraries.Add("crypt32.lib");
+			// Read the active GPU process-memory budget even when RHI stats are compiled out.
+			PublicSystemLibraries.Add("dxgi.lib");
 			// Independent gamepad paddles and the viewport's Windows input-message origin filter.
 			PublicSystemLibraries.AddRange(new[] { "WindowsApp.lib", "Comctl32.lib" });
 			// The downloaded map packs are checked with SHA-256 from CNG (Online/ScctMapPacks).

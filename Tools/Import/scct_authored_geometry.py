@@ -4,12 +4,41 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import tempfile
 from urllib.parse import unquote
 
 DIR_FLAG_SLOT = 28  # ScctAuthored::DirectionFlagSlot
+
+
+def restore_painted_mesh_roles(actors, root, source_names):
+    """Persist the authored vertex-colour role on existing imported and Lightmass-duplicated components."""
+    import unreal
+    from scct_materials import BAKED_VERTEX_SLOT
+    names = {re.sub(r"[^A-Za-z0-9_]", "_", name).casefold() for name in source_names}
+    count = 0
+    if not names:
+        return count
+    for actor in actors:
+        for component in actor.get_components_by_class(unreal.StaticMeshComponent):
+            mesh = component.static_mesh
+            if not mesh:
+                continue
+            folder = mesh.get_path_name().rsplit("/", 1)[0]
+            name = mesh.get_name().casefold()
+            if folder == root + "/NativeLighting":
+                name = re.sub(r"_(?:[0-9a-f]{8}|[0-9a-f]{12})$", "", name)
+            elif folder != root + "/world/StaticMeshes":
+                continue
+            if name in names:
+                values = component.get_editor_property("custom_primitive_data").get_editor_property("data")
+                if len(values) <= BAKED_VERTEX_SLOT or values[BAKED_VERTEX_SLOT] != 2.0:
+                    component.modify()
+                    component.set_default_custom_primitive_data_float(BAKED_VERTEX_SLOT, 2.0)
+                    count += 1
+    return count
 
 
 def direction_geometry(path, document, cache_root, log):

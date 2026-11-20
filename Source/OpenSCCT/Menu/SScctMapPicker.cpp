@@ -5,6 +5,7 @@
 #include "ImageUtils.h"
 #include "Menu/ScctMenuStyle.h"
 #include "Menu/ScctMenuKit.h"
+#include "Menu/ScctSelectBox.h"
 #include "Misc/Paths.h"
 #include "OpenSCCT.h"
 #include "Widgets/Images/SImage.h"
@@ -96,56 +97,60 @@ void SScctMapPicker::Construct(const FArguments& InArgs)
 	}));
 	SearchBox->SetToolTipText(Ui::ToText(TEXT("Search installed maps by name or map code")));
 
-	// Each of the three choices is one button that steps to the next value: the pages are too narrow for a row of buttons each.
 	FilterRow = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6.0f, 6.0f));
-	const TSharedRef<SButton> GroupButton = Ui::Button(
-		TAttribute<FText>::CreateLambda([this] { return Ui::ToText(TEXT("GROUP: ") + (Groups.IsValidIndex(GroupIndex) ? Groups[GroupIndex].Title.ToUpper() : FString(TEXT("ALL INSTALLED MAPS")))); }),
-		FOnClicked::CreateLambda([this]
-		{
-			if (Groups.Num() > 1)
-			{
-				SetGroup(Groups[(GroupIndex + 1) % Groups.Num()].Name);
-			}
-			return FReply::Handled();
-		}),
-		TAttribute<bool>::CreateLambda([this] { return Groups.IsValidIndex(GroupIndex) && !Groups[GroupIndex].bAll; }));
-	GroupButton->SetToolTipText(TAttribute<FText>::CreateLambda([this]
+	TArray<FString> GroupLabels;
+	for (const FScctMapGroup& Group : Groups)
 	{
-		// Every group with its number of maps here; the one shown is marked.
-		FString Text = TEXT("Filter maps by group. A press shows the next group.");
-		for (int32 Index = 0; Index < Groups.Num(); ++Index)
+		GroupLabels.Add(Group.Title);
+	}
+	const TSharedRef<SScctSelectBox> GroupSelect = SNew(SScctSelectBox)
+		.Options(MoveTemp(GroupLabels))
+		.Prefix(TEXT("Group: "))
+		.FieldLabel(Ui::ToText(TEXT("Map group")))
+		.EmptyText(Ui::ToText(TEXT("All installed maps")))
+		.Get([this] { return GroupIndex; })
+		.Set([this](int32 Index) { SetGroup(Groups[Index].Name); });
+	GroupSelect->SetToolTipText(TAttribute<FText>::CreateLambda([this]
+	{
+		FString Text = TEXT("Filter maps by group.");
+		for (const FScctMapGroup& Group : Groups)
 		{
-			const FScctMapGroup& Group = Groups[Index];
 			const int32 Count = Maps.FilterByPredicate([&Group](const FScctHostMap& Map) { return Group.Holds(Map.Id); }).Num();
-			Text += FString::Printf(TEXT("\n%s %s (%d): %s"), Index == GroupIndex ? TEXT(">") : TEXT("  "), *Group.Title, Count, *Group.Description);
+			Text += FString::Printf(TEXT("\n%s (%d): %s"), *Group.Title, Count, *Group.Description);
 		}
 		return Ui::ToText(Text);
 	}));
-	FilterRow->AddSlot()[ GroupButton ];
+	FilterRow->AddSlot()[ GroupSelect ];
 
-	const TSharedRef<SButton> ViewButton = Ui::Button(
-		TAttribute<FText>::CreateLambda([this] { return Ui::ToText(TEXT("VIEW: ") + ScctMapBrowser::ViewTitle(View).ToUpper()); }),
-		FOnClicked::CreateLambda([this]
-		{
-			SetView(View == EScctMapView::PictureGrid ? EScctMapView::List : View == EScctMapView::List ? EScctMapView::ThumbnailList : EScctMapView::PictureGrid);
-			return FReply::Handled();
-		}));
-	ViewButton->SetToolTipText(Ui::ToText(TEXT("Map display: picture grid, list or thumbnail list. Kept for every map list.")));
-	FilterRow->AddSlot()[ ViewButton ];
+	TArray<FString> ViewLabels;
+	for (const EScctMapView Choice : { EScctMapView::PictureGrid, EScctMapView::List, EScctMapView::ThumbnailList })
+	{
+		ViewLabels.Add(ScctMapBrowser::ViewTitle(Choice));
+	}
+	const TSharedRef<SScctSelectBox> ViewSelect = SNew(SScctSelectBox)
+		.Options(MoveTemp(ViewLabels))
+		.Prefix(TEXT("View: "))
+		.FieldLabel(Ui::ToText(TEXT("Map view")))
+		.Get([this] { return static_cast<int32>(View); })
+		.Set([this](int32 Index) { SetView(static_cast<EScctMapView>(Index)); });
+	ViewSelect->SetToolTipText(Ui::ToText(TEXT("Map display: picture grid, list or thumbnail list. Kept for every map list.")));
+	FilterRow->AddSlot()[ ViewSelect ];
 
 	if (ModeFilters.Num() > 2)
 	{
-		const TSharedRef<SButton> ModeButton = Ui::Button(
-			TAttribute<FText>::CreateLambda([this] { return Ui::ToText(TEXT("MODE: ") + (ModeFilter.IsEmpty() ? FString(TEXT("ANY")) : ScctHostSetup::ModeLabel(ModeFilter).ToUpper())); }),
-			FOnClicked::CreateLambda([this]
-			{
-				const int32 At = FMath::Max(ModeFilters.IndexOfByPredicate([this](const FString& Mode) { return Mode.Equals(ModeFilter, ESearchCase::IgnoreCase); }), 0);
-				SetModeFilter(ModeFilters[(At + 1) % ModeFilters.Num()]);
-				return FReply::Handled();
-			}),
-			TAttribute<bool>::CreateLambda([this] { return !ModeFilter.IsEmpty(); }));
-		ModeButton->SetToolTipText(Ui::ToText(TEXT("Show only the maps that offer a mode. A press shows the next mode.")));
-		FilterRow->AddSlot()[ ModeButton ];
+		TArray<FString> ModeLabels;
+		for (const FString& Mode : ModeFilters)
+		{
+			ModeLabels.Add(Mode.IsEmpty() ? FString(TEXT("Any")) : ScctHostSetup::ModeLabel(Mode));
+		}
+		const TSharedRef<SScctSelectBox> ModeSelect = SNew(SScctSelectBox)
+			.Options(MoveTemp(ModeLabels))
+			.Prefix(TEXT("Mode: "))
+			.FieldLabel(Ui::ToText(TEXT("Map mode filter")))
+			.Get([this] { return FMath::Max(ModeFilters.IndexOfByKey(ModeFilter), 0); })
+			.Set([this](int32 Index) { SetModeFilter(ModeFilters[Index]); });
+		ModeSelect->SetToolTipText(Ui::ToText(TEXT("Show only the maps that offer a mode.")));
+		FilterRow->AddSlot()[ ModeSelect ];
 	}
 	FilterRow->AddSlot()
 	[

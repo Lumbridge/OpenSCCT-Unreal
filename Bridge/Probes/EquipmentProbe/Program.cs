@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using OpenScct.Core;
+using OpenScct.Core.Engine;
 using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
 using OpenScct.UnrealBridge;
@@ -19,6 +20,11 @@ using OpenScct.UnrealBridge.Pose;
 
 string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
+if (map == "--rifle-recoil")
+{
+    RifleRecoilProbe.Run(System.IO.Path.Combine(content, "shared"));
+    return 0;
+}
 double seconds = args.Length > 2 ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 9;
 
 BridgeSession.Configure(content);
@@ -124,10 +130,20 @@ internal static unsafe class Probe
         // The world mesh and the eye-view rig must both be usable. Previously every rifle's
         // matrix-authored ADS joint made the eye-view model disappear while the world gun worked.
         string shared = System.IO.Path.Combine(content, "shared");
+        if (!LadderDrawPoses(shared, "SWeaponFirst.1DEF_01", "FirstDrawStEd2")) return false;
+        foreach (string stock in new[] { "1DEF_01", "1DEF_Uzi", "1DEF_shotgun" })
+            if (!StrafeReversals(shared, "SWeaponFirst." + stock)) return false;
+        if (System.IO.Directory.Exists(System.IO.Path.Combine(chars, "OpenScctSidearms")))
+            foreach (SidearmDefinition sidearm in Sidearms.All)
+                if (!StrafeReversals(shared, sidearm.Asset + "_first")) return false;
         if (System.IO.Directory.Exists(System.IO.Path.Combine(chars, "OpenScctRifles")))
         {
+            if (!LadderDrawPoses(shared, "OpenScctRifles.m4a1s_first", "FirstHolsterStFd2")) return false;
+            if (!WalkLoop(shared, "OpenScctRifles.m4a1s_first", closed: true) ||
+                !WalkLoop(shared, "SWeaponFirst.1DEF_01", closed: false)) return false;
             foreach (MercRifleDefinition rifle in MercRifles.All)
             {
+                if (!StrafeReversals(shared, rifle.Asset + "_first")) return false;
                 EquipmentModel? world = EquipmentModel.Load(rifle.Asset, shared);
                 EquipmentModel? first = EquipmentModel.Load(rifle.Asset + "_first", shared);
                 if (world is not { MuzzleBone: >= 0 } || first is not { MuzzleBone: >= 0 } ||
@@ -168,6 +184,113 @@ internal static unsafe class Probe
             }
         }
 
+        return true;
+    }
+
+    private static bool LadderDrawPoses(string shared, string asset, string stowSequence)
+    {
+        if (EquipmentModel.Load(asset, shared) is not { MuzzleBone: >= 0 } model)
+        {
+            Console.WriteLine($"FAILED: {asset} has no first-person muzzle to sample");
+            return false;
+        }
+
+        var anim = new ViewModelAnim();
+        var pose = new ViewModelPose();
+        var applier = new ChannelPoseApplier(model.Character);
+        Vector3 SampleMuzzle()
+        {
+            applier.Apply(pose.Update(anim, model.Character, 0f));
+            return (model.ActorToSkeleton * model.Global(model.MuzzleBone, applier.Positions, applier.Rotations, applier.Scales)).Origin;
+        }
+
+        anim.Loop(0, ViewModelClips.FirstWaitStFd2);
+        Vector3 ready = SampleMuzzle();
+        Name draw = ViewModelClips.FirstDrawStEd2;
+        foreach (bool drawing in new[] { false, true })
+        {
+            // The original ladder state sends the same sequence forward to stow and backward to draw.
+            anim.Play(0, draw, ViewModelClips.DataOf(draw), Backward: drawing);
+            float startDistance = Vector3.Distance(SampleMuzzle(), ready);
+            string? sequence = pose.Channels[0].Sequence;
+            anim.Stop(0);
+            float endDistance = Vector3.Distance(SampleMuzzle(), ready);
+            string expected = drawing ? "FirstDrawStEd2" : stowSequence;
+            float raised = drawing ? endDistance : startDistance;
+            float lowered = drawing ? startDistance : endDistance;
+            if (sequence != expected || raised > .05f || lowered < raised + .10f)
+            {
+                Console.WriteLine($"FAILED: {asset} ladder {(drawing ? "draw" : "stow")} sampled {sequence}, " +
+                    $"expected {expected}; muzzle distance from ready {startDistance:F3} to {endDistance:F3} m");
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool WalkLoop(string shared, string asset, bool closed)
+    {
+        var character = EquipmentModel.Load(asset, shared)?.Character;
+        var clip = character?.Find("FirstWalkStFd2");
+        if (character is null || clip is null) return false;
+        var anim = new ViewModelAnim();
+        anim.Loop(0, ViewModelClips.FirstWalkStFd2);
+        var pose = new ViewModelPose();
+        const float dt = 1f / 240f;
+        double period = closed ? clip.Length :
+            (Math.Round(clip.Length * ViewModelPose.DefaultFps) + 1) / ViewModelPose.DefaultFps;
+        for (int i = 1; i < 5 * period / dt; i++)
+        {
+            ChannelPose channel = pose.Update(anim, character, dt)[0];
+            double time = channel.ClipFrame * channel.Frames / channel.Fps;
+            double expected = (i * (double)dt) % period;
+            double error = Math.Abs(expected - time);
+            if (time > period + 1e-4 || Math.Min(error, Math.Abs(error - period)) > 1e-4)
+            {
+                Console.WriteLine($"FAILED: {asset} walk at draw {i}: expected {expected:F6} s, sampled {time:F6} s");
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool StrafeReversals(string shared, string asset)
+    {
+        var character = EquipmentModel.Load(asset, shared)?.Character;
+        if (character is null) return false;
+        foreach (int hz in new[] { 30, 60, 144, 240 })
+        {
+            var pawn = new SBasePawn();
+            var weapon = new SWeaponDefense { Instigator = pawn };
+            var pose = new ViewModelPose();
+            pose.OnTick(weapon.ViewAnim);
+            ChannelPose Step(float sideways)
+            {
+                pawn.Velocity = new FVector(0f, sideways, 0f);
+                weapon.AnimateWaiting();
+                return pose.Update(weapon.ViewAnim, character, 1f / hz, blendLocomotion: true)[0];
+            }
+
+            ChannelPose frame = default;
+            for (int step = 0; step < hz / 3; step++) frame = Step(-128f);
+            for (int direction = 0; direction < 4; direction++)
+            {
+                float previous = frame.ClipFrame;
+                frame = Step(0f);
+                if (frame.Sequence != "FirstWalkStFd2" || frame.Frame < 0f || frame.ClipFrame <= previous) return false;
+                frame = Step(direction % 2 == 0 ? 128f : -128f);
+                if (frame.Sequence != "FirstWalkStFd2" || frame.Frame < 0f || frame.ClipFrame <= previous) return false;
+            }
+
+            float lastWalk = frame.ClipFrame;
+            for (int step = 0; step < hz / 2; step++)
+            {
+                frame = Step(0f);
+                if (frame.Sequence == "FirstWalkStFd2") lastWalk = frame.ClipFrame;
+            }
+            if (frame.Sequence != "FirstWaitStFd2" || Step(128f).ClipFrame <= lastWalk) return false;
+        }
+        Console.WriteLine($"   {asset}: strafe reversals preserve the step at 30/60/144/240 Hz; full stop settles to idle");
         return true;
     }
 

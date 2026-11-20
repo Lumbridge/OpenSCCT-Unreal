@@ -177,4 +177,5 @@ def main():
     json.dump(places, open(os.path.join(output, "rain_cover.json"), "w"), indent=1)
 
 
-main()
+if __name__ == "__main__":
+    main()

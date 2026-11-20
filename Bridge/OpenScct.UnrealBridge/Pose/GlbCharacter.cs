@@ -56,6 +56,7 @@ public sealed class GlbClip
     private readonly GlbCharacter.ChannelSource[] _sources;
     private GlbTrack[]? _tracks;
     private float _length;
+    private bool? _matchingEndpointPoses;
 
     internal GlbClip(GlbCharacter owner, string name, GlbCharacter.ChannelSource[] sources)
     {
@@ -88,6 +89,33 @@ public sealed class GlbClip
             _ = Tracks;
             return _length;
         }
+    }
+
+    // A closed authored loop contains its own final-to-first transition. Check every animated
+    // joint, including Studio replacement tracks, once when this clip is first used as a loop.
+    internal bool HasMatchingEndpointPoses => _matchingEndpointPoses ??= CheckEndpointPoses();
+
+    private bool CheckEndpointPoses()
+    {
+        const float epsilonSquared = 1e-12f;
+        float end = Length;
+        if (end <= 0f) return false;
+        for (int i = 0; i < Tracks.Length; i++)
+        {
+            if (Tracks[i].Type == GlbTrackType.Rotation)
+            {
+                Quaternion first = Quat.Normalized(Rotation(i, 0f));
+                Quaternion last = Quat.Normalized(Rotation(i, end));
+                // Opposite signs encode the same rotation.
+                if ((first - last).LengthSquared() > epsilonSquared &&
+                    (first + last).LengthSquared() > epsilonSquared) return false;
+            }
+            else if (Vector3.DistanceSquared(SampleVector(i, 0f), SampleVector(i, end)) > epsilonSquared)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     public Vector3 Position(int track, double time) => SampleVector(track, time);

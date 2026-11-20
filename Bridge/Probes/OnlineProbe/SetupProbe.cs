@@ -42,11 +42,35 @@ internal static unsafe class SetupProbe
         Console.WriteLine($"defaults of {map} Story: {setup}");
         ok &= setup.Contains($"MapName={map}", StringComparison.OrdinalIgnoreCase) && setup.Contains("GameMode=5", StringComparison.Ordinal);
 
+        bool HasFeatures(string line, char value) => Array.TrueForAll(new[] { "SvmSidearms", "SvmRifles", "SvmResponsiveSmoke" },
+            key => OpenScct.Core.Engine.UcOptions.ParseOption(line, key) == value.ToString());
+        string old = $"?MapName={map}?GameMode=5?TimeLimit=8?SvmRifles=0?SvmResponsiveSmoke=0?SvmSidearms=0";
+        string restored = Text(SetupText.NormalizeNewHost, old, null);
+        ok &= Check("fresh and restored new host enable all standard features and keep the saved time limit",
+            HasFeatures(setup, '1') && HasFeatures(restored, '1') && restored.Contains("?TimeLimit=8?", StringComparison.Ordinal));
+        ok &= Check("live lobby normalization keeps an older server's rules", HasFeatures(Text(SetupText.Normalize, old, null), '0'));
+        ok &= Check("explicit low-level host options keep the three override values",
+            HasFeatures(OnlineBridge.Instance.HostSetup(old, 4).ToOptions(), '0'));
+        using (var offline = BridgeSession.StartLocal("TestBox", "Story", merc: true, bots: 0))
+        {
+            ok &= Check("default offline match passes all three features to the level rules",
+                HasFeatures(offline.Session.Loader.GameOptions, '1'));
+        }
+
         Console.WriteLine("rows:");
-        foreach (string row in Text(SetupText.Rows, setup, null).Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        string rows = Text(SetupText.Rows, setup, null);
+        foreach (string row in rows.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             Console.WriteLine("  " + row.Replace('\t', '|'));
         }
+        foreach (string fixedRule in new[] { "Sidearms", "Rifles", "ResponsiveSmoke" })
+        {
+            ok &= Check(fixedRule + " is absent from host settings and cannot be edited",
+                !rows.Contains(fixedRule + "\t", StringComparison.Ordinal)
+                && Text(SetupText.Edit, setup, fixedRule + " 0") == setup);
+        }
+        ok &= Check("practice and alternate rules remain editable",
+            rows.Contains("Practice\tcheck\t", StringComparison.Ordinal) && rows.Contains("Alternate\tcheck\t", StringComparison.Ordinal));
 
         // Row changes.
         string edited = Edit(setup, "TimeLimit 12");

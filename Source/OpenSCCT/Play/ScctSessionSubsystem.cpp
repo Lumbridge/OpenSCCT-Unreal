@@ -14,9 +14,12 @@
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctPoseAim.h"
 #include "Play/ScctViewPawn.h"
+#include "ProfilingDebugging/CsvProfiler.h"
 #include "Runtime/ScctFeatures.h"
 #include "Runtime/ScctOfflineMatchApi.h"
 #include "UnrealClient.h"
+
+CSV_DEFINE_CATEGORY(ScctSession, false);
 
 namespace
 {
@@ -340,6 +343,7 @@ void UScctSessionSubsystem::Tick(float DeltaTime)
 
 		if (SessionId != 0)
 		{
+			CSV_SCOPED_TIMING_STAT(ScctSession, Simulate);
 			const int32 Ticks = Api->UpdateSession(SessionId);
 			TicksThisFrame = FMath::Max(Ticks, 0);
 			if (Ticks < 0 || Api->GetState() != static_cast<int32>(EScctBridgeState::Playing))
@@ -376,11 +380,14 @@ void UScctSessionSubsystem::Tick(float DeltaTime)
 			return;
 		}
 	}
+	CSV_SCOPED_TIMING_STAT(ScctSession, PresentFeatures);
 	OnFrame.Broadcast(DeltaTime);
+	OnFramePresented.Broadcast(DeltaTime);
 }
 
 void UScctSessionSubsystem::UpdatePawns()
 {
+	CSV_SCOPED_TIMING_STAT(ScctSession, PawnPresentation);
 	PawnCount = FMath::Clamp(Api->GetPawns(PawnBuffer.GetData(), PawnBuffer.Num()), 0, PawnBuffer.Num());
 	LocalActorId = 0;
 
@@ -406,6 +413,9 @@ void UScctSessionSubsystem::UpdatePawns()
 	}
 	ScctPoseAim::FeedDrawnView(*GetWorld(), AimingActorId);
 
+	const APlayerController* Player = GetWorld()->GetFirstPlayerController();
+	const AScctViewPawn* ViewPawn = Player ? Cast<AScctViewPawn>(Player->GetViewTarget()) : nullptr;
+	const bool bShowFirstPersonLegs = ViewPawn && ViewPawn->UsesMercCamera() && ViewPawn->GetActorRotation().Pitch < 0.0;
 	TSet<int32, DefaultKeyFuncs<int32>, TInlineSetAllocator<MaxPawns>> Seen;
 	for (int32 Index = 0; Index < PawnCount; ++Index)
 	{
@@ -427,7 +437,7 @@ void UScctSessionSubsystem::UpdatePawns()
 		if (IsValid(Proxy))
 		{
 			const int32 Bones = FMath::Clamp(Api->GetPawnPose(Pawn.ActorId, PoseBuffer.GetData(), PoseBuffer.Num()), 0, PoseBuffer.Num());
-			Proxy->Present(Pawn, GetSkeleton(Pawn.Kind), TConstArrayView<FScctBridgeBone>(PoseBuffer.GetData(), Bones));
+			Proxy->Present(Pawn, GetSkeleton(Pawn.Kind), TConstArrayView<FScctBridgeBone>(PoseBuffer.GetData(), Bones), bShowFirstPersonLegs);
 		}
 	}
 	ScctPoseAim::LogAimProbe(*GetWorld(), AimingActorId, GetWorld()->GetDeltaSeconds());
@@ -611,6 +621,8 @@ void UScctSessionSubsystem::TickAutoShots(float DeltaTime)
 		FString Cameras;
 		if (FParse::Value(FCommandLine::Get(), TEXT("ScctCams="), Cameras, false))
 		{
+			FParse::Value(FCommandLine::Get(), TEXT("ScctShotFov="), TourFov);
+			TourFov = FMath::Clamp(TourFov, 5.0f, 170.0f);
 			TArray<FString> Entries;
 			Cameras.ParseIntoArray(Entries, TEXT(";"));
 			for (const FString& Entry : Entries)
@@ -664,6 +676,10 @@ void UScctSessionSubsystem::TickAutoShots(float DeltaTime)
 	// -ScctShotUI: the screenshot includes the HUD and everything else Slate draws over the picture.
 	static const bool bShowUI = FParse::Param(FCommandLine::Get(), TEXT("ScctShotUI"));
 	FScreenshotRequest::RequestScreenshot(File, bShowUI, false);
+	if (GEngine && FParse::Param(FCommandLine::Get(), TEXT("ScctShotStreaming")))
+	{
+		GEngine->Exec(GetWorld(), TEXT("ListStreamingTextures AssetType=Texture"), *GLog);
+	}
 	bAdvanceTour = true;
 	UE_LOG(LogOpenSCCT, Log, TEXT("Screenshot %s (view valid %d at %.0f %.0f %.0f, session %d)"), *File, View.Valid, View.X, View.Y, View.Z, SessionId);
 
@@ -693,7 +709,7 @@ void UScctSessionSubsystem::ApplyTourCamera()
 	View.Pitch = Rotation.Pitch;
 	View.Yaw = Rotation.Yaw;
 	View.Roll = 0.0f;
-	View.Fov = 75.0f;
+	View.Fov = TourFov;
 	View.Valid = 1;
 	View.SpyFirstPerson = 0;
 }

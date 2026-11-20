@@ -20,6 +20,7 @@
 #include "OpenSCCT.h"
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
+#include "Play/ScctViewPawn.h"
 #include "Runtime/ScctFeatures.h"
 
 namespace
@@ -449,6 +450,7 @@ void UScctHudSubsystem::ProjectMarkers()
 	M.Markers.Reset();
 	M.BinocularMarkers.Reset();
 	const APlayerController* Player = GetWorld()->GetFirstPlayerController();
+	M.MercView = Player ? Cast<AScctViewPawn>(Player->GetPawn()) : nullptr;
 	if (Player == nullptr || !M.bHasState)
 	{
 		return;

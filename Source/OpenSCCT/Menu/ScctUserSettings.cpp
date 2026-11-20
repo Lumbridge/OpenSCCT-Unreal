@@ -100,7 +100,7 @@ void UScctUserSettings::ApplyAll()
 
 	// As game settings: a console variable given on the command line or typed in the console still wins.
 	SetVariable(TEXT("r.MotionBlurQuality"), bMotionBlur ? 4.0f : 0.0f);
-	SetVariable(TEXT("r.ScreenPercentage"), static_cast<float>(RenderScale));
+	// The graphics settings subscriber applies the manual or vendor-selected render scale.
 	if (GEngine != nullptr)
 	{
 		// The lighting plan holds the brightness to a narrower range (Play/ScctTone.h); without the plan this is Gamma itself.

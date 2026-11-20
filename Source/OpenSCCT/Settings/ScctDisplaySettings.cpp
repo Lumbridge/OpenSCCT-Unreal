@@ -190,6 +190,10 @@ void UScctDisplaySettings::Initialize(FSubsystemCollectionBase& Collection)
 	bApplies = !GIsEditor && !IsRunningDedicatedServer() && FApp::CanEverRender();
 
 	RegisterDisplay();
+	if (GConfig)
+	{
+		GConfig->RemoveKey(DisplaySettingsSection, TEXT("Mercenary.Bodycam"), GGameUserSettingsIni);
+	}
 	ScctGraphicsSettings::Register();
 	ScctPerformanceSettings::Register();
 	FScctSettingsForced::Report();
@@ -232,7 +236,7 @@ void UScctDisplaySettings::RegisterDisplay()
 		FDisplayMetrics::RebuildDisplayMetrics(Metrics);
 		int32 Primary = 0;
 		FScctSettingDesc Desc = Option(TEXT("Display.Monitor"), DisplayPage, TEXT("Window"), TEXT("Monitor"),
-			TEXT("The monitor the game is shown on. The window mode and the resolution above are kept."), EScctSettingType::Choice, TEXT("0"), Order++);
+			TEXT("Chooses the monitor for the game. In borderless mode its desktop resolution sets the pixel count. A higher resolution increases GPU load."), EScctSettingType::Choice, TEXT("0"), Order++);
 		for (int32 Index = 0; Index < Metrics.MonitorInfo.Num(); ++Index)
 		{
 			const FMonitorInfo& Info = Metrics.MonitorInfo[Index];
@@ -249,7 +253,7 @@ void UScctDisplaySettings::RegisterDisplay()
 	}
 	{
 		FScctSettingDesc Desc = Option(TEXT("Display.WindowPosition"), DisplayPage, TEXT("Window"), TEXT("Window position (windowed)"),
-			TEXT("Where the window goes on its monitor. Fill the screen sizes it to the monitor's work area, above the taskbar."),
+			TEXT("Centred and Top left move the window at its current size. Fill the screen uses the monitor's work area and can increase GPU load if the window grows."),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		Desc.Choices = ScctVideoOptions::Texts({ TEXT("Centred"), TEXT("Top left"), TEXT("Fill the screen") });
 		FScctSettings::Register(Desc);

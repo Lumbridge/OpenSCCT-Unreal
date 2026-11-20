@@ -9,6 +9,7 @@ param(
     [Parameter(Mandatory)] [string] $Map,
     [string] $Content = $env:SVM_CONTENT,
     [switch] $PropsOnly,
+    [switch] $NativeLighting,
     [string] $Engine = 'F:\UE_5.8'
 )
 
@@ -33,8 +34,21 @@ $rain = Join-Path $project "Saved\ScctImport\$Map\rain"
 python -B "$PSScriptRoot\prepare_rain_cover.py" (Join-Path $Content "svmap\$Map") $rain
 if ($LASTEXITCODE -ne 0) { throw 'Working out the rain cover failed.' }
 
+if ($Map -eq 'MounE') {
+    $shaft = Join-Path $project "Saved\ScctImport\$Map\SideStairs"
+    python -B "$PSScriptRoot\prepare_hospital_side_stairs_beam.py" $render $shaft
+    if ($LASTEXITCODE -ne 0) { throw 'Could not reconstruct the original Side Stairs grate.' }
+}
+
 # A level that exists cannot be replaced from inside the editor's Python: it is rebuilt from nothing each import.
 Remove-Item (Join-Path $project "Content\Imported\Maps\$Map\$Map.umap") -ErrorAction SilentlyContinue
 
-Invoke-ScctEditorScript -Project $project -Engine $Engine -Name "import-$Map" -Script "$(Fwd "$PSScriptRoot\import_map.py") $(Fwd $Content) $Map $(Fwd $normals) $(Fwd $rain)" | Out-Null
+$imported = Invoke-ScctEditorScript -Project $project -Engine $Engine -Name "import-$Map" -Script "$(Fwd "$PSScriptRoot\import_map.py") $(Fwd $Content) $Map $(Fwd $normals) $(Fwd $rain)"
+if ($imported -and $Map -eq 'MounE') {
+    $manifest = Fwd (Join-Path $shaft 'SideStairsShaft.json')
+    $imported = Invoke-ScctEditorScript -Project $project -Engine $Engine -Name "import-$Map-skylight" -Script "$(Fwd "$PSScriptRoot\apply_hospital_side_stairs_beam.py") $manifest --include-floor"
+}
+if ($imported -and $NativeLighting) {
+    & "$PSScriptRoot/Build-MapLighting.ps1" -Map $Map -Content $Content -Engine $Engine
+}
 Exit-ScctScripts

@@ -87,7 +87,7 @@ private:
 	 * The marking of something with Intensity and Opacity in the mode: false when it is left as it is. Adds its
 	 * primitives to Wanted and counts it.
 	 */
-	bool Want(AActor* Actor, UPrimitiveComponent* Single, bool bThermal, float Intensity, float Opacity);
+	bool Want(AActor* Actor, UPrimitiveComponent* Single, bool bThermal, float Intensity, float Opacity, bool bMine = false);
 
 	TWeakObjectPtr<UWorld> IndexedWorld;
 	TArray<FTagged> Tagged;

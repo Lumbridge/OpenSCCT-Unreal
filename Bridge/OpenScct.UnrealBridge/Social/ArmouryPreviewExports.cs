@@ -3,6 +3,7 @@ using System.IO;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using OpenScct.Game.Equipment;
 using OpenScct.Net.Cosmetics;
 using OpenScct.Server;
 using OpenScct.UnrealBridge.Pose;
@@ -80,7 +81,7 @@ public static unsafe class ArmouryPreviewExports
     private static string Text(char* text) => text == null ? string.Empty : new string(text);
 
     /// <summary>The model a slot is seen on (CosmeticPreview.AssetFor): the side's character for a body or light, else that gun.</summary>
-    private static string AssetFor(CosmeticSide side, CosmeticSlot slot) => slot switch
+    private static string AssetFor(CosmeticSide side, CosmeticSlot slot) => MercRifles.Find(CosmeticCatalog.PrimaryClass(slot))?.Asset ?? (slot switch
     {
         CosmeticSlot.Suppressed => "OpenScctSidearms.suppressed",
         CosmeticSlot.Unsuppressed => "OpenScctSidearms.unsuppressed",
@@ -88,11 +89,9 @@ public static unsafe class ArmouryPreviewExports
         CosmeticSlot.Magnum44 => "OpenScctSidearms.magnum44",
         CosmeticSlot.DesertEagle => "OpenScctSidearms.desert_eagle",
         CosmeticSlot.Pistol => "SWeaponFirst.p190",
-        CosmeticSlot.GunAr => "SWeaponFirst.M160",
-        CosmeticSlot.GunSmg => "SWeaponFirst.Hk81",
-        CosmeticSlot.GunShotgun => "SWeaponFirst.BM401",
+        CosmeticSlot.GunAr => MercRifles.Find("Svm.M4A1S")!.Asset,
         _ => side == CosmeticSide.Spy ? "SPerso.ATT_01" : "SPerso.DEF_01",
-    };
+    });
 
     /// <summary>The flat picture of an item (CosmeticThumbs): the content builder's thumb of its pattern, else the built camo texture of the slot's main texture.</summary>
     private static string? ThumbOf(CosmeticItem item)
@@ -113,9 +112,6 @@ public static unsafe class ArmouryPreviewExports
             (CosmeticSlot.Body, CosmeticSide.Spy) => ("SPerso", "SPersoTextures_Shadw_agent"),
             (CosmeticSlot.Body, CosmeticSide.Merc) => ("SPerso", "SPersoTextures_DEF_01_A_Body"),
             (CosmeticSlot.Pistol, _) => ("SWeaponFirst", "SWeaponTex_p190"),
-            (CosmeticSlot.GunAr, _) => ("SWeaponFirst", "SWeaponTex_M160"),
-            (CosmeticSlot.GunSmg, _) => ("SWeaponFirst", "SWeaponTex_Hk81"),
-            (CosmeticSlot.GunShotgun, _) => ("SWeaponFirst", "SWeaponTex_shotgun"),
             _ => (string.Empty, string.Empty),
         };
         if (item.Kind != CosmeticKind.Texture || package.Length == 0)

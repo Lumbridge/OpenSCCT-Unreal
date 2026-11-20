@@ -188,31 +188,28 @@ TArray<int32> UScctArmourySubsystem::SlotsOf(int32 Side) const
 
 TArray<FScctArmouryRow> UScctArmourySubsystem::ItemsOf(int32 Side, int32 Slot) const
 {
-	TArray<FScctArmouryRow> Rows;
 	if (Api == nullptr)
 	{
-		return Rows;
+		return {};
 	}
-	for (int32 Index = 0;; ++Index)
+	const FScctArmouryInfo Info = GetInfo();
+	if (!CatalogueRevision.IsSet() || CatalogueRevision.GetValue() != Info.Revision)
 	{
-		FScctArmouryItem Item = {};
-		TCHAR Id[96], Name[96], Tip[512];
-		Id[0] = Name[0] = Tip[0] = 0;
-		if (Api->GetItem(Index, &Item, Id, UE_ARRAY_COUNT(Id), Name, UE_ARRAY_COUNT(Name), Tip, UE_ARRAY_COUNT(Tip)) == 0)
+		Catalogue.Reset(Info.Items);
+		for (int32 Index = 0; Index < Info.Items; ++Index)
 		{
-			break;
-		}
-		if (Item.Side == Side && Item.Slot == Slot)
-		{
-			FScctArmouryRow& Row = Rows.AddDefaulted_GetRef();
-			Row.Item = Item;
+			FScctArmouryRow Row;
+			TCHAR Id[96] = {}, Name[96] = {}, Tip[512] = {};
+			if (!Api->GetItem(Index, &Row.Item, Id, UE_ARRAY_COUNT(Id), Name, UE_ARRAY_COUNT(Name), Tip, UE_ARRAY_COUNT(Tip))) { break; }
 			Row.Index = Index;
 			Row.Id = Id;
 			Row.Name = Name;
 			Row.Tip = Tip;
+			Catalogue.Add(MoveTemp(Row));
 		}
+		CatalogueRevision = Info.Revision;
 	}
-	return Rows;
+	return Catalogue.FilterByPredicate([Side, Slot](const FScctArmouryRow& Row) { return Row.Item.Side == Side && Row.Item.Slot == Slot; });
 }
 
 bool UScctArmourySubsystem::Choose(int32 Side, int32 Slot, const FString& Id, bool bForce)

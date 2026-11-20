@@ -11,6 +11,13 @@ class UAudioComponent;
 class UScctSoundWave;
 class UTexture2D;
 
+struct FScctGearLaunch
+{
+	int32 Side = INDEX_NONE;
+	FString Script;
+	bool bUseBinding = false;
+};
+
 /** The sounds the menus make, from the content's own interface sounds (shared/audio/wav/Interface/Menu). */
 enum class EScctUiSound : uint8
 {
@@ -32,6 +39,18 @@ struct FScctMenuMapInfo
 
 	/** Index into Data.Modes of the bridge's mode key (Story, DiskHunt, Deathmatch, MercDeathMatch). */
 	bool Plays(int32 ModeIndex) const { return ModeIndex >= 0 && ModeIndex < 4 && Data.Modes[ModeIndex].Playable != 0; }
+	/** Story is first, followed by the other modes in menu order. */
+	int32 DefaultModeIndex() const
+	{
+		for (int32 ModeIndex = 0; ModeIndex < UE_ARRAY_COUNT(Data.Modes); ++ModeIndex)
+		{
+			if (Plays(ModeIndex))
+			{
+				return ModeIndex;
+			}
+		}
+		return 0;
+	}
 };
 
 /**
@@ -54,6 +73,9 @@ public:
 
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
+
+	/** Gives the startup Equipment request to its first menu or match, once across level travel. */
+	bool TakeGearLaunch(FScctGearLaunch& Request, bool bInMatch);
 
 	// ---- maps and texts --------------------------------------------------------------------------------------
 
@@ -79,6 +101,9 @@ public:
 
 	/** "OpenSCCT 0.8.150" as the bridge was built, empty without the bridge. */
 	FString GetGameVersion();
+
+	/** The shared OpenSCCT build number, empty without the bridge. */
+	FString GetBuildNumber();
 
 	const TArray<FScctMenuAction>& GetActions();
 
@@ -117,6 +142,7 @@ private:
 	UScctSoundWave* FindWave(int32 Slot, const FString& File, bool bLoop);
 
 	static TWeakObjectPtr<UScctMenuSubsystem> Current;
+	bool bGearLaunchTaken = false;
 
 	const FScctMenuApi* Api = nullptr;
 	bool bMapsLoaded = false;

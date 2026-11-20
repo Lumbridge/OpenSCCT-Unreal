@@ -119,8 +119,10 @@ public static class BindingDraft
     /// (OptionsMenu.CanSwapKeyboardInput).
     /// </summary>
     public static bool CanSwap(KeyLayout layout, string from, string to) => !BindingKey.IsPulseName(to) ||
-        !KeyLayout.Resolve(CommandOf(layout, from)).Any(a => a.Kind == KeyActionKind.Command &&
-            (a.Name.Equals(ControlActionList.PingCommand, StringComparison.OrdinalIgnoreCase) ||
+        !KeyLayout.Resolve(CommandOf(layout, from)).Any(a =>
+            a.Kind == KeyActionKind.Button && (a.Name.Equals(ControlActionList.MercFreeLookButton, StringComparison.OrdinalIgnoreCase) ||
+                a.Name.Equals(MercBindings.AimButton, StringComparison.OrdinalIgnoreCase)) ||
+            a.Kind == KeyActionKind.Command && (a.Name.Equals(ControlActionList.PingCommand, StringComparison.OrdinalIgnoreCase) ||
              a.Name.Equals("UseGadget", StringComparison.OrdinalIgnoreCase) && a.Arg == SGadget.BindMineHack));
 
     public static string Canonical(string key) => BindingKey.TryParse(key, out BindingKey parsed) ? parsed.Canonical : key;
@@ -236,7 +238,7 @@ public static class BindingsEditor
             return "A double tap needs a key or mouse button, not the mouse wheel.";
         }
 
-        if (parsed.IsPulse && action.Id is ControlActionList.PingId or ControlActionList.MineHackId)
+        if (parsed.IsPulse && action.Id is ControlActionList.PingId or ControlActionList.MineHackId or ControlActionList.MercFreeLookId or MercBindings.AimId)
         {
             return action.Label + " needs a key or mouse button you can hold.";
         }

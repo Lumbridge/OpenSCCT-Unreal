@@ -35,6 +35,12 @@ class OPENSCCT_API AScctRuntimeMapActor : public AActor
 
 public:
 	AScctRuntimeMapActor();
+	/** Prepare the same registered receiving lights in editor-imported maps and older map packs. */
+	UFUNCTION(BlueprintCallable, Category="OpenSCCT|Maps")
+	static int32 PrepareWaterRefraction(UWorld* World, const FString& MapFolder);
+	/** Disconnect obsolete Lightmass receivers on a level explicitly converted to live fixtures. */
+	UFUNCTION(BlueprintCallable, Category="OpenSCCT|Maps")
+	static int32 DetachRebuiltLightmaps(UWorld* World);
 	virtual void Tick(float DeltaSeconds) override;
 	static UStaticMesh* SplitSkinMesh(UObject* Outer, UStaticMesh* Imported, const FString& MapFolder, int32 Index);
 	static void ReadSectionIndex(const FString& MapFolder, TMap<FName, TMap<FName, int32>>& Sections);

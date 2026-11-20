@@ -22,6 +22,8 @@
 #include "Runtime/ScctEventsApi.h"
 #include "Runtime/ScctFlicFlocApi.h"
 #include "Runtime/ScctFxTraceApi.h"
+#include "Runtime/ScctShadowTraceApi.h"
+#include "Runtime/ScctLaserTraceApi.h"
 #include "Runtime/ScctGlassApi.h"
 #include "Runtime/ScctHubActivityApi.h"
 #include "Runtime/ScctHostApi.h"
@@ -98,11 +100,14 @@ SCCT_FEATURE_TABLE(FScctEffectSkinApi, "EffectSkinExports", ScctEffectSkinApiVer
 SCCT_FEATURE_TABLE(FScctEventsApi, "EventsExports", ScctEventsApiVersion);
 SCCT_FEATURE_TABLE(FScctFlicFlocApi, "FlicFlocExports", ScctFlicFlocApiVersion);
 SCCT_FEATURE_TABLE(FScctFxTraceApi, "FxTraceExports", ScctFxTraceApiVersion);
+SCCT_FEATURE_TABLE(FScctShadowTraceApi, "ShadowTraceExports", ScctShadowTraceApiVersion);
+SCCT_FEATURE_TABLE(FScctLaserTraceApi, "LaserTraceExports", ScctLaserTraceApiVersion);
 SCCT_FEATURE_TABLE(FScctGlassApi, "GlassExports", ScctGlassApiVersion);
 SCCT_FEATURE_TABLE(FScctHostApi, "HostExports", ScctHostApiVersion);
 SCCT_FEATURE_TABLE(FScctHubApi, "HubExports", ScctHubApiVersion);
 SCCT_FEATURE_TABLE(FScctHubSocialApi, "HubSocialExports", ScctHubSocialApiVersion);
 SCCT_FEATURE_TABLE(FScctHubPadsApi, "HubPadsExports", ScctHubPadsApiVersion);
+SCCT_FEATURE_TABLE(FScctHubLaptopChoicesApi, "HubLaptopChoicesExports", ScctHubLaptopChoicesApiVersion);
 SCCT_FEATURE_TABLE(FScctHubActivityApi, "HubActivityExports", ScctHubActivityApiVersion);
 SCCT_FEATURE_TABLE(FScctHudApi, "HudExports", ScctHudApiVersion);
 SCCT_FEATURE_TABLE(FScctLightPlanApi, "LightPlanExports", ScctLightPlanApiVersion);

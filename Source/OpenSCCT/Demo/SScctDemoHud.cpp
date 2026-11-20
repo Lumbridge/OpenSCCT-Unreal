@@ -4,12 +4,12 @@
 #include "Demo/ScctDemoPlayback.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Menu/ScctMenuStyle.h"
+#include "Menu/ScctSelectBox.h"
 #include "Misc/App.h"
 #include "Rendering/DrawElements.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBox.h"
-#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SLeafWidget.h"
 #include "Widgets/SOverlay.h"
@@ -382,12 +382,10 @@ TSharedRef<SWidget> SScctDemoHud::BuildBar()
 	// The players, then the cameras.
 	const TSharedRef<SHorizontalBox> Players = SNew(SHorizontalBox);
 	Players->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 10.0f, 0.0f)[ SNew(SBox).WidthOverride(58.0f)[ DemoHudUi::Label(TEXT("Player")) ] ];
-	Row(Players, Chip(TEXT("<"), [this] { Command(EScctDemoCommand::CycleTarget, -1); }, nullptr, 34.0f));
-	Players->AddSlot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 6.0f, 0.0f)
+	Players->AddSlot().AutoWidth().VAlign(VAlign_Center)
 	[
-		SAssignNew(PlayerBox, SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6.0f, 6.0f))
+		SAssignNew(PlayerBox, SBox).MinDesiredWidth(200.0f)
 	];
-	Row(Players, Chip(TEXT(">"), [this] { Command(EScctDemoCommand::CycleTarget, 1); }, nullptr, 34.0f));
 
 	const TSharedRef<SHorizontalBox> View = SNew(SHorizontalBox);
 	View->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 10.0f, 0.0f)[ SNew(SBox).WidthOverride(58.0f)[ DemoHudUi::Label(TEXT("Camera")) ] ];
@@ -443,7 +441,7 @@ void SScctDemoHud::RebuildPlayers()
 	{
 		Signature += FString::Printf(TEXT("%d:%s:%d\n"), Target.PlayerId, Target.Name, Target.Team);
 	}
-	if (Signature == RosterSignature && PlayerBox.IsValid() && PlayerBox->GetChildren()->Num() > 0)
+	if (Signature == RosterSignature && PlayerSelect.IsValid())
 	{
 		return;
 	}
@@ -452,24 +450,28 @@ void SScctDemoHud::RebuildPlayers()
 	{
 		return;
 	}
-	PlayerBox->ClearChildren();
-	if (Targets.Num() == 0)
-	{
-		PlayerBox->AddSlot()[ DemoHudText(DemoHudUi::ToText(TEXT("No players available")), 12.5f, ScctHudStyle::TextDim()) ];
-		return;
-	}
+	TArray<FString> Labels;
+	TArray<int32> PlayerIds;
 	for (int32 Index = 0; Index < Targets.Num(); ++Index)
 	{
 		const FScctDemoTarget& Target = Targets[Index];
-		const int32 PlayerId = Target.PlayerId;
-		const FLinearColor Side = ScctHudStyle::Accent(Target.Team == 1 ? 1 : 0);
-		PlayerBox->AddSlot()
-		[
-			DemoHudUi::Button(DemoHudUi::ToText(FString::Printf(TEXT("%d  %s · %s"), Index + 1, Target.Name, Target.Team == 1 ? TEXT("Merc") : TEXT("Spy"))),
-				FOnClicked::CreateLambda([this, PlayerId] { Command(EScctDemoCommand::WatchPlayer, PlayerId); return FReply::Handled(); }),
-				TAttribute<bool>::CreateLambda([this, Index] { return Info.TargetIndex == Index; }), Side)
-		];
+		Labels.Add(FString::Printf(TEXT("%d  %s · %s"), Index + 1, Target.Name, Target.Team == 1 ? TEXT("Merc") : TEXT("Spy")));
+		PlayerIds.Add(Target.PlayerId);
 	}
+	PlayerBox->SetContent(
+		SAssignNew(PlayerSelect, SScctSelectBox)
+		.Options(MoveTemp(Labels))
+		.FieldLabel(DemoHudUi::ToText(TEXT("Replay player")))
+		.EmptyText(DemoHudUi::ToText(Targets.IsEmpty() ? TEXT("No players available") : TEXT("Choose a player")))
+		.Get([this] { return Info.TargetIndex; })
+		.Set([this, PlayerIds = MoveTemp(PlayerIds)](int32 Index)
+		{
+			if (PlayerIds.IsValidIndex(Index))
+			{
+				Command(EScctDemoCommand::WatchPlayer, PlayerIds[Index]);
+			}
+		})
+	);
 }
 
 void SScctDemoHud::DriveFrame(float DeltaSeconds)
@@ -553,7 +555,8 @@ bool SScctDemoHud::IsBarShown() const
 	{
 		return false;
 	}
-	return bAlwaysShown || Idle < DemoHudHideAfter || bHelp || (Info.Flags & (EScctDemoPlayFlags::Paused | EScctDemoPlayFlags::Seeking)) != 0;
+	return bAlwaysShown || Idle < DemoHudHideAfter || bHelp || (PlayerSelect.IsValid() && PlayerSelect->IsOpen())
+		|| (Info.Flags & (EScctDemoPlayFlags::Paused | EScctDemoPlayFlags::Seeking)) != 0;
 }
 
 void SScctDemoHud::SetLooking(bool bInLooking)
@@ -603,6 +606,10 @@ void SScctDemoHud::AnswerLeave(bool bLeave)
 FReply SScctDemoHud::OnPreviewKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
 	Idle = 0.0f;
+	if (PlayerSelect.IsValid() && PlayerSelect->IsOpen())
+	{
+		return FReply::Unhandled();
+	}
 	const FKey Key = InKeyEvent.GetKey();
 	Held.Add(Key);
 	if (InKeyEvent.IsRepeat())

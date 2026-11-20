@@ -137,7 +137,7 @@ void FScctVisionObjects::IndexLevel(UWorld* World)
 	}
 }
 
-bool FScctVisionObjects::Want(AActor* Actor, UPrimitiveComponent* Single, bool bThermal, float Intensity, float Opacity)
+bool FScctVisionObjects::Want(AActor* Actor, UPrimitiveComponent* Single, bool bThermal, float Intensity, float Opacity, bool bMine)
 {
 	FWanted Mark;
 	if (Opacity <= 0.01f)
@@ -153,6 +153,13 @@ bool FScctVisionObjects::Want(AActor* Actor, UPrimitiveComponent* Single, bool b
 		Mark.bMainPass = false;
 		Mark.bCustomDepth = true;
 		Mark.Stencil = UScctVisionSubsystem::PawnStencil(Intensity, Opacity);
+	}
+	else if (bThermal && bMine && Intensity > 0.0f)
+	{
+		// A mine is a small heat source. Use its own stencil band so a sharp,
+		// visible casing can be resolved independently of the large soft pawn silhouettes.
+		Mark.bCustomDepth = true;
+		Mark.Stencil = 32 + FMath::RoundToInt(FMath::Clamp(Intensity, 0.0f, 1.0f) * 15.0f);
 	}
 	else if (bThermal ? Intensity >= ThermalMarkHeat : Intensity > 0.01f)
 	{
@@ -252,7 +259,7 @@ void FScctVisionObjects::Update(UWorld* World, int32 Mode, const FScctVisionData
 				}
 			}
 		}
-		else if (Effects != nullptr)
+		if (Actor == nullptr && Effects != nullptr)
 		{
 			// Spawned in play: a mine, a sticky cam, a grenade, drawn among the effect actors.
 			Single = Effects->FindActorMesh(Row.ActorId);
@@ -279,7 +286,7 @@ void FScctVisionObjects::Update(UWorld* World, int32 Mode, const FScctVisionData
 		{
 			LiveActors.Add(Actor);
 		}
-		if (Want(Actor, Single, bThermal, Intensity, Opacity))
+		if (Want(Actor, Single, bThermal, Intensity, Opacity, (Row.Flags & EScctVisionActorFlags::Mine) != 0))
 		{
 			++NumLive;
 			if (!Listed.Contains(Row.ActorId))

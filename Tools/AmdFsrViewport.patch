@@ -1,0 +1,51 @@
+--- a/Source/FFXFrameInterpolation/Private/FFXFrameInterpolation.cpp
++++ b/Source/FFXFrameInterpolation/Private/FFXFrameInterpolation.cpp
+@@ -259,11 +259,8 @@
+ {
+ 	if (GEngine && GEngine->GameViewport)
+ 	{
+-		FViewportRHIRef ViewportRHI = GetRHIViewport(GEngine->GameViewport->Viewport);
+-#if UE_VERSION_AT_LEAST(5, 8, 0)
+-		check(ViewportRHI.IsValid());
+-#else
+-		if (!ViewportRHI.IsValid())
++#if UE_VERSION_OLDER_THAN(5, 8, 0)
++		if (!GetRHIViewport(GEngine->GameViewport->Viewport).IsValid())
+ #endif
+ 		{
+ 			GEngine->GameViewport->OnBeginDraw().AddRaw(this, &FFXFrameInterpolation::OnBeginDrawHandler);
+@@ -1247,13 +1244,20 @@
+ 		return nullptr;
+ 	}
+ 
+-	check(FSlateApplication::IsInitialized() && FSlateApplication::Get().GetRenderer());
++	if (!FSlateApplication::IsInitialized() || !FSlateApplication::Get().GetRenderer())
++	{
++		return nullptr;
++	}
+ #if UE_VERSION_AT_LEAST(5, 8, 0)
+ 	FRHIViewport* ViewportRHI = static_cast<FRHIViewport*>(FSlateApplication::Get().GetRenderer()->GetViewportResource(SlateWindow));
+ #else
+ 	FRHIViewport* ViewportRHI = *static_cast<FRHIViewport**>(FSlateApplication::Get().GetRenderer()->GetViewportResource(SlateWindow));
+ #endif
+-	check(ViewportRHI);
++	// Texture-backed and offscreen viewports have no swapchain. Retry on a later draw.
++	if (!ViewportRHI)
++	{
++		return nullptr;
++	}
+ 
+ 	SlateWindowMap.Add(&SlateWindow, ViewportRHI);
+ 	SlateWindow.GetOnWindowClosedEvent().AddRaw(this, &FFXFrameInterpolation::OnSlateWindowClosed);
+@@ -1285,7 +1289,10 @@
+ 		}
+ 
+ 		TSharedPtr<SWindow> SlateWindow = SceneViewport->FindWindow();
+-		check(SlateWindow.IsValid());
++		if (!SlateWindow.IsValid())
++		{
++			return nullptr;
++		}
+ 		FViewportRHIRef ViewportRHI = GetRHIViewport(*SlateWindow);
+ 
+ 		if (ViewportRHI.IsValid())

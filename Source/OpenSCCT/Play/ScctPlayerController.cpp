@@ -10,6 +10,8 @@
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
 #include "Play/ScctControlSettings.h"
+#include "Play/ScctMercCameraOptics.h"
+#include "Play/ScctViewPawn.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
 #include "SceneView.h"
@@ -57,6 +59,31 @@ namespace
 AScctPlayerController::AScctPlayerController()
 {
 	bShowMouseCursor = false;
+}
+
+bool AScctPlayerController::PostProcessWorldToScreen(FVector WorldLocation, FVector2D& ScreenLocation, bool bPlayerViewportRelative) const
+{
+	if (!Super::PostProcessWorldToScreen(WorldLocation, ScreenLocation, bPlayerViewportRelative))
+	{
+		return false;
+	}
+	const AScctViewPawn* ViewPawn = Cast<AScctViewPawn>(GetViewTarget());
+	if (!ViewPawn || !ViewPawn->HasMercCameraLens())
+	{
+		return true;
+	}
+	if (LensProjectionFrame != GFrameCounter)
+	{
+		LensProjectionFrame = GFrameCounter;
+		const ULocalPlayer* Local = GetLocalPlayer();
+		FSceneViewProjectionData Projection;
+		LensProjectionRect = Local && Local->ViewportClient && Local->ViewportClient->Viewport &&
+			Local->GetProjectionData(Local->ViewportClient->Viewport, Projection)
+			? Projection.GetConstrainedViewRect() : FIntRect(0, 0, 0, 0);
+	}
+	const FIntRect Rect = bPlayerViewportRelative ? FIntRect(FIntPoint::ZeroValue, LensProjectionRect.Size()) : LensProjectionRect;
+	ScreenLocation = ScctMercCameraOptics::WarpScreenPoint(ScreenLocation, Rect);
+	return true;
 }
 
 void AScctPlayerController::SetInputMode(const FInputModeDataBase& InData)
@@ -318,6 +345,7 @@ bool AScctPlayerController::IsPadActive() const
 
 void AScctPlayerController::FeedControls(float DeltaSeconds)
 {
+	MercAimTurn = FVector2D::ZeroVector;
 	const FScctControlsApi* Controls = ScctFeature<FScctControlsApi>();
 	if (Controls == nullptr)
 	{
@@ -350,17 +378,62 @@ void AScctPlayerController::FeedControls(float DeltaSeconds)
 		}
 		// The stick that chose on the ping wheel is still pushed over when the wheel closes (FScctLookStickHold).
 		LookStickHold.Step(bLookTaken, UScctControlSettings::Get()->PadDeadzoneRight, DeltaSeconds, Raw.RightX, Raw.RightY);
+		const AScctViewPawn* ViewPawn = Cast<AScctViewPawn>(GetViewTarget());
+		if (!bLookTaken && ViewPawn && ViewPawn->UsesMercCamera())
+		{
+			Raw.Flags |= EScctRawInputFlags::AllowMercFreeLook;
+		}
 	}
 	else
 	{
 		LookStickHold.Reset();
+		const AScctViewPawn* ViewPawn = Cast<AScctViewPawn>(GetViewTarget());
+		if (IsMenuOpen() && ViewPawn && ViewPawn->UsesMercCamera())
+		{
+			Raw.Flags |= EScctRawInputFlags::MercMenuView;
+		}
 	}
-	FrameMouseX = Raw.MouseX;
 	Controls->Frame(&Raw);
+	MercAimTurn = FVector2D(Raw.MercAimYaw, Raw.MercAimPitch);
+	UpdateMercFreeLook(Raw);
+	FrameMouseX = (Raw.Flags & EScctRawInputFlags::MercFreeLookHeld) ? 0.f : Raw.MouseX;
 	KeyEdges.Reset();
 	GameplayMousePresses.Reset();
 
 	TakeLocalCommands(*Controls);
+}
+
+void AScctPlayerController::UpdateMercFreeLook(const FScctRawInput& Raw)
+{
+	if (!(Raw.Flags & EScctRawInputFlags::AllowMercFreeLook))
+	{
+		MercFreeLookOffset = FRotator::ZeroRotator;
+		return;
+	}
+	if (!(Raw.Flags & EScctRawInputFlags::MercFreeLookHeld))
+	{
+		// The camera returns to the weapon when the key comes up. New input immediately turns the player.
+		MercFreeLookOffset *= FMath::Exp(-18.f * Raw.DeltaSeconds);
+		if (MercFreeLookOffset.IsNearlyZero(0.01))
+		{
+			MercFreeLookOffset = FRotator::ZeroRotator;
+		}
+		return;
+	}
+
+	const UScctControlSettings* Settings = UScctControlSettings::Get();
+	const double DegreesPerCount = 1.0 / GetMouseCountsPerDegree();
+	FVector2D Turn(Raw.MouseX * DegreesPerCount, Raw.MouseY * DegreesPerCount);
+	const FVector2D Stick(Raw.RightX, Raw.RightY);
+	const double Magnitude = Stick.Size();
+	if (Settings->bPadEnabled && Settings->bPadAim && Magnitude > Settings->PadDeadzoneRight)
+	{
+		const double Travel = (FMath::Min(1.0, Magnitude) - Settings->PadDeadzoneRight) / (1.0 - Settings->PadDeadzoneRight);
+		const double Degrees = 90.0 * Settings->MercPad.Look * Settings->PadLookScale * Travel * Raw.DeltaSeconds;
+		Turn += FVector2D(Stick.X, Stick.Y * Settings->PadVerticalScale) * (Degrees / Magnitude);
+	}
+	MercFreeLookOffset.Yaw = FMath::Clamp(MercFreeLookOffset.Yaw + Turn.X, -55.0, 55.0);
+	MercFreeLookOffset.Pitch = FMath::Clamp(MercFreeLookOffset.Pitch + (Settings->bInvertY ? -Turn.Y : Turn.Y), -32.0, 32.0);
 }
 
 void AScctPlayerController::ReadDevices(FScctRawInput& Raw) const
@@ -541,6 +614,8 @@ void AScctPlayerController::OverrideView(FScctBridgeView& View)
 
 void AScctPlayerController::ForgetView(int32 OldSessionId, int32 NewSessionId)
 {
+	MercAimTurn = FVector2D::ZeroVector;
+	MercFreeLookOffset = FRotator::ZeroRotator;
 	// The view belonged to the match that is over: nobody is handed its aim any more, the next match's first
 	// picture continues nothing, and a black screen it left behind is lifted.
 	LookView = {};
@@ -608,6 +683,10 @@ void AScctPlayerController::ReportAutoplay(const FString& Label)
 		}
 	}
 
+	if (const AScctViewPawn* ViewPawn = Cast<AScctViewPawn>(GetViewTarget()); ViewPawn && ViewPawn->UsesMercCamera())
+	{
+		Hud += FString::Printf(TEXT(" | mercenary free-look yaw %.2f pitch %.2f"), MercFreeLookOffset.Yaw, MercFreeLookOffset.Pitch);
+	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Autoplay: %s | %s | view at (%.0f %.0f %.0f) yaw %.2f pitch %.2f fov %.1f (wanted %.1f wide, %.1f high; Unreal draws %s) aim blend %.2f%s | since the last line: the view turned at most %.3f deg and moved at most %.2f cm between two frames, was at most %.3f deg off the mouse counts of its frame, camera cuts %d"),
 		*Label, *Body, LookView.X, LookView.Y, LookView.Z, LookView.Yaw, LookView.Pitch, LookView.Fov,
 		LookView.HorizontalFov, LookView.VerticalFov, *Drawn, LookView.RifleAimBlend, *Hud, LargestViewTurn, LargestViewMove, LargestTurnError, CutsRaised);

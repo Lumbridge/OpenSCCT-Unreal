@@ -80,7 +80,6 @@ namespace
 			{ TEXT("SvmRandomMap"), TEXT("Random map") }, { TEXT("SvmBal"), TEXT("Auto balance") }, { TEXT("BalanceTeams"), TEXT("Auto balance") },
 			{ TEXT("SvmBots"), TEXT("Bots") }, { TEXT("SvmBotsPerSide"), TEXT("Bots per side") }, { TEXT("SvmSpyBots"), TEXT("Spy bots") },
 			{ TEXT("SvmMercBots"), TEXT("Mercenary bots") }, { TEXT("SvmBotSkill"), TEXT("Bot skill") }, { TEXT("SvmPr"), TEXT("Practice") },
-			{ TEXT("SvmSidearms"), TEXT("Sidearms") }, { TEXT("SvmRifles"), TEXT("Additional rifles") }, { TEXT("SvmResponsiveSmoke"), TEXT("Responsive smoke") },
 		};
 		const FString* Found = Captions.Find(Key);
 		return Found != nullptr ? *Found : FString(TEXT("Alternate rules"));
@@ -287,7 +286,10 @@ void SScctSessionOptions::FillDraft(const FString& Line)
 	{
 		if (Pair.Key.Equals(TEXT("MapName"), ESearchCase::IgnoreCase))
 		{
-			Next = ScctHostSetup::Text(EScctSetupText::Edit, Next, TEXT("Map ") + Pair.Value, PlayersOf(Next));
+			if (const FScctHostMap* Entry = FindMap(Pair.Value))
+			{
+				Next = ScctHostSetup::MapDefaults(*Entry, Next, PlayersOf(Next));
+			}
 		}
 		else if (Pair.Key.Equals(TEXT("Mode"), ESearchCase::IgnoreCase))
 		{
@@ -479,7 +481,13 @@ TSharedRef<SWidget> SScctSessionOptions::BuildOptions()
 			.Maps(Maps)
 			.TileWidth(124.0f)
 			.Selected(TAttribute<FString>::CreateLambda([this] { return ShownMap(); }))
-			.OnPicked(FOnScctMapPicked::CreateLambda([this](const FString& Map) { Edit(TEXT("Map ") + Map); }))
+			.OnPicked(FOnScctMapPicked::CreateLambda([this](const FString& Map)
+			{
+				if (const FScctHostMap* Entry = FindMap(Map))
+				{
+					SetDraft(ScctHostSetup::MapDefaults(*Entry, Draft, PlayersOf(Draft)));
+				}
+			}))
 		];
 	}
 	else
@@ -629,7 +637,7 @@ TSharedRef<SWidget> SScctSessionOptions::BuildRows()
 		Box->AddSlot().AutoHeight()[ ScctSetupRowsView::Heading(TEXT("Teams & rotation")) ];
 		AddRows(Box, { TEXT("Revenge"), TEXT("GamesInARow"), TEXT("RandomMap"), TEXT("AutoBalance"), TEXT("VoiceInLobby") });
 		Box->AddSlot().AutoHeight()[ ScctSetupRowsView::Heading(TEXT("Extra rules")) ];
-		AddRows(Box, { TEXT("Practice"), TEXT("Sidearms"), TEXT("Rifles"), TEXT("ResponsiveSmoke"), TEXT("Alternate") });
+		AddRows(Box, { TEXT("Practice"), TEXT("Alternate") });
 		const FScctSetupRow* Alternate = FindRow(TEXT("Alternate"));
 		Box->AddSlot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f).HAlign(HAlign_Left)
 		[

@@ -13,8 +13,11 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Rendering/DrawElements.h"
 #include "Rendering/SlateRenderer.h"
+#include "Styling/AppStyle.h"
 #include "Styling/CoreStyle.h"
+#include "Types/NavigationMetaData.h"
 #include "Widgets/Images/SImage.h"
+#include "Widgets/Input/SComboButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBackgroundBlur.h"
 #include "Widgets/Layout/SBorder.h"
@@ -26,6 +29,8 @@
 #include "Widgets/SWindow.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Views/SListView.h"
+#include "Widgets/Views/STableRow.h"
 
 namespace
 {
@@ -152,6 +157,28 @@ namespace
 			.SetDisabled(FSlateNoResource())
 			.SetNormalPadding(FMargin(0.0f))
 			.SetPressedPadding(FMargin(0.0f));
+		return Style;
+	}
+
+	const FComboButtonStyle& DropdownStyle()
+	{
+		static const FComboButtonStyle Style = []
+		{
+			FComboButtonStyle Made = FAppStyle::Get().GetWidgetStyle<FComboButtonStyle>(TEXT("ComboButton"));
+			const FLinearColor Fill(0.015f, 0.022f, 0.033f, 0.9f);
+			const FLinearColor Line(1.0f, 1.0f, 1.0f, 0.2f);
+			FButtonStyle Button = Made.ButtonStyle;
+			Button.SetNormal(FSlateRoundedBoxBrush(Fill, ScctUi::Corner, Line, 1.0f));
+			Button.SetHovered(FSlateRoundedBoxBrush(Fill, ScctUi::Corner, FLinearColor(0.4f, 0.75f, 0.88f, 0.65f), 1.0f));
+			Button.SetPressed(Button.Hovered);
+			Button.SetNormalPadding(FMargin(0.0f));
+			Button.SetPressedPadding(FMargin(0.0f));
+			Made.SetButtonStyle(Button);
+			Made.SetMenuBorderBrush(FSlateRoundedBoxBrush(FLinearColor(0.022f, 0.032f, 0.046f, 1.0f), ScctUi::Corner, Line, 1.0f));
+			Made.SetMenuBorderPadding(FMargin(4.0f));
+			Made.SetDownArrowPadding(FMargin(5.0f, 0.0f, 2.0f, 0.0f));
+			return Made;
+		}();
 		return Style;
 	}
 
@@ -807,8 +834,30 @@ void SScctStepper::Construct(const FArguments& InArgs)
 	GetOptions = InArgs._GetOptions;
 	Get = InArgs._Get;
 	Set = InArgs._Set;
-	bWrap = InArgs._Wrap;
-	BuildRow(InArgs._Label, InArgs._Description, SNullWidget::NullWidget);
+	BuildRow(InArgs._Label, InArgs._Description,
+		SNew(SBox).MinDesiredHeight(30.0f)
+		[
+			SAssignNew(Dropdown, SComboButton)
+			.ComboButtonStyle(&DropdownStyle())
+			.ForegroundColor(ScctHudStyle::Text())
+			.ContentPadding(FMargin(10.0f, 4.0f))
+			.Method(EPopupMethod::UseCurrentWindow)
+			.IsFocusable(false)
+			.IsEnabled_Lambda([this] { return Set && !CurrentOptions().IsEmpty(); })
+			.OnGetMenuContent(this, &SScctStepper::MakeChoiceList)
+			.OnComboBoxOpened_Lambda([this]
+			{
+				ScctUi::Play(EScctUiSound::Accept);
+				FocusChoices();
+			})
+			.ButtonContent()
+			[
+				SNew(STextBlock)
+				.Font(ScctUi::Caps(12.5f))
+				.Text(this, &SScctStepper::CurrentText)
+				.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+			]
+		]);
 }
 
 TArray<FString> SScctStepper::CurrentOptions() const
@@ -816,43 +865,127 @@ TArray<FString> SScctStepper::CurrentOptions() const
 	return GetOptions ? GetOptions() : Options;
 }
 
-bool SScctStepper::Adjust(int32 Direction)
+FText SScctStepper::CurrentText() const
 {
-	const int32 Count = CurrentOptions().Num();
-	if (Count < 2 || !Get || !Set)
-	{
-		return Count > 0;
-	}
-	const int32 Now = FMath::Clamp(Get(), 0, Count - 1);
-	const int32 Next = bWrap ? (Now + Direction + Count) % Count : FMath::Clamp(Now + Direction, 0, Count - 1);
-	if (Next != Now)
-	{
-		Set(Next);
-	}
-	return true;
+	const TArray<FString> Values = CurrentOptions();
+	return Values.IsEmpty() ? FText::GetEmpty() : FText::FromString(Values[FMath::Clamp(Get ? Get() : 0, 0, Values.Num() - 1)].ToUpper());
 }
 
-int32 SScctStepper::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
+void SScctStepper::Press()
 {
-	const int32 Layer = SScctOptionRow::OnPaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
-	const FPainter Painter{ OutDrawElements, AllottedGeometry, Layer, InWidgetStyle.GetColorAndOpacityTint() * FLinearColor(1.0f, 1.0f, 1.0f, IsEnabled() ? 1.0f : 0.4f) };
-	const FSlateRect Rect = GetControlRect(AllottedGeometry);
-	const TArray<FString> Shown = CurrentOptions();
-	const int32 Index = Get && Shown.Num() > 0 ? FMath::Clamp(Get(), 0, Shown.Num() - 1) : 0;
-	const float Middle = (Rect.Top + Rect.Bottom) * 0.5f;
-
-	Painter.Box(FVector2D(Rect.Left, Middle - 15.0f), FVector2D(Rect.Right - Rect.Left, 30.0f), FillBrush(), FLinearColor(0.0f, 0.0f, 0.0f, 0.32f));
-	const FSlateFontInfo Arrow = ScctHudStyle::Font(EWeight::Bold, 15.0f);
-	const bool bLeft = bWrap || Index > 0;
-	const bool bRight = bWrap || Index < Shown.Num() - 1;
-	const FLinearColor ArrowColour = FMath::Lerp(ScctHudStyle::TextFaint(), ScctUi::Accent(), Lit);
-	Painter.TextAt(FVector2D(Rect.Left + 16.0f, Middle - 1.0f), TEXT("‹"), Arrow, ScctHudStyle::Fade(ArrowColour, bLeft && Shown.Num() > 1 ? 1.0f : 0.25f));
-	Painter.TextAt(FVector2D(Rect.Right - 16.0f, Middle - 1.0f), TEXT("›"), Arrow, ScctHudStyle::Fade(ArrowColour, bRight && Shown.Num() > 1 ? 1.0f : 0.25f));
-	if (Shown.IsValidIndex(Index))
+	if (Dropdown->IsEnabled())
 	{
-		Painter.TextAt(FVector2D((Rect.Left + Rect.Right) * 0.5f, Middle), Shown[Index].ToUpper(), ScctUi::Caps(12.5f), ScctHudStyle::Text());
+		Dropdown->SetIsOpen(!Dropdown->IsOpen(), false);
+		if (Dropdown->IsOpen())
+		{
+			FocusChoices();
+		}
 	}
-	return Layer + 2;
+}
+
+FReply SScctStepper::OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent)
+{
+	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
+	{
+		return FReply::Unhandled();
+	}
+	ScctUi::Play(EScctUiSound::Accept);
+	Press();
+	return Dropdown->IsOpen() ? FReply::Handled() : FReply::Handled().SetUserFocus(AsShared(), EFocusCause::Mouse);
+}
+
+TSharedRef<SWidget> SScctStepper::MakeChoiceList()
+{
+	Choices.Reset();
+	for (const FString& Value : CurrentOptions())
+	{
+		Choices.Add(MakeShared<FString>(Value));
+	}
+	const TSharedRef<SWidget> Menu = SNew(SBox).MaxDesiredHeight(320.0f)
+	[
+		SAssignNew(ChoiceList, SListView<TSharedPtr<FString>>)
+		.ListItemsSource(&Choices)
+		.SelectionMode(ESelectionMode::Single)
+		.OnGenerateRow(this, &SScctStepper::MakeChoiceRow)
+		.OnSelectionChanged(this, &SScctStepper::OnChoiceChanged)
+		.OnKeyDownHandler(this, &SScctStepper::OnChoiceKeyDown)
+	];
+	ChoiceList->SetBackgroundBrush(FStyleDefaults::GetNoBrush());
+	const TSharedRef<FNavigationMetaData> Navigation = MakeShared<FNavigationMetaData>();
+	Navigation->SetNavigationStop(EUINavigation::Left);
+	Navigation->SetNavigationStop(EUINavigation::Right);
+	ChoiceList->AddMetadata(Navigation);
+	if (!Choices.IsEmpty())
+	{
+		const TSharedPtr<FString>& Current = Choices[FMath::Clamp(Get ? Get() : 0, 0, Choices.Num() - 1)];
+		ChoiceList->SetSelection(Current, ESelectInfo::OnNavigation);
+		ChoiceList->RequestScrollIntoView(Current);
+	}
+	return Menu;
+}
+
+TSharedRef<ITableRow> SScctStepper::MakeChoiceRow(TSharedPtr<FString> Item, const TSharedRef<STableViewBase>& Owner)
+{
+	return SNew(STableRow<TSharedPtr<FString>>, Owner)
+		.Style(&FAppStyle::Get().GetWidgetStyle<FTableRowStyle>(TEXT("ComboBox.Row")))
+		.bAllowPreselectedItemActivation(true)
+		.Padding(FMargin(9.0f, 6.0f))
+		[
+			SNew(STextBlock)
+			.Font(ScctUi::Body())
+			.Text(FText::FromString(*Item))
+			.ColorAndOpacity(ScctHudStyle::Text())
+		];
+}
+
+FReply SScctStepper::OnChoiceKeyDown(const FGeometry& Geometry, const FKeyEvent& Event)
+{
+	ScctUi::NoteInput(Event.GetKey());
+	if (ScctMenuNav::IsBackKey(Event.GetKey()))
+	{
+		Dropdown->SetIsOpen(false);
+		ScctUi::Play(EScctUiSound::Back);
+		return FReply::Handled().SetUserFocus(AsShared(), EFocusCause::SetDirectly);
+	}
+	if (IsAccept(Event))
+	{
+		const TArray<TSharedPtr<FString>> Selected = ChoiceList->GetSelectedItems();
+		if (!Selected.IsEmpty())
+		{
+			CommitChoice(Selected[0]);
+		}
+		return FReply::Handled();
+	}
+	return FReply::Unhandled();
+}
+
+void SScctStepper::OnChoiceChanged(TSharedPtr<FString> Item, ESelectInfo::Type SelectInfo)
+{
+	if (SelectInfo == ESelectInfo::OnMouseClick && Item)
+	{
+		CommitChoice(Item);
+	}
+}
+
+void SScctStepper::FocusChoices()
+{
+	if (ChoiceList.IsValid())
+	{
+		FSlateApplication::Get().SetKeyboardFocus(ChoiceList, EFocusCause::SetDirectly);
+	}
+}
+
+void SScctStepper::CommitChoice(const TSharedPtr<FString>& Item)
+{
+	const int32 Index = Choices.Find(Item);
+	const TArray<FString> Values = CurrentOptions();
+	Dropdown->SetIsOpen(false);
+	FSlateApplication::Get().SetKeyboardFocus(AsShared(), EFocusCause::SetDirectly);
+	if (Set && Item && Values.IsValidIndex(Index) && Values[Index] == *Item && (!Get || Index != FMath::Clamp(Get(), 0, Values.Num() - 1)))
+	{
+		ScctUi::Play(EScctUiSound::Accept);
+		Set(Index);
+	}
 }
 
 // ---- SScctSlider --------------------------------------------------------------------------------------------------

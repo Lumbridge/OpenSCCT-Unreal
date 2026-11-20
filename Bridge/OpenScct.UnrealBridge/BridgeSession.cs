@@ -33,10 +33,10 @@ public sealed record LocalMatch
     public string PlayerName { get; init; } = "Player";
 
     /// <summary>The mercs carry OpenSCCT's sidearms.</summary>
-    public bool Sidearms { get; init; }
+    public bool Sidearms { get; init; } = true;
 
     /// <summary>The mercs may pick OpenSCCT's additional rifles.</summary>
-    public bool Rifles { get; init; }
+    public bool Rifles { get; init; } = true;
 
     /// <summary>
     /// A practice round, as the Godot client's --practice: no time limit, unlimited lives, 5 s respawn, and the
@@ -45,7 +45,7 @@ public sealed record LocalMatch
     public bool OfflineRules { get; init; }
 
     /// <summary>Responsive smoke: smoke grenades fill the shared simulated cloud (the match option SvmResponsiveSmoke).</summary>
-    public bool ResponsiveSmoke { get; init; }
+    public bool ResponsiveSmoke { get; init; } = true;
     /// <summary>Visit a Map practice: unlimited ammunition and gadgets, instant gear changes, and Switch Team in the menu.</summary>
     public bool UnlimitedGear { get; init; }
 
@@ -174,6 +174,7 @@ public sealed class BridgeSession : IDisposable
         var settings = new PlaySettings
         {
             Map = match.Map,
+            LocalWeaponCareer = Loadout.WeaponCareerView.Local(),
             Mode = match.Mode,
             Side = match.Merc ? PlaySide.Merc : PlaySide.Spy,
             Bots = match.Bots,

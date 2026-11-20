@@ -172,6 +172,9 @@ public static class BridgeEquipmentFlags
     /// rotation as given, not on his bone.
     /// </summary>
     public const int TorchInCamera = 1 << 17;
+
+    /// <summary>The equipped primary has the M4's rail laser, including while the weapon is stowed.</summary>
+    public const int RailLaser = 1 << 18;
 }
 
 /// <summary>

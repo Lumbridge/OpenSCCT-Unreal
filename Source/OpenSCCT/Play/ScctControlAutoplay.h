@@ -34,6 +34,16 @@ public:
 	/** Every step has been played and its keys are up again. */
 	bool IsFinished() const { return Index >= Steps.Num() && !bFinalReportDue; }
 
+	/** Zero before the first input, the 1-based step most recently begun, or step count + 1 after the final report. */
+	int32 GetProgress() const
+	{
+		if (HasSteps() && IsFinished())
+		{
+			return Steps.Num() + 1;
+		}
+		return Index + (bBegun ? 1 : 0);
+	}
+
 	/**
 	 * Advances the script by one frame: raises the frame's input events on Controller. Call it before the
 	 * controller processes its input for the frame. MouseCountsPerDegree turns the degrees of "turn" and "look"

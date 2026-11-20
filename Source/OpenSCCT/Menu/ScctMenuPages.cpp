@@ -6,6 +6,7 @@
 #include "Menu/ScctOverlayPages.h"
 #include "Menu/SScctHelpFeedbackPage.h"
 #include "Menu/SScctTutorialsPage.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
@@ -157,8 +158,25 @@ namespace ScctUi
 
 	FString BuildLabel()
 	{
+		FString Version;
+		GConfig->GetString(TEXT("/Script/EngineSettings.GeneralProjectSettings"), TEXT("ProjectVersion"), Version, GGameIni);
+		return Version.IsEmpty() ? TEXT("OPENSCCT UNREAL") : FString::Printf(TEXT("OPENSCCT UNREAL %s"), *Version);
+	}
+
+	FString BridgeBuildLabel()
+	{
 		UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
-		const FString Version = Menu != nullptr ? Menu->GetGameVersion() : FString();
-		return Version.IsEmpty() ? TEXT("OPENSCCT · UNREAL") : FString::Printf(TEXT("OPENSCCT %s · UNREAL"), *Version);
+		if (Menu == nullptr)
+		{
+			return FString();
+		}
+		const FString Version = Menu->GetGameVersion();
+		if (Version.IsEmpty())
+		{
+			return FString();
+		}
+		const FString Build = Menu->GetBuildNumber();
+		return Build.IsEmpty() ? FString::Printf(TEXT("BRIDGE %s"), *Version)
+			: FString::Printf(TEXT("BRIDGE %s · BUILD %s"), *Version, *Build);
 	}
 }

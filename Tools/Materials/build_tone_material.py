@@ -14,7 +14,8 @@ film curve off there, so this shader is the whole transfer from scene light to d
   2. A correction the ramp solve can ask for (Tools/Light/solve_tone.py): Gain x value ^ Gamma, both 1 when the
      measured ramp agrees with the wanted one.
   3. The shoulder: values up to Knee are kept exactly (the identity the plan asks for up to 200 of 255); above, the
-     overbright range the original clipped is rolled off towards 1, with the slope 1 at the knee.
+     overbright range the original clipped is rolled off towards 1, with the slope 1 at the knee. A merc body
+     camera uses a shared RGB gain and a longer shoulder on exposed surfaces.
   4. The original's glow gate (its normal composite, ps_1_1 0x10c4ea78): frame x saturate(16 (L - 0.03)) with
      L = dot(frame, (0.311, 0.524, 0.165)), which draws near-black as black. Gate blends it in (1 the original's, 0
      none: the night vision reads the scene before the composite, so the game takes the gate out while goggles are on).
@@ -48,8 +49,25 @@ C = Gain * pow(C, Gamma);
 
 float K = clamp(Knee, 0.05, 0.999);
 float W = 1.0 - K;
-float3 Over = max(C - K, 0.0);
-C = min(C, K) + W * (1.0 - exp(-Over / W));
+if (MercCamera > 0.5)
+{
+    // Shape the metered surface response at the fixed scene exposure. Leave the shadow range
+    // alone. Common RGB gain preserves the colour of reflected light on paint and metal.
+    float Y = dot(C, float3(0.2126, 0.7152, 0.0722));
+    C *= 1.0 + 0.095 * smoothstep(0.15, 0.50, Y);
+    float Peak = max(max(C.r, C.g), C.b);
+    float WhiteKnee = clamp(K - 0.065, 0.40, 0.85);
+    float Width = 1.0 - WhiteKnee;
+    float Above = max(Peak - WhiteKnee, 0.0);
+    // A rational shoulder retains separation between neighbouring overbright samples.
+    float Compressed = min(Peak, WhiteKnee) + Width * Above / (Width + Above);
+    C *= Compressed / max(Peak, 1e-6);
+}
+else
+{
+    float3 Over = max(C - K, 0.0);
+    C = min(C, K) + W * (1.0 - exp(-Over / W));
+}
 
 float L = dot(C, float3(0.311, 0.524, 0.165));
 C *= lerp(1.0, saturate(GateSlope * (L - GateFloor)), saturate(Gate));
@@ -67,17 +85,25 @@ def log(text):
 
 def build():
     path = "%s/%s" % (PACKAGE, NAME)
-    if unreal.EditorAssetLibrary.does_asset_exist(path):
-        unreal.EditorAssetLibrary.delete_asset(path)
-
     library = unreal.MaterialEditingLibrary
-    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(NAME, PACKAGE, unreal.Material, unreal.MaterialFactoryNew())
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        material = unreal.load_asset(path)
+        library.delete_all_material_expressions(material)
+    else:
+        material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(NAME, PACKAGE, unreal.Material, unreal.MaterialFactoryNew())
     material.set_editor_property("material_domain", unreal.MaterialDomain.MD_POST_PROCESS)
     material.set_editor_property("blendable_location", unreal.BlendableLocation.BL_SCENE_COLOR_BEFORE_BLOOM)
 
     scene = library.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -700, 0)
     scene.set_editor_property("scene_texture_id", unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0)
     inputs = [("Scene", scene, "Color")]
+    collection = unreal.load_asset(PACKAGE + "/MPC_ScctLight")
+    if not collection:
+        raise RuntimeError("Missing lighting parameter collection")
+    merc_camera = library.create_material_expression(material, unreal.MaterialExpressionCollectionParameter, -700, 1280)
+    merc_camera.set_editor_property("collection", collection)
+    merc_camera.set_editor_property("parameter_name", "BodycamSurfaces")
+    inputs.append(("MercCamera", merc_camera, ""))
     for index, (parameter, default) in enumerate(SCALARS):
         node = library.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -700, 200 + index * 150)
         node.set_editor_property("parameter_name", parameter)
@@ -97,10 +123,13 @@ def build():
 
     for pin_name, node, output in inputs:
         if not library.connect_material_expressions(node, output, custom, pin_name):
-            log("could not connect %s of %s" % (pin_name, NAME))
+            raise RuntimeError("Could not connect %s of %s" % (pin_name, NAME))
     library.connect_material_property(custom, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
-    library.recompile_material(material)
-    unreal.EditorAssetLibrary.save_loaded_asset(material, only_if_is_dirty=False)
+    errors = library.recompile_material(material)
+    if errors:
+        raise RuntimeError("\n".join(errors))
+    if not unreal.EditorAssetLibrary.save_loaded_asset(material, only_if_is_dirty=False):
+        raise RuntimeError("Could not save " + path)
     log("built %s" % path)
 
 

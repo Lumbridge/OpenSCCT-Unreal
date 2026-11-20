@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using OpenScct.Core.Engine;
 using OpenScct.UnrealBridge.Online;
 using OpenScct.UnrealBridge.Social;
 
@@ -154,6 +155,8 @@ public enum CareerString
     AchievementsSummary = 25,
     DetailsError = 26,
     ArchiveFolder = 27,
+    AchievementRewardIds = 28,
+    AchievementWeapon = 29,
 }
 
 /// <summary>Command's kinds.</summary>
@@ -389,6 +392,9 @@ public static unsafe class CareerExports
             CareerString.AchievementStatus => CareerModel.StatusText(achievement, false),
             CareerString.AchievementStatusLong => CareerModel.StatusText(achievement, true),
             CareerString.AchievementRewards => CareerModel.Rewards(achievement),
+            CareerString.AchievementRewardIds => string.Join("\n", CareerModel.RewardItems(achievement).Select(i => i.Id)),
+            CareerString.AchievementWeapon => MercPrimaryMastery.All.FirstOrDefault(g =>
+                achievement.Achievement.Id.StartsWith("primary_" + g.Id + "_", StringComparison.Ordinal))?.Name ?? string.Empty,
             _ => string.Empty,
         };
     }
@@ -510,7 +516,7 @@ public static unsafe class CareerExports
             CareerAchievementFlags flags = CareerAchievementFlags.None;
             if (row.Earned) flags |= CareerAchievementFlags.Earned;
             if (row.Reported) flags |= CareerAchievementFlags.Reported;
-            if (row.Achievement.Rewards.Any(id => OpenScct.Net.Cosmetics.CosmeticCatalog.Find(id) is not null)) flags |= CareerAchievementFlags.HasRewards;
+            if (CareerModel.RewardItems(row).Any()) flags |= CareerAchievementFlags.HasRewards;
             if (model.NextUnlockIndex() == index) flags |= CareerAchievementFlags.NextUnlock;
             *achievement = new CareerAchievementBlock
             {

@@ -29,6 +29,7 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScaleBox.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -727,14 +728,17 @@ TSharedRef<SWidget> SScctMatchMenu::BuildMatchCard()
 
 TSharedRef<SWidget> SScctMatchMenu::BuildPause()
 {
-	const TSharedRef<SVerticalBox> Entries = SNew(SVerticalBox);
+	const TSharedRef<SScrollBox> Entries = SNew(SScrollBox)
+		.ScrollWhenFocusChanges(EScrollWhenFocusChanges::InstantScroll)
+		.AllowOverscroll(EAllowOverscroll::No);
 	const auto Entry = [&Entries](const FString& Caption, const FString& Sub, const FString& Description, TFunction<void()> OnPressed, EScctButtonLook Look = EScctButtonLook::Menu) -> TSharedRef<SScctButton>
 	{
 		TSharedPtr<SScctButton> Made;
-		Entries->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
+		Entries->AddSlot().Padding(0.0f, 0.0f, 0.0f, 1.0f)
 		[
 			SAssignNew(Made, SScctButton)
 			.Look(Look)
+			.Compact(true)
 			.Text(FText::FromString(Caption.ToUpper()))
 			.SubText(FText::FromString(Sub))
 			.Description(FText::FromString(Description))
@@ -785,7 +789,7 @@ TSharedRef<SWidget> SScctMatchMenu::BuildPause()
 	}
 
 	return SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Fill)
 		[
 			SNew(SBox).WidthOverride(700.0f)
 			[
@@ -794,13 +798,13 @@ TSharedRef<SWidget> SScctMatchMenu::BuildPause()
 				[
 					ScctUi::Label(bOnlineLevel ? TEXT("ONLINE · THE MATCH GOES ON") : TEXT("PAUSED · THE BOTS PLAY ON"), ScctUi::Accent(), 12.0f)
 				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 30.0f)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)
 				[
 					SNew(STextBlock).Font(ScctUi::Display(52.0f)).ColorAndOpacity(ScctHudStyle::Text())
 					.Text(FText::FromString(ScctUi::GameText(TEXT("Start_Menu"), TEXT("TitlePage"), TEXT("In-Game Menu")).ToUpper()))
 				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(-24.0f, 0.0f, 0.0f, 0.0f)[ SNew(SBox).WidthOverride(480.0f)[ Entries ] ]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 30.0f, 0.0f, 0.0f)
+				+ SVerticalBox::Slot().FillHeight(1.0f).HAlign(HAlign_Left).Padding(-24.0f, 0.0f, 0.0f, 0.0f)[ SNew(SBox).WidthOverride(480.0f)[ Entries ] ]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
 				[
 					SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 22.0f, 0.0f)[ ScctUi::KeyHint(TEXT("ENTER"), TEXT("A"), TEXT("Select")) ]

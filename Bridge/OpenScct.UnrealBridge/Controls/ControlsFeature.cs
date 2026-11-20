@@ -4,7 +4,9 @@ using System.Numerics;
 using OpenScct.Animation;
 using OpenScct.Core;
 using OpenScct.Game.Camera;
+using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
+using OpenScct.Game.Svm;
 using OpenScct.Server;
 using OpenScctGame.Play.Session;
 
@@ -82,11 +84,12 @@ public sealed class ControlsFeature
     private static readonly Name NAME_StickyCam = new("s_UseObject_StickyCam");
     private static readonly Name NAME_CamNetwork = new("s_UseObject_CamNetwork");
 
-    /// <summary>How fast the merc's aim zoom eases in and out (PlayRoot.DrawViews).</summary>
+    /// <summary>Default aim and zoom response per second (PlayRoot.DrawViews).</summary>
     private const float AimBlendRate = 18f;
 
     /// <summary>How much of the field of view the merc's aim takes away at full blend (PlayCamera.Apply).</summary>
     private const float AimFovScale = 0.2f;
+    private const float MercAimedSensitivity = 0.7f;
 
     private readonly PlaySession _session;
     private readonly LookAhead _look = new();
@@ -95,6 +98,15 @@ public sealed class ControlsFeature
     private bool _placed;
     private bool _wasCinematic;
     private float _aimBlend;
+    private float _aimPhase;
+    private SWeaponDefense? _presentedWeapon;
+    private float _aimZoomBlend;
+    private float _opticZoomExtra;
+    private bool _mercLookHeldLastFrame;
+    private SWeaponDefense? _shouldered;
+    private SWeaponDefense? _menuSight;
+    private bool _shoulderHeldLastFrame;
+    private bool _ownsRifleAim;
     internal float RifleAimBlend => _aimBlend;
 
     private ControlsFeature(BridgeSession bridge)
@@ -140,11 +152,25 @@ public sealed class ControlsFeature
     /// </summary>
     public FRotator? DrawnAim { get; private set; }
 
+    /// <summary>This frame's calibrated mercenary aim input, in degrees (yaw, pitch).</summary>
+    public Vector2 MercAimTurn { get; private set; }
+    public bool MercWeaponView { get; private set; }
+
+    private (float X, float Y) PendingLook
+    {
+        get
+        {
+            var counts = Keys.PendingMouse;
+            return (counts.X + _session.Input.MouseX, counts.Y + _session.Input.MouseY);
+        }
+    }
+
     /// <summary>One rendered frame of device state, before the session's update.</summary>
-    public unsafe void Frame(in BridgeRawInput raw)
+    public unsafe bool Frame(in BridgeRawInput raw)
     {
         if (!ReferenceEquals(_applied, ControlsStore.Settings))
         {
+            _mercLookHeldLastFrame = false;
             ApplySettings();
         }
 
@@ -159,22 +185,127 @@ public sealed class ControlsFeature
         // in place: either way the mapper sees it here, so a rebind plays from this frame.
         Keys.SetLayout(ControlsStore.Bindings.KeysOf(_merc), _merc);
         bool play = (raw.Flags & BridgeRawInputFlags.Play) != 0;
+        SPlayerController? pc = _session.LocalController;
+        bool localWeaponView = _merc && _session.ViewOverride is null && !_wasCinematic &&
+            pc is { bBehindView: false, bBinocularVision: false, FreeCameraFlying: 0, SBPawn: SPAWNDEFENSE { Health: > 0 } } &&
+            ReferenceEquals(pc.ViewTarget, pc.SBPawn) && PlayerCalcView.SourceOf(pc) == PlayerCalcView.EViewSource.Default;
+        bool allowFreeLook = play && localWeaponView && (raw.Flags & BridgeRawInputFlags.AllowMercFreeLook) != 0;
+        // UE batches all axis samples in this frame, including the ones collected before the key-up.
+        bool reserveReleaseFrame = allowFreeLook && _mercLookHeldLastFrame && Keys.MercFreeLookHeld;
+        bool freeLook;
         double delta = float.IsFinite(raw.DeltaSeconds) && raw.DeltaSeconds > 0f ? raw.DeltaSeconds : 0.0;
+        var weapon = _session.LocalPawn?.MyWeapon as SWeaponDefense;
+        bool menuView = (raw.Flags & BridgeRawInputFlags.MercMenuView) != 0;
+        MercWeaponView = localWeaponView && weapon is not null;
+        Keys.MercControls = play && MercWeaponView;
+        var before = allowFreeLook ? PendingLook : default;
         fixed (byte* keys = raw.Keys)
         {
             var state = new ReadOnlySpan<byte>(keys, BridgeRawInput.KeyCount);
             // A value that is not a number (a device glitch) must not reach the simulation's rotation.
-            Keys.Frame(state, Finite(raw.MouseX), Finite(raw.MouseY), delta, play,
+            // Resolve this frame's keyboard and controller presses before directing its look input.
+            Keys.Frame(state, 0f, 0f, delta, play,
                 new ReadOnlySpan<BridgeKeyEdge>(raw.Edges, raw.EdgeCount), raw.NowMsec);
-            Pad.Frame(state, new Vector2(Finite(raw.LeftX), Finite(raw.LeftY)), new Vector2(Finite(raw.RightX), Finite(raw.RightY)),
-                Finite(raw.LeftTrigger), Finite(raw.RightTrigger), settings, side.Pad, _merc, play, delta);
+            freeLook = Pad.Frame(state, new Vector2(Finite(raw.LeftX), Finite(raw.LeftY)), new Vector2(Finite(raw.RightX), Finite(raw.RightY)),
+                Finite(raw.LeftTrigger), Finite(raw.RightTrigger), settings, side.Pad, _merc, play, delta, out var stick, allowFreeLook, reserveReleaseFrame);
+            _mercLookHeldLastFrame = allowFreeLook && Keys.MercFreeLookHeld;
+            UpdateShoulder(pc, weapon, (float)delta, menuView);
+            if (play && !freeLook)
+            {
+                float aimSensitivity = _opticZoomExtra > 0f ? 1f / (1f + _opticZoomExtra) :
+                    Keys.MercControls ? 1f + (MercAimedSensitivity - 1f) * _aimBlend : 1f;
+                Keys.AddMouse(Finite(raw.MouseX) * aimSensitivity, Finite(raw.MouseY) * aimSensitivity);
+                _session.Input.MouseX += stick.X * aimSensitivity;
+                _session.Input.MouseY += stick.Y * aimSensitivity;
+            }
         }
 
         UpdateClutch(settings);
+        MercAimTurn = Vector2.Zero;
+        if (allowFreeLook && !freeLook && pc is not null)
+        {
+            var after = PendingLook;
+            if (after != before)
+            {
+                // Both projections start from the same simulation pose. Subtracting also accounts for earlier
+                // render frames within this tick at the pitch stop and in the integer rotation rounding.
+                float dt = pc.Level?.m_dT ?? Sim.DeltaTime;
+                var oldTurn = LookAhead.Turn(pc, _session.Mouse, before.X, before.Y, dt);
+                var newTurn = LookAhead.Turn(pc, _session.Mouse, after.X, after.Y, dt);
+                MercAimTurn = new Vector2(Degrees(newTurn.Yaw - oldTurn.Yaw), Degrees(newTurn.Pitch - oldTurn.Pitch));
+            }
+        }
+        return freeLook;
+    }
 
-        // The merc's aim zoom eases by the frame, as the Godot client's first-person view does.
-        float target = _session.LocalPawn?.MyWeapon is OpenScct.Game.Svm.MercRifle { AimRequested: true } ? 1f : 0f;
-        _aimBlend += (target - _aimBlend) * (1f - MathF.Exp(-AimBlendRate * (float)delta));
+    private void UpdateShoulder(SPlayerController? pc, SWeaponDefense? weapon, float delta, bool menuView)
+    {
+        if (!ReferenceEquals(weapon, _presentedWeapon))
+        {
+            _presentedWeapon = weapon;
+            _aimBlend = _aimPhase = _aimZoomBlend = _opticZoomExtra = 0f;
+        }
+        bool held = Keys.MercAimHeld;
+        bool canShowRifle = MercWeaponView && pc is { bIsInInventoryMode: false, iDontUpdatePadInput: 0,
+            SBPawn: SPAWNDEFENSE { Health: > 0, bStickyShocking: false, bWeaponTransit: false } };
+        bool ready = canShowRifle && (weapon is MercSidearm sidearm
+            ? sidearm.ReloadUntil <= 0f && sidearm.IsInState("s_Selected") &&
+                pc?.SBPawn is { bLyingOnGround: false } pawn && pawn.Level.TimeSeconds >= pawn.WeaponSwitchUntil
+            : weapon?.StateNode is SWeaponDefense.s_Selected or SWeaponDefense.s_Firing);
+        // The match keeps running behind the menu. Release the gameplay aim input below, but
+        // keep the current sight picture until play resumes or this rifle can no longer be held.
+        _menuSight = menuView && ready && ReferenceEquals(weapon, _menuSight ?? _shouldered) ? weapon : null;
+        if (_shouldered is not null && (!held || !ready || !ReferenceEquals(weapon, _shouldered)))
+        {
+            if (_ownsRifleAim && _shouldered is { AimRequested: true } owned && pc is not null)
+                owned.SetAiming(pc, false);
+            // Reload cancels aim immediately. The same visible rifle still has to travel out of its sights.
+            bool reloading = weapon is MercSidearm { ReloadUntil: > 0f }
+                || weapon?.StateNode is SWeaponDefense.s_Reloading or SWeaponDefense.s_FullReloading;
+            if (!ReferenceEquals(weapon, _shouldered) || !canShowRifle || (!ready && !reloading)) _aimBlend = _aimPhase = 0f;
+            _shouldered = null;
+            _ownsRifleAim = false;
+        }
+        if (ready && held && !_shoulderHeldLastFrame)
+        {
+            _shouldered = weapon;
+            if (weapon is { AimRequested: false } rifle)
+            {
+                // The authority records which physical sight was raised when the shot landed.
+                rifle.SetAiming(pc!, true);
+                _ownsRifleAim = rifle.AimRequested;
+            }
+        }
+        _shoulderHeldLastFrame = held;
+
+        if (!MercWeaponView)
+        {
+            _aimBlend = _aimPhase = _aimZoomBlend = _opticZoomExtra = 0f;
+            return;
+        }
+
+        bool aiming = weapon is MercRifle or MercSidearm ? weapon.AimRequested : _shouldered is not null;
+        float step = 1f - MathF.Exp(-AimBlendRate * delta);
+        float power = WeaponAttachments.OpticPower(weapon);
+        if (_menuSight is null)
+        {
+            // Advance the raise/lower animation from its current position, including when the player
+            // reverses direction before reaching the sight.
+            float speed = weapon switch
+            {
+                M4A1S => 2.3f * 1.35f,
+                BoltRifle => 4f,
+                CompactSMG or MercSidearm or SWeaponDefense_Uzi => 3f,
+                _ => 2.3f
+            };
+            _aimPhase = Math.Clamp(_aimPhase + (aiming ? speed : -speed) * delta, 0f, 1f);
+            _aimBlend = weapon is BoltRifle ? _aimPhase : .5f * (1f - MathF.Cos(MathF.PI * _aimPhase));
+            _opticZoomExtra = (power - 1f) * _aimBlend;
+        }
+        // The shoulder binding raises the sight in the existing image. The independent scope binding
+        // retains its original zoom and eases back out when released.
+        if (_shouldered is not null || power > 1f) _aimZoomBlend = 0f;
+        else _aimZoomBlend += ((weapon is MercRifle { AimRequested: true } ? 1f : 0f) - _aimZoomBlend) * step;
     }
 
     /// <summary>
@@ -203,10 +334,10 @@ public sealed class ControlsFeature
         bool overridden = _session.ViewOverride is not null;
 
         // The mouse turn not yet simulated is drawn now (no frame of delay, as the original's per-frame controller).
-        (float pendingX, float pendingY) = Keys.PendingMouse;
+        (float pendingX, float pendingY) = PendingLook;
         FRotator look = overridden
             ? default
-            : _look.Offset(pc, _session.Mouse, pendingX + _session.Input.MouseX, pendingY + _session.Input.MouseY, alpha);
+            : _look.Offset(pc, _session.Mouse, pendingX, pendingY, alpha);
         float orbit = _look.OrbitDistance(pc);
 
         bool cut = !_placed || _wasCinematic || ViewBlend.IsCut(previous, current);
@@ -260,7 +391,7 @@ public sealed class ControlsFeature
 
         if (!cinematic)
         {
-            camera.Fov *= 1f - AimFovScale * _aimBlend;
+            camera.Fov *= 1f - AimFovScale * _aimZoomBlend;
         }
 
         _wasCinematic = cinematic;
@@ -271,6 +402,15 @@ public sealed class ControlsFeature
         Name state = pc?.GetStateName() ?? default;
         bool capped = pc is null || (state != NAME_StickyCam && state != NAME_CamNetwork);
         (float horizontal, float vertical) = ViewFov.Screen(camera.Fov, aspect > 0f ? aspect : ViewFov.WidestAspect, settings, capped);
+        float scopeLensPower = 0f;
+        if (!cinematic && !overridden && pc is { bBinocularVision: false, FreeCameraFlying: 0 } &&
+            pc.SBPawn is SPAWNDEFENSE { Health: > 0, bWeaponTransit: false } pawn && ReferenceEquals(pc.ViewTarget, pawn) &&
+            PlayerCalcView.SourceOf(pc) == PlayerCalcView.EViewSource.Default && pawn.MyWeapon is SWeaponDefense weapon)
+        {
+            // The lens has a fixed focal length. Eye alignment controls how much of its image can be seen.
+            float power = WeaponAttachments.OpticPower(weapon);
+            if (power > 1f) scopeLensPower = power;
+        }
 
         FRotator pending = !overridden && _look.Active ? _look.Pending : default;
         FRotator aim = pc is null ? camera.Rotation : new FRotator(pc.Rotation.Pitch + pending.Pitch, pc.Rotation.Yaw + pending.Yaw, pc.Rotation.Roll);
@@ -295,6 +435,8 @@ public sealed class ControlsFeature
             Occluded = occluded ? 1 : 0,
             LookAhead = _look.Active ? 1 : 0,
             RifleAimBlend = _aimBlend,
+            OpticMagnification = 1f,
+            ScopeLensPower = scopeLensPower,
         };
     }
 

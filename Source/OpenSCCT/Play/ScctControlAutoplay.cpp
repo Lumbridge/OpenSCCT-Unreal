@@ -29,6 +29,7 @@ namespace
 		{ TEXT("weapon"), TEXT("E") },
 		{ TEXT("walk"), TEXT("MiddleMouseButton") },
 		{ TEXT("firstperson"), TEXT("X") },
+		{ TEXT("freelook"), TEXT("LeftAlt") },
 	};
 
 	constexpr float TapSeconds = 0.1f;

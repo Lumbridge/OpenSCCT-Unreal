@@ -66,6 +66,9 @@ come before the map imports when they are run. A rebuilt asset is a new binary f
 The weapon table `DA_ScctWeapons` is made once: delete it and run `Import-Characters.ps1` to get the script's
 values back.
 
+Enhanced Mount Hospital's restored colour textures can be regenerated from the installed map.
+[Texture restoration batch](docs/HOSPITAL-TEXTURE-RESTORATION.md)
+
 ## Playing a level
 
 An imported level starts a local match with bots when it opens. Game URL options (all optional, see

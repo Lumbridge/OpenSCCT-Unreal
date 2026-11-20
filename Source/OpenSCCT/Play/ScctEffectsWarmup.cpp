@@ -122,7 +122,11 @@ int32 UScctEffectsSubsystem::SpawnWarmupSamples(const FVector& At, const FVector
 	SpawnMuzzleFlash(At - Right * 15.0, Ahead, 1.0f, false, false, false);
 	SpawnMuzzleFlash(At - Right * 10.0, Ahead, 1.0f, true, false, false);
 	SpawnMuzzleFlash(At - Right * 5.0, Ahead, 1.0f, false, true, true);
-	for (const EStyle Style : { EStyle::Smoke, EStyle::Gas, EStyle::Wisp, EStyle::Sparks, EStyle::Electric, EStyle::Flare, EStyle::Water })
+	if (FlareCard && FlareMaterial)
+	{
+		AddMesh(FlareCard, FlareMaterial, At, FRotationMatrix::MakeFromXY(Right, Up).Rotator(), FVector(0.16, 0.19, 1))->SetCastShadow(false);
+	}
+	for (const EStyle Style : { EStyle::Smoke, EStyle::Gas, EStyle::Wisp, EStyle::Sparks, EStyle::Electric, EStyle::Water })
 	{
 		float Debt = 3.0f;
 		Emit(Style, At + Up * 10.0, FVector::ZeroVector, 0.0f, Debt);

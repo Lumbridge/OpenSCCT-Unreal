@@ -726,8 +726,6 @@ public sealed partial class HubBridge
             new("BotsPerSide", "Bots per side", Range(1, LobbySetup.MaxMaxPlayers / 2, v => v.ToString(CultureInfo.InvariantCulture)), Math.Clamp(d.BotsPerSide, 1, LobbySetup.MaxMaxPlayers / 2) - 1, d.Bots == BotFill.PerSide),
             new("BotSkill", "Bot skill", ["Easy", "Normal", "Hard", "Expert"], Math.Clamp((int)d.BotSkill, 0, 3), d.Bots != BotFill.Off),
             new("Practice", "Practice", ["Off", "On"], d.Practice ? 1 : 0, true),
-            new("Sidearms", "Sidearms only", ["Off", "On"], d.Sidearms ? 1 : 0, true),
-            new("Rifles", "Rifles only", ["Off", "On"], d.Rifles ? 1 : 0, true),
         ];
     }
 
@@ -735,14 +733,29 @@ public sealed partial class HubBridge
     public bool StepLaptopRow(int row, int delta)
     {
         IReadOnlyList<LaptopRow> rows = LaptopRows();
-        if (_draft is not { } d || row < 0 || row >= rows.Count || !rows[row].Enabled || rows[row].Values.Count == 0 || delta == 0)
+        if (row < 0 || row >= rows.Count || rows[row].Values.Count == 0 || delta == 0)
         {
             return false;
         }
 
-        LaptopRow r = rows[row];
-        int n = r.Values.Count;
-        int i = ((r.Index + delta) % n + n) % n;
+        LaptopRow option = rows[row];
+        int count = option.Values.Count;
+        return SelectLaptopRow(option, ((option.Index + delta) % count + count) % count);
+    }
+
+    public bool SelectLaptopRow(int row, int index)
+    {
+        IReadOnlyList<LaptopRow> rows = LaptopRows();
+        return row >= 0 && row < rows.Count && SelectLaptopRow(rows[row], index);
+    }
+
+    private bool SelectLaptopRow(LaptopRow r, int i)
+    {
+        if (_draft is not { } d || !r.Enabled || i < 0 || i >= r.Values.Count)
+        {
+            return false;
+        }
+
         _draft = r.Key switch
         {
             "Mode" => d with { Mode = ModesOf(d.Map)[i] },
@@ -754,8 +767,6 @@ public sealed partial class HubBridge
             "BotsPerSide" => d with { BotsPerSide = i + 1 },
             "BotSkill" => d with { BotSkill = (OpenScct.Game.AI.AiSkill)i },
             "Practice" => d with { Practice = i == 1 },
-            "Sidearms" => d with { Sidearms = i == 1 },
-            "Rifles" => d with { Rifles = i == 1 },
             _ => d,
         };
         Touch();

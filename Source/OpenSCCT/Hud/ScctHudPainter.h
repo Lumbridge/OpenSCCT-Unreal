@@ -11,8 +11,7 @@ struct FSlateBrush;
  * Draws the HUD's shapes into a Slate element list: glass panels, text, lines and arcs. Every HUD element paints
  * through this, so they share one look and nothing else touches Slate's draw calls.
  *
- * Positions and sizes are in the local units of the widget being painted. Each call draws above the one before
- * (Slate only promises an order between layers, so every shape takes a new layer).
+ * Positions and sizes are in the local units of the widget being painted. Overlapping shapes keep their paint order. Disjoint boxes can share a Slate layer.
  */
 class FScctHudPainter
 {
@@ -110,6 +109,7 @@ public:
 
 private:
 	FPaintGeometry BoxGeometry(const FBox2f& Box) const;
+	int32 LayerForBox(const FBox2f& Box);
 
 	/** The fade every shape is drawn with: the block's own times the layout group's. */
 	float Alpha() const { return Opacity * GroupOpacity; }
@@ -122,6 +122,8 @@ private:
 	FGeometry BaseGeometry;
 	FGeometry Geometry;
 	int32 Layer;
+	int32 BoxLayer = INDEX_NONE;
+	FBox2f BoxLayerBounds = FBox2f(ForceInit);
 	float Opacity = 1.0f;
 	float GroupOpacity = 1.0f;
 	float GroupScale = 1.0f;

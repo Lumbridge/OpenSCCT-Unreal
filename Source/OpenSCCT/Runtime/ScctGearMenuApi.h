@@ -13,7 +13,7 @@
 // This mirrors GearMenuExports.cs field for field; change both together and bump the version. Strings are UTF-16 and
 // zero terminated, cut to fit.
 
-constexpr int32 ScctGearMenuApiVersion = 1;
+constexpr int32 ScctGearMenuApiVersion = 2;
 
 namespace EScctGearMenuContext
 {
@@ -149,13 +149,15 @@ struct FScctGearMenuApi
 	int32 (__cdecl* SavedJson)(TCHAR* Buffer, int32 Capacity);
 
 	int32 (__cdecl* LastError)(TCHAR* Buffer, int32 Capacity);
+	int32 (__cdecl* GetAttachmentMask)(const TCHAR* Weapon);
+	int32 (__cdecl* SetAttachmentMask)(const TCHAR* Weapon, int32 Mask);
 };
 
 // The sizes the C# side has (Bridge/Probes/GearMenuProbe prints them).
 static_assert(sizeof(FScctGearMenuState) == 1912, "FScctGearMenuState must match BridgeGearMenuState");
 static_assert(sizeof(FScctGearOption) == 328, "FScctGearOption must match BridgeGearOption");
 static_assert(sizeof(FScctGearIntel) == 3544, "FScctGearIntel must match BridgeGearIntel");
-static_assert(sizeof(FScctGearMenuApi) == 96, "FScctGearMenuApi must match GearMenuApi (64-bit)");
+static_assert(sizeof(FScctGearMenuApi) == 112, "FScctGearMenuApi must match GearMenuApi (64-bit)");
 
 // Fetched like every other feature table (Runtime/ScctFeatures.h), declared here so the shared list stays as it is.
 template <> struct TScctFeatureInfo<FScctGearMenuApi>

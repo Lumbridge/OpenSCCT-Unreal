@@ -25,13 +25,11 @@ public sealed class ViewModelPose
 
     private const float LandingBlendSeconds = 0.1f;
 
-    private static readonly Name s_authoredHolster = new("FirstHolsterStFd2");
-
     private readonly ChannelPose[] _channels = new ChannelPose[ViewModelAnim.ChannelCount];
     private readonly Name[] _sequence = new Name[ViewModelAnim.ChannelCount];
     private readonly float[] _remaining = new float[ViewModelAnim.ChannelCount];
     private readonly float[] _duration = new float[ViewModelAnim.ChannelCount];
-    private readonly float[] _loopTime = new float[ViewModelAnim.ChannelCount];
+    private readonly double[] _loopTime = new double[ViewModelAnim.ChannelCount];
     private readonly Name[] _tickSequence = new Name[ViewModelAnim.ChannelCount];
     private readonly float[] _tickRemaining = new float[ViewModelAnim.ChannelCount];
     private readonly Name[] _prevSequence = new Name[ViewModelAnim.ChannelCount];
@@ -42,6 +40,9 @@ public sealed class ViewModelPose
     private ViewModelAnim? _tickAnim;
     private int _samples;
     private float _landingBlendLeft;
+    private float _idleSeconds;
+    private float _lastWalkRate;
+    private double _walkTime;
 
     private static bool IsLocomotion(Name sequence) =>
         sequence == ViewModelClips.FirstWalkStFd2 || sequence == ViewModelClips.FirstWaitStFd2;
@@ -57,6 +58,8 @@ public sealed class ViewModelPose
             _tickAnim = anim;
             _samples = 0;
             _landingBlendLeft = 0f;
+            _idleSeconds = 0f;
+            _walkTime = 0d;
             Array.Clear(_sequence);
         }
 
@@ -101,6 +104,30 @@ public sealed class ViewModelPose
         {
             Name sequence = anim.Sequence(c);
             float remaining = anim.Remaining(c);
+            float rate = anim.Rate(c);
+            if (c == 0 && blendLocomotion)
+            {
+                if (sequence == ViewModelClips.FirstWaitStFd2 && _sequence[c] == ViewModelClips.FirstWalkStFd2)
+                {
+                    // Reversing a strafe briefly crosses the simulation's idle-speed threshold.
+                    // Coast to rest on the current step before committing to the idle clip.
+                    float before = _idleSeconds;
+                    _idleSeconds += MathF.Max(0f, dt);
+                    if (_idleSeconds < LandingBlendSeconds)
+                    {
+                        sequence = ViewModelClips.FirstWalkStFd2;
+                        rate = _lastWalkRate * (1f - (before + _idleSeconds) / (2f * LandingBlendSeconds));
+                    }
+                }
+                else
+                {
+                    _idleSeconds = 0f;
+                    if (sequence == ViewModelClips.FirstWalkStFd2)
+                        _lastWalkRate = rate;
+                    else if (!IsLocomotion(sequence))
+                        _walkTime = 0d;
+                }
+            }
             if (sequence != _sequence[c] || remaining > _remaining[c] + 1e-4f)
             {
                 // Animation sets without a native entry tween keep their existing easing. The original merc clips
@@ -122,7 +149,7 @@ public sealed class ViewModelPose
                 // the clip's data is not known).
                 float full = anim.Data(c).Seconds(anim.Rate(c)) + anim.TweenTime(c);
                 _duration[c] = full > remaining ? full : remaining;
-                _loopTime[c] = 0f;
+                _loopTime[c] = c == 0 && blendLocomotion && sequence == ViewModelClips.FirstWalkStFd2 ? _walkTime : 0d;
             }
 
             _sequence[c] = sequence;
@@ -132,10 +159,13 @@ public sealed class ViewModelPose
                 continue;
             }
 
-            // The holster is the draw clip played backward unless the model brings a clip of its own for it.
-            bool authoredHolster = anim.IsBackward(c) && sequence == ViewModelClips.FirstDrawStEd2 &&
-                (replacements?.Find("FirstHolsterStFd2") ?? character.Find("FirstHolsterStFd2")) is not null;
-            Name played = authoredHolster ? s_authoredHolster : sequence;
+            Name played = sequence;
+            bool backward = anim.IsBackward(c);
+            if (sequence == ViewModelClips.FirstDrawStEd2)
+            {
+                bool hasSeparateHolster = (replacements?.Find("FirstHolsterStFd2") ?? character.Find("FirstHolsterStFd2")) is not null;
+                ViewModelClips.ResolveDrawDirection(ref played, ref backward, hasSeparateHolster);
+            }
             if (_clipNameOf[c] != played)
             {
                 _clipNameOf[c] = played;
@@ -165,9 +195,14 @@ public sealed class ViewModelPose
             if (loop)
             {
                 // LoopAnim's rate scales the clip's own frame rate (the merc's walk loop runs at 0.006 x his speed).
-                _loopTime[c] += dt * anim.Rate(c);
-                frame = _loopTime[c] * fps / frames;
-                frame -= MathF.Floor(frame);
+                // Custom locomotion clips can already end on their starting pose. An extra
+                // wrap key there holds the gun still for one frame of the authored animation.
+                double period = IsLocomotion(sequence) && clip.HasMatchingEndpointPoses ? clip.Length : frames / (double)fps;
+                double time = _loopTime[c] + dt * (double)rate;
+                _loopTime[c] = time - Math.Floor(time / period) * period;
+                if (c == 0 && blendLocomotion && sequence == ViewModelClips.FirstWalkStFd2)
+                    _walkTime = _loopTime[c];
+                frame = (float)(_loopTime[c] * fps / frames);
             }
             else
             {
@@ -180,7 +215,7 @@ public sealed class ViewModelPose
                 frame = Math.Clamp(progress, 0f, 1f) * last;
             }
 
-            float clipFrame = anim.IsBackward(c) && !authoredHolster ? MathF.Max(0f, last - frame) : frame;
+            float clipFrame = backward ? MathF.Max(0f, last - frame) : frame;
             _channels[c] = new ChannelPose
             {
                 Clip = clip,

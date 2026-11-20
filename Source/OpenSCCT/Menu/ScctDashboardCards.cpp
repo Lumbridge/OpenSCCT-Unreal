@@ -432,7 +432,7 @@ namespace ScctDashboard
 				.Text_Lambda([Online, Account, SignedIn, HasRank]
 				{
 					if (!Online.IsValid() || !Online->HasMaster()) { return FText::FromString(TEXT("Offline: no master server is set, so there is no account.")); }
-					if (!SignedIn()) { return FText::FromString(TEXT("Sign in to track your rank and unlocks.")); }
+					if (!SignedIn()) { return FText::FromString(TEXT("Sign in to track your online rank.")); }
 					if (!HasRank()) { return FText::FromString(TEXT("Progress is currently unavailable.")); }
 					FString Line = Account->GetText(EScctAccountText::NextLevel);
 					if (Account->HasFlag(EScctAccountFlags::RefreshFailed)) { Line += TEXT(" · Last received"); }
@@ -449,7 +449,7 @@ namespace ScctDashboard
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
 			[
 				SNew(STextBlock).Font(ScctUi::Small()).ColorAndOpacity(ScctUi::Accent()).AutoWrapText(true)
-				.Visibility_Lambda([SignedIn, Shown] { return Shown(SignedIn() && ScctDashFlag(EScctDashboardFlags::HasUnlock)); })
+				.Visibility_Lambda([Shown] { return Shown(ScctDashFlag(EScctDashboardFlags::HasUnlock)); })
 				.Text(ScctDashAttr(EScctDashboardText::NextUnlock))
 			]
 			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Fill).Padding(0.0f, 12.0f, 0.0f, 0.0f)

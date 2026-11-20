@@ -8,6 +8,18 @@ using OpenScct.UnrealBridge.Social;
 
 namespace OpenScct.UnrealBridge;
 
+internal static class ArmouryPresentation
+{
+    internal static bool IsVisible(CosmeticSlot slot) => slot is not (CosmeticSlot.GunSmg or CosmeticSlot.GunShotgun);
+
+    internal static string SlotName(CosmeticSlot slot, CosmeticSide side) =>
+        slot == CosmeticSlot.GunAr ? "Shared rifle finish" : CosmeticCatalog.SlotName(slot, side);
+
+    internal static string Describe(CosmeticItem item) =>
+        item.Name + " · " + SlotName(item.Slot, item.Side) + (item.Slot is CosmeticSlot.Body or CosmeticSlot.Light
+            ? (item.Side == CosmeticSide.Spy ? " (Spy)" : " (Mercenary)") : string.Empty);
+}
+
 /// <summary>
 /// The Armoury's table (Source/OpenSCCT/Runtime/ScctArmouryApi.h mirrors it): the cosmetics catalogue with the
 /// account's unlocks, the chosen look per side, the appearance sync's status and its conflict choices (Social/Appearance.cs).
@@ -62,7 +74,7 @@ public static unsafe class ArmouryExports
             AccountService a = Account;
             *info = new ArmouryInfoBlock
             {
-                Revision = a.Revision,
+                Revision = HashCode.Combine(a.Revision, Loadout.WeaponCareerView.MasteryRevision, CareerModel.UsesPrivateMastery),
                 Flags = (AccountService.MasterUrl is not null ? 1 : 0) | (a.Account is not null ? 2 : 0) | (a.AppearanceManaged ? 4 : 0) |
                     (a.AppearanceConflict ? 8 : 0) | (PawnLooks.HideMine ? 16 : 0),
                 Items = CosmeticCatalog.All.Count,
@@ -120,11 +132,12 @@ public static unsafe class ArmouryExports
             {
                 0 => Account.AppearanceStatus,
                 1 => string.Join(",", ArmouryLook.Of(side)),
-                2 => CosmeticCatalog.SlotName((CosmeticSlot)b, side),
-                3 => string.Join(",", CosmeticCatalog.SlotsOf(side).Select(s => ((int)s).ToString(System.Globalization.CultureInfo.InvariantCulture))),
+                2 => ArmouryPresentation.SlotName((CosmeticSlot)b, side),
+                3 => string.Join(",", CosmeticCatalog.SlotsOf(side).Where(ArmouryPresentation.IsVisible).Select(s => ((int)s).ToString(System.Globalization.CultureInfo.InvariantCulture))),
                 4 => ArmouryLook.Shared(side).ToHex(),
                 5 => Account.AppearanceTitle,
                 6 => string.Join("+", ArmouryLook.Spy.Concat(ArmouryLook.Merc)),
+                7 => CosmeticCatalog.PrimaryClass((CosmeticSlot)b) is not null ? ((int)CosmeticSlot.GunAr).ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty,
                 _ => string.Empty,
             };
             return OnlineTextCopy.Buffer(buffer, capacity, text);

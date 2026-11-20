@@ -6,8 +6,8 @@ namespace OpenScct.UnrealBridge;
 
 /// <summary>
 /// The offline match's table (Source/OpenSCCT/Runtime/ScctOfflineMatchApi.h mirrors it): what the local match that
-/// plays was really started with, as the simulation's game rules read it. The Offline page's options (practice,
-/// sidearms, rifles, responsive smoke, match size) travel through the level URL and StartLocalEx into PlaySettings,
+/// plays was really started with, as the simulation's game rules read it. The session rules and standard features
+/// travel through the level URL and StartLocalEx into PlaySettings,
 /// and this hands back PlaySettings.GameOptions as the map loader used it, so the log shows what reached the rules.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]

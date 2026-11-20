@@ -1,0 +1,183 @@
+{
+  "map": "MounE",
+  "textures": {
+    "SGameplayObjectsTex_DEF_Cam_obj_eteint_fx.png": {
+      "sha256": "32866437175b7d298c62242a41a4436577e4a86aee74e2308f1433a2e2c5194b",
+      "size": [
+        64,
+        64
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "mesh": "SGameplayObjects_Globe",
+          "mesh_key": "SGameplayObjects.CamNetwork.Globe",
+          "material": "SGameplayObjectsTex.DEF_Cam_obj_eteint_fx",
+          "slot": 1,
+          "alpha_mode": "OPAQUE"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_DEF_cam_text_heat.png": {
+      "sha256": "de20d937de04047d0b279c5d38d322a459a4d68a34b0c1be9b2aab001c6916f8",
+      "size": [
+        256,
+        256
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "mesh": "SGameplayObjects_Globe",
+          "mesh_key": "SGameplayObjects.CamNetwork.Globe",
+          "material": "SGameplayObjectsTex.DEF_cam_text_heat",
+          "slot": 0,
+          "alpha_mode": "OPAQUE"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_FX_neutr_heat.png": {
+      "sha256": "894565f693fe36c853a72408f16f3fceac743292dbbc6351ca88b6d29522b630",
+      "size": [
+        256,
+        256
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "mesh": "SGameplayObjects_mode_neutralisation",
+          "mesh_key": "SGameplayObjects.neutre.mode_neutralisation",
+          "material": "SGameplayObjectsTex.FX_neutr_heat",
+          "slot": 0,
+          "alpha_mode": "OPAQUE"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_FX_neutre_standby_heat.png": {
+      "sha256": "d53a807499f8085eb01862492c38d4131c24457b10e597eb72ec12dcf2429230",
+      "size": [
+        64,
+        64
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "mesh": "SGameplayObjects_mode_neutralisation",
+          "mesh_key": "SGameplayObjects.neutre.mode_neutralisation",
+          "material": "SGameplayObjectsTex.FX_neutre_standby_heat",
+          "slot": 1,
+          "alpha_mode": "OPAQUE"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_HEAT_modetagobject.png": {
+      "sha256": "5d3527f0b2f679f089323857f142e17089e3ff34ecf2ba7059bb59556d1876a8",
+      "size": [
+        128,
+        128
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "mesh": "SGameplayObjects_Dogtag_object",
+          "mesh_key": "SGameplayObjects.Objects.Dogtag_object",
+          "material": "SGameplayObjectsTex.HEAT_modetagobject",
+          "slot": 0,
+          "alpha_mode": "OPAQUE"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_boite_munition_heat.png": {
+      "sha256": "eeedaa6f4970b37874a6928c4a78ecfcd54e4005e0682e18f524d19c6b98f6d4",
+      "size": [
+        256,
+        256
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "mesh": "SGameplayObjects_dr_ammoclip",
+          "mesh_key": "SGameplayObjects.Objects.dr_ammoclip",
+          "material": "SGameplayObjectsTex.boite_munition_heat",
+          "slot": 0,
+          "alpha_mode": "OPAQUE"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_extincteur_heat.png": {
+      "sha256": "9fb58cc1cfc9b930f9afb26f0185fab166adbd28864a56eb0c3dc4b557cdc6c5",
+      "size": [
+        128,
+        128
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "mesh": "SGameplayObjects_F_extincteur_kal",
+          "mesh_key": "SGameplayObjects.Objects.F_extincteur_kal",
+          "material": "SGameplayObjectsTex.extincteur_heat",
+          "slot": 0,
+          "alpha_mode": "OPAQUE"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_first_aid_int_shad.png": {
+      "sha256": "b1cb1485eff1f7ee8e21b3425202730b9ae57c2f1142b45e0f4de3c88aae5f67",
+      "size": [
+        256,
+        256
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "mesh": "SGameplayObjects_first_aid",
+          "mesh_key": "SGameplayObjects.Objects.first_aid",
+          "material": "SGameplayObjectsTex.first_aid_int_shad",
+          "slot": 2,
+          "alpha_mode": "OPAQUE"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_first_aid_int_shad_heat.png": {
+      "sha256": "439d4d11bd774a08f97dd8d00b3a4fadb742b26670f6dd8c745ba9cbae11835a",
+      "size": [
+        128,
+        128
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "mesh": "SGameplayObjects_first_aid",
+          "mesh_key": "SGameplayObjects.Objects.first_aid",
+          "material": "SGameplayObjectsTex.first_aid_int_shad_heat",
+          "slot": 0,
+          "alpha_mode": "OPAQUE"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_fist_aid_glass_heat.png": {
+      "sha256": "439d4d11bd774a08f97dd8d00b3a4fadb742b26670f6dd8c745ba9cbae11835a",
+      "size": [
+        128,
+        128
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "mesh": "SGameplayObjects_first_aid",
+          "mesh_key": "SGameplayObjects.Objects.first_aid",
+          "material": "SGameplayObjectsTex.fist_aid_glass_heat",
+          "slot": 1,
+          "alpha_mode": "BLEND"
+        },
+        {
+          "role": "Self-illumination image",
+          "mesh": "SGameplayObjects_first_aid",
+          "mesh_key": "SGameplayObjects.Objects.first_aid",
+          "material": "SGameplayObjectsTex.fist_aid_glass_heat",
+          "slot": 1,
+          "alpha_mode": "BLEND"
+        }
+      ]
+    }
+  }
+}

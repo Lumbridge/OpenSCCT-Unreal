@@ -49,6 +49,7 @@ namespace EScctEquipmentFlags
 	                                           // carries the zoom)
 	constexpr int32 TorchInCamera = 1 << 17;   // the merc looks through a network camera and his torch shines from it:
 	                                           // place the light at Torch X/Y/Z and pitch/yaw as given, not on his bone
+	constexpr int32 RailLaser = 1 << 18;       // the equipped primary has the M4's rail laser, including while stowed
 }
 
 /** What one pawn holds and wears this frame. Simulation units are Unreal centimetres, same axes. */

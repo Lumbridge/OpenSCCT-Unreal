@@ -19,7 +19,8 @@ double seconds = args.Length > 2 ? double.Parse(args[2], System.Globalization.Cu
 bool on = !(args.Length > 3 && args[3] == "off");
 
 BridgeSession.Configure(content);
-using BridgeSession session = BridgeSession.StartLocal(new LocalMatch { Map = map, Mode = "Story", Merc = false, Bots = 0, ResponsiveSmoke = on });
+var match = new LocalMatch { Map = map, Mode = "Story", Merc = false, Bots = 0 };
+using BridgeSession session = BridgeSession.StartLocal(on ? match : match with { ResponsiveSmoke = false });
 SmokeFeature smoke = SmokeFeature.Of(session);
 var fields = new BridgeSmokeField[8];
 var grid = new byte[64 * 64 * 64];
@@ -129,7 +130,14 @@ while (run.Elapsed.TotalSeconds < seconds)
 }
 
 Console.WriteLine($"done: uploads {smoke.Uploads}, failed grids {fails}");
-return 0;
+if (UcOptions.GetIntOption(session.Session.Loader!.GameOptions, "SvmResponsiveSmoke", -1) != (on ? 1 : 0) ||
+    smoke.State().Enabled != (on ? 1 : 0))
+{
+    Console.WriteLine("FAILED: the host or client used a different responsive smoke rule.");
+    return 1;
+}
+
+return fails == 0 ? 0 : 1;
 
 static float LineDensity(BridgeSession session, FVector a, FVector b)
 {

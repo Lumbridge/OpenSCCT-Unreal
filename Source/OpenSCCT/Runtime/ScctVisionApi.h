@@ -58,6 +58,7 @@ namespace EScctVisionActorFlags
 	constexpr int32 Hidden = 4;   // Actor.bHidden
 	constexpr int32 MapActor = 8; // placed by the map: NameId is its map name
 	constexpr int32 Tracked = 16; // the local merc's motion tracker holds a lock on it (a thrown grenade)
+	constexpr int32 Mine = 32;    // a mine body, including map-placed and player-placed variants
 }
 
 /**

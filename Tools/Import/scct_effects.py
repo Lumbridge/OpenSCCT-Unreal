@@ -22,6 +22,7 @@ PARTICLE_LIT = EFFECTS + "/M_ScctParticleLit"
 PARTICLE_GLOW = EFFECTS + "/M_ScctParticleGlow"
 CORONA = EFFECTS + "/M_ScctCorona"
 LIGHT_FUNCTION = EFFECTS + "/M_ScctLightFunction"
+WATER_REFRACTION = EFFECTS + "/M_ScctWaterRefraction"
 PROJECTOR = EFFECTS + "/M_ScctProjector"
 GLOW_CARD = EFFECTS + "/M_ScctGlowCard"
 WET = EFFECTS + "/M_ScctWet"
@@ -273,6 +274,45 @@ if (Type > 1.5) return 0.6 + 0.39 * sin(angle);
 return 1.0;"""
 
 
+def build_water_refraction():
+    """Refract an incident bundle of rays across three travelling surface waves.
+
+    For a shallow wave the refracted displacement is proportional to the height gradient.
+    Flux concentrates where the determinant of that mapping's Jacobian approaches zero.
+    The whole transmitted bundle exits the window; divergence spreads its energy across a
+    larger area. A finite fixture also illuminates any point from more than one incident angle.
+    """
+    g = Graph(WATER_REFRACTION, rebuild_in_place=True)
+    g.material.set_editor_property("material_domain", unreal.MaterialDomain.MD_LIGHT_FUNCTION)
+    g.material.set_editor_property("force_compatible_with_light_function_atlas", True)
+    flux = g.custom("""
+float2 target = (UV * 2.0 - 1.0) * 14.0;
+float2 surface = target;
+float2 k0 = float2(1.43, 0.54), k1 = float2(-0.68, 1.62), k2 = float2(1.27, -1.34);
+float3 amplitude = float3(0.34, 0.28, 0.19);
+float3 phase = T * float3(0.96, -0.81, 0.57);
+// Effective propagation depth times the air/water slope refraction factor.
+float propagation = 4.8 * (1.0 - 1.0 / 1.333);
+[unroll] for (int i = 0; i < 2; ++i) {
+    float3 angles = float3(dot(surface,k0),dot(surface,k1),dot(surface,k2)) + phase;
+    float3 s = amplitude * sin(angles);
+    surface = target - propagation * (s.x*k0 + s.y*k1 + s.z*k2);
+}
+float3 c = propagation * amplitude * cos(float3(dot(surface,k0),dot(surface,k1),dot(surface,k2)) + phase);
+float xx = 1 + dot(c, float3(k0.x*k0.x,k1.x*k1.x,k2.x*k2.x));
+float yy = 1 + dot(c, float3(k0.y*k0.y,k1.y*k1.y,k2.y*k2.y));
+float xy = dot(c,float3(k0.x*k0.y,k1.x*k1.y,k2.x*k2.y));
+float determinant = abs(xx*yy - xy*xy);
+// Use the complete flux, including diverging rays. Source angular extent softens the ideal
+// point-source cusp. Direct illumination still obeys the receiving surface, shadows and reach.
+float flux = rsqrt(determinant*determinant + 0.21);
+float irradiance = saturate(0.44 + 0.28 * flux);
+return irradiance * (1.0 - smoothstep(0.53, 1.0, length(UV*2.0 - 1.0)));
+""", FLOAT1, UV=g.node(unreal.MaterialExpressionTextureCoordinate), T=g.node(unreal.MaterialExpressionTime))
+    g.output(flux, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    return g.finish()
+
+
 def build_light_function():
     g = Graph(LIGHT_FUNCTION)
     material = g.material
@@ -419,6 +459,7 @@ def build_all():
     build_particle_glow()
     build_corona()
     build_light_function()
+    build_water_refraction()
     build_projector()
     build_glow_card()
     build_wet()

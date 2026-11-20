@@ -46,6 +46,7 @@ enum class EScctSetupText : int32
 	Edit = 6,          // Argument "Row value" ("TimeLimit 12", "Mode DiskHunt", "Map AquaE") applied with the page's rules; returns the setup line
 	Alternate = 7,     // the Alternate rules: "ability TAB bit TAB side TAB caption TAB on", "gadget TAB side TAB option TAB name TAB allowed", "slots TAB side TAB count TAB most"
 	EditAlternate = 8, // Argument "ability BIT 0|1", "gadget SIDE OPTION 0|1", "slots SIDE COUNT" or "reset"; returns the setup line
+	NormalizeNewHost = 9, // restore a local host draft with the standard equipment and smoke rules enabled
 };
 
 struct FScctHostApi

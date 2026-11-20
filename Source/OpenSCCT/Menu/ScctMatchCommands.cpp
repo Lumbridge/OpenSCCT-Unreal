@@ -6,9 +6,11 @@
 #include "Menu/SScctGearPage.h"
 #include "Menu/SScctStrategicMapPage.h"
 #include "Menu/ScctMatchMenuWidget.h"
+#include "Menu/ScctMenuSubsystem.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "Play/ScctGameMode.h"
 #include "Play/ScctPlayerController.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctLoadoutApi.h"
@@ -16,15 +18,6 @@
 
 namespace
 {
-	/** "spy" or "merc" as a side; anything else is "the side played". */
-	int32 MenuSideOf(const FString& Text)
-	{
-		return Text.Equals(TEXT("merc"), ESearchCase::IgnoreCase) ? 1 : Text.Equals(TEXT("spy"), ESearchCase::IgnoreCase) ? 0 : -1;
-	}
-
-	/** -ScctGear / -ScctGearApply acted on in a match of this run. */
-	bool bGearDoneThisRun = false;
-
 	/** -ScctStrategicMap acted on in a match of this run. */
 	bool bMapDoneThisRun = false;
 }
@@ -43,29 +36,6 @@ void UScctMatchCommandsSubsystem::Initialize(FSubsystemCollectionBase& Collectio
 		FrameHandle = Session->OnFrame.AddUObject(this, &UScctMatchCommandsSubsystem::OnFrame);
 	}
 
-	// Once a run (OnFrame marks it done): a match that follows does not open it again.
-	if (!bGearDoneThisRun)
-	{
-		FString Side;
-		if (FParse::Value(FCommandLine::Get(), TEXT("ScctGearApply="), GearScript, false))
-		{
-			bGearPending = true;
-			FString First;
-			GearScript.Split(TEXT(","), &First, nullptr);
-			GearSide = MenuSideOf(First.IsEmpty() ? GearScript : First);
-		}
-		else if (FParse::Param(FCommandLine::Get(), TEXT("ScctGear")) || FParse::Value(FCommandLine::Get(), TEXT("ScctGear="), Side))
-		{
-			bGearPending = true;
-			GearSide = MenuSideOf(Side);
-		}
-		else if (FParse::Param(FCommandLine::Get(), TEXT("ScctGearKey")))
-		{
-			bGearPending = true;
-			bGearByCommand = true;
-		}
-		FParse::Value(FCommandLine::Get(), TEXT("ScctGearAt="), GearDelay);
-	}
 	if (!bMapDoneThisRun)
 	{
 		if (FParse::Value(FCommandLine::Get(), TEXT("ScctStrategicMap="), MapOpenAt) || FParse::Param(FCommandLine::Get(), TEXT("ScctStrategicMap")))
@@ -74,6 +44,24 @@ void UScctMatchCommandsSubsystem::Initialize(FSubsystemCollectionBase& Collectio
 		}
 		FParse::Value(FCommandLine::Get(), TEXT("ScctStrategicMapFloorAt="), MapFloorAt);
 		FParse::Value(FCommandLine::Get(), TEXT("ScctStrategicMapCloseAt="), MapCloseAt);
+	}
+}
+
+void UScctMatchCommandsSubsystem::OnWorldBeginPlay(UWorld& InWorld)
+{
+	Super::OnWorldBeginPlay(InWorld);
+	if (!InWorld.GetAuthGameMode<AScctGameMode>() && InWorld.GetNetMode() != NM_Client)
+	{
+		return;
+	}
+	FScctGearLaunch Gear;
+	if (UScctMenuSubsystem* Menu = UScctMenuSubsystem::Get(this); Menu && Menu->TakeGearLaunch(Gear, true))
+	{
+		bGearPending = true;
+		bGearByCommand = Gear.bUseBinding;
+		GearSide = Gear.Side;
+		GearScript = MoveTemp(Gear.Script);
+		FParse::Value(FCommandLine::Get(), TEXT("ScctGearAt="), GearDelay);
 	}
 }
 
@@ -130,7 +118,6 @@ void UScctMatchCommandsSubsystem::OnFrame(float DeltaSeconds)
 	}
 
 	bGearPending = false;
-	bGearDoneThisRun = true;
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctGear: the kit before: %s"), Kit);
 	if (bGearByCommand && Player != nullptr)
 	{

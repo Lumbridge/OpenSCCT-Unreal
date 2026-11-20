@@ -2,11 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "Runtime/ScctEquipmentApi.h"
+#include "Play/ScctMercRailModule.h"
 
 class UMaterialInterface;
 class UMeshComponent;
 class UPoseableMeshComponent;
 class UPrimitiveComponent;
+class UStaticMeshComponent;
 struct FScctEquipmentModel;
 struct FScctWeaponPresentation;
 
@@ -15,6 +17,8 @@ struct FScctWeaponMotion
 {
 	/** Counts up with every shot (FScctEquipment::ShotCount); negative when not known. */
 	int32 ShotCount = -1;
+
+	int32 AttachmentMask = 0;
 
 	/** 0 single, 1 burst, 2 automatic; negative when not known. */
 	int32 RateOfFire = -1;
@@ -51,9 +55,17 @@ struct FScctEquipmentView
 
 	/** A replacement model is drawn in place of the original gun. */
 	bool HasReplacement() const { return Replacement.IsValid(); }
+	bool HasSupportGrip() const { return SupportGripBone != INDEX_NONE; }
 
 	/** Sets the bridge's pose of the model. */
 	void ApplyPose(TConstArrayView<FScctBridgeBone> Pose);
+
+	/** Update after both the holder's transform and the weapon's pose have been applied. */
+	void UpdateRailModule(int32 AttachmentMask = INDEX_NONE);
+	bool FindAttachmentSight(FTransform& OutWorld) const;
+	UStaticMeshComponent* GetMountedOptic() const { return AccessoryOptic.Get(); }
+	bool HasMountedScope() const;
+	bool FindIronSight(const FTransform& Reference, FTransform& OutWorld, FQuat& OutAlignment) const;
 
 	/**
 	 * Moves the replacement's own parts for this frame (the weapon table row's moving parts): bolt handle,
@@ -85,8 +97,9 @@ struct FScctEquipmentView
 	/** The muzzle: the replacement's Muzzle socket, else the bone "FX". */
 	bool FindMuzzle(FTransform& OutWorld) const;
 
-	/** The Merc sight's aperture or the centre of the drawn barrel when the model has no separate mount. */
-	bool FindMercLaserMount(FTransform& OutWorld) const;
+	/** The animated lamp or laser outlet, with the weapon's original mount as a fallback. */
+	bool FindMercEmitter(bool bTorch, FTransform& OutWorld, bool bRequireRail = false) const;
+	bool SupportsWeaponAttachments() const { return MountProfile != nullptr; }
 
 	/**
 	 * -ScctWeaponProbe (unattended, off by default): every few seconds logs every bone of the original model in
@@ -103,6 +116,19 @@ private:
 	void CopyPoseToFollowers();
 
 	TWeakObjectPtr<UPoseableMeshComponent> Replacement;
+	TWeakObjectPtr<UStaticMeshComponent> RailModule;
+	TWeakObjectPtr<UStaticMeshComponent> AccessoryOptic;
+	TWeakObjectPtr<UStaticMeshComponent> AccessorySuppressor;
+	const FScctWeaponMountProfile* MountProfile = nullptr;
+	bool bEyeModel = false;
+	int32 AppliedAttachmentMask = INDEX_NONE;
+	int32 MuzzleBone = INDEX_NONE;
+	FTransform StockBoreInGun;
+	FVector BoreCorrection = FVector::ZeroVector;
+	int32 StockGunBone = INDEX_NONE;
+	int32 SupportGripBone = INDEX_NONE;
+	bool FindMountFrame(FTransform& OutWorld, bool bBoreCorrection = false) const;
+	void ChangeAttachmentMeshes(int32 Mask);
 	const FScctEquipmentModel* Model = nullptr;
 	const FScctWeaponPresentation* Row = nullptr;
 	double NextProbe = 0.0;

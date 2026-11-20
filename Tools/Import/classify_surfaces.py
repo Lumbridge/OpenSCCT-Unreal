@@ -136,6 +136,10 @@ def classify(source, surface_type, flags, stats):
     if flags.get("projector") or source.startswith("PROJ."):
         return "effect", "projector"
 
+    if (flags.get("translucent") and not flags.get("masked")
+            and re.search(r"(?:aquarium|fish_?tank|water_?tank)[_-]?(?:glass|pane|window|vitre)", name)):
+        return "tank_glass", "transparent aquarium pane"
+
     cls, why = from_name or from_type or "generic", "name" if from_name else "surface type" if from_type else "fallback"
     if from_name and from_type and from_name in WEAK_NAME_CLASSES:
         # The game's own word for what the surface is made of beats a weak name word.

@@ -16,8 +16,8 @@ class UScctOnlineSubsystem;
  *   GAME      session name, game mode, game length, voice chat; player slots, bots (off, per side, fill slots,
  *             custom teams), bots per side or bot pairs, spy and mercenary bots, bot skill
  *   RULES     spy lives (kills to win in Merc Deathmatch), mercenary lives, respawn, active disks and disks to take
- *             (Disk Hunt); revenge, games in a row, random map, auto balance, voice in lobby; practice, sidearms,
- *             additional rifles, responsive smoke, alternate (and its page: each side's abilities, gadgets and slots)
+ *             (Disk Hunt); revenge, games in a row, random map, auto balance, voice in lobby; practice and
+ *             alternate rules (each side's abilities, gadgets and slots)
  *   HOSTING   password, listed on the master, signed-in players only, UPnP, UDP port, LAN beacon, record demos
  *
  * The rules are OpenSCCT's own (the bridge runs CreateSessionModel: ranges, which rows show in which mode, what a
@@ -57,6 +57,7 @@ private:
 	void Edit(const FString& Change);
 	void EditAlternate(const FString& Change);
 	void PickMap(const FString& Map);
+	const FScctHostMap* FindMap(const FString& Id) const;
 	void SetSetup(const FString& Line);
 	void Refresh();
 	int32 PlayersArgument() const { return bPlayersChosen ? FCString::Atoi(*ScctHostSetup::Option(Setup, TEXT("MaxPlayers"))) : 0; }

@@ -224,7 +224,9 @@ public static unsafe class LoadoutExports
             return 0;
         }
 
-        LoadoutStore.Set(FromBridge(in *loadout));
+        LoadoutChoice choice = FromBridge(in *loadout);
+        choice.AttachmentMasks = LoadoutStore.Current.AttachmentMasks;
+        LoadoutStore.Set(choice);
         return 1;
     });
 

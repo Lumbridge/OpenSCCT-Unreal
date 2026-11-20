@@ -1,5 +1,6 @@
 #include "Online/ScctHostSetup.h"
 
+#include "Menu/ScctMenuSubsystem.h"
 #include "Misc/PackageName.h"
 #include "Online/ScctOnlineSubsystem.h"
 #include "Runtime/ScctFeatures.h"
@@ -33,6 +34,23 @@ namespace
 	}
 }
 
+FString FScctHostMap::DefaultMode() const
+{
+	const FString Story = TEXT("Story");
+	if (Modes.Contains(Story))
+	{
+		// A Story settings entry can be present on a map with no Story objectives.
+		UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
+		const FScctMenuMapInfo* CatalogMap = Menu != nullptr ? Menu->FindMap(Id) : nullptr;
+		if (CatalogMap == nullptr || CatalogMap->Plays(0))
+		{
+			return Story;
+		}
+	}
+	const FString* Fallback = Modes.FindByPredicate([&Story](const FString& Mode) { return Mode != Story; });
+	return Fallback != nullptr ? *Fallback : Story;
+}
+
 bool ScctHostSetup::IsAvailable()
 {
 	return SetupTable() != nullptr;
@@ -57,6 +75,11 @@ FString ScctHostSetup::Text(EScctSetupText Kind, const FString& Options, const F
 	Long.SetNumZeroed(Length + 1);
 	Api->SetupText(static_cast<int32>(Kind), *Options, *Argument, MaxPlayers, Long.GetData(), Long.Num());
 	return FString(Long.GetData());
+}
+
+FString ScctHostSetup::MapDefaults(const FScctHostMap& Map, const FString& Options, int32 MaxPlayers)
+{
+	return Text(EScctSetupText::Defaults, Options, FString::Printf(TEXT("?MapName=%s?Mode=%s"), *Map.Id, *Map.DefaultMode()), MaxPlayers);
 }
 
 TArray<FScctHostMap> ScctHostSetup::Maps()

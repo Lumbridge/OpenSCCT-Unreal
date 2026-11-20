@@ -4,8 +4,10 @@
 #include "Engine/PostProcessVolume.h"
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
+#include "GameFramework/Actor.h"
 #include "Hud/ScctHudStyle.h"
 #include "ImageUtils.h"
+#include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialParameterCollection.h"
@@ -20,6 +22,17 @@
 
 namespace
 {
+	void SetMapShaftsHidden(UWorld* World, bool bHidden)
+	{
+		static const FName VisibleShaftTag(TEXT("ScctVisibleMapShaft"));
+		TArray<AActor*> Shafts;
+		UGameplayStatics::GetAllActorsWithTag(World, VisibleShaftTag, Shafts);
+		for (AActor* Shaft : Shafts)
+		{
+			Shaft->SetActorHiddenInGame(bHidden);
+		}
+	}
+
 	struct FVisionMode
 	{
 		int32 Mode; // FScctHudState::VisionMode
@@ -43,6 +56,8 @@ namespace
 	// of a lit room, not a white screen), more as the picture gets darker than the exposure can follow, by the
 	// power NightGainSlope of how much darker, between the bounds; NightGainRate per second is how fast it moves.
 	constexpr int32 NightIndex = 0;
+	constexpr int32 ThermalIndex = 1;
+	constexpr int32 EmfIndex = 3;
 	constexpr float NightGainSettled = 1.25f;
 	constexpr float NightGainSlope = 0.5f;
 	constexpr float NightGainLeast = 0.9f;
@@ -153,7 +168,6 @@ bool UScctVisionSubsystem::EnsureVolume()
 
 void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 {
-	Data.Refresh(DeltaSeconds);
 	if (WarmupMode != INDEX_NONE)
 	{
 		VisionMode = WarmupMode;
@@ -170,6 +184,11 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 	}
 	if (VisionMode != LastMode)
 	{
+		const bool bWasHeatOrEmf = LastMode == 36 || LastMode == 38;
+		if (bWasHeatOrEmf != IsHeatOrEmf())
+		{
+			SetMapShaftsHidden(GetWorld(), IsHeatOrEmf());
+		}
 		UE_LOG(LogOpenSCCT, Log, TEXT("Vision: mode %d -> %d"), LastMode, VisionMode);
 		LastMode = VisionMode;
 	}
@@ -177,6 +196,7 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 	// Nothing is spawned or loaded until the goggles are first used.
 	if ((!bAnyMode && !IsValid(Volume)) || !EnsureVolume())
 	{
+		Data.Refresh(DeltaSeconds, false);
 		Motion.Update(GetWorld(), Data, nullptr, false, DeltaSeconds);
 		Backdrop.Update(GetWorld(), false);
 		return;
@@ -227,26 +247,16 @@ void UScctVisionSubsystem::Present(int32 VisionMode, float DeltaSeconds)
 	// The original night tube amplifies the current frame. Keep moving particles out of the camera's velocity blur.
 	Volume->Settings.bOverride_MotionBlurAmount = GetNightAmount() > 0.0f;
 	Volume->Settings.MotionBlurAmount = 0.0f;
+	// Thermal and EMF need device rows for their objects and carried electronics, including during crossfades.
+	Data.Refresh(DeltaSeconds, Amounts[ThermalIndex] > 0.0f || Amounts[EmfIndex] > 0.0f);
 	MarkCharacters(bAnyShown);
 
 	// Motion tracking's level ramp and the tracker's clean rectangles, while its picture is in the frame at all.
 	Motion.Update(GetWorld(), Data, Materials[MotionIndex], Amounts[MotionIndex] > 0.0f, DeltaSeconds);
 
-	// The gadgets, devices and level meshes, for the mode furthest in (a mode fading out keeps its marks to the end).
-	int32 ObjectMode = 0;
-	float ObjectAmount = 0.0f;
-	for (int32 Index = 0; Index < ModeCount; ++Index)
-	{
-		if (Amounts[Index] > ObjectAmount)
-		{
-			ObjectAmount = Amounts[Index];
-			ObjectMode = VisionModes[Index].Mode;
-		}
-	}
-	Objects.Update(GetWorld(), ObjectMode, Data);
-
-	// Thermal and EMF draw no coronas and no sky, from the moment one is the mode furthest in until it has faded out.
-	Backdrop.Update(GetWorld(), ObjectMode == 36 || ObjectMode == 38);
+	// Geometry and depth follow the selected mode immediately. Only the screen filter fades.
+	Objects.Update(GetWorld(), VisionMode, Data);
+	Backdrop.Update(GetWorld(), IsHeatOrEmf());
 }
 
 void UScctVisionSubsystem::HoldModeForWarmup(int32 Mode)
@@ -279,6 +289,10 @@ void UScctVisionSubsystem::Clear()
 			Materials[Index]->SetScalarParameterValue(AmountParameter, 0.0f);
 			Volume->Settings.WeightedBlendables.Array[Index].Weight = 0.0f;
 		}
+	}
+	if (IsHeatOrEmf())
+	{
+		SetMapShaftsHidden(GetWorld(), false);
 	}
 	LastMode = 0;
 	ShownMode = 0;

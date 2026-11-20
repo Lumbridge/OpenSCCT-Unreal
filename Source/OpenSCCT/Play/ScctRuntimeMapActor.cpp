@@ -7,7 +7,9 @@
 #include "Play/ScctAuthoredMaterial.h"
 #include "Play/ScctMeshMaterial.h"
 #include "Play/ScctAuthoredDirections.h"
+#include "Play/ScctWaterRefraction.h"
 
+#include "Algo/AllOf.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -24,6 +26,9 @@
 #include "GameFramework/PlayerController.h"
 #include "StaticMeshOperations.h"
 #include "Engine/Level.h"
+#include "Engine/MapBuildDataRegistry.h"
+#include "GameFramework/WorldSettings.h"
+#include "StaticMeshComponentLODInfo.h"
 #include "Engine/LevelStreaming.h"
 #include "Engine/PointLight.h"
 #include "Engine/SpotLight.h"
@@ -217,37 +222,277 @@ namespace
 		return Names;
 	}
 
-	/** Restore the missing role on components of older imports, including cooked map packs. */
-	void MarkImportedAuthoredColours(ULevel& Level, const FString& Package)
+	/** Same asset spelling as Tools/Import/import_map.py sanitize(), including variant suffixes. */
+	FString ImportedAssetName(FString Name)
+	{
+		for (TCHAR& Ch : Name)
+		{
+			if (!(Ch < 128 && FChar::IsAlnum(Ch))) Ch = TEXT('_');
+		}
+		return Name;
+	}
+
+	enum class ETankSurface { None, LitPane, UnlitPane, Backdrop, Haze };
+
+	struct FTankMaterialProfiles
+	{
+		const TSharedPtr<FJsonObject> Table = ReadJsonFile(FPaths::ProjectDir() / TEXT("Tools/Import/surface_classes.json"));
+		const TSharedPtr<FJsonObject> Overrides = ObjectOf(Table, TEXT("overrides"));
+		const TSharedPtr<FJsonObject> Materials = ObjectOf(Table, TEXT("materials"));
+		const TSharedPtr<FJsonObject> Classes = ObjectOf(Table, TEXT("classes"));
+		const TSharedPtr<FJsonObject> Look = ObjectOf(Classes, TEXT("tank_glass"));
+		const TSharedPtr<FJsonObject> Backdrop = ObjectOf(Classes, TEXT("tank_backdrop"));
+		const TSharedPtr<FJsonObject> Haze = ObjectOf(Classes, TEXT("tank_haze"));
+
+		ETankSurface Classify(const FString& Source, const TSharedPtr<FJsonObject>& Flags) const
+		{
+			if (!Flags || BoolOf(Flags, TEXT("masked")) || Flags->HasField(TEXT("authored"))) return ETankSurface::None;
+			FString Class = StringOf(Overrides, *Source);
+			if (Class.IsEmpty()) Class = StringOf(Materials, *Source);
+			const bool bUnlit = BoolOf(Flags, TEXT("unlit"));
+			const bool bTranslucent = BoolOf(Flags, TEXT("translucent"));
+			if (Look && bTranslucent && Class == TEXT("tank_glass"))
+				return bUnlit ? ETankSurface::UnlitPane : ETankSurface::LitPane;
+			if (Backdrop && Class == TEXT("tank_backdrop") && bUnlit && !bTranslucent && StringOf(Flags, TEXT("self_illum")).IsEmpty())
+				return ETankSurface::Backdrop;
+			if (Haze && Class == TEXT("tank_haze") && bUnlit && bTranslucent)
+				return ETankSurface::Haze;
+			return ETankSurface::None;
+		}
+
+		void ApplyHaze(UMaterialInstanceDynamic& Target, bool bGlassMaster) const
+		{
+			Target.SetScalarParameterValue(TEXT("Opacity"), NumberOf(Haze, TEXT("opacity"), 1.0));
+			Target.SetScalarParameterValue(TEXT("Emissive"), NumberOf(Haze, TEXT("emissive"), 1.0));
+			// The loose map's unlit translucent shader already has no depth fade.
+			if (bGlassMaster) Target.SetScalarParameterValue(TEXT("SoftDepth"), NumberOf(Haze, TEXT("soft_depth")));
+		}
+
+		// The original opaque gradient stays in BaseColor. The material master adds a constant
+		// through its separate self-illumination input, as in Tools/Import/import_map.py.
+		UMaterialInstanceDynamic* ApplyBackdrop(UMaterialInterface& Existing, UObject& Outer, UMaterialInstanceDynamic* Target = nullptr) const
+		{
+			UTexture2D* White = LoadObject<UTexture2D>(nullptr, TEXT("/Engine/EngineResources/WhiteSquareTexture"));
+			if (!White) return nullptr;
+			const float Emissive = NumberOf(Backdrop, TEXT("emissive"));
+			const float Backscatter = NumberOf(Backdrop, TEXT("backscatter"));
+			const FVector RGB = VectorOf(Backdrop, TEXT("tint"), FVector::OneVector);
+			const FLinearColor Tint(RGB.X, RGB.Y, RGB.Z);
+			float OldEmissive = 0, OldScatter = 0;
+			FLinearColor OldTint;
+			UTexture* OldGlow = nullptr;
+			UTexture* OldMask = nullptr;
+			if (!Existing.GetScalarParameterValue(FName(TEXT("Emissive")), OldEmissive)
+				|| !Existing.GetScalarParameterValue(FName(TEXT("SelfIllum")), OldScatter)
+				|| !Existing.GetVectorParameterValue(FName(TEXT("Tint")), OldTint)
+				|| !Existing.GetTextureParameterValue(FName(TEXT("SelfIllumTexture")), OldGlow)
+				|| !Existing.GetTextureParameterValue(FName(TEXT("SelfIllumMask")), OldMask)) return nullptr;
+			if (FMath::IsNearlyEqual(Emissive, OldEmissive) && FMath::IsNearlyEqual(Backscatter, OldScatter)
+				&& OldTint.Equals(Tint) && OldGlow == White && OldMask == White) return nullptr;
+			if (!Target) Target = UMaterialInstanceDynamic::Create(&Existing, &Outer);
+			Target->SetScalarParameterValue(TEXT("Emissive"), Emissive);
+			Target->SetScalarParameterValue(TEXT("SelfIllum"), Backscatter);
+			Target->SetVectorParameterValue(TEXT("Tint"), Tint);
+			Target->SetTextureParameterValue(TEXT("SelfIllumTexture"), White);
+			Target->SetTextureParameterValue(TEXT("SelfIllumMask"), White);
+			return Target;
+		}
+
+		UMaterialInterface* Master()
+		{
+			if (!bLookedUp)
+			{
+				Glass = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/OpenSCCT/Materials/M_ScctGlass.M_ScctGlass"));
+				bLookedUp = true;
+			}
+			return Glass;
+		}
+
+		auto Parameters(bool bUnlit) const
+		{
+			auto Value = [this](const TCHAR* Key) { return static_cast<float>(NumberOf(Look, Key)); };
+			return TArray<TPair<FName, float>, TInlineAllocator<6>>{
+				{TEXT("Roughness"), Value(TEXT("rough_dark"))},
+				{TEXT("Specular"), Value(TEXT("specular"))},
+				{TEXT("Opacity"), Value(TEXT("opacity"))},
+				{TEXT("OpacityFloor"), Value(TEXT("opacity_floor"))},
+				{TEXT("GlanceOpacity"), Value(TEXT("glance_opacity"))},
+				{TEXT("Emissive"), bUnlit ? Value(TEXT("emissive")) : 0.f}};
+		}
+
+	private:
+		UMaterialInterface* Glass = nullptr;
+		bool bLookedUp = false;
+	};
+
+	TMap<FName, ETankSurface> TankMaterialPackages(const FTankMaterialProfiles& Profile, const FString& MapFolder, const TSharedPtr<FJsonObject>& MaterialDoc)
+	{
+		TMap<FName, ETankSurface> Packages;
+		const auto Records = ObjectOf(MaterialDoc, TEXT("materials"));
+		if (!Records) return Packages;
+		TSet<FString> OtherBlends;
+		for (const TCHAR* Group : {TEXT("additive"), TEXT("modulate")})
+		{
+			for (const auto& Entry : ArrayOf(MaterialDoc, Group))
+			{
+				OtherBlends.Add(Key(StringOf(Entry->AsObject(), TEXT("key"))));
+				OtherBlends.Add(Key(StringOf(Entry->AsObject(), TEXT("name"))));
+			}
+		}
+		for (const auto& [RecordName, Value] : Records->Values)
+		{
+			const auto Record = Value->AsObject();
+			const auto Flags = ObjectOf(Record, TEXT("flags"));
+			const ETankSurface Kind = Profile.Classify(StringOf(Record, TEXT("source")), Flags);
+			if (Kind == ETankSurface::None || OtherBlends.Contains(Key(*RecordName))) continue;
+			const FString Asset = TEXT("MI_") + ImportedAssetName(*RecordName);
+			Packages.Add(FName(*(MapFolder / TEXT("Materials") / Asset)), Kind);
+		}
+		return Packages;
+	}
+
+	UMaterialInstanceDynamic* RetrofitTankMaterial(ULevel& Level, UMaterialInterface& Original, FTankMaterialProfiles& Profile, ETankSurface Kind)
+	{
+		if (Kind == ETankSurface::Backdrop)
+		{
+			return Original.GetBlendMode() == BLEND_Opaque ? Profile.ApplyBackdrop(Original, Level) : nullptr;
+		}
+		if (Kind == ETankSurface::Haze)
+		{
+			// Only migrate the old import recipe. Keep current assets and custom artist overrides,
+			// including their source texture, untouched on disk.
+			float Opacity, Emissive, SoftDepth;
+			if (Original.GetBlendMode() != BLEND_Translucent
+				|| !Original.GetScalarParameterValue(FName(TEXT("Opacity")), Opacity) || !FMath::IsNearlyEqual(Opacity, 1.0f)
+				|| !Original.GetScalarParameterValue(FName(TEXT("Emissive")), Emissive) || !FMath::IsNearlyEqual(Emissive, 0.3f)
+				|| !Original.GetScalarParameterValue(FName(TEXT("SoftDepth")), SoftDepth) || !FMath::IsNearlyEqual(SoftDepth, 220.0f)) return nullptr;
+			auto* Updated = UMaterialInstanceDynamic::Create(&Original, &Level);
+			Profile.ApplyHaze(*Updated, true);
+			return Updated;
+		}
+		UMaterialInterface* Master = Profile.Master();
+		if (!Master) return nullptr;
+		const auto Params = Profile.Parameters(Kind == ETankSurface::UnlitPane);
+		const bool bGlassShader = Original.GetMaterial() == Master->GetMaterial();
+		if (bGlassShader && Algo::AllOf(Params, [&Original](const auto& Param)
+		{
+			float Current;
+			return Original.GetScalarParameterValue(Param.Key, Current) && FMath::IsNearlyEqual(Current, Param.Value);
+		})) return nullptr;
+		UMaterialInstanceDynamic* Pane = UMaterialInstanceDynamic::Create(bGlassShader ? &Original : Master, &Level);
+		if (!bGlassShader) Pane->CopyMaterialUniformParameters(&Original);
+		for (const auto& Param : Params) Pane->SetScalarParameterValue(Param.Key, Param.Value);
+		return Pane;
+	}
+
+	int32 PrepareLevelWater(ULevel& Level, const FString& Folder)
+	{
+		if (Folder.IsEmpty() || !ScctWaterRefraction::NeedsPreparation(Level)) return 0;
+		const FString Render = Folder / TEXT("render");
+		const FString Path = Render / TEXT("world.glb");
+		const auto Gltf = ReadGlbJson(Path);
+		const auto Lighting = ReadJsonFile(Render / TEXT("lighting.json"));
+		if (!Gltf || !Lighting) return 0;
+		GLTF::FFileReader Reader;
+		GLTF::FAsset Asset;
+		Reader.ReadFile(Path, false, false, Asset);
+		return ScctWaterRefraction::Build(Level, Render, *Gltf, *Lighting, Asset);
+	}
+
+	int32 DetachRebuiltLightmaps(ULevel& Level)
+	{
+		const AWorldSettings* Settings = Level.GetWorldSettings(false);
+		UMapBuildDataRegistry* Data = Level.MapBuildData;
+		if (!Data || !Settings || !Settings->bForceNoPrecomputedLighting || !Settings->ActorHasTag(TEXT("ScctLumenLighting"))
+			|| !Level.IsMapBuildDataOwner() || Level.GetWorld()->GetActiveLightingScenario()) return 0;
+
+		// The registry can also contain reflection captures and sky atmosphere data. Break only this
+		// level's bindings to its obsolete surface and volume lighting. Nothing in the registry is erased.
+		int32 Detached = 0;
+		for (AActor* Actor : Level.Actors)
+		{
+			if (!IsValid(Actor)) continue;
+			for (UStaticMeshComponent* Mesh : TInlineComponentArray<UStaticMeshComponent*>(Actor))
+			{
+				bool bChanged = false;
+				for (auto& Lod : Mesh->LODData)
+				{
+					if (!Lod.MapBuildDataId.IsValid() || !Data->GetMeshBuildDataDuringBuild(Lod.MapBuildDataId)) continue;
+					Lod.MapBuildDataId.Invalidate();
+					Lod.OriginalMapBuildDataId.Invalidate();
+					bChanged = true;
+				}
+				if (bChanged)
+				{
+					Mesh->MarkRenderStateDirty();
+					++Detached;
+				}
+			}
+		}
+		if (Data->GetLevelPrecomputedLightVolumeBuildData(Level.LevelBuildDataId) || Data->GetLevelPrecomputedVolumetricLightmapBuildData(Level.LevelBuildDataId))
+		{
+			Level.ReleaseRenderingResources();
+			Level.LevelBuildDataId = FGuid::NewGuid();
+			Level.InitializeRenderingResources();
+			++Detached;
+		}
+		if (Detached > 0)
+		{
+			if (Level.GetWorld()->WorldType == EWorldType::Editor) Level.MarkPackageDirty();
+			UE_LOG(LogOpenSCCT, Log, TEXT("Map %s detached %d obsolete Lightmass receivers from its live fixtures"), *Level.GetOutermost()->GetName(), Detached);
+		}
+		return Detached;
+	}
+
+	/** Repair materials and missing vertex-colour roles on older imports, including downloaded map packs. */
+	void PrepareImportedMaterials(ULevel& Level, const FString& Package)
 	{
 		const FString Map = FPackageName::GetShortName(Package);
 		if (Package != UScctOnlineSubsystem::ImportedLevelOf(Map))
 		{
 			return;
 		}
+		DetachRebuiltLightmaps(Level);
 		const FString Folder = ScctMapFolders::FolderOf(Map);
 		if (Folder.IsEmpty())
 		{
 			return;
 		}
 
-		const FString MeshFolder = FPackageName::GetLongPackagePath(Package) / TEXT("world/StaticMeshes");
+		const FString MapFolder = FPackageName::GetLongPackagePath(Package);
+		const FString MeshFolder = MapFolder / TEXT("world/StaticMeshes");
+		const auto MaterialDoc = ReadJsonFile(Folder / TEXT("render/materials.json"));
+		FTankMaterialProfiles TankProfiles;
+		const auto TankMaterials = TankMaterialPackages(TankProfiles, MapFolder, MaterialDoc);
+		TMap<UMaterialInterface*, UMaterialInstanceDynamic*> TankOverrides;
+		int32 UpdatedTankSlots = 0;
+		TSet<FName> AuthoredNames;
 		TSet<FName> Packages;
-		for (FString Name : AuthoredMeshNames(ReadJsonFile(Folder / TEXT("render/materials.json"))))
+		for (const FString& Original : AuthoredMeshNames(MaterialDoc))
 		{
-			// import_map.py sanitize(): retain the complete variant suffix and match only this map's mesh assets.
-			for (TCHAR& Ch : Name)
-			{
-				if (!(Ch < 128 && FChar::IsAlnum(Ch)))
-				{
-					Ch = TEXT('_');
-				}
-			}
+			const FString Name = ImportedAssetName(Original);
+			AuthoredNames.Add(FName(*Name));
 			Packages.Add(FName(*(MeshFolder / Name)));
 		}
-		if (Packages.IsEmpty())
+		if (Packages.IsEmpty() && TankMaterials.IsEmpty())
 		{
 			return;
+		}
+		// Lightmass preparation duplicates each mesh into this map's NativeLighting folder. Its final
+		// suffix is a bake hash (8 hex digits in older maps, 12 now); the preceding #vc variant identifies
+		// the original painted vertex stream. Never match an unpainted variant of the same base mesh.
+		TArray<FAssetData> Receivers;
+		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+		Registry.GetAssetsByPath(FName(*(MapFolder / TEXT("NativeLighting"))), Receivers, false);
+		for (const FAssetData& Receiver : Receivers)
+		{
+			FString Original, Hash;
+			if (Receiver.AssetName.ToString().Split(TEXT("_"), &Original, &Hash, ESearchCase::CaseSensitive, ESearchDir::FromEnd)
+				&& (Hash.Len() == 8 || Hash.Len() == 12) && Algo::AllOf(Hash, [](TCHAR Ch) { return FChar::IsHexDigit(Ch); })
+				&& AuthoredNames.Contains(FName(*Original)))
+			{
+				Packages.Add(Receiver.PackageName);
+			}
 		}
 
 		for (AActor* Actor : Level.Actors)
@@ -261,8 +506,32 @@ namespace
 					{
 						Component->SetCustomPrimitiveDataFloat(BakedVertexSlot, AuthoredVertexColour);
 					}
+					if (Mesh && !TankMaterials.IsEmpty())
+					{
+						const auto& Slots = Mesh->GetStaticMaterials();
+						for (int32 Slot = 0; Slot < Slots.Num(); ++Slot)
+						{
+							UMaterialInterface* Original = Slots[Slot].MaterialInterface;
+							const ETankSurface* Kind = Original ? TankMaterials.Find(Original->GetOutermost()->GetFName()) : nullptr;
+							if (Kind && Component->GetMaterial(Slot) == Original)
+							{
+								auto* Pane = TankOverrides.Find(Original);
+								if (!Pane) Pane = &TankOverrides.Add(Original, RetrofitTankMaterial(Level, *Original, TankProfiles, *Kind));
+								if (*Pane)
+								{
+									Component->SetMaterial(Slot, *Pane);
+									++UpdatedTankSlots;
+								}
+							}
+						}
+					}
 				}
 			}
+		}
+		if (UpdatedTankSlots || FParse::Param(FCommandLine::Get(), TEXT("ScctTankPaneProbe")))
+		{
+			UE_LOG(LogOpenSCCT, Log, TEXT("Map %s tank materials: %d classified material packages, %d used, %d old component slots updated"), *Map,
+				TankMaterials.Num(), TankOverrides.Num(), UpdatedTankSlots);
 		}
 	}
 
@@ -396,16 +665,22 @@ void UScctRuntimeMapSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	FLevelStreamingDelegates::OnLevelStreamingStateChanged.AddWeakLambda(this,
 		[this](UWorld* World, const ULevelStreaming* Streaming, ULevel* Level, ELevelStreamingState Previous, ELevelStreamingState Current)
 		{
+			if (World == GetWorld() && Level && Current == ELevelStreamingState::LoadedVisible)
+			{
+				const FString Map = FPackageName::GetShortName(Streaming->PackageNameToLoad.IsNone() ? Streaming->GetWorldAssetPackageName() : Streaming->PackageNameToLoad.ToString());
+				PrepareLevelWater(*Level, ScctMapFolders::FolderOf(Map));
+			}
 			if (World == GetWorld() && Level && (Previous == ELevelStreamingState::Loading || Previous == ELevelStreamingState::Unloaded)
 				&& (Current == ELevelStreamingState::LoadedNotVisible || Current == ELevelStreamingState::LoadedVisible))
 			{
 				const FString Source = Streaming->PackageNameToLoad.IsNone() ? Streaming->GetWorldAssetPackageName() : Streaming->PackageNameToLoad.ToString();
-				MarkImportedAuthoredColours(*Level, UWorld::RemovePIEPrefix(Source));
+				PrepareImportedMaterials(*Level, UWorld::RemovePIEPrefix(Source));
 			}
 		});
 	if (Package != UScctOnlineSubsystem::RuntimeLevel)
 	{
-		MarkImportedAuthoredColours(*InWorld.PersistentLevel, Package);
+		PrepareImportedMaterials(*InWorld.PersistentLevel, Package);
+		PrepareLevelWater(*InWorld.PersistentLevel, ScctMapFolders::FolderOf(FPackageName::GetShortName(Package)));
 		return;
 	}
 
@@ -689,6 +964,16 @@ void AScctRuntimeMapActor::Tick(float DeltaSeconds)
 	}
 }
 
+int32 AScctRuntimeMapActor::PrepareWaterRefraction(UWorld* World, const FString& MapFolder)
+{
+	return World && World->PersistentLevel ? PrepareLevelWater(*World->PersistentLevel, MapFolder) : 0;
+}
+
+int32 AScctRuntimeMapActor::DetachRebuiltLightmaps(UWorld* World)
+{
+	return World && World->PersistentLevel ? ::DetachRebuiltLightmaps(*World->PersistentLevel) : 0;
+}
+
 bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 {
 	const double Start = FPlatformTime::Seconds();
@@ -925,6 +1210,7 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 		}
 		const bool bMovable = StringOf(Instance, TEXT("kind")) == TEXT("mover") || BoolOf(Instance, TEXT("gameplay"));
 		AActor* Placed = PlaceMesh(Mesh, StringOf(Instance, TEXT("actor")), FTransform(Rotator, Location, Scale), bMovable, VertexLightKind(MeshName, Instance));
+		if (Placed && ScctWaterRefraction::IsGuide(MeshName)) Placed->Tags.Add(TEXT("ScctCausticGuide"));
 		if (const auto Soft = ObjectOf(Instance, TEXT("softBody")); Soft && Placed)
 		{
 			const FString Kind = StringOf(Soft, TEXT("kind"));
@@ -981,6 +1267,8 @@ bool AScctRuntimeMapActor::Build(const FString& Map, const FString& MapFolder)
 	}
 	ConfigureSky(Map);
 	PlaceLights(Lighting);
+	if (Lighting && ScctWaterRefraction::NeedsPreparation(*GetLevel()))
+		ScctWaterRefraction::Build(*GetLevel(), RenderFolder, *Gltf, *Lighting, Asset);
 
 	UE_LOG(LogOpenSCCT, Log, TEXT("Runtime map %s: built %d meshes (%d sections, %d triangles) from %s with the engine's glTF reader (%d reader errors), %d materials, %d textures loaded (%d missing), placed %d meshes (%d level surfaces; %d instances skipped as hidden or projector copies, %d without a mesh), %d lights; read in %.2f s, built in %.2f s"),
 		*Map, Meshes.Num(), NumSections, NumTriangles, *GlbPath, NumReaderErrors, Materials.Num(), Textures.Num(), NumTexturesMissing,
@@ -1291,6 +1579,7 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 		return Parent;
 	};
 
+	FTankMaterialProfiles TankProfiles;
 	const TArray<TSharedPtr<FJsonValue>>& GltfMaterials = ArrayOf(Gltf, TEXT("materials"));
 	TMap<FString, int32> Counts;
 	for (const TSharedPtr<FJsonValue>& Value : GltfMaterials)
@@ -1301,7 +1590,7 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 		const TSharedPtr<FJsonObject> Flags = ObjectOf(Record, TEXT("flags"));
 		const FString Source = StringOf(Record, TEXT("source")).IsEmpty() ? Name : StringOf(Record, TEXT("source"));
 
-		// import_map.py build_materials, for the surface kind (the class table of glass and water is the editor's).
+		// import_map.py build_materials, including its explicit source-material overrides.
 		const FString* MultiplyMode = Modulate.Find(Key(Name));
 		const bool bAdditive = Additive.Contains(Key(Name));
 		const FString SelfLit = StringOf(Flags, TEXT("self_illum"));
@@ -1330,7 +1619,10 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 			Overlay = TextureFor(StringOf(Combine, TEXT("tex2")));
 		}
 		const bool bUseOverlay = FirstLayer && Overlay;
-		UMaterialInterface* Parent = ParentOf(Blend, MultiplyMode || bUnlit, bTwoSided, bHasSequence && !MultiplyMode ? TEXT("_Sequence") : bUseOverlay ? TEXT("_Overlay") : TEXT(""));
+		const ETankSurface Tank = !bAdditive && !MultiplyMode ? TankProfiles.Classify(Source, Flags) : ETankSurface::None;
+		UMaterialInterface* Glass = Tank == ETankSurface::LitPane || Tank == ETankSurface::UnlitPane ? TankProfiles.Master() : nullptr;
+		UMaterialInterface* Parent = Glass ? Glass : ParentOf(Blend, MultiplyMode || bUnlit, bTwoSided,
+			bHasSequence && !MultiplyMode ? TEXT("_Sequence") : bUseOverlay ? TEXT("_Overlay") : TEXT(""));
 		UMaterialInstanceDynamic* Instance = Parent != nullptr ? UMaterialInstanceDynamic::Create(Parent, this) : nullptr;
 		if (Instance == nullptr)
 		{
@@ -1360,8 +1652,24 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 		{
 			Instance->SetScalarParameterValue(TEXT("Darken"), *MultiplyMode == TEXT("darken") ? 1.0f : 0.0f);
 		}
-		Instance->SetScalarParameterValue(TEXT("Emissive"), bGlowCard ? GlowCardBrightness : bCaustics ? EmissiveCaustics
-			: bAdditive ? EmissiveAdditive : bUnlit ? EmissiveUnlit : 0.0f);
+		if (Glass)
+		{
+			for (const auto& Param : TankProfiles.Parameters(bUnlit)) Instance->SetScalarParameterValue(Param.Key, Param.Value);
+		}
+		else if (Tank == ETankSurface::Backdrop)
+		{
+			Instance->SetScalarParameterValue(TEXT("Emissive"), EmissiveUnlit);
+			TankProfiles.ApplyBackdrop(*Instance, *this, Instance);
+		}
+		else if (Tank == ETankSurface::Haze)
+		{
+			TankProfiles.ApplyHaze(*Instance, false);
+		}
+		else
+		{
+			Instance->SetScalarParameterValue(TEXT("Emissive"), bGlowCard ? GlowCardBrightness : bCaustics ? EmissiveCaustics
+				: bAdditive ? EmissiveAdditive : bUnlit ? EmissiveUnlit : 0.0f);
+		}
 
 		ApplyUvAnimation(*Instance, ObjectOf(Flags, TEXT("uv_anim")), Base);
 		if (bUseOverlay)

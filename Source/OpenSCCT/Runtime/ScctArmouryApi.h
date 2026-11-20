@@ -60,6 +60,7 @@ enum class EScctArmouryText : int32
 	SharedLook = 4, // the look of side A sent to servers (hex)
 	Title = 5,      // the account's title to store
 	OwnLook = 6,    // every chosen id of both sides joined by "+"
+	SharedFinishSlot = 7, // fallback slot of a weapon, empty for equipment with its own default
 };
 
 enum class EScctArmouryCommand : int32

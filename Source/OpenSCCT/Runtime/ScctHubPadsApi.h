@@ -159,3 +159,22 @@ static_assert(sizeof(FScctHubPadRow) == 928, "FScctHubPadRow does not match HubP
 static_assert(sizeof(FScctHubLaptopRow) == 220, "FScctHubLaptopRow does not match HubLaptopRow");
 static_assert(sizeof(FScctHubLaptopMap) == 780, "FScctHubLaptopMap does not match HubLaptopMap");
 static_assert(sizeof(FScctHubPadsApi) == 8 + 12 * sizeof(void*), "FScctHubPadsApi does not match HubPadsApi");
+
+
+/** Optional laptop choice API. The existing hub pads table keeps its original layout. */
+constexpr int32 ScctHubLaptopChoicesApiVersion = 1;
+
+struct FScctHubLaptopChoice
+{
+	TCHAR Label[48];
+};
+
+struct FScctHubLaptopChoicesApi
+{
+	int32 Version;
+	int32 (__cdecl* GetChoices)(int32 Row, FScctHubLaptopChoice* Choices, int32 Capacity);
+	int32 (__cdecl* Select)(int32 Row, int32 Index);
+};
+
+static_assert(sizeof(FScctHubLaptopChoice) == 96, "FScctHubLaptopChoice does not match HubLaptopChoice");
+static_assert(sizeof(FScctHubLaptopChoicesApi) == 8 + 2 * sizeof(void*), "FScctHubLaptopChoicesApi does not match HubLaptopChoicesApi");

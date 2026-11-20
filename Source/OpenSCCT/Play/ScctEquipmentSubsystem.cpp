@@ -6,8 +6,8 @@
 #include "Components/PoseableMeshComponent.h"
 #include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
-#include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/TextureLightProfile.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -18,11 +18,14 @@
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
 #include "Play/ScctEquipmentData.h"
+#include "Play/ScctExposure.h"
 #include "Play/ScctFirstPersonView.h"
 #include "Play/ScctLaserBeam.h"
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
+#include "Play/ScctViewPawn.h"
 #include "Runtime/ScctFeatures.h"
+#include "Runtime/ScctWeaponAttachmentsApi.h"
 
 namespace
 {
@@ -34,34 +37,40 @@ namespace
 	// a wall can be as near as the pawn's collision radius; at this scale the whole model stays nearer than that.
 	constexpr float FirstPersonScale = 0.42f;
 
-	// The near clipping plane cuts the pulled-in model too: a plane N cm from the eye takes away everything of
-	// the view model within N / scale cm of it. With the engine's 10 cm plane that was the 24 cm nearest the eye:
-	// the hands' wrists at most with the original guns, but the whole rear half of a gun whose receiver and stock
-	// run back beside the face (the merc's new rifle showed only its barrel and rail, cut open and see-through
-	// behind them). While a view model is drawn the plane is held no further out than this many centimetres of
-	// the model as it is held, so what is cut is only what touches the eye.
-	constexpr float ViewModelNearCut = 7.5f;
-
 	// The torch. The original's brightness (304) is a number for its baked, unshadowed projector; as a physical
 	// spot light under Lumen this many candelas per unit gives a beam that owns a dark room without washing out
 	// a lit one. Tuned by eye on AquaE and MuseE.
 	constexpr float TorchCandelasPerBrightness = 0.8f;
 	constexpr float TorchInnerCone = 0.2f;          // of the outer half angle: a hot centre that falls away to the rim
 	constexpr float TorchFogScattering = 12.0f;     // the beam hangs in the level's volumetric fog
-	// The player's own torch shines from where the view model's barrel ends on screen, a little ahead of the eye,
-	// not from the eye itself. First-person primitives are drawn pulled in towards the camera, so a light at the
-	// eye would be several times too close to the gun and burn it white; from here the gun is behind the light,
-	// as it is behind a weapon light, and every edge in the beam gets a thin shadow rim. The point is well
-	// inside the pawn's collision cylinder, so no wall can come between it and the eye.
-	const FVector TorchEyeOffset(30.0, 5.0, -7.0);
-
+	constexpr float StockTorchBrightness = 304.0f;
 	const FLinearColor LaserColor(1.0f, 0.03f, 0.02f);
+	const FLinearColor MountedLaserColor(0.055f, 1.0f, 0.025f);
 	constexpr double LaserRibbonWidth = 3.6;        // cm, including the faint outer glow
 	constexpr float LaserBeamWidth = 0.7f;          // cm
 	constexpr float LaserDotWidth = 2.2f;           // cm
 	constexpr float LaserBeamIntensity = 8.0f;
 	constexpr float LaserBeamSharpness = 1.7f;
 	constexpr float LaserDotIntensity = 160.0f;
+	constexpr float MountedBeamWidthRatio = 0.33f;
+	constexpr float MountedBeamGain = 0.33f;
+	constexpr float MountedDotWidth = 0.75f;
+	constexpr float MountedDotIntensity = 24.0f;
+
+	// Trace the posed outlet on its own axis. In first person this transform already includes the
+	// renderer's scale and FOV. Only the short obstruction check starts at the holder's eye or hand.
+	int32 TraceMountedLaser(int32 HolderId, const FVector& Holder, const FTransform& Emitter, FVector& End)
+	{
+		const FVector Origin = Emitter.GetLocation();
+		const FVector Direction = Emitter.GetUnitAxis(EAxis::X);
+		const auto* Api = ScctFeature<FScctLaserTraceApi>();
+		float Distance = 0.0f;
+		const FScctMountedLaserRay Ray{float(Holder.X), float(Holder.Y), float(Holder.Z),
+			float(Origin.X), float(Origin.Y), float(Origin.Z), float(Direction.X), float(Direction.Y), float(Direction.Z)};
+		const int32 Result = Api ? Api->Trace(HolderId, &Ray, &Distance) : -1;
+		End = Origin + Direction * Distance;
+		return Result;
+	}
 
 	const TCHAR* const CylinderPath = TEXT("/Engine/BasicShapes/Cylinder.Cylinder");
 	const TCHAR* const SpherePath = TEXT("/Engine/BasicShapes/Sphere.Sphere");
@@ -71,6 +80,8 @@ namespace
 		TEXT("Candelas of a merc's torch per unit of the original's light brightness (304 for the torch)."));
 	TAutoConsoleVariable<float> CVarTorchFog(TEXT("scct.Torch.FogScattering"), TorchFogScattering,
 		TEXT("How strongly a merc's torch beam shows in the level's volumetric fog."));
+	TAutoConsoleVariable<float> CVarMercTorchPeak(TEXT("scct.Merc.TorchPeak"), 7.0f,
+		TEXT("Maximum direct intensity of the mercenary's first-person torch, in Unreal's unitless falloff mode. Follows the gadget's brightness."));
 	TAutoConsoleVariable<float> CVarFirstPersonScale(TEXT("scct.FirstPerson.Scale"), FirstPersonScale,
 		TEXT("How far the first-person view model is pulled towards the camera (0.05 to 1). Lower keeps it out of walls; too low and the near plane cuts the hands."));
 
@@ -172,6 +183,7 @@ void UScctEquipmentSubsystem::OnMatchStarted()
 	Weapons = UScctWeaponSet::Get();
 	GlowMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/OpenSCCT/Weapons/Materials/M_ScctGlow.M_ScctGlow"), nullptr, LOAD_NoWarn);
 	LaserBeamMaterial = LoadObject<UMaterialInterface>(nullptr, ScctLaserBeam::MaterialPath, nullptr, LOAD_NoWarn);
+	MercTorchProfile = LoadObject<UTextureLightProfile>(nullptr, TEXT("/Game/OpenSCCT/Weapons/Materials/MercTorchProfile.MercTorchProfile"));
 	if (GlowMaterial == nullptr)
 	{
 		UE_LOG(LogOpenSCCT, Warning, TEXT("Equipment: no /Game/OpenSCCT/Weapons/Materials/M_ScctGlow (Tools/Import/Import-Characters.ps1 builds it); laser dots and torch coronas are not drawn"));
@@ -218,6 +230,7 @@ void UScctEquipmentSubsystem::DropEverything()
 	FirstPersonActor = 0;
 	if (IsValid(FirstPersonView))
 	{
+		FirstPersonView->Hide(0.0f);
 		FirstPersonView->Destroy();
 	}
 	FirstPersonView = nullptr;
@@ -258,10 +271,21 @@ const FScctEquipment* UScctEquipmentSubsystem::FindEquipment(int32 ActorId) cons
 	return nullptr;
 }
 
+const USceneComponent* UScctEquipmentSubsystem::GetCarriedWeapon(int32 ActorId) const
+{
+	const FPawnGear* Found = Gear.Find(ActorId);
+	return Found ? Found->Slots[EScctAttachmentSlot::Carried].View.GetBody() : nullptr;
+}
+
 bool UScctEquipmentSubsystem::FindMuzzle(int32 ActorId, FTransform& OutWorld) const
 {
-	if (ActorId == FirstPerson.ActorId && IsValid(FirstPersonView) && FirstPersonView->FindMuzzle(OutWorld))
+	if (ActorId == FirstPerson.ActorId && IsValid(FirstPersonView) && FirstPersonView->IsShown())
 	{
+		if (!FirstPersonView->FindMuzzle(OutWorld))
+		{
+			return false;
+		}
+		OutWorld.SetLocation(FirstPersonView->ProjectSocket(OutWorld.GetLocation(), DrawnFirstPersonScale));
 		return true;
 	}
 	const FPawnGear* Found = Gear.Find(ActorId);
@@ -272,7 +296,12 @@ bool UScctEquipmentSubsystem::FindCasingPort(int32 ActorId, FTransform& OutWorld
 {
 	if (ActorId == FirstPerson.ActorId && IsValid(FirstPersonView) && FirstPersonView->IsShown())
 	{
-		return FirstPersonView->FindCasingPort(OutWorld);
+		const bool bFound = FirstPersonView->FindCasingPort(OutWorld);
+		if (bFound && FirstPersonView->UsesSightProjection())
+		{
+			OutWorld.SetLocation(FirstPersonView->ProjectSocket(OutWorld.GetLocation(), DrawnFirstPersonScale));
+		}
+		return bFound;
 	}
 	const FPawnGear* Found = Gear.Find(ActorId);
 	if (Found == nullptr)
@@ -362,6 +391,16 @@ void UScctEquipmentSubsystem::OnFrame(float DeltaSeconds)
 		return &Found;
 	};
 
+	const FScctWeaponAttachmentsApi* AttachmentApi = ScctFeature<FScctWeaponAttachmentsApi>();
+	for (int32 Index = 0; Index < EquipmentCount; ++Index)
+	{
+		const FScctEquipment& Pawn = Equipment[Index];
+		if (FPawnGear* Found = GearOf(Pawn.ActorId))
+		{
+			Found->AttachmentMask = (Pawn.Flags & EScctEquipmentFlags::Merc) && AttachmentApi
+				? AttachmentApi->GetEquippedForActor(Pawn.ActorId) : 0;
+		}
+	}
 	for (int32 Index = 0; Index < AttachmentCount; ++Index)
 	{
 		const FScctAttachment& Attachment = Attachments[Index];
@@ -498,14 +537,25 @@ void UScctEquipmentSubsystem::UpdateAttachment(const FScctEquipmentApi& Api, FPa
 		Slot.View.ResetPose();
 	}
 	Slot.bAnimated = bAnimated;
+	// A world weapon can be rigid in the hand with no animation clip of its own.
+	if (Attachment.Slot == EScctAttachmentSlot::Weapon)
+	{
+		Slot.View.UpdateRailModule(Found.AttachmentMask);
+	}
+	else if (Attachment.Slot == EScctAttachmentSlot::Carried && Slot.View.SupportsWeaponAttachments())
+	{
+		const auto* AttachmentApi = ScctFeature<FScctWeaponAttachmentsApi>();
+		Slot.View.UpdateRailModule(AttachmentApi ? AttachmentApi->GetHolsteredEquippedForActor(Attachment.ActorId) : 0);
+	}
 	if (Attachment.Slot == EScctAttachmentSlot::Weapon)
 	{
 		// A model drawn in place of the original: its own parts move with the simulation, and while the gun is
 		// in the hands the body's left hand closes on its grip.
-		if (const FScctEquipment* Pawn = Slot.View.HasReplacement() ? FindEquipment(Attachment.ActorId) : nullptr)
+		if (const FScctEquipment* Pawn = Slot.View.HasReplacement() || Slot.View.HasSupportGrip() ? FindEquipment(Attachment.ActorId) : nullptr)
 		{
 			Slot.View.Animate(MotionOf(*Pawn), FrameSeconds);
-			if ((Pawn->Flags & EScctEquipmentFlags::WeaponInHand) != 0)
+			const bool bSupportHandIsFree = Slot.View.HasSupportGrip() && (Pawn->Flags & EScctEquipmentFlags::Reloading) != 0;
+			if ((Pawn->Flags & EScctEquipmentFlags::WeaponInHand) != 0 && !bSupportHandIsFree)
 			{
 				Slot.View.HoldWithLeftHand(*Proxy.GetBodyMesh());
 			}
@@ -592,8 +642,8 @@ void UScctEquipmentSubsystem::UpdateTorch(FPawnGear& Found, AScctPawnProxy& Prox
 		Found.Torch = Torch;
 	}
 
-	// Where it shines from, in the bridge's order: a network camera the merc looks through, the eye of the
-	// player holding it, else the torch's bone on the body.
+	// Camnet supplies its own projector. In the world, use the moving weapon outlet for
+	// first-person and third-person alike. The bridge carries the fallback for a missing model.
 	FVector Location(Pawn.TorchX, Pawn.TorchY, Pawn.TorchZ);
 	FQuat Rotation = FRotator(Pawn.TorchPitch, Pawn.TorchYaw, Pawn.TorchRoll).Quaternion();
 	const bool bInCamera = (Pawn.Flags & EScctEquipmentFlags::TorchInCamera) != 0;
@@ -601,35 +651,89 @@ void UScctEquipmentSubsystem::UpdateTorch(FPawnGear& Found, AScctPawnProxy& Prox
 	// Thermal and EMF draw no coronas (the goggles say so), or the bright card would read as hot or glowing.
 	const UScctVisionSubsystem* Vision = UScctVisionSubsystem::Find(GetWorld());
 	bCorona = bCorona && (Vision == nullptr || !Vision->ShouldHideCoronasAndSky());
-	if (!bInCamera && bFromEye)
+	bool bMercCamera = false;
+	if (bFromEye && !bInCamera)
 	{
-		const FTransform Camera = GetCamera();
-		Location = Camera.TransformPosition(TorchEyeOffset);
-		Rotation = Camera.GetRotation();
 		bCorona = false;
+		const APlayerController* Player = GetWorld()->GetFirstPlayerController();
+		const auto* View = Player ? Cast<AScctViewPawn>(Player->GetViewTarget()) : nullptr;
+		bMercCamera = View && View->UsesMercCamera();
 	}
-	else if (!bInCamera)
+	if (!bInCamera)
 	{
-		const TConstArrayView<int32> BoneMap = Proxy.GetBoneMap();
-		const int32 MeshBone = BoneMap.IsValidIndex(Pawn.TorchBone) ? BoneMap[Pawn.TorchBone] : INDEX_NONE;
-		if (MeshBone != INDEX_NONE)
+		const FScctEquipmentView& Gun = Found.Slots[EScctAttachmentSlot::Weapon].View;
+		FTransform Lamp;
+		bool bMounted = bFromEye && IsValid(FirstPersonView) && FirstPerson.ActorId == Pawn.ActorId
+			&& FirstPersonView->FindMercEmitter(true, DrawnFirstPersonScale, Lamp);
+		if (!bMounted && (Pawn.Flags & EScctEquipmentFlags::WeaponInHand) != 0 && Gun.IsShown())
 		{
-			const FTransform Bone = Proxy.GetBodyMesh()->GetBoneTransform(MeshBone);
-			Location = Bone.GetLocation();
-			if ((Pawn.Flags & EScctEquipmentFlags::TorchFollowsBone) != 0)
+			bMounted = Gun.FindMercEmitter(true, Lamp);
+		}
+		if (bMounted)
+		{
+			Location = Lamp.GetLocation();
+			Rotation = Lamp.GetRotation();
+			if (bFromEye)
 			{
-				Rotation = Bone.GetRotation();
+				// First-person primitives can draw across level collision. Keep the real shadowed light
+				// on the player's side only when the level actually intersects the camera-to-lamp segment.
+				const FVector Eye = GetCamera().GetLocation();
+				float HitDistance;
+				if (FScctExposure::TraceLevel(Eye, Location, HitDistance))
+				{
+					Location = Eye + (Location - Eye).GetSafeNormal() * FMath::Max(0.0f, HitDistance - 2.0f);
+				}
+			}
+		}
+		else
+		{
+			const TConstArrayView<int32> BoneMap = Proxy.GetBoneMap();
+			const int32 MeshBone = BoneMap.IsValidIndex(Pawn.TorchBone) ? BoneMap[Pawn.TorchBone] : INDEX_NONE;
+			if (MeshBone != INDEX_NONE)
+			{
+				const FTransform Bone = Proxy.GetBodyMesh()->GetBoneTransform(MeshBone);
+				Location = Bone.GetLocation();
+				if ((Pawn.Flags & EScctEquipmentFlags::TorchFollowsBone) != 0)
+				{
+					Rotation = Bone.GetRotation();
+				}
 			}
 		}
 	}
 
+	static const IConsoleVariable* EffectsQuality = IConsoleManager::Get().FindConsoleVariable(TEXT("sg.EffectsQuality"));
+	// Both paths use one shadowed light with the torch's original reach. Low uses the native cone.
+	const bool bUseProfile = bMercCamera && MercTorchProfile && (!EffectsQuality || EffectsQuality->GetInt() > 0);
+	Torch->SetIESTexture(bUseProfile ? MercTorchProfile.Get() : nullptr);
 	Torch->SetWorldLocationAndRotation(Location, Rotation);
 	Torch->SetOuterConeAngle(Pawn.TorchHalfAngle);
-	Torch->SetInnerConeAngle(Pawn.TorchHalfAngle * TorchInnerCone);
+	Torch->SetInnerConeAngle(Pawn.TorchHalfAngle * (bUseProfile ? 0.72f : TorchInnerCone));
 	Torch->SetAttenuationRadius(Pawn.TorchRange);
 	Torch->SetLightColor(FLinearColor(Pawn.TorchR, Pawn.TorchG, Pawn.TorchB));
-	Torch->SetIntensity(Pawn.TorchBrightness * CVarTorchCandelas.GetValueOnGameThread());
-	Torch->SetVolumetricScatteringIntensity(CVarTorchFog.GetValueOnGameThread());
+	Torch->SetUseInverseSquaredFalloff(!bMercCamera);
+	Torch->SetIntensityUnits(bMercCamera ? ELightUnits::Unitless : ELightUnits::Candelas);
+	// The first-person gun lamp has a bounded falloff. With inverse-square falloff a tile under the
+	// player clips long before the spot is bright enough on a door several metres away. In this
+	// mode the GPU evaluates (1 - distance² / range²)² per surface, bounded even at the emitter.
+	const float RatedCandelas = Pawn.TorchBrightness * CVarTorchCandelas.GetValueOnGameThread();
+	float Intensity = RatedCandelas;
+	if (bMercCamera)
+	{
+		Torch->SetLightFalloffExponent(2.0f);
+		Intensity = RatedCandelas / (StockTorchBrightness * TorchCandelasPerBrightness)
+			* FMath::Max(0.0f, CVarMercTorchPeak.GetValueOnGameThread());
+		// UE applies the IES import multiplier even with UseIESBrightness off. Use just the angular
+		// distribution, so a reimport or switching between the profile and Low keeps the peak value.
+		if (bUseProfile && MercTorchProfile->TextureMultiplier > 0.0f)
+		{
+			Intensity /= MercTorchProfile->TextureMultiplier;
+		}
+	}
+	Torch->SetIntensity(Intensity);
+	// The reference has a bright spot on the receiver. Applying the original 12x fog enhancement to
+	// that peak turns the air white when the lamp crosses a dark doorway.
+	const float Fog = CVarTorchFog.GetValueOnGameThread();
+	Torch->SetVolumetricScatteringIntensity(bMercCamera ? FMath::Min(Fog, 1.0f) : Fog);
 	if (!Torch->IsVisible())
 	{
 		Torch->SetVisibility(true);
@@ -653,35 +757,45 @@ void UScctEquipmentSubsystem::UpdateTorch(FPawnGear& Found, AScctPawnProxy& Prox
 
 void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Proxy, const FScctEquipment& Pawn, bool bFromViewModel)
 {
-	const bool bBeam = (Pawn.Flags & EScctEquipmentFlags::LaserBeam) != 0 && Proxy.IsShown();
-	const bool bDot = bBeam || ((Pawn.Flags & EScctEquipmentFlags::LaserDot) != 0 && Proxy.IsShown());
+	bool bBeam = (Pawn.Flags & EScctEquipmentFlags::LaserBeam) != 0 && Proxy.IsShown();
+	bool bDot = bBeam || ((Pawn.Flags & EScctEquipmentFlags::LaserDot) != 0 && Proxy.IsShown());
 	const bool bMerc = (Pawn.Flags & EScctEquipmentFlags::Merc) != 0;
-	const bool bMercPrimary = bMerc && Pawn.ActiveWeaponSlot == 0;
+	const bool bInCamera = (Pawn.Flags & EScctEquipmentFlags::TorchInCamera) != 0;
+	const bool bEquipped = (Found.AttachmentMask & EScctWeaponAttachment::Laser) != 0;
+	if (bMerc && !bInCamera && !bEquipped)
+	{
+		bBeam = bDot = false;
+	}
+	const bool bMounted = bMerc && bEquipped && !bInCamera;
 
-	const FVector End(Pawn.LaserEndX, Pawn.LaserEndY, Pawn.LaserEndZ);
-	const FVector TracedStart(Pawn.LaserStartX, Pawn.LaserStartY, Pawn.LaserStartZ);
-	FVector Start = TracedStart;
+	FVector End(Pawn.LaserEndX, Pawn.LaserEndY, Pawn.LaserEndZ);
+	FVector Start(Pawn.LaserStartX, Pawn.LaserStartY, Pawn.LaserStartZ);
 	bool bAttachedMuzzle = false;
+	bool bMountedRay = false;
 	if (bBeam)
 	{
-		// Leave the impact at the bridge's traced point. Match the near end to the weapon as posed for this frame.
 		FTransform Source;
-		if (bMercPrimary)
+		FVector Holder = FVector::ZeroVector;
+		if (bMounted)
 		{
-			if (bFromViewModel && FirstPersonView->FindMercLaserStart(Source))
+			if (bFromViewModel && FirstPersonView->FindMercEmitter(false, DrawnFirstPersonScale, Source, true))
 			{
-				const FVector Eye = GetCamera().GetLocation();
-				Start = Eye + (Source.GetLocation() - Eye) * DrawnFirstPersonScale;
+				Start = Source.GetLocation();
 				bAttachedMuzzle = true;
+				bMountedRay = true;
+				Holder = GetCamera().GetLocation();
 			}
-			else if (!Proxy.IsFirstPerson() && (Pawn.Flags & EScctEquipmentFlags::TorchInCamera) == 0
+			else if (!Proxy.IsFirstPerson()
 				&& (Pawn.Flags & EScctEquipmentFlags::WeaponInHand) != 0)
 			{
 				const FScctEquipmentView& Gun = Found.Slots[EScctAttachmentSlot::Weapon].View;
-				if (Gun.IsShown() && Gun.GetBody()->IsVisible() && Gun.FindMercLaserMount(Source))
+				if (Found.Slots[EScctAttachmentSlot::Weapon].bSeen && Gun.IsShown() && Gun.GetBody()->IsVisible()
+					&& Gun.FindMercEmitter(false, Source, true))
 				{
 					Start = Source.GetLocation();
 					bAttachedMuzzle = true;
+					bMountedRay = true;
+					Holder = Gun.GetBody()->GetComponentLocation();
 				}
 			}
 		}
@@ -694,19 +808,25 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		{
 			Start = Source.GetLocation();
 		}
-		if (bMerc && !bMercPrimary && bFromViewModel)
+		if (bMountedRay)
 		{
-			const FVector Eye = GetCamera().GetLocation();
-			Start = Eye + (Start - Eye) * DrawnFirstPersonScale;
+			// A clear ray has no impact dot. If cover already separates the holder and outlet,
+			// nothing emerges on the far side. The legacy rifle/camera traces use a different axis.
+			bDot = TraceMountedLaser(Pawn.ActorId, Holder, Source, End) > 0;
+		}
+		else if (bMounted)
+		{
+			// On a ladder or the first frame of a draw there may be no posed outlet. Wait for it
+			// before showing either effect, so the dot never jumps from a cached simulation hit.
+			bBeam = false;
+			bDot = false;
 		}
 	}
 
 	const FVector Along = End - Start;
 	const double Length = Along.Size();
 	const FVector Direction = Length > UE_KINDA_SMALL_NUMBER ? Along / Length : FVector::ForwardVector;
-	// A first-person weapon can reach past the struck surface near a wall. Show the impact without a reversed beam.
-	const bool bDrawBeam = bBeam && Length > 1.0 && (!bMercPrimary || FVector::DotProduct(Along, End - TracedStart) > 0.0);
-	const FVector SurfaceDirection = bMercPrimary && bBeam && !bDrawBeam ? (End - TracedStart).GetSafeNormal() : Direction;
+	const bool bDrawBeam = bBeam && Length > 1.0;
 
 	if (bLaserProbe && bBeam && &Proxy == Session->FindLocalProxy())
 	{
@@ -717,6 +837,31 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 	// stands in for the red one, whose added light the mode's material would read as brightness.
 	const UScctVisionSubsystem* Goggles = UScctVisionSubsystem::Find(GetWorld());
 	const int32 GoggleMode = Goggles != nullptr ? Goggles->GetVisionMode() : 0;
+	const bool bNormalVision = GoggleMode == 0 || GoggleMode == 5;
+	const bool bGreen = bNormalVision && bMounted;
+	const FLinearColor& BeamColor = bGreen ? MountedLaserColor : LaserColor;
+	const float BeamWidthRatio = bGreen ? MountedBeamWidthRatio : 1.0f;
+	const float BeamIntensity = (LaserBeamMaterial ? 1.0f : LaserBeamIntensity) * (bGreen ? MountedBeamGain : 1.0f);
+	const float DotIntensity = bGreen ? MountedDotIntensity : LaserDotIntensity;
+	if (Found.bGreenLaser != bGreen)
+	{
+		// Existing instances survive weapon and camera changes.
+		const auto SetAppearance = [&BeamColor](UStaticMeshComponent* Shape, float Intensity)
+		{
+			if (auto* Material = Shape ? Cast<UMaterialInstanceDynamic>(Shape->GetMaterial(0)) : nullptr)
+			{
+				Material->SetVectorParameterValue(TEXT("Color"), BeamColor);
+				Material->SetScalarParameterValue(TEXT("Intensity"), Intensity);
+			}
+		};
+		SetAppearance(Found.Beam.Get(), BeamIntensity);
+		SetAppearance(Found.Dot.Get(), DotIntensity);
+		if (Found.DotLight.IsValid())
+		{
+			Found.DotLight->SetLightColor(BeamColor);
+		}
+		Found.bGreenLaser = bGreen;
+	}
 	const int32 GoggleStencil = bDrawBeam ? FScctLaserVision::StencilFor(GoggleMode, bMerc) : 0;
 	if (GoggleStencil != 0)
 	{
@@ -727,14 +872,14 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		Found.LaserVisionStencil = GoggleStencil;
 		UE_LOG(LogOpenSCCT, Log, TEXT("Equipment: pawn %d (%s) laser beam, %.0f cm, is drawn %s (vision mode %d)"), Pawn.ActorId,
 			bMerc ? TEXT("merc") : TEXT("spy"), Length,
-			GoggleStencil == 0 ? (bDrawBeam ? TEXT("as the red beam") : TEXT("not at all")) : GoggleStencil == UScctVisionSubsystem::StencilEmfStreak ? TEXT("for the goggles as a dark grey EMF streak") : TEXT("for the goggles as heat 1"), GoggleMode);
+			GoggleStencil == 0 ? (bDrawBeam ? TEXT("in normal vision") : TEXT("not at all")) : GoggleStencil == UScctVisionSubsystem::StencilEmfStreak ? TEXT("for the goggles as a dark grey EMF streak") : TEXT("for the goggles as heat 1"), GoggleMode);
 	}
 
 	if (bDrawBeam && !Found.Beam.IsValid())
 	{
 		if (LaserBeamMaterial != nullptr)
 		{
-			UStaticMeshComponent* Ribbon = MakeGlowShape(Proxy, ScctLaserBeam::PlanePath, LaserColor, 1.0f, 1.0f, LaserBeamMaterial.Get());
+			UStaticMeshComponent* Ribbon = MakeGlowShape(Proxy, ScctLaserBeam::PlanePath, BeamColor, BeamIntensity, 1.0f, LaserBeamMaterial.Get());
 			if (Ribbon != nullptr)
 			{
 				CastChecked<UMaterialInstanceDynamic>(Ribbon->GetMaterial(0))->SetScalarParameterValue(TEXT("WeaponProfile"), 1.0f);
@@ -743,7 +888,7 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		}
 		else
 		{
-			Found.Beam = MakeGlowShape(Proxy, CylinderPath, LaserColor, LaserBeamIntensity, LaserBeamSharpness);
+			Found.Beam = MakeGlowShape(Proxy, CylinderPath, BeamColor, BeamIntensity, LaserBeamSharpness);
 		}
 	}
 	if (UStaticMeshComponent* Beam = Found.Beam.Get())
@@ -753,13 +898,13 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		{
 			if (LaserBeamMaterial != nullptr)
 			{
-				ScctLaserBeam::Place(*Beam, Start, End, GetCamera().GetLocation(), LaserRibbonWidth, bAttachedMuzzle);
+				ScctLaserBeam::Place(*Beam, Start, End, GetCamera().GetLocation(), LaserRibbonWidth * BeamWidthRatio, bAttachedMuzzle);
 			}
 			else
 			{
 				// The fallback cylinder is 100 across and 100 long along Z.
 				Beam->SetWorldTransform(FTransform(FRotationMatrix::MakeFromZ(Direction).ToQuat(), Start + Along * 0.5,
-					FVector(LaserBeamWidth / 100.0, LaserBeamWidth / 100.0, Length / 100.0)));
+					FVector(LaserBeamWidth * BeamWidthRatio / 100.0, LaserBeamWidth * BeamWidthRatio / 100.0, Length / 100.0)));
 			}
 		}
 		if (Beam->IsVisible() != bShow)
@@ -770,7 +915,13 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 
 	if (bDot && !Found.Dot.IsValid())
 	{
-		Found.Dot = MakeGlowShape(Proxy, SpherePath, LaserColor, LaserDotIntensity, 2.0f);
+		Found.Dot = MakeGlowShape(Proxy, SpherePath, BeamColor, DotIntensity, 2.0f);
+	}
+	// The mounted emitter paints a small emissive spot. A second light at the hit illuminates
+	// a 60 cm patch of wall at close range and overwhelms the actual point.
+	const bool bDotSpill = bDot && !bGreen;
+	if (bDotSpill && !Found.DotLight.IsValid())
+	{
 		UPointLightComponent* Light = NewObject<UPointLightComponent>(&Proxy, NAME_None, RF_Transient);
 		Light->SetMobility(EComponentMobility::Movable);
 		Light->SetupAttachment(Proxy.GetRootComponent());
@@ -780,7 +931,7 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 		// red from head to foot, and so was the door frame beside him.
 		Light->SetIntensity(0.04f);
 		Light->SetAttenuationRadius(30.0f);
-		Light->SetLightColor(LaserColor);
+		Light->SetLightColor(BeamColor);
 		Light->SetCastShadows(false);
 		UScctEchelonLightFilter::RouteNewWorldLight(*Light);
 		Light->RegisterComponent();
@@ -791,8 +942,8 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 	{
 		if (bDot)
 		{
-			Dot->SetWorldLocation(End - SurfaceDirection * 0.4);
-			Dot->SetWorldScale3D(FVector(LaserDotWidth / 100.0));
+			Dot->SetWorldLocation(End - Direction * (bGreen ? 0.12 : 0.4));
+			Dot->SetWorldScale3D(FVector((bGreen ? MountedDotWidth : LaserDotWidth) / 100.0));
 		}
 		if (Dot->IsVisible() != bDot)
 		{
@@ -801,14 +952,14 @@ void UScctEquipmentSubsystem::UpdateLaser(FPawnGear& Found, AScctPawnProxy& Prox
 	}
 	if (UPointLightComponent* Light = Found.DotLight.Get())
 	{
-		if (bDot)
+		if (bDotSpill)
 		{
 			// Just off the surface, so the spill lands on it.
-			Light->SetWorldLocation(End - SurfaceDirection * 4.0);
+			Light->SetWorldLocation(End - Direction * 4.0);
 		}
-		if (Light->IsVisible() != bDot)
+		if (Light->IsVisible() != bDotSpill)
 		{
-			Light->SetVisibility(bDot);
+			Light->SetVisibility(bDotSpill);
 		}
 	}
 }
@@ -851,6 +1002,15 @@ void UScctEquipmentSubsystem::UpdateFirstPerson(const FScctEquipmentApi& Api, fl
 	UScctSessionSubsystem* Match = Session.Get();
 	const bool bHasView = Api.GetFirstPerson(&FirstPerson) != 0 && FirstPerson.Kind != EScctFirstPersonKind::None;
 	const bool bDraw = bHasView && !bNoViewModel && !Match->IsTourView() && Match->GetView().Valid != 0;
+	const APlayerController* Player = GetWorld()->GetFirstPlayerController();
+	const APawn* ViewPawn = Player ? Player->GetPawn() : nullptr;
+	UCameraComponent* Camera = ViewPawn ? ViewPawn->FindComponentByClass<UCameraComponent>() : nullptr;
+	DrawnFirstPersonScale = bDraw && Camera ? FMath::Clamp(CVarFirstPersonScale.GetValueOnGameThread(), 0.05f, 1.0f) : 1.0f;
+	if (Camera)
+	{
+		Camera->SetEnableFirstPersonScale(bDraw);
+		Camera->SetFirstPersonScale(DrawnFirstPersonScale);
+	}
 
 	if (bDraw && !IsValid(FirstPersonView))
 	{
@@ -872,33 +1032,16 @@ void UScctEquipmentSubsystem::UpdateFirstPerson(const FScctEquipmentApi& Api, fl
 		return;
 	}
 
-	// The camera carries how far first-person primitives are pulled in. The field of view stays the world's.
-	const APlayerController* Player = GetWorld()->GetFirstPlayerController();
-	const APawn* ViewPawn = Player != nullptr ? Player->GetPawn() : nullptr;
-	DrawnFirstPersonScale = 1.0f;
-	if (UCameraComponent* Camera = ViewPawn != nullptr ? ViewPawn->FindComponentByClass<UCameraComponent>() : nullptr)
-	{
-		const float Scale = FMath::Clamp(CVarFirstPersonScale.GetValueOnGameThread(), 0.05f, 1.0f);
-		DrawnFirstPersonScale = Scale;
-		Camera->SetEnableFirstPersonScale(true);
-		Camera->SetFirstPersonScale(Scale);
-
-		const float NearPlane = ViewModelNearCut * Scale;
-		if (GNearClippingPlane > NearPlane + 0.01f && GEngine != nullptr)
-		{
-			UE_LOG(LogOpenSCCT, Log, TEXT("First person: near clipping plane %.2f cm brought in to %.2f cm (it cuts the view model %.1f cm from the eye at first-person scale %.2f)"),
-				GNearClippingPlane, NearPlane, GNearClippingPlane / Scale, Scale);
-			// The engine's own command: it moves the plane for the game and the render thread together.
-			GEngine->Exec(GetWorld(), *FString::Printf(TEXT("r.SetNearClipPlane %.3f"), NearPlane));
-		}
-	}
-
 	FScctWeaponMotion Motion;
 	if (const FScctEquipment* Own = FindEquipment(FirstPerson.ActorId))
 	{
 		Motion = MotionOf(*Own);
 	}
 
+	if (const FPawnGear* Own = Gear.Find(FirstPerson.ActorId))
+	{
+		Motion.AttachmentMask = Own->AttachmentMask;
+	}
 	const float Cloak = VisibleCloak(FirstPerson.Cloak);
 	FirstPersonView->Present(Api, Models, Weapons, FirstPerson, GetCamera(), Cloak, Motion, DeltaSeconds);
 
@@ -911,7 +1054,12 @@ void UScctEquipmentSubsystem::UpdateFirstPerson(const FScctEquipmentApi& Api, fl
 	if (FirstPerson.ShotCount != FirstPersonShots)
 	{
 		FirstPersonShots = FirstPerson.ShotCount;
-		FirstPersonView->PlayMuzzleFlash();
+		const bool bIntegralSuppressor = FirstPerson.Kind == EScctFirstPersonKind::Merc && FirstPerson.PartCount > 0
+			&& Models.Name(Api, FirstPerson.Parts[0].Mesh) == TEXT("OpenScctSidearms.suppressed_first");
+		if (!bIntegralSuppressor && !(Motion.AttachmentMask & EScctWeaponAttachment::Suppressor))
+		{
+			FirstPersonView->PlayMuzzleFlash();
+		}
 	}
 }
 

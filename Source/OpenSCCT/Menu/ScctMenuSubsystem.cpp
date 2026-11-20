@@ -58,6 +58,32 @@ UScctMenuSubsystem* UScctMenuSubsystem::Get(const UObject* WorldContext)
 	return Instance != nullptr ? Instance->GetSubsystem<UScctMenuSubsystem>() : nullptr;
 }
 
+bool UScctMenuSubsystem::TakeGearLaunch(FScctGearLaunch& Request, bool bInMatch)
+{
+	if (bGearLaunchTaken)
+	{
+		return false;
+	}
+	const TCHAR* Command = FCommandLine::Get();
+	FString Side;
+	if (FParse::Value(Command, TEXT("ScctGearApply="), Request.Script, false))
+	{
+		int32 Comma;
+		Side = Request.Script.FindChar(TEXT(','), Comma) ? Request.Script.Left(Comma) : Request.Script;
+	}
+	else if (!FParse::Value(Command, TEXT("ScctGear="), Side) && !FParse::Param(Command, TEXT("ScctGear")))
+	{
+		Request.bUseBinding = bInMatch && FParse::Param(Command, TEXT("ScctGearKey"));
+		if (!Request.bUseBinding)
+		{
+			return false;
+		}
+	}
+	Request.Side = Side.Equals(TEXT("merc"), ESearchCase::IgnoreCase) ? 1 : Side.Equals(TEXT("spy"), ESearchCase::IgnoreCase) ? 0 : INDEX_NONE;
+	bGearLaunchTaken = true;
+	return true;
+}
+
 void UScctMenuSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -229,6 +255,12 @@ FString UScctMenuSubsystem::GetGameVersion()
 {
 	const FScctMenuApi* Menu = Connect();
 	return Menu == nullptr ? FString() : ReadMenuSubsystemText([&](TCHAR* Buffer, int32 Capacity) { return Menu->GetText(static_cast<int32>(EScctMenuText::GameVersion), Buffer, Capacity); });
+}
+
+FString UScctMenuSubsystem::GetBuildNumber()
+{
+	const FScctMenuApi* Menu = Connect();
+	return Menu == nullptr ? FString() : ReadMenuSubsystemText([&](TCHAR* Buffer, int32 Capacity) { return Menu->GetText(static_cast<int32>(EScctMenuText::BuildNumber), Buffer, Capacity); });
 }
 
 const TArray<FScctMenuAction>& UScctMenuSubsystem::GetActions()

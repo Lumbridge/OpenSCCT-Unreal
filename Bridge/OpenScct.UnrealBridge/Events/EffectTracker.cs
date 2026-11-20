@@ -10,6 +10,7 @@ using OpenScct.Game.Combat;
 using OpenScct.Game.Equipment;
 using OpenScct.Game.Lighting;
 using OpenScct.Game.SBase;
+using OpenScct.Game.Svm;
 using OpenScct.UnrealBridge.LightPlan;
 using OpenScctGame.Play.Session;
 using OpenScctGame.Render.Data;
@@ -592,14 +593,16 @@ internal sealed class EffectTracker
         }
 
         bool pistol = source is MercSidearm or MercSidearmDummy;
-        bool suppressed = source is MercSidearm { Kind: 0 } or MercSidearmDummy { Kind: 0 } or
-            OpenScct.Game.Svm.M4A1S or OpenScct.Game.Svm.M4A1SDummy;
+        int attachments = source is SWeaponDefense gun ? gun.AttachmentMask : pawn is SPAWNDEFENSE merc
+            ? pistol ? merc.SidearmWeapon?.AttachmentMask ?? 0 : merc.PrimaryAttachmentMask : 0;
+        bool suppressed = source is MercSidearm { Kind: 0 } or MercSidearmDummy { Kind: 0 } ||
+            (attachments & WeaponAttachments.Suppressor) != 0;
         bool revolver = source is MercSidearm { Kind: 2 } or MercSidearmDummy { Kind: 2 };
         bool shotgun = source is SWeaponDefense_Shotgun or SWeaponDefenseDummy_Shotgun;
-        bool uzi = source is SWeaponDefense_Uzi;
+        bool smg = source is SWeaponDefense_Uzi or SWeaponDefenseDummy_Uzi or CompactSMG or CompactSMGDummy;
 
-        // The first-person Uzi and shotgun have no barrel flash (spec/equipment/merc-guns.md).
-        bool barrel = !sticky && !pistol && !suppressed && !(firstPerson && (uzi || source is SWeaponDefense_Shotgun));
+        // Compact SMGs and shotguns use their own first-person muzzle effect.
+        bool barrel = !sticky && !pistol && !suppressed && !(firstPerson && (smg || shotgun));
         _shots.Add(new BridgeShot
         {
             Kind = sticky ? BridgeShotKind.MuzzleSticky : firstPerson ? BridgeShotKind.FirstPersonMuzzle : BridgeShotKind.ThirdPersonMuzzle,
@@ -609,7 +612,7 @@ internal sealed class EffectTracker
             WeaponClassId = source is null ? 0 : EventNames.Id(source.GetUcClass().Path),
             Flags = (pawn is not null && ReferenceEquals(pawn, viewer?.Pawn) ? BridgeShotFlags.Local : 0) |
                 (suppressed ? BridgeShotFlags.Suppressed : 0) | (pistol ? BridgeShotFlags.Pistol : 0) |
-                (revolver ? BridgeShotFlags.Revolver : 0) | (shotgun ? BridgeShotFlags.Shotgun : 0) | (uzi ? BridgeShotFlags.Uzi : 0) |
+                (revolver ? BridgeShotFlags.Revolver : 0) | (shotgun ? BridgeShotFlags.Shotgun : 0) | (smg ? BridgeShotFlags.Uzi : 0) |
                 (!sticky && !revolver ? BridgeShotFlags.Casing : 0) | (barrel ? BridgeShotFlags.BarrelFlash : 0),
             X = at.X,
             Y = at.Y,

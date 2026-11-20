@@ -8,6 +8,8 @@ using OpenScct.Net.Discovery;
 using OpenScct.Net.Scoreboards;
 using OpenScct.Server.Online;
 using OpenScct.UnrealBridge.Demo;
+using OpenScct.UnrealBridge.Hub;
+using OpenScct.UnrealBridge.Loadout;
 using OpenScct.UnrealBridge.Online;
 using OpenScctGame.UI;
 
@@ -46,12 +48,18 @@ public sealed class CareerModel
     private int _archiveRevision = -1;
     private int _demoRevision = -1;
     private int _accountRevision = -1;
+    private long _masteryRevision = -1;
+    private bool _privateProgress;
+    private int _nextUnlock = -1;
     private string? _historyError;
     private string? _detailsError;
     private IReadOnlyList<StatsModel.Row> _stats = [];
     private readonly List<AchievementRow> _achievements = new();
 
-    public sealed record AchievementRow(Achievement Achievement, bool Earned, int Current, int Target, DateTimeOffset? EarnedAt, bool Reported);
+    private readonly Dictionary<string, AchievementRow> _rewardProgress = new(StringComparer.Ordinal);
+    public AchievementRow? UnlockFor(string rewardId) => _rewardProgress.GetValueOrDefault(rewardId);
+
+    public sealed record AchievementRow(Achievement Achievement, bool Earned, int Current, int Target, DateTimeOffset? EarnedAt, bool Reported, bool Private = false);
 
     public int Revision { get; private set; }
 
@@ -149,9 +157,13 @@ public sealed class CareerModel
             Touch();
         }
 
-        if (Account.Revision != _accountRevision)
+        bool privateProgress = UsesPrivateMastery;
+        long masteryRevision = privateProgress ? WeaponCareerView.MasteryRevision : 0;
+        if (Account.Revision != _accountRevision || masteryRevision != _masteryRevision || privateProgress != _privateProgress)
         {
             _accountRevision = Account.Revision;
+            _masteryRevision = masteryRevision;
+            _privateProgress = privateProgress;
             BuildCareer(Account.Account);
             Touch();
         }
@@ -363,10 +375,15 @@ public sealed class CareerModel
 
     // ---- stats and achievements -----------------------------------------------------------------------------------
 
+    internal static bool UsesPrivateMastery => HubBridge.Existing?.Client == null && OnlineBridge.Existing?.Client is not
+        { State: OnlineClientState.Lobby or OnlineClientState.Loading or OnlineClientState.Match or OnlineClientState.Results };
+
     private void BuildCareer(AccountInfo? account)
     {
         _stats = account is null ? [] : StatsModel.Build(account);
         _achievements.Clear();
+        _rewardProgress.Clear();
+        var privateRows = _privateProgress ? WeaponCareerView.PrivateMastery() : null;
         var reported = account?.Achievements.GroupBy(a => a.Id, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal)
             ?? new Dictionary<string, AchievementInfo>(StringComparer.Ordinal);
 
@@ -380,33 +397,48 @@ public sealed class CareerModel
         foreach (Achievement a in Achievements.All)
         {
             AchievementInfo? info = reported.GetValueOrDefault(a.Id);
+            bool fromPractice = false;
+            if (privateRows != null && privateRows.TryGetValue(a.Id, out var practice)
+                && info?.Earned is null && (info == null || practice.Earned != null || practice.Current > info.Current))
+            {
+                info = practice;
+                fromPractice = true;
+            }
             if (info?.Earned is { } earned)
             {
-                _achievements.Add(new AchievementRow(a, true, 1, 1, earned, true));
-                continue;
+                int completed = Math.Max(1, info.Target);
+                _achievements.Add(new AchievementRow(a, true, completed, completed, earned, true, fromPractice));
             }
-
-            (int current, int target) = info is { Target: > 0 } r ? (r.Current, r.Target) : a.Goal(local);
-            _achievements.Add(new AchievementRow(a, false, Math.Max(0, current), Math.Max(0, target), null, info is not null));
+            else
+            {
+                (int current, int target) = info is { Target: > 0 } r ? (r.Current, r.Target) : a.Goal(local);
+                _achievements.Add(new AchievementRow(a, false, Math.Max(0, current), Math.Max(0, target), null, info is not null, fromPractice));
+            }
+            foreach (string reward in a.Rewards)
+            {
+                if (!_rewardProgress.TryGetValue(reward, out var previous) || (!previous.Earned && _achievements[^1].Earned))
+                    _rewardProgress[reward] = _achievements[^1];
+            }
         }
+        _nextUnlock = FindNextUnlock();
     }
 
     /// <summary>The closest reported cumulative achievement with a cosmetic still locked (the dashboard's next unlock), or -1.</summary>
-    public int NextUnlockIndex()
+    public int NextUnlockIndex() => _nextUnlock;
+    public CosmeticItem? NextReward { get; private set; }
+
+    private int FindNextUnlock()
     {
         AccountInfo? account = Account.Account;
-        if (account is null)
-        {
-            return -1;
-        }
-
-        var unlocked = new HashSet<string>(account.Unlocked, StringComparer.Ordinal);
+        var unlocked = new HashSet<string>(account?.Unlocked ?? [], StringComparer.Ordinal);
+        if (_privateProgress) unlocked.UnionWith(WeaponCareerView.PrivateUnlocks());
         int best = -1;
+        NextReward = null;
         for (int i = 0; i < _achievements.Count; i++)
         {
             AchievementRow row = _achievements[i];
             if (row.Earned || !row.Reported || row.Target <= 1 || row.Current >= row.Target ||
-                !row.Achievement.Rewards.Any(id => !unlocked.Contains(id) && CosmeticCatalog.Find(id) is not null))
+                RewardItems(row).FirstOrDefault(item => !unlocked.Contains(item.Id)) is not { } reward)
             {
                 continue;
             }
@@ -414,6 +446,7 @@ public sealed class CareerModel
             if (best < 0 || (long)row.Current * _achievements[best].Target > (long)_achievements[best].Current * row.Target)
             {
                 best = i;
+                NextReward = reward;
             }
         }
 
@@ -432,30 +465,30 @@ public sealed class CareerModel
 
     public static string CategoryNote(AchievementCategory c) => c switch
     {
-        AchievementCategory.Weapons => "A camo ladder per merc gun, then Gilded for the golden guns",
+        AchievementCategory.Weapons => "Each weapon tracks its own kills and headshot kills. Select a challenge to see its rewards.",
         AchievementCategory.Gadgets => "Both kits, Change Gear gadgets too, then a side's whole kit for its Mastercraft suit and guns",
         AchievementCategory.Map => "Win on each map 3 times as a spy and 3 times as a mercenary",
         _ => string.Empty,
     };
 
-    public static string StatusText(AchievementRow row, bool longDate) => row.Earned
+    public static string StatusText(AchievementRow row, bool longDate) => (row.Earned
         ? "Earned " + row.EarnedAt!.Value.ToLocalTime().ToString(longDate ? "d MMMM yyyy" : "d MMM yyyy", CultureInfo.InvariantCulture)
-        : row.Target > 1 ? string.Create(CultureInfo.InvariantCulture, $"{Math.Min(row.Current, row.Target)} / {row.Target}") : "Not earned yet";
+        : row.Target > 1 ? string.Create(CultureInfo.InvariantCulture, $"{Math.Min(row.Current, row.Target)} / {row.Target}") : "Not earned yet")
+        + (row.Private ? " · Private" : string.Empty);
 
     /// <summary>What the achievement unlocks, one cosmetic a line ("Spy suit · Mastercraft (Spy)"), or why nothing.</summary>
+    public static IEnumerable<CosmeticItem> RewardItems(AchievementRow row) =>
+        row.Achievement.Rewards.Select(CosmeticCatalog.Find).OfType<CosmeticItem>().Where(i => ArmouryPresentation.IsVisible(i.Slot));
+
     public static string Rewards(AchievementRow row)
     {
-        string[] items = row.Achievement.Rewards.Select(CosmeticCatalog.Find).Where(i => i is not null)
-            .Select(i => CosmeticCatalog.Describe(i!)).ToArray();
-        return items.Length == 0 ? "Unlocks no cosmetic: this one is for the record." : string.Join("\n", items);
+        return string.Join("\n", RewardItems(row).Select(ArmouryPresentation.Describe));
     }
 
-    public string AchievementsSummary => Account.Account is null
-        ? AccountService.MasterUrl is not null
-            ? "Sign in on the Account page to earn these on official servers. Each one unlocks cosmetics."
-            : "Achievements are earned on servers linked to an official master server; none is set up."
-        : string.Create(CultureInfo.InvariantCulture,
-            $"{AchievementsEarned} of {_achievements.Count} earned. Only rounds on official servers with a signed-in player on each side count.");
+    public string AchievementsSummary => string.Create(CultureInfo.InvariantCulture,
+        $"{AchievementsEarned} of {_achievements.Count} earned. ") + (_privateProgress
+            ? "Weapon mastery tracks private match progress on this profile. Official matches track account progress separately."
+            : "Official challenges count rounds with a signed-in player on each side.");
 
     public string StatsStatus => Account.Refreshing ? "Refreshing career stats…"
         : Account.Account is null

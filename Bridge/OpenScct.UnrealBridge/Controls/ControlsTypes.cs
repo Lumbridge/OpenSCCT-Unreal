@@ -44,6 +44,8 @@ public unsafe struct BridgeRawInput
     public BridgeKeyEdge* Edges;
     public long NowMsec;
     public int EdgeCount;
+    /// <summary>Output. This frame's player-driven yaw and pitch in degrees, in the local mercenary view.</summary>
+    public float MercAimYaw, MercAimPitch;
 }
 
 public static class BridgeRawInputFlags
@@ -53,6 +55,10 @@ public static class BridgeRawInputFlags
     /// keys. Without it nothing is read and everything held is released.
     /// </summary>
     public const int Play = 1;
+    /// <summary>The local mercenary view accepts free-look input. Other UI may temporarily consume the look axes.</summary>
+    public const int AllowMercFreeLook = 2;
+    public const int MercFreeLookHeld = 4;
+    public const int MercMenuView = 8;
 }
 
 /// <summary>
@@ -98,8 +104,12 @@ public struct BridgeLookView
     /// <summary>1 while the mouse turn is drawn ahead of the simulation.</summary>
     public int LookAhead;
 
-    /// <summary>The merc's rifle aim zoom, 0 (hip) to 1 (aimed), eased as the view's FOV is.</summary>
+    /// <summary>The mercenary rifle's sight pose, 0 at the hip and 1 when aimed.</summary>
     public float RifleAimBlend;
+    /// <summary>Optical power already applied to the reported fields of view. A plain view is 1.</summary>
+    public float OpticMagnification;
+    /// <summary>Fixed power of the equipped ACOG or native scope in the local weapon view. Zero for plain sights.</summary>
+    public float ScopeLensPower;
 }
 
 /// <summary>An interface command a binding raised (ShowMenu, Talk, PushToTalk...). The name is behind <c>GetName</c>.</summary>

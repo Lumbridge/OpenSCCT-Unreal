@@ -1,6 +1,8 @@
 #include "Play/ScctPawnLighting.h"
 
 #include "Components/MeshComponent.h"
+#include "Engine/World.h"
+#include "Play/ScctLevelStateSubsystem.h"
 #include "HAL/IConsoleManager.h"
 #include "Play/ScctLightRules.h"
 #include "Runtime/ScctFeatures.h"
@@ -9,12 +11,16 @@ namespace
 {
 	TAutoConsoleVariable<int32> CVarLightPawnShadow(TEXT("scct.Light.PawnShadow"), 1,
 		TEXT("Under the lighting plan, walls, furniture and movers block ordinary lamps at the pawn's centre. 0 gives the original unoccluded term."));
+	TAutoConsoleVariable<float> CVarViewBounce(TEXT("scct.Light.ViewBounce"), 0.25f,
+		TEXT("Diffuse return from visible room lamps onto local first-person equipment, in linear light."));
 	const FName HasPawnRig(TEXT("HasPawnRig"));
 }
 
-FScctPawnLighting FScctPawnLighting::Sample(FVector Centre, float Radius, int32 SpyActorId)
+FScctPawnLighting FScctPawnLighting::Sample(const UWorld& World, FVector Centre, float Radius, int32 SpyActorId, bool bSampleViewBounce)
 {
 	FScctPawnLighting Sample;
+	FScctLightRig Rig{};
+	Rig.Zone = INDEX_NONE;
 	Sample.bLamps = FScctLightRules::BodiesOnLampChannel();
 	if (!Sample.bLamps)
 	{
@@ -27,7 +33,6 @@ FScctPawnLighting FScctPawnLighting::Sample(FVector Centre, float Radius, int32 
 	}
 	const bool bShadows = CVarLightPawnShadow.GetValueOnGameThread() != 0;
 	const int32 Options = EScctLightRigOptions::MaterialLamps | (bShadows ? 0 : EScctLightRigOptions::NoOcclusion);
-	FScctLightRig Rig{};
 	// Viewer is only used by the audit's facing estimate. Per-pixel normals determine the drawn term.
 	if (SpyActorId != INDEX_NONE && Api->GetActorRig(SpyActorId, Centre.X, Centre.Y, Centre.Z,
 		Options | EScctLightRigOptions::SpySurface, &Rig))
@@ -39,11 +44,29 @@ FScctPawnLighting FScctPawnLighting::Sample(FVector Centre, float Radius, int32 
 		return Sample;
 	}
 	Sample.Data[0] = 1.0f;
+	const auto* LevelState = World.GetSubsystem<UScctLevelStateSubsystem>();
 	FVector3f Ambient(Rig.AmbientR, Rig.AmbientG, Rig.AmbientB);
+	const float ViewBounce = bSampleViewBounce ? FMath::Clamp(CVarViewBounce.GetValueOnGameThread(), 0.0f, 1.0f) : 0.0f;
+	FVector3f Incoming = FVector3f::ZeroVector;
 	for (int32 Index = 0; Index < FMath::Min(Rig.Count, ScctLightRigLights); ++Index)
 	{
 		const FScctRigLight& Light = Rig.Lights[Index];
+		// The visibility meter uses the original light rig. A fixture rendered by Unreal
+		// still contributes to that measurement, but its per-pixel light is already on the mesh.
 		if (bShadows && (Light.Flags & EScctRigLightFlags::Occluded))
+		{
+			continue;
+		}
+		if (ViewBounce > 0.0f && !(Light.Flags & EScctRigLightFlags::PointAmbient))
+		{
+			// The legacy actor rig can have zero ambient even in an illuminated corridor.
+			// Estimate a single diffuse reflection from the same visibility-tested light
+			// at the player. Convert its display-space colour to linear energy before mixing.
+			Incoming.X += FMath::Pow(FMath::Max(0.0f, Light.R), 2.2f);
+			Incoming.Y += FMath::Pow(FMath::Max(0.0f, Light.G), 2.2f);
+			Incoming.Z += FMath::Pow(FMath::Max(0.0f, Light.B), 2.2f);
+		}
+		if (LevelState && LevelState->IsNativeFixture(Light.Id))
 		{
 			continue;
 		}
@@ -64,7 +87,24 @@ FScctPawnLighting FScctPawnLighting::Sample(FVector Centre, float Radius, int32 
 	Sample.Data[8] = Ambient.X;
 	Sample.Data[16] = Ambient.Y;
 	Sample.Data[24] = Ambient.Z;
+	if (bSampleViewBounce)
+	{
+		for (int32 Channel = 0; Channel < 3; ++Channel)
+		{
+			const float Return = FMath::Min(ViewBounce * Incoming[Channel], 1.0f);
+			Sample.ViewAmbient[Channel] = Return > 0.0f
+				? FMath::Pow(FMath::Pow(FMath::Max(Ambient[Channel], 0.0f), 2.2f) + Return, 1.0f / 2.2f)
+				: Ambient[Channel];
+		}
+	}
 	return Sample;
+}
+
+void FScctPawnLighting::UseViewAmbient()
+{
+	Data[8] = ViewAmbient.X;
+	Data[16] = ViewAmbient.Y;
+	Data[24] = ViewAmbient.Z;
 }
 
 void FScctPawnLighting::Apply(UMeshComponent& Mesh, bool bReceiveBodyAid, bool bBody) const

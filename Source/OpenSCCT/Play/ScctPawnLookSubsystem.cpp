@@ -19,6 +19,7 @@
 #include "Play/ScctPawnProxy.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Runtime/ScctFeatures.h"
+#include "Runtime/ScctPawnCarriedLookApi.h"
 #include "Settings/ScctSettings.h"
 
 namespace
@@ -29,7 +30,6 @@ namespace
 	const FName HideOthersSetting(TEXT("Display.HideOthersCosmetics"));
 	const FName OwnLookSetting(TEXT("Display.OwnCosmeticLook"));
 
-	const FName BaseColorName(TEXT("BaseColor"));
 	const FName LensName(TEXT("Lens"));
 	const FName HueTurnName(TEXT("HueTurn"));
 
@@ -67,7 +67,10 @@ namespace
 	bool IsHeadSlot(const FString& Key) { return Key.EndsWith(TEXT("shadwagent2")) || Key.EndsWith(TEXT("def01aface")); }
 
 	/** Suit (the body item's pattern) rather than gun: the bodies and the merc's first-person sleeves (SWeaponTex_1DEF_01). */
-	bool IsSuit(const FString& Key) { return IsBodySlot(Key) || IsHeadSlot(Key) || Key.EndsWith(TEXT("sweapontex1def01")); }
+	bool IsSuit(const FString& Key)
+	{
+		return IsBodySlot(Key) || IsHeadSlot(Key) || Key.EndsWith(TEXT("sweapontex1def01")) || Key.EndsWith(TEXT("openscctsidearmsarmsarmsbasecolor"));
+	}
 
 	/** A name made safe as an asset name, as Tools/Import/import_outfits.py makes it. */
 	FString AssetName(const FString& Name)
@@ -484,9 +487,9 @@ int32 UScctPawnLookSubsystem::Dress(UMeshComponent& Mesh, const FDress& Look)
 		if (Key != State.Key)
 		{
 			State.Key = Key;
-			UTexture* Retail = nullptr;
+			UTexture* Retail = ScctCosmeticMaterial::ColourAtlas(Source);
 			FString Finish;
-			const FString Path = Source->GetTextureParameterValue(BaseColorName, Retail) && Retail != nullptr
+			const FString Path = Retail != nullptr
 				? TextureFor(*Api, Retail->GetName(), PackageOf(*Retail, Look.Kind), Look, Finish)
 				: FString();
 			UTexture2D* Made = Path.IsEmpty() ? nullptr : LoadTexture(Path);
@@ -672,6 +675,8 @@ void UScctPawnLookSubsystem::OnFrame(float DeltaSeconds)
 	}
 
 	const int32 Count = FMath::Clamp(Api->GetLooks(Looks.GetData(), MaxLooks), 0, MaxLooks);
+	const UScctEquipmentSubsystem* Equipment = GetWorld()->GetSubsystem<UScctEquipmentSubsystem>();
+	const auto* CarriedLookApi = ScctFeature<FScctPawnCarriedLookApi>();
 	const FScctPawnLook* Mine = nullptr;
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
@@ -695,6 +700,8 @@ void UScctPawnLookSubsystem::OnFrame(float DeltaSeconds)
 		int32 Dressed = Dress(*Proxy->GetBodyMesh(), Suit);
 		TArray<USceneComponent*> Attached;
 		Proxy->GetBodyMesh()->GetChildrenComponents(true, Attached);
+		const USceneComponent* Carried = Equipment ? Equipment->GetCarriedWeapon(Look.ActorId) : nullptr;
+		const int32 CarriedPattern = Carried && CarriedLookApi ? CarriedLookApi->GetPattern(Look.ActorId) : 0;
 		for (USceneComponent* Child : Attached)
 		{
 			UMeshComponent* Mesh = Cast<UMeshComponent>(Child);
@@ -707,8 +714,11 @@ void UScctPawnLookSubsystem::OnFrame(float DeltaSeconds)
 				TurnGoggles(*Mesh, Look.HueTurn, bTurn);
 				continue;
 			}
-			// What hangs on the body (the gun in the hands, a holstered one) takes the gun's pattern.
 			FDress Gear = Suit;
+			if (Carried && (Mesh == Carried || Mesh->IsAttachedTo(Carried)))
+			{
+				Gear.GunPattern = CarriedPattern;
+			}
 			Gear.BodySlot = 0;
 			Gear.HeadSlot = 0;
 			Dressed += Dress(*Mesh, Gear);
@@ -736,7 +746,6 @@ void UScctPawnLookSubsystem::OnFrame(float DeltaSeconds)
 	}
 
 	// The player's own arms and gun in his eye view: the suit's pattern on the sleeves, the gun's on the gun.
-	const UScctEquipmentSubsystem* Equipment = GetWorld()->GetSubsystem<UScctEquipmentSubsystem>();
 	AScctFirstPersonView* View = Equipment != nullptr ? Equipment->GetFirstPersonView() : nullptr;
 	if (Mine != nullptr && IsValid(View) && View->IsShown())
 	{

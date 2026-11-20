@@ -1330,9 +1330,15 @@ namespace
 			Rows->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 10.0f)[ SetupButtons(true) ];
 			UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
 			TArray<FString> MapIds, MapNames;
+			TArray<int32> DefaultModes;
 			if (Menu != nullptr)
 			{
-				for (const FScctMenuMapInfo& Map : Menu->GetMaps()) { MapIds.Add(Map.Id); MapNames.Add(Map.Title); }
+				for (const FScctMenuMapInfo& Map : Menu->GetMaps())
+				{
+					MapIds.Add(Map.Id);
+					MapNames.Add(Map.Title);
+					DefaultModes.Add(UScctMenuSubsystem::ModeId(Map.DefaultModeIndex()));
+				}
 			}
 			if (MapIds.Num() > 0)
 			{
@@ -1343,7 +1349,7 @@ namespace
 					.Description(FText::FromString(TEXT("The map of the next match (the maps installed here).")))
 					.Options(MapNames)
 					.Get([Weak, MapIds] { return Weak.IsValid() ? FMath::Max(MapIds.IndexOfByPredicate([&](const FString& Id) { return Id.Equals(Weak->GetSetupMap(), ESearchCase::IgnoreCase); }), 0) : 0; })
-					.Set([Weak, MapIds](int32 Value) { if (Weak.IsValid() && MapIds.IsValidIndex(Value)) { Weak->SetMatch(MapIds[Value], Weak->GetStatus().Mode); } })
+					.Set([Weak, MapIds, DefaultModes](int32 Value) { if (Weak.IsValid() && MapIds.IsValidIndex(Value)) { Weak->SetMatch(MapIds[Value], DefaultModes[Value]); } })
 				];
 			}
 			TArray<FString> LobbyModeChoices;

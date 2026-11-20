@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
+using OpenScct.Core.Engine;
+using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
 using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Loadout;
@@ -18,6 +21,11 @@ string map = args.Length > 1 ? args[1] : "AquaE";
 string scratch = args.Length > 2 ? args[2] : Path.Combine(Path.GetTempPath(), "LoadoutProbe");
 Directory.CreateDirectory(scratch);
 string file = Path.Combine(scratch, "loadout.json");
+// Exercise migration from a profile written before private headshots were stored.
+int[] legacy = new int[WeaponCareerCounters.Count];
+legacy[WeaponCareerCounters.IndexOf(WeaponAttachments.M4)] = 49;
+legacy[WeaponCareerCounters.IndexOf("Svm.CompactSMG")] = 149;
+File.WriteAllText(Path.Combine(scratch, "weapon-kills-0.json"), JsonSerializer.Serialize(legacy));
 File.Delete(file);
 
 int failures = 0;
@@ -201,6 +209,40 @@ internal static unsafe class Probe
             check(expected.All(e => now.Contains(e, StringComparison.OrdinalIgnoreCase)), $"after the change the merc carries [{string.Join(", ", expected)}]");
         }
 
+        if (merc && check is not null && Exports.Current?.Session is { } match)
+        {
+            string activeFile = LoadoutStore.FilePath;
+            string[] awarded = [WeaponAttachments.M4, "Svm.CompactSMG", "Svm.PumpShotgun", "Svm.BoltRifle", "Svm.DesignatedMarksman"];
+            int[] startingKills = awarded.Select(WeaponCareerView.GetKills).ToArray();
+            int otherGun = WeaponCareerView.GetKills("Svm.AK47");
+            var beforeMastery = WeaponCareerView.PrivateMastery();
+            long revision = WeaponCareerView.MasteryRevision;
+            check(beforeMastery.Count == 48 && beforeMastery["primary_m4a1s_woodland"].Current == 49 &&
+                beforeMastery["primary_compactsmg_woodland"].Earned != null, "legacy exact counters migrate, including already-earned private milestones");
+            match.Stop();
+            bool credited = match.ServerSnapshot(host =>
+            {
+                var owner = host.World.Level.Actors.OfType<SPlayerController>().SingleOrDefault(
+                    pc => !pc.bDeleteMe && ReferenceEquals(pc.WeaponProgress, match.Settings.LocalWeaponCareer));
+                if (owner == null) return false;
+                foreach (string gun in awarded) WeaponCareer.RecordKill(owner, gun, headshot: true);
+                return true;
+            });
+            check(credited, "the local listen host assigned the saved gun career to its player");
+            var activeRows = WeaponCareerView.PrivateMastery();
+            var earned = activeRows["primary_m4a1s_woodland"].Earned;
+            check(WeaponCareerView.MasteryRevision > revision && earned != null && activeRows["primary_m4a1s_red_tiger"].Current == 1 &&
+                activeRows["primary_compactsmg_desert"].Earned != null && activeRows["primary_compactsmg_desert"].Rewards.Count == 0 &&
+                WeaponCareerView.PrivateUnlocks().SetEquals(["merc.m4a1s.woodland"]), "private mastery awards the M4 paint and records SMG recognition");
+            LoadoutStore.Load(Path.Combine(Path.GetDirectoryName(activeFile)!, "empty-profile", "loadout.json"));
+            check(awarded.All(gun => WeaponCareerView.GetKills(gun) == 0), "a separate profile starts with zero kills on every tested gun");
+            check(WeaponCareerView.PrivateUnlocks().Count == 0, "a second private profile has no unlocked paint");
+            LoadoutStore.Load(activeFile);
+            check(WeaponCareerView.PrivateMastery()["primary_m4a1s_woodland"].Earned == earned &&
+                WeaponCareerView.PrivateMastery()["primary_m4a1s_red_tiger"].Current == 1, "private milestone date and headshots survive a reload");
+            check(awarded.Select((gun, i) => WeaponCareerView.GetKills(gun) == startingKills[i] + 1).All(matches => matches) &&
+                WeaponCareerView.GetKills("Svm.AK47") == otherGun, "host-earned kills survive reloading on the M4 and all four new guns");
+        }
         s_bridge.Stop();
         return true;
     }

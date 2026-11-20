@@ -35,8 +35,8 @@ class OPENSCCT_API AScctArmouryPreviewStage : public AActor
 public:
 	AScctArmouryPreviewStage();
 
-	static constexpr int32 TargetWidth = 600;
-	static constexpr int32 TargetHeight = 500;
+	static constexpr int32 TargetWidth = 768;
+	static constexpr int32 TargetHeight = 400;
 
 	/** Spawns the stage in a world. */
 	static AScctArmouryPreviewStage* Make(UWorld* World);

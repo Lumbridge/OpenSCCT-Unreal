@@ -46,7 +46,53 @@ Check(BindingsEditor.Rows(false).Contains("\tNight vision\t") && BindingsEditor.
     !BindingsEditor.Rows(true).Contains("\troll\t") && BindingsEditor.Rows(false).StartsWith("forward\tMovement", StringComparison.Ordinal),
     "each side lists its own actions with its own names, movement first");
 
+Console.WriteLine("Mercenary free-look:");
+const string freeLook = ControlActionList.MercFreeLookId;
+Check(Keys(true, freeLook) == "Alt" && !BindingsEditor.Rows(false).Contains(freeLook, StringComparison.Ordinal) &&
+    BindingsEditor.Check(true, freeLook, "MouseWheelDown").Length > 0, "the merc action defaults to Alt and requires a held input");
+var savedKeys = ControlBindings.FromJson("""{"merc":{"keys":{"Alt":"Walk"}},"hub":1}""");
+Check(savedKeys.Merc.Keys.Bindings["Alt"] == "Walk" && BindingDraft.Keys(savedKeys.Merc.Keys, ControlActionList.Find(freeLook)!).Count == 0,
+    "loading an existing custom layout preserves its Alt binding");
+var mercMapper = new InputMapper(new LocalInput(), ControlBindings.DefaultKeys(), true, new ControlSettings());
+var mercKeys = new byte[BridgeKeys.Count];
+mercMapper.Frame(mercKeys, 0, 0, 0, true);
+mercKeys[(int)BridgeKey.Alt] = 1;
+mercMapper.Frame(mercKeys, 0, 0, 0, true);
+Check(mercMapper.MercFreeLookHeld, "Alt captures free-look on the first frame of its press");
+string padLook = ControlActions.VirtualPrefix + "P1:" + freeLook;
+mercMapper.Key(padLook, true);
+mercKeys[(int)BridgeKey.Alt] = 0;
+mercMapper.Frame(mercKeys, 0, 0, 0, true);
+Check(mercMapper.MercFreeLookHeld, "a bound controller button keeps free-look held after keyboard release");
+mercMapper.Frame(mercKeys, 0, 0, 0, false);
+Check(!mercMapper.MercFreeLookHeld, "loss of gameplay focus releases free-look");
+
+Console.WriteLine("Mercenary sights and gadget:");
+Check(Keys(true, "mercaim") == "RightMouse" &&
+      BindingsEditor.KeysOf(true, "mercgadget").Order().SequenceEqual(new[] { "MouseX1", "V" }),
+    "the default shoulder and alternate gadget keys are visible in the mercenary editor");
+ControlBindings migrated = ControlBindings.FromJson("""
+    {"version":1,"hub":1,"merc":{"keys":{"RightMouse":"Button bReload","V":"Talk","MouseX1":"ShowMenu"},"pad":{"LT":"Action:reload","LB+RB":"Action:jump"}}}
+    """);
+Check(migrated.Merc.Keys.Bindings["RightMouse"] == "Button bReload" && migrated.Merc.Keys.Bindings["V"] == "Talk" &&
+      migrated.Merc.Keys.Bindings["MouseX1"] == "ShowMenu" && migrated.Merc.Pad["LT"] == "Action:reload" &&
+      migrated.Merc.Pad["LB+RB"] == "Action:jump", "loading an older profile preserves bespoke mouse, keyboard and controller bindings");
+Check(migrated.Merc.Keys.Bindings["MouseX2"] == "Button bMercAim" &&
+      migrated.Merc.Keys.Bindings["M"] == "Button bMercGadget", "occupied stock controls leave free alternatives available");
+migrated.Merc.Keys.Bind("MouseX2", "");
+Check(!ControlBindings.FromJson(migrated.ToJson()).Merc.Keys.Bindings.ContainsKey("MouseX2"),
+    "an explicitly cleared shoulder binding stays cleared after save and reload");
+
 Console.WriteLine("Capture and conflicts:");
+ControlBindings priorMerc = ControlBindings.FromJson("""
+    {"version":2,"hub":1,"merc":{"keys":{"G":"Button bBodycamAim | SwitchFireMode","H":"Button bBodycamFreeLook"},"order":{"bodycamaim":["G"]},"pad":{"LT":"Pad:mercbodycamtrigger","P1":"Action:bodycamgadget","LB+RB":""}}}
+    """);
+Check(priorMerc.Merc.Keys.Bindings["G"] == "Button bMercAim | SwitchFireMode"
+    && priorMerc.Merc.Keys.Bindings["H"] == ControlActionList.MercFreeLookCommand
+    && priorMerc.Merc.Keys.InputOrders["mercaim"].SequenceEqual(new[] { "G" })
+    && priorMerc.Merc.Pad["LT"] == "Pad:merctrigger" && priorMerc.Merc.Pad["P1"] == "Action:mercgadget"
+    && priorMerc.Merc.Pad["LB+RB"] == "" && !priorMerc.ToJson().Contains("bodycam", StringComparison.OrdinalIgnoreCase),
+    "existing merc bindings keep their keys, controller slots, secondary commands and saved order");
 string conflict = BindingsEditor.Conflict(false, "use", "Shift", "F", out bool already, out bool canSwap);
 Check(conflict == "Switch fire mode" && !already && canSwap, $"spy F -> Interact conflicts with \"{conflict}\" (swap possible: {canSwap})");
 Check(BindingsEditor.Commit(false, "use", "Shift", "F", BindingCommitMode.Replace, out string error) && Keys(false, "use") == "F" &&
@@ -148,7 +194,7 @@ unsafe
 {
     // The sizes Source/OpenSCCT/Runtime/ScctBindingsApi.h and ScctMouseAimApi.h assert for their mirrors.
     Check(sizeof(BindingsApi) == 128, $"table size for the C++ mirror: {sizeof(BindingsApi)}");
-    Check(sizeof(BridgeRawInput) == 192 && sizeof(BridgeKeyEdge) == 16, "raw input and edge sizes match the C++ table");
+    Check(sizeof(BridgeRawInput) == 200 && sizeof(BridgeKeyEdge) == 16, "raw input and edge sizes match the C++ table");
     Check(sizeof(MouseAimApi) == 48, $"mouse and aim table size for the C++ mirror: {sizeof(MouseAimApi)}");
     // And Runtime/ScctLoadoutApi.h (Bridge/Probes/LoadoutProbe checks each struct and plays a match with it).
     Check(sizeof(LoadoutApi) == 112 && sizeof(BridgeLoadout) == 1280 && sizeof(BridgeGearItem) == 236 && sizeof(BridgeGearAnswer) == 200,

@@ -334,10 +334,10 @@ public static unsafe class HubPadsExports
 
     // ---- guards -------------------------------------------------------------------------------------------------
 
-    private static Span<T> Span<T>(T* rows, int capacity)
+    internal static Span<T> Span<T>(T* rows, int capacity)
         where T : unmanaged => rows == null || capacity <= 0 ? default : new Span<T>(rows, capacity);
 
-    private static int Guarded(Func<int> read)
+    internal static int Guarded(Func<int> read)
     {
         try
         {
@@ -364,4 +364,64 @@ public static unsafe class HubPadsExports
     }
 
     private static void Failed(Exception e) => Exports.ReportFailure(e.ToString());
+}
+
+
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct HubLaptopChoice
+{
+    public fixed char Label[48];
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct HubLaptopChoicesApi
+{
+    public int Version;
+    public delegate* unmanaged[Cdecl]<int, HubLaptopChoice*, int, int> GetChoices;
+    public delegate* unmanaged[Cdecl]<int, int, int> Select;
+}
+
+/// <summary>Direct laptop choices, kept separate from the original pads table.</summary>
+public static unsafe class HubLaptopChoicesExports
+{
+    public const int ApiVersion = 1;
+
+    [UnmanagedCallersOnly]
+    public static int GetApi(HubLaptopChoicesApi* api)
+    {
+        if (api != null)
+        {
+            api->Version = ApiVersion;
+            api->GetChoices = &GetChoices;
+            api->Select = &Select;
+        }
+
+        return ApiVersion;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetChoices(int row, HubLaptopChoice* choices, int capacity) => HubPadsExports.Guarded(() =>
+    {
+        IReadOnlyList<HubBridge.LaptopRow> rows = HubBridge.Instance.LaptopRows();
+        if (row < 0 || row >= rows.Count)
+        {
+            return 0;
+        }
+
+        IReadOnlyList<string> values = rows[row].Values;
+        Span<HubLaptopChoice> output = HubPadsExports.Span(choices, capacity);
+        for (int i = 0; i < values.Count && i < output.Length; i++)
+        {
+            fixed (char* label = output[i].Label)
+            {
+                OnlineTextCopy.Fixed(label, 48, values[i]);
+            }
+        }
+
+        return values.Count;
+    });
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int Select(int row, int index) =>
+        HubPadsExports.Guarded(() => HubBridge.Instance.SelectLaptopRow(row, index) ? 1 : 0);
 }

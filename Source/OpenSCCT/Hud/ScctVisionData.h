@@ -7,7 +7,7 @@
  * The simulation's per-actor vision values for this frame, read from the bridge's vision table (Runtime/ScctVisionApi.h):
  * each pawn's heat, EMF, motion and shock protection state, the other actors the modes draw by their own values
  * (electronics, heat-hidden emitters, glass), and the level's motion vision tweak. The vision subsystem refreshes it
- * once a frame; whatever draws a mode reads it from there (UScctVisionSubsystem::GetData).
+ * once a frame. Non-pawn rows are read when thermal or EMF draws, or when a diagnostic dump is due.
  *
  * Unattended switch: -ScctVisionDump[=seconds] logs every row once that many seconds into the match (default 6), with
  * the world names of the actors, so the values can be checked from a run's log.
@@ -15,8 +15,8 @@
 class OPENSCCT_API FScctVisionData
 {
 public:
-	/** Reads this frame's rows. False while there is no table or no session (the rows are then empty). */
-	bool Refresh(float DeltaSeconds);
+	/** Reads this frame's pawn and level rows, plus non-pawn rows when a visible mode needs them. */
+	bool Refresh(float DeltaSeconds, bool bReadActors);
 
 	/** Drops every row (the match is over). */
 	void Reset();

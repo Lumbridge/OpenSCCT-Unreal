@@ -25,11 +25,11 @@
 namespace
 {
 	/** A yes/no URL option: on when present, unless its value says otherwise. */
-	bool ParseSwitch(const FString& Options, const TCHAR* Key)
+	bool ParseSwitch(const FString& Options, const TCHAR* Key, bool bDefault = false)
 	{
 		if (!UGameplayStatics::HasOption(Options, Key))
 		{
-			return false;
+			return bDefault;
 		}
 		const FString Value = UGameplayStatics::ParseOption(Options, Key);
 		return !(Value == TEXT("0") || Value.Equals(TEXT("false"), ESearchCase::IgnoreCase)
@@ -101,13 +101,13 @@ void AScctGameMode::InitGame(const FString& MapName, const FString& Options, FSt
 	Match.bMerc = UGameplayStatics::ParseOption(Options, TEXT("Side")).Equals(TEXT("merc"), ESearchCase::IgnoreCase);
 	Match.Bots = UGameplayStatics::GetIntOption(Options, TEXT("Bots"), Match.Bots);
 	Match.Difficulty = ParseDifficulty(UGameplayStatics::ParseOption(Options, TEXT("Difficulty")));
-	Match.bSidearms = ParseSwitch(Options, TEXT("Sidearms"));
+	Match.bSidearms = ParseSwitch(Options, TEXT("Sidearms"), Match.bSidearms);
 	Match.Sidearm = ParseSidearm(UGameplayStatics::ParseOption(Options, TEXT("Sidearm")), Match.Sidearm);
-	Match.bRifles = ParseSwitch(Options, TEXT("Rifles"));
+	Match.bRifles = ParseSwitch(Options, TEXT("Rifles"), Match.bRifles);
 	Match.bOfflineRules = ParseSwitch(Options, TEXT("Practice"));
 	Match.bPlayLevel = ParseSwitch(Options, TEXT("PlayLevel"));
 	Match.bUnlimitedGear = ParseSwitch(Options, TEXT("UnlimitedGear"));
-	Match.bResponsiveSmoke = ParseSwitch(Options, TEXT("ResponsiveSmoke"));
+	Match.bResponsiveSmoke = ParseSwitch(Options, TEXT("ResponsiveSmoke"), Match.bResponsiveSmoke);
 	Match.MatchPlayers = FMath::Clamp(UGameplayStatics::GetIntOption(Options, TEXT("MatchPlayers"), 0), 0, 24);
 	Match.PlayerName = UGameplayStatics::ParseOption(Options, TEXT("Name"));
 	Match.TimeLimit = UGameplayStatics::GetIntOption(Options, TEXT("TimeLimit"), -1);

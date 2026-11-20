@@ -838,7 +838,7 @@ void UScctLightParitySubsystem::Tick(float DeltaTime)
 	case EPhase::Settle:
 		if (FScctLightPlan::IsOn() && !bBodyPass)
 		{
-			FScctPawnLighting::Sample(Spots[Index].Centre, LightPawnRadius).Apply(*Sphere);
+			FScctPawnLighting::Sample(*GetWorld(), Spots[Index].Centre, LightPawnRadius).Apply(*Sphere);
 		}
 		MatchCaptureToView(Spots[Index]);
 		if (Now - PhaseAt >= SettleSeconds)

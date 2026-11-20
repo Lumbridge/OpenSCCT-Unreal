@@ -66,7 +66,7 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(FScctLocalCommandEvent, FName /*Name*/, i
  * on this controller (see ScctControlAutoplay.h), so they take the same path as real keys, bindings included.
  * While it is given the game counts as having the input even though its window has no focus (and so it does
  * once another feature's unattended switch has used HoldScriptedAction or TapBoundCommand). Steps:
- *   forward|back|left|right|fire|altfire|jump|crouch|use|roll|reload|weapon|walk|firstperson [seconds]
+ *   forward|back|left|right|fire|altfire|jump|crouch|use|roll|reload|weapon|walk|firstperson|freelook [seconds]
  *                            hold the key the default bindings put that action on (W S A D, left and right
  *                            mouse button, Space, C, Shift, Q, R, E, middle mouse button, X); 0.1 s when no
  *                            time is given; several joined with + are held together ("forward+left 2")
@@ -92,18 +92,27 @@ class OPENSCCT_API AScctPlayerController : public APlayerController
 public:
 	AScctPlayerController();
 
+	/** Current step of the unattended input route. Lets benchmark tools time gameplay without reading a log every frame. */
+	UFUNCTION(BlueprintPure, Category="OpenSCCT|Testing")
+	int32 GetAutoplayProgress() const { return Autoplay.GetProgress(); }
+
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void PlayerTick(float DeltaTime) override;
 	virtual void SetInputMode(const FInputModeDataBase& InData) override;
 	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
+	virtual bool PostProcessWorldToScreen(FVector WorldLocation, FVector2D& ScreenLocation, bool bPlayerViewportRelative) const override;
 
 	/**
 	 * The controls' view of this frame as the camera drew it; Valid is 0 while there is none. Beyond the camera:
-	 * AimPitch and AimYaw (where the local spy's arm and pistol point), RifleAimBlend (the merc's aim zoom, for
+	 * AimPitch and AimYaw (where the local spy's arm and pistol point), RifleAimBlend (the merc's sight pose, for
 	 * the first-person gun), Cut and Occluded.
 	 */
 	const FScctLookView& GetLookView() const { return LookView; }
+	/** Viewing angle relative to the merc's aim while looking around with the body camera. */
+	const FRotator& GetMercFreeLookOffset() const { return MercFreeLookOffset; }
+	/** This frame's player-driven aim turn in degrees (yaw, pitch), after sensitivity and pitch limits. */
+	FVector2D GetMercAimTurn() const { return MercAimTurn; }
 
 	/** The controller did something in the last frame: show its button prompts instead of the keys'. */
 	bool IsPadActive() const;
@@ -170,8 +179,15 @@ public:
 	void ScctControlsLoad();
 
 private:
+	// All projected HUD anchors share the camera's constrained view rectangle for this frame.
+	mutable uint64 LensProjectionFrame = MAX_uint64;
+	mutable FIntRect LensProjectionRect = FIntRect(0, 0, 0, 0);
 	/** The session's OnBeforeTicks: hands the frame's devices to the bridge's controls. */
 	void FeedControls(float DeltaSeconds);
+
+	void UpdateMercFreeLook(const FScctRawInput& Raw);
+	FRotator MercFreeLookOffset = FRotator::ZeroRotator;
+	FVector2D MercAimTurn = FVector2D::ZeroVector;
 
 	/** The session's ViewOverride: replaces the bridge's view with the controls' look-ahead view. */
 	void OverrideView(FScctBridgeView& View);

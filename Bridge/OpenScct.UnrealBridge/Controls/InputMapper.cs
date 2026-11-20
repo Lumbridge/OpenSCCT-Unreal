@@ -28,9 +28,9 @@ public sealed class InputMapper
     private const int LocalCommandLimit = 256;
 
     private readonly LocalInput _target;
-    private readonly HashSet<string> _down = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyList<KeyAction>> _down = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<int> _pressedSinceTick = new();
-    private readonly List<(string Ik, bool Pressed)> _pending = new();
+    private readonly List<(string Ik, bool Pressed, IReadOnlyList<KeyAction> Actions)> _pending = new();
     private readonly HashSet<string> _physicalSources = new(StringComparer.OrdinalIgnoreCase);
     private readonly InputActionState _actionState = new();
     private readonly BindingInputState _state = new();
@@ -69,6 +69,10 @@ public sealed class InputMapper
 
     /// <summary>The mouse counts gathered since the last tick took them (the drawn view turns by them ahead of the tick).</summary>
     public (float X, float Y) PendingMouse => (_mouseX, _mouseY);
+
+    public bool MercFreeLookHeld => Merc && IsButtonHeld(ControlActionList.MercFreeLookButton, null);
+    internal bool MercControls { get; set; }
+    internal bool MercAimHeld => Merc && IsButtonHeld(MercBindings.AimHeld, null);
 
     /// <summary>True while game input is read (the last frame had the play flag).</summary>
     public bool Playing => _playing;
@@ -242,8 +246,13 @@ public sealed class InputMapper
             }
         }
 
-        _mouseX += mouseX;
-        _mouseY += mouseY;
+        AddMouse(mouseX, mouseY);
+    }
+
+    internal void AddMouse(float x, float y)
+    {
+        _mouseX += x;
+        _mouseY += y;
     }
 
     private void ApplyEdge(in BridgeKeyEdge edge)
@@ -308,23 +317,28 @@ public sealed class InputMapper
         bool pulse = BindingKey.IsPulseName(ik);
         if (pressed)
         {
-            if (!_down.Add(ik) && !pulse)
+            if (_down.ContainsKey(ik) && !pulse)
             {
                 return;
             }
 
-            _pending.Add((ik, true));
+            var actions = ActionsOf(ik);
+            if (MercControls) actions = MercBindings.Resolve(actions);
+            // A release belongs to its press even when a scope, camera or other input context took over in between.
+            _down[ik] = actions;
+            _pending.Add((ik, true, actions));
         }
-        else if (_down.Remove(ik))
+        else if (_down.Remove(ik, out var owned))
         {
-            _pending.Add((ik, false));
+            _pending.Add((ik, false, owned));
         }
 
         // The wheel has no release.
         if (pressed && pulse)
         {
+            var actions = _down[ik];
             _down.Remove(ik);
-            _pending.Add((ik, false));
+            _pending.Add((ik, false, actions));
         }
     }
 
@@ -362,7 +376,7 @@ public sealed class InputMapper
         bool wheelState = pc?.StateNode is SPlayerController.IWheel;
         for (int e = 0; e < _pending.Count; e++)
         {
-            (string ik, bool pressed) = _pending[e];
+            (string ik, bool pressed, IReadOnlyList<KeyAction> actions) = _pending[e];
             bool pulse = BindingKey.IsPulseName(ik);
             if (pressed && pulse)
             {
@@ -377,7 +391,6 @@ public sealed class InputMapper
                 }
             }
 
-            IReadOnlyList<KeyAction> actions = ActionsOf(ik);
             bool targetedGadget = SuppressAlternateFire(actions, pc);
             for (int i = 0; i < actions.Count; i++)
             {
@@ -517,9 +530,8 @@ public sealed class InputMapper
         // What is held now: the gadget keys and the axes (Jump's +280 on aUp while Space is down).
         float up = 0f;
         input.HeldGadgetBindings = 0;
-        foreach (string ik in _down)
+        foreach (var actions in _down.Values)
         {
-            IReadOnlyList<KeyAction> actions = ActionsOf(ik);
             for (int i = 0; i < actions.Count; i++)
             {
                 KeyAction a = actions[i];
@@ -552,9 +564,8 @@ public sealed class InputMapper
     public void ClearHeld()
     {
         // Held interface commands (push to talk, the held scoreboard) end too.
-        foreach (string ik in _down)
+        foreach (var actions in _down.Values)
         {
-            IReadOnlyList<KeyAction> actions = ActionsOf(ik);
             for (int i = 0; i < actions.Count; i++)
             {
                 KeyAction a = actions[i];
@@ -648,9 +659,8 @@ public sealed class InputMapper
     private bool IsButtonHeld(string button, SPlayerController? pc)
     {
         bool altFire = Is(button, "bAltFire");
-        foreach (string ik in _down)
+        foreach (var actions in _down.Values)
         {
-            IReadOnlyList<KeyAction> actions = ActionsOf(ik);
             if (altFire && SuppressAlternateFire(actions, pc))
             {
                 continue;

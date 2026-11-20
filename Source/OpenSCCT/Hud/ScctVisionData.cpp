@@ -3,7 +3,10 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OpenSCCT.h"
+#include "ProfilingDebugging/CsvProfiler.h"
 #include "Runtime/ScctFeatures.h"
+
+CSV_DEFINE_CATEGORY(ScctVision, false);
 
 namespace
 {
@@ -91,8 +94,9 @@ void FScctVisionData::Bind()
 	}
 }
 
-bool FScctVisionData::Refresh(float DeltaSeconds)
+bool FScctVisionData::Refresh(float DeltaSeconds, bool bReadActors)
 {
+	CSV_SCOPED_TIMING_STAT(ScctVision, Refresh);
 	Bind();
 	if (Api == nullptr)
 	{
@@ -100,7 +104,6 @@ bool FScctVisionData::Refresh(float DeltaSeconds)
 	}
 
 	ReadRows(Pawns, [this](FScctVisionPawn* Rows, int32 Capacity) { return Api->GetPawns(Rows, Capacity); });
-	ReadRows(Actors, [this](FScctVisionActor* Rows, int32 Capacity) { return Api->GetActors(Rows, Capacity); });
 	bHasLevel = Api->GetLevel(&Level) != 0;
 
 	PawnIndex.Reset();
@@ -108,22 +111,35 @@ bool FScctVisionData::Refresh(float DeltaSeconds)
 	{
 		PawnIndex.Add(Pawns[Index].ActorId, Index);
 	}
-	ActorIndex.Reset();
-	MapActorIndex.Reset();
-	for (int32 Index = 0; Index < Actors.Num(); ++Index)
-	{
-		ActorIndex.Add(Actors[Index].ActorId, Index);
-		if (Actors[Index].NameId != 0)
-		{
-			MapActorIndex.Add(Actors[Index].NameId, Index);
-		}
-	}
-
-	if (Pawns.Num() > 0)
+	if (!Pawns.IsEmpty())
 	{
 		MatchSeconds += DeltaSeconds;
 	}
-	if (DumpAt >= 0.0f && !bDumped && Pawns.Num() > 0 && MatchSeconds >= DumpAt)
+	const bool bDumpNow = DumpAt >= 0.0f && !bDumped && !Pawns.IsEmpty() && MatchSeconds >= DumpAt;
+
+	if (bReadActors || bDumpNow)
+	{
+		CSV_SCOPED_TIMING_STAT(ScctVision, ActorRows);
+		ReadRows(Actors, [this](FScctVisionActor* Rows, int32 Capacity) { return Api->GetActors(Rows, Capacity); });
+		ActorIndex.Reset();
+		MapActorIndex.Reset();
+		for (int32 Index = 0; Index < Actors.Num(); ++Index)
+		{
+			ActorIndex.Add(Actors[Index].ActorId, Index);
+			if (Actors[Index].NameId != 0)
+			{
+				MapActorIndex.Add(Actors[Index].NameId, Index);
+			}
+		}
+	}
+	else if (!Actors.IsEmpty())
+	{
+		Actors.Reset();
+		ActorIndex.Reset();
+		MapActorIndex.Reset();
+	}
+
+	if (bDumpNow)
 	{
 		bDumped = true;
 		Dump();

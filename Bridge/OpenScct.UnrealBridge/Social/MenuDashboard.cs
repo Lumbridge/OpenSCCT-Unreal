@@ -440,7 +440,7 @@ public sealed class MenuDashboard
             (block.HubPlayers, block.HubSessions) = Activity(hubs, ServerKind.Hub);
         }
 
-        if (NextUnlock(_owner.Account.Account) is { } unlock)
+        if (NextUnlock() is { } unlock)
         {
             flags |= DashboardFlags.HasUnlock;
             block.UnlockCurrent = unlock.Current;
@@ -495,7 +495,7 @@ public sealed class MenuDashboard
             case DashboardText.RecentResults:
                 return _owner.Account.Account?.RecentResults is { Count: > 0 } results ? "Recent: " + string.Join("-", results.Take(9)) : string.Empty;
             case DashboardText.NextUnlock:
-                return NextUnlock(_owner.Account.Account) is { } unlock
+                return NextUnlock() is { } unlock
                     ? string.Create(CultureInfo.InvariantCulture, $"Next unlock · {unlock.RewardName} · {unlock.Current:N0} / {unlock.Target:N0}")
                     : string.Empty;
             case DashboardText.AnnouncementStatus:
@@ -627,40 +627,14 @@ public sealed class MenuDashboard
     private sealed record Unlock(string RewardName, int Current, int Target);
 
     /// <summary>The closest reported cumulative achievement with a known cosmetic still locked on the account.</summary>
-    private static Unlock? NextUnlock(AccountInfo? account)
+    private static Unlock? NextUnlock()
     {
-        if (account is null)
-        {
-            return null;
-        }
-
-        var reported = account.Achievements.GroupBy(a => a.Id, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
-        var unlocked = new HashSet<string>(account.Unlocked, StringComparer.Ordinal);
-        Unlock? best = null;
-        foreach (Achievement achievement in Achievements.All)
-        {
-            if (!reported.TryGetValue(achievement.Id, out AchievementInfo? progress) || progress.Earned is not null ||
-                progress.Target <= 1 || progress.Current >= progress.Target)
-            {
-                continue;
-            }
-
-            CosmeticItem? reward = achievement.Rewards.Where(id => !unlocked.Contains(id))
-                .Select(CosmeticCatalog.Find).FirstOrDefault(item => item is not null);
-            if (reward is null)
-            {
-                continue;
-            }
-
-            var candidate = new Unlock(reward.Name, Math.Max(0, progress.Current), progress.Target);
-            if (best is null || (long)candidate.Current * best.Target > (long)best.Current * candidate.Target)
-            {
-                best = candidate;
-            }
-        }
-
-        return best;
+        var career = CareerModel.Instance;
+        career.Pump();
+        int index = career.NextUnlockIndex();
+        if (index < 0 || career.NextReward is not { } reward) return null;
+        var row = career.AchievementRows[index];
+        return new Unlock(ArmouryPresentation.Describe(reward), row.Current, row.Target);
     }
 
     // ---- one polled request (MenuDashboardRequest) ----------------------------------------------------------------

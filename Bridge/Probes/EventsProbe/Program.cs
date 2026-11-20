@@ -11,6 +11,11 @@ using OpenScct.UnrealBridge.Events;
 
 // Usage: EventsProbe [contentRoot] [map] [seconds] [spy|merc] [clean]   (clean: no forced dirty feet or flares)
 //        EventsProbe [contentRoot] [map] [seconds] sequence   (the animation sequences' audio segments: SequenceAudioProbe.cs)
+if (args is ["--shadow-trace"])
+{
+    return ShadowTraceCheck.Run();
+}
+
 string content = args.Length > 0 ? args[0] : OpenScct.UnrealBridge.DevPaths.ContentRoot();
 string map = args.Length > 1 ? args[1] : "AquaE";
 double seconds = args.Length > 2 ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 15;

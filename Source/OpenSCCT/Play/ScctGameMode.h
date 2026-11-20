@@ -15,12 +15,12 @@ class UScctMatchMenuWidget;
  *   ?Side=spy|merc      the local player's side (default spy)
  *   ?Bots=3             how many bots fill the match
  *   ?Difficulty=hard    the bots' skill: easy, normal, hard or expert (or 1 to 4); default normal
- *   ?Sidearms=1         the mercs carry OpenSCCT's sidearms (G, SwapWeapon, draws it)
+ *   ?Sidearms=0         disable mercenary sidearms for this direct launch (default on)
  *   ?Sidearm=magnum44   override the equipped pistol for a direct launch: suppressed, automatic, magnum44,
  *                       desert_eagle or unsuppressed
- *   ?Rifles=1           the mercs may pick OpenSCCT's additional rifles
+ *   ?Rifles=0           disable the additional mercenary rifles for this direct launch (default on)
  *   ?Practice=1         practice rules: no time limit, unlimited lives, 5 s respawn
- *   ?ResponsiveSmoke=1  smoke grenades fill the shared simulated cloud (Play/ScctEffectsSmokeVolume.cpp draws it)
+ *   ?ResponsiveSmoke=0  disable responsive smoke for this direct launch (default on)
  *   ?UnlimitedGear=1    Visit a Map practice: unlimited gear, instant gear changes, Switch Team in the menu
  *   ?MatchPlayers=N     the player count (2 to 24) the map's match-size rules lay the match out for; absent: bots + 1
  *   ?Name=Sam           the local player's name (Unreal's own player-name option; default "Player")

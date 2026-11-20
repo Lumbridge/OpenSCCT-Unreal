@@ -268,6 +268,7 @@ void UScctHudSubsystem::ReadScope(float DeltaSeconds, int32 Mode)
 	}
 	Spot.X = FMath::Clamp(Spot.X, 160.0f, 480.0f);
 	Spot.Y = FMath::Clamp(Spot.Y, 96.0f, 384.0f);
+	M.ScopeSightOffset = (S.Flags & EScctHudFlags::HoldBreath) != 0 ? FVector2f::ZeroVector : Spot - FVector2f(320.0f, 240.0f);
 
 	FScctHudScopePageInput Input = {};
 	Input.Seconds = ScopeAge;

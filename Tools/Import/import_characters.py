@@ -19,6 +19,7 @@ poses are computed for it. Nothing here is committed.
 import json
 import os
 import re
+import struct
 import sys
 
 import unreal
@@ -151,6 +152,69 @@ def equipment_look(name):
         if re.search(pattern, lowered):
             return dark, bright, metallic, emissive
     return 0.8, 0.5, 0.0, 0.0
+
+
+def set_weapon_finishes(package, mesh_name):
+    """Restore the converted model's masked gloss or glTF metal/roughness on merc first-person equipment."""
+    if not ((package == "SWeaponFirst" and mesh_name.startswith("1DEF_")) or
+            (package == "OpenScctSidearms" and mesh_name.endswith("_first"))):
+        return
+    source = os.path.join(CHARS, package)
+    with open(os.path.join(source, mesh_name + ".glb"), "rb") as file:
+        file.seek(12)
+        length, _ = struct.unpack("<I4s", file.read(8))
+        model = json.loads(file.read(length))
+    base = "%s/%s/%s" % (DEST, package, mesh_name)
+    textures = {key(path.rsplit("/", 1)[1].split(".")[0]): path
+                for path in editor_assets.list_assets(base + "/Textures", recursive=False)}
+    materials = {}
+    for asset_path in skeletal_meshes_of(package, mesh_name):
+        for slot in unreal.load_asset(asset_path).get_editor_property("materials"):
+            instance = slot.material_interface
+            if isinstance(instance, unreal.MaterialInstanceConstant):
+                materials[key(str(slot.material_slot_name))] = instance
+    for entry in model["materials"]:
+        pbr = entry.get("pbrMetallicRoughness", {})
+        packed_map = pbr.get("metallicRoughnessTexture")
+        if packed_map is not None:
+            image = model["images"][model["textures"][packed_map["index"]]["source"]]
+            uri = image.get("uri")
+        else:
+            uri = entry.get("extras", {}).get("scct_spec_mask")
+        if not uri:
+            continue
+        name = os.path.splitext(os.path.basename(uri))[0]
+        # Interchange imports glTF PBR maps but does not follow the original reflection masks in extras.
+        texture_path = textures.get(key(name))
+        if not texture_path:
+            task = unreal.AssetImportTask()
+            task.filename = os.path.join(source, uri)
+            task.destination_path = base + "/Textures"
+            task.automated = True
+            task.save = True
+            asset_tools.import_asset_tasks([task])
+            if not task.imported_object_paths:
+                raise RuntimeError("could not import weapon finish " + task.filename)
+            texture_path = task.imported_object_paths[0]
+        texture = unreal.load_asset(texture_path)
+        if (texture.get_editor_property("srgb") or
+                texture.get_editor_property("compression_settings") != unreal.TextureCompressionSettings.TC_MASKS):
+            texture.set_editor_property("srgb", False)
+            texture.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_MASKS)
+            editor_assets.save_loaded_asset(texture)
+        instance = materials[key(entry["name"])]
+        materials_lib.set_material_instance_texture_parameter_value(instance, "WeaponFinishTexture", texture)
+        roughness_scale = pbr.get("roughnessFactor", 1.0) if packed_map is not None else 1.0
+        materials_lib.set_material_instance_scalar_parameter_value(instance, "WeaponPackedPBR", float(packed_map is not None))
+        materials_lib.set_material_instance_scalar_parameter_value(instance, "WeaponRoughnessFactor", roughness_scale)
+        materials_lib.set_material_instance_scalar_parameter_value(instance, "WeaponMetallicFactor", pbr.get("metallicFactor", 1.0))
+        materials_lib.set_material_instance_static_switch_parameter_value(instance, "UseWeaponFinish", True)
+        materials_lib.update_material_instance(instance)
+        if (not materials_lib.get_material_instance_static_switch_parameter_value(instance, "UseWeaponFinish") or
+                materials_lib.get_material_instance_texture_parameter_value(instance, "WeaponFinishTexture") != texture):
+            raise RuntimeError("weapon finish unavailable on " + instance.get_path_name())
+        editor_assets.save_loaded_asset(instance, only_if_is_dirty=False)
+        log("weapon finish %s.%s / %s <- %s" % (package, mesh_name, entry["name"], texture.get_name()))
 
 
 def set_materials(package, mesh_name, surface, look):
@@ -297,6 +361,9 @@ def use_lens_materials():
 
 
 def import_rifles():
+    import long_gun_materials
+    import scct_rifle_cosmetics
+    scct_rifle_cosmetics.build()
     # The manifest lists the playable models. Auxiliary art (e.g. micro_red_dot.glb) is already
     # skinned into the rifles that use it. Clips are sampled from the original GLB by the bridge.
     package = "OpenScctRifles"
@@ -351,11 +418,31 @@ def import_rifles():
             if restored:
                 mesh.set_editor_property("materials", slots)
                 editor_assets.save_loaded_asset(mesh, only_if_is_dirty=False)
+        long_gun_materials.apply(CHARS, package, name, meshes)
+        scct_rifle_cosmetics.apply(CHARS, name)
         log("rifle %s: %d skinned parts" % (name, len(meshes)))
 
+if "--long-gun-materials-only" in sys.argv:
+    import long_gun_materials
+    for base in long_gun_materials.MODELS:
+        for name in (base, base + "_first"):
+            long_gun_materials.apply(CHARS, "OpenScctRifles", name, skeletal_meshes_of("OpenScctRifles", name))
+    sys.exit(0)
 
 if "--rifles-only" in sys.argv:
     import_rifles()
+    sys.exit(0)
+
+if "--rifle-attachment-finishes-only" in sys.argv:
+    import scct_rifle_cosmetics
+    for weapon in scct_rifle_cosmetics.RIFLES:
+        for model in (weapon, weapon + "_first"):
+            scct_rifle_cosmetics.apply(CHARS, model, attachments_only=True)
+    sys.exit(0)
+
+if "--weapon-finishes-only" in sys.argv:
+    for package, mesh_name in equipment_models():
+        set_weapon_finishes(package, mesh_name)
     sys.exit(0)
 
 surface = unreal.load_asset(SURFACE_MATERIAL)
@@ -372,6 +459,7 @@ if "--magnum-reload-only" in sys.argv:
     if not name_mesh_after_file(package, mesh_name):
         raise RuntimeError("missing imported mesh " + mesh_name)
     set_materials(package, mesh_name, surface, equipment_look)
+    set_weapon_finishes(package, mesh_name)
     for case in range(6):
         path = "%s/%s/%s/SkeletalMeshes/SpentCase%d_mesh" % (DEST, package, mesh_name, case)
         mesh = unreal.load_asset(path)
@@ -396,6 +484,7 @@ import_models(equipment, pipelines_without_animations())
 for package, mesh_name in equipment:
     if name_mesh_after_file(package, mesh_name):
         set_materials(package, mesh_name, surface, equipment_look)
+        set_weapon_finishes(package, mesh_name)
 if os.path.isdir(os.path.join(CHARS, "OpenScctRifles")):
     import_rifles()
 

@@ -5,6 +5,7 @@
 #include "UObject/StrongObjectPtr.h"
 #include "ScctEchelonLightFilter.generated.h"
 
+class UDecalComponent;
 class ULightComponent;
 class UMaterialInterface;
 class UPrimitiveComponent;
@@ -27,6 +28,8 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 	void Apply();
+	void SetSideStairsProjection(ULightComponent& Light, UDecalComponent& Floor);
+	bool ManagesSideStairsVisibility(const ULightComponent& Light) const;
 	void OnLightPlanDressed() { bLightPlanReady = true; }
 	void CaptureVisibleProjectors(const FSceneView& View);
 	bool AddedToUnshapedLight(const ULightComponent* Light) const;
@@ -39,6 +42,7 @@ public:
 
 private:
 	void RouteLight(ULightComponent& Light);
+	void UpdateSideStairsProjection();
 	void RestoreRouting();
 	void Uninstall();
 	void RegisterMap(const FString& Folder);
@@ -65,5 +69,10 @@ private:
 	TArray<TWeakObjectPtr<AActor>> Pending;
 	FDelegateHandle SpawnHandle;
 	TSharedPtr<ISceneViewExtension, ESPMode::ThreadSafe> ViewExtension;
+	TWeakObjectPtr<ULightComponent> SideStairsLight;
+	TWeakObjectPtr<UDecalComponent> SideStairsFloor;
+	TWeakObjectPtr<UMaterialInterface> SideStairsShaderMaterial;
+	int32 SideStairsShaderQuality = INDEX_NONE;
+	bool bSideStairsShaderRequested = false;
 	bool bInstalled = false;
 };

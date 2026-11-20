@@ -149,7 +149,7 @@ void FScctFxSprites::Clear()
 			{
 				Transform = HiddenInstance;
 			}
-			Component->BatchUpdateInstancesTransforms(0, TArrayView<const FTransform>(Layer.Transforms), true, true, true);
+			Component->BatchUpdateInstancesTransforms(0, TArrayView<const FTransform>(Layer.Transforms), true, false, true);
 			Layer.bDrawnEmpty = true;
 		}
 	}
@@ -188,6 +188,20 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 		FLayer& Layer = Layers[LayerIndex];
 		const int32 Capacity = Layer.Particles.Num();
 		Layer.Live = 0;
+		// Keep the original instance numbers and ordering. Coalesce nearby changed slots so sparse
+		// streaks do not force us to send the entire particle pool to render one line.
+		TArray<FIntPoint, TInlineAllocator<16>> ChangedRanges;
+		auto MarkChanged = [&ChangedRanges](int32 Index)
+		{
+			if (!ChangedRanges.IsEmpty() && Index - ChangedRanges.Last().Y <= 8)
+			{
+				ChangedRanges.Last().Y = Index;
+			}
+			else
+			{
+				ChangedRanges.Emplace(Index, Index);
+			}
+		};
 
 		for (int32 Index = 0; Index < Capacity; ++Index)
 		{
@@ -195,10 +209,15 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 			FTransform& Transform = Layer.Transforms[Index];
 			if (Particle.Age >= Particle.Life)
 			{
-				Transform = HiddenInstance;
+				if (!Transform.GetScale3D().IsZero())
+				{
+					Transform = HiddenInstance;
+					MarkChanged(Index);
+				}
 				continue;
 			}
 
+			MarkChanged(Index);
 			Particle.Age += Particle.SeekAge + DeltaSeconds;
 			if (Particle.Age >= Particle.Life)
 			{
@@ -253,6 +272,11 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 			for (int32 Index = 0; Index < MaxStreaks; ++Index)
 			{
 				FTransform& Transform = Layer.Transforms[Capacity + Index];
+				if (Index >= Streaks.Num() && Transform.GetScale3D().IsZero())
+				{
+					continue;
+				}
+				MarkChanged(Capacity + Index);
 				Transform = HiddenInstance;
 				if (Index < Streaks.Num() && StreakTransform(Streaks[Index].From, Streaks[Index].To, Streaks[Index].Width, ViewLocation, Transform))
 				{
@@ -269,12 +293,17 @@ void FScctFxSprites::Tick(float DeltaSeconds, const FVector& ViewLocation, const
 		}
 		NumLive += Layer.Live;
 
-		// Nothing to show and the buffers already show nothing: the render thread is left alone.
 		UInstancedStaticMeshComponent* Component = Layer.Component.Get();
-		if (Component != nullptr && !(Drawn == 0 && Layer.bDrawnEmpty))
+		if (Component != nullptr)
 		{
-			Component->SetCustomData(0, Layer.Transforms.Num() - 1, Layer.CustomData, false);
-			Component->BatchUpdateInstancesTransforms(0, TArrayView<const FTransform>(Layer.Transforms), true, true, true);
+			for (const FIntPoint& Range : ChangedRanges)
+			{
+				const int32 Count = Range.Y - Range.X + 1;
+				Component->SetCustomData(Range.X, Range.Y, MakeArrayView(Layer.CustomData).Slice(Range.X * CustomFloats, Count * CustomFloats), false);
+				// UE queues instance transform and custom data changes itself. Forcing the render state
+				// dirty would destroy and recreate the entire scene proxy on every frame with an effect.
+				Component->BatchUpdateInstancesTransforms(Range.X, MakeArrayView(Layer.Transforms).Slice(Range.X, Count), true, false, true);
+			}
 			Layer.bDrawnEmpty = Drawn == 0;
 		}
 	}

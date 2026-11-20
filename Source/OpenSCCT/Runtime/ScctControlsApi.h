@@ -15,7 +15,7 @@
 //   Host.GetFunction(TEXT("OpenScct.UnrealBridge.ControlsExports, OpenScct.UnrealBridge"), TEXT("GetApi"))
 // called with an FScctControlsApi*; it returns ScctControlsApiVersion.
 
-constexpr int32 ScctControlsApiVersion = 2;
+constexpr int32 ScctControlsApiVersion = 5;
 
 /** The length of FScctRawInput::Keys. */
 constexpr int32 ScctKeyCount = 128;
@@ -146,6 +146,7 @@ struct FScctRawInput
 	const FScctKeyEdge* Edges; // keyboard and mouse buttons in device order, valid for this call
 	int64 NowMsec;
 	int32 EdgeCount;
+	float MercAimYaw, MercAimPitch; // output, this frame's ordinary mercenary aim input, degrees
 };
 
 namespace EScctRawInputFlags
@@ -156,6 +157,12 @@ namespace EScctRawInputFlags
 	 * ignored until they are let go.
 	 */
 	constexpr int32 Play = 1;
+	/** Input. Let a held mercenary free-look binding take this frame's look axes. */
+	constexpr int32 AllowMercFreeLook = 2;
+	/** Output. Both look axes were reserved for free look during this frame. */
+	constexpr int32 MercFreeLookHeld = 4;
+	/** Input. A menu owns the controls while the local merc's body camera still renders the match. */
+	constexpr int32 MercMenuView = 8;
 }
 
 /**
@@ -175,7 +182,9 @@ struct FScctLookView
 	int32 Cut;               // 1 when this view does not continue the last one (respawn, change of camera, a cinematic sequence's camera); it stays 1 for every frame drawn until the next tick
 	int32 Occluded;          // 1 when no collision-free eye position exists: cover the world this frame
 	int32 LookAhead;         // 1 while the mouse turn is drawn ahead of the simulation
-	float RifleAimBlend;     // the merc's rifle aim zoom, 0 (hip) to 1 (aimed), eased as the FOV is
+	float RifleAimBlend;     // the merc's rifle sight pose, 0 (hip) to 1 (aimed)
+	float OpticMagnification; // optical power already applied to the view
+	float ScopeLensPower; // precision glass magnification, independent of the view
 };
 
 /** An interface command a binding raised (ShowMenu, Talk, DisplaySessionStatus, PushToTalk...). */
@@ -234,7 +243,7 @@ struct FScctControlsApi
 	 * The devices' state of this frame. Call once a frame, before the bridge's Update. The bridge then writes the
 	 * simulation's input itself: do not also call the bridge's SetInput, or Command for anything a binding covers.
 	 */
-	void (__cdecl* Frame)(const FScctRawInput* Raw);
+	void (__cdecl* Frame)(FScctRawInput* Raw);
 
 	/**
 	 * The camera to draw this frame; call after Update. Aspect: the picture's width over height (0 for 16:9).
@@ -293,8 +302,8 @@ struct FScctControlsApi
 
 // The sizes the C# side has (the probe prints them: Bridge/Probes/ControlsProbe). A mismatch here means the two
 // files have drifted apart.
-static_assert(sizeof(FScctKeyEdge) == 16 && sizeof(FScctRawInput) == 192, "Raw input must match the bridge");
-static_assert(sizeof(FScctLookView) == 68, "FScctLookView must match BridgeLookView");
+static_assert(sizeof(FScctKeyEdge) == 16 && sizeof(FScctRawInput) == 200, "Raw input must match the bridge");
+static_assert(sizeof(FScctLookView) == 76, "FScctLookView must match BridgeLookView");
 static_assert(sizeof(FScctLocalCommand) == 12, "FScctLocalCommand must match BridgeLocalCommand");
 static_assert(sizeof(FScctLookSettings) == 72, "FScctLookSettings must match BridgeLookSettings");
 static_assert(sizeof(FScctControlSettings) == 372, "FScctControlSettings must match BridgeControlSettings");

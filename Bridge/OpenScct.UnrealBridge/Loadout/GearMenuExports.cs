@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
 using OpenScct.Server.Online;
 using OpenScct.UnrealBridge.Loadout;
@@ -123,6 +124,8 @@ public unsafe struct GearMenuApi
     public delegate* unmanaged[Cdecl]<int, char*, int, int> Summary;
     public delegate* unmanaged[Cdecl]<char*, int, int> SavedJson;
     public delegate* unmanaged[Cdecl]<char*, int, int> LastError;
+    public delegate* unmanaged[Cdecl]<char*, int> GetAttachmentMask;
+    public delegate* unmanaged[Cdecl]<char*, int, int> SetAttachmentMask;
 }
 
 /// <summary>
@@ -137,6 +140,7 @@ public static class GearEditor
     public const string OtherSideRule = "This is the other side's kit: it goes on when you play that side.";
 
     private static readonly GearMenuModel?[] s_models = new GearMenuModel?[2];
+    private static readonly Dictionary<string, int> s_attachmentEdits = new(StringComparer.OrdinalIgnoreCase);
     // Slate reads the lobby kit every frame. Rebuild the text only when its inputs change.
     private static (bool Spy, LoadoutChoice? Saved, LobbySetup? Setup, int Rank, bool Unrestricted) s_lobbyKit;
     private static string s_lobbyKitText = "";
@@ -178,6 +182,7 @@ public static class GearEditor
     /// </summary>
     public static void Open(int side, int context)
     {
+        s_attachmentEdits.Clear();
         s_context = Math.Clamp(context, MenuContext, MatchContext);
         LoadoutChoice saved = LoadoutStore.Current;
         s_models[0] = Build(true, saved);
@@ -223,6 +228,11 @@ public static class GearEditor
             model?.SaveTo(choice);
         }
 
+        foreach ((string weapon, int mask) in s_attachmentEdits)
+        {
+            if (mask == 0) choice.AttachmentMasks.Remove(weapon);
+            else choice.AttachmentMasks[weapon] = mask;
+        }
         choice.Clamp();
         return choice;
     }
@@ -230,23 +240,41 @@ public static class GearEditor
     public static bool Changed() => LoadoutStore.ToJson(Draft()) != LoadoutStore.ToJson(LoadoutStore.Current);
 
     /// <summary>The page's RESET: the side shown goes back to its default kit (the host's restrictions applied).</summary>
-    public static void Reset() => Current.Reset();
+    public static int GetAttachmentMask(string weaponClass)
+    {
+        if (WeaponAttachments.Key(weaponClass) is not { } key) return 0;
+        int mask = s_attachmentEdits.GetValueOrDefault(key, LoadoutStore.Current.AttachmentMasks.GetValueOrDefault(key));
+        return WeaponAttachments.EarnedSelection(key, mask, WeaponCareerView.GetKills(key));
+    }
+
+    public static bool SetAttachmentMask(string weaponClass, int mask)
+    {
+        if (Side != 1 || WeaponAttachments.Key(weaponClass) is not { } key ||
+            !WeaponAttachments.IsValid(key, mask, WeaponCareerView.GetKills(key))) return false;
+        if (LoadoutStore.Current.AttachmentMasks.GetValueOrDefault(key) == mask) s_attachmentEdits.Remove(key);
+        else s_attachmentEdits[key] = mask;
+        return true;
+    }
+
+    public static void Reset()
+    {
+        Current.Reset();
+        if (Side != 1) return;
+        s_attachmentEdits.Clear();
+        foreach (string key in LoadoutStore.Current.AttachmentMasks.Keys) s_attachmentEdits[key] = 0;
+    }
 
     /// <summary>
     /// APPLY: both drafts go into the saved kit and the file; the drafts are made again from what was kept. Throws when
-    /// the file cannot be written (the kit stays in use).
+    /// the file cannot be written, retaining the previous saved kit and the unapplied edits.
     /// </summary>
     public static void Apply()
     {
-        LoadoutStore.Set(Draft());
-        try
-        {
-            LoadoutStore.Save(null);
-        }
-        finally
-        {
-            Open(s_side, s_context);
-        }
+        foreach ((string weapon, int mask) in s_attachmentEdits)
+            if (!WeaponAttachments.IsValid(weapon, mask, WeaponCareerView.GetKills(weapon)))
+                throw new InvalidOperationException($"Attachment selection is no longer available for {LoadoutGear.NameOf(weapon)}.");
+        LoadoutStore.SaveChoice(Draft());
+        Open(s_side, s_context);
     }
 
     /// <summary>The catalogue of a category (0 gadgets for a slot, 1 weapons, 2 sidearms) of the side shown.</summary>
@@ -274,7 +302,7 @@ public static class GearEditor
             int flags = (allowed ? GearOptionFlags.Allowed : 0) | (levelLocked ? GearOptionFlags.LevelLocked : 0) |
                 (!allowed && !levelLocked ? GearOptionFlags.HostDisabled : 0) | (equipped ? GearOptionFlags.Equipped : 0) |
                 (Same(path, selected) ? GearOptionFlags.Selected : 0) | (GearIntel.IsQuickUse(path) ? GearOptionFlags.QuickUse : 0) |
-                (GearIntel.IsSuppressed(path) ? GearOptionFlags.Suppressed : 0);
+                (GearIntel.IsSuppressed(path, GetAttachmentMask(path)) ? GearOptionFlags.Suppressed : 0);
             list.Add((path, flags));
         }
 
@@ -320,7 +348,7 @@ public static class GearEditor
 
 public static unsafe class GearMenuExports
 {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     private static string s_lastError = "";
 
@@ -345,6 +373,8 @@ public static unsafe class GearMenuExports
         api->Summary = &Summary;
         api->SavedJson = &SavedJson;
         api->LastError = &LastError;
+        api->GetAttachmentMask = &GetAttachmentMask;
+        api->SetAttachmentMask = &SetAttachmentMask;
         return ApiVersion;
     }
 
@@ -384,7 +414,7 @@ public static unsafe class GearMenuExports
 
     public static BridgeGearIntel Intel(string path)
     {
-        GearIntelInfo info = GearIntel.Describe(GearEditor.Current, path);
+        GearIntelInfo info = GearIntel.Describe(GearEditor.Current, path, GearEditor.GetAttachmentMask(path));
         BridgeGearIntel b = default;
         Put(info.Name, b.Name, BridgeGearIntel.NameCapacity);
         Put(info.Role, b.Role, BridgeGearIntel.NameCapacity);
@@ -445,7 +475,7 @@ public static unsafe class GearMenuExports
             BridgeGearOption o = default;
             Put(list[i].Path, o.Path, BridgeLoadout.PathCapacity);
             Put(LoadoutGear.NameOf(list[i].Path), o.Name, BridgeGearItem.NameCapacity);
-            Put(GearIntel.SubLine(m, list[i].Path), o.Sub, BridgeGearOption.SubCapacity);
+            Put(GearIntel.SubLine(m, list[i].Path, GearEditor.GetAttachmentMask(list[i].Path)), o.Sub, BridgeGearOption.SubCapacity);
             o.Flags = list[i].Flags;
             o.RequiredLevel = m.RequiredLevel(list[i].Path);
             options[i] = o;
@@ -457,6 +487,12 @@ public static unsafe class GearMenuExports
     /// <summary>Picks a card. Returns 1 taken, 0 refused (locked, or not of that category).</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int Choose(int category, int slot, char* path) => Guard(() => GearEditor.Choose(category, slot, Text(path)) ? 1 : 0);
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetAttachmentMask(char* path) => Guard(() => GearEditor.GetAttachmentMask(Text(path)));
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int SetAttachmentMask(char* path, int mask) => Guard(() => GearEditor.SetAttachmentMask(Text(path), mask) ? 1 : 0);
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Reset() => Guard(() =>

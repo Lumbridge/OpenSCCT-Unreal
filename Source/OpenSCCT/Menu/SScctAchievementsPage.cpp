@@ -4,6 +4,7 @@
 // list is complete signed out too; progress and earned dates come from the master's account answer.
 
 #include "Menu/ScctCareerPages.h"
+#include "Widgets/Input/SSearchBox.h"
 
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SWrapBox.h"
@@ -20,6 +21,7 @@ namespace
 		FScctCareerAchievement Data = {};
 		FString Id;
 		FString Title;
+		FString Description;
 		float Fraction() const
 		{
 			return (Data.Flags & EScctCareerAchievementFlags::Earned) != 0 ? 1.0f : Data.Target > 0 ? FMath::Clamp(static_cast<float>(Data.Current) / Data.Target, 0.0f, 1.0f) : 0.0f;
@@ -96,13 +98,26 @@ namespace
 							],
 							FMargin(20.0f, 14.0f))
 					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 12.0f)[ Filters ]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 12.0f)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth()[ Filters ]
+						+ SHorizontalBox::Slot().FillWidth(1).Padding(12, 0, 0, 0)
+						[
+							SAssignNew(SearchBox, SSearchBox).HintText(FText::FromString(TEXT("Find a weapon or challenge")))
+							.OnTextChanged_Lambda([this](const FText& Text)
+							{
+								const FString Query = Text.ToString().TrimStartAndEnd();
+								if (Query != Search) { Search = Query; Rebuild(); }
+							})
+						]
+					]
 					+ SVerticalBox::Slot().FillHeight(1.0f)
 					[
 						SNew(SHorizontalBox)
 						+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0.0f, 0.0f, 20.0f, 0.0f)
 						[
-							SNew(SScrollBox).ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll)
+							SAssignNew(Scroll, SScrollBox).ScrollWhenFocusChanges(EScrollWhenFocusChanges::AnimatedScroll)
 							+ SScrollBox::Slot()[ SAssignNew(List, SVerticalBox) ]
 						]
 						+ SHorizontalBox::Slot().AutoWidth()
@@ -142,6 +157,7 @@ namespace
 			{
 				Selected = Sub;
 			}
+			bRevealSelection = true;
 			Rebuild();
 		}
 
@@ -149,6 +165,9 @@ namespace
 		void SetGroup(int32 InGroup)
 		{
 			Group = InGroup;
+			Selected.Reset();
+			Search.Reset();
+			SearchBox->SetText(FText::GetEmpty());
 			Rebuild();
 		}
 
@@ -163,6 +182,7 @@ namespace
 					{
 						bPickNext = false;
 						Selected = Career->GetString(EScctCareerString::AchievementId, Career->GetInfo().NextUnlock);
+						bRevealSelection = true;
 					}
 				}
 				Rebuild();
@@ -173,23 +193,36 @@ namespace
 		void Rebuild()
 		{
 			UScctCareerSubsystem* Career = ScctCareerUi::Career();
-			ShownRevision = ScctCareerUi::Revision();
+			const int32 Revision = ScctCareerUi::Revision();
 			List->ClearChildren();
-			Rows.Reset();
-			const int32 Count = Career != nullptr ? Career->GetInfo().Achievements : 0;
-			for (int32 Index = 0; Index < Count; ++Index)
+			if (Revision != ShownRevision)
 			{
-				FScctAchievementRow Row;
-				Row.Index = Index;
-				if (Career->GetAchievement(Index, Row.Data))
+				ShownRevision = Revision;
+				Rows.Reset();
+				const int32 Count = Career != nullptr ? Career->GetInfo().Achievements : 0;
+				for (int32 Index = 0; Index < Count; ++Index)
 				{
+					FScctAchievementRow Row;
+					Row.Index = Index;
+					if (!Career->GetAchievement(Index, Row.Data)) { continue; }
 					Row.Id = Career->GetString(EScctCareerString::AchievementId, Index);
 					Row.Title = Career->GetString(EScctCareerString::AchievementTitle, Index);
+					Row.Description = Career->GetString(EScctCareerString::AchievementDescription, Index);
 					Rows.Add(Row);
 				}
 			}
 
+			if (bRevealSelection && Career)
+			{
+				if (const FScctAchievementRow* Target = Rows.FindByPredicate([this](const FScctAchievementRow& Row) { return Row.Id == Selected; }))
+				{
+					Group = Target->Data.Category;
+					Search = Career->GetString(EScctCareerString::AchievementWeapon, Target->Index);
+					SearchBox->SetText(FText::FromString(Search));
+				}
+			}
 			const FScctAchievementRow* Picked = nullptr;
+			const FScctAchievementRow* First = nullptr;
 			for (int32 Category = 0; Category < ScctAchievementGroups; ++Category)
 			{
 				if (Group >= 0 && Group != Category)
@@ -200,7 +233,7 @@ namespace
 				int32 Earned = 0;
 				for (const FScctAchievementRow& Row : Rows)
 				{
-					if (Row.Data.Category == Category)
+					if (Row.Data.Category == Category && (Search.IsEmpty() || Row.Title.Contains(Search) || Row.Description.Contains(Search)))
 					{
 						InGroup.Add(&Row);
 						Earned += (Row.Data.Flags & EScctCareerAchievementFlags::Earned) != 0 ? 1 : 0;
@@ -222,17 +255,26 @@ namespace
 				const TSharedRef<SWrapBox> Tiles = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.0f, 8.0f));
 				for (const FScctAchievementRow* Row : InGroup)
 				{
-					if (Picked == nullptr && (Selected.IsEmpty() || Row->Id == Selected))
+					if (!First) { First = Row; }
+					const TSharedRef<SWidget> Button = Tile(*Row);
+					Tiles->AddSlot()[ Button ];
+					if (Row->Id == Selected)
 					{
 						Picked = Row;
+						if (bRevealSelection) { Scroll->ScrollDescendantIntoView(Button, false, EDescendantScrollDestination::IntoView); }
 					}
-					Tiles->AddSlot()[ Tile(*Row) ];
 				}
 				List->AddSlot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 14.0f)[ Tiles ];
 			}
-			if (Picked != nullptr && Selected.IsEmpty())
+			if (!Picked) { Picked = First; }
+			if (Picked)
 			{
 				Selected = Picked->Id;
+				bRevealSelection = false;
+			}
+			else if (!Search.IsEmpty())
+			{
+				List->AddSlot().AutoHeight()[ ScctCareerUi::Line(TEXT("No matching challenges."), ScctUi::Body(), ScctHudStyle::TextDim()) ];
 			}
 			Detail->SetContent(Picked != nullptr ? BuildDetail(*Picked) : SNullWidget::NullWidget);
 		}
@@ -256,11 +298,11 @@ namespace
 					+ SVerticalBox::Slot().AutoHeight()
 					[
 						SNew(SScctButton).Look(EScctButtonLook::Chip).FillWidth(true)
-						.Text(FText::FromString(Row.Title))
+						.Text(FText::FromString(Row.Id.StartsWith(TEXT("primary_")) ? Row.Title.Replace(TEXT(" · "), TEXT("\n")) : Row.Title))
 						.SubText(FText::FromString(Status))
 						.Colour(bDone ? ScctUi::Accent() : ScctHudStyle::TextDim())
 						.Selected_Lambda([this, Id] { return Selected == Id; })
-						.Description(FText::FromString(ScctCareerUi::Str(EScctCareerString::AchievementDescription, Row.Index)))
+						.Description(FText::FromString(Row.Description))
 						.OnPressed(FSimpleDelegate::CreateLambda([this, Id] { Selected = Id; ShowDetail(); }))
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(2.0f, 3.0f, 2.0f, 0.0f)[ ScctAchievementBar(Row.Fraction(), bDone, 3.0f) ]
@@ -273,7 +315,7 @@ namespace
 			const TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
 			Box->AddSlot().AutoHeight()[ ScctUi::Label(ScctCareerUi::Str(EScctCareerString::CategoryName, Row.Data.Category).ToUpper()) ];
 			Box->AddSlot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)[ ScctCareerUi::Line(Row.Title, ScctUi::H1(), bDone ? ScctUi::Accent() : ScctHudStyle::Text()) ];
-			Box->AddSlot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)[ ScctCareerUi::Line(ScctCareerUi::Str(EScctCareerString::AchievementDescription, Row.Index), ScctUi::Body(), ScctHudStyle::Text()) ];
+			Box->AddSlot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)[ ScctCareerUi::Line(Row.Description, ScctUi::Body(), ScctHudStyle::Text()) ];
 			Box->AddSlot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 0.0f)
 			[
 				SNew(SHorizontalBox)
@@ -290,20 +332,23 @@ namespace
 					ScctCareerUi::Line(TEXT("The master gave no progress for this one: it is counted from your stats, feats from zero."), ScctUi::Small(), ScctHudStyle::TextFaint())
 				];
 			}
-			Box->AddSlot().AutoHeight().Padding(0.0f, 18.0f, 0.0f, 6.0f)[ ScctUi::Label(bDone ? TEXT("UNLOCKED") : TEXT("UNLOCKS")) ];
 			TArray<FString> Rewards;
+			TArray<FString> Ids;
 			ScctCareerUi::Str(EScctCareerString::AchievementRewards, Row.Index).ParseIntoArrayLines(Rewards);
-			for (const FString& Reward : Rewards)
+			ScctCareerUi::Str(EScctCareerString::AchievementRewardIds, Row.Index).ParseIntoArrayLines(Ids);
+			if (!Rewards.IsEmpty())
 			{
-				Box->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
-				[
-					ScctCareerUi::Line((Row.Data.Flags & EScctCareerAchievementFlags::HasRewards) != 0 ? TEXT("•  ") + Reward : Reward, ScctUi::Body(),
-						(Row.Data.Flags & EScctCareerAchievementFlags::HasRewards) != 0 ? ScctHudStyle::Text() : ScctHudStyle::TextDim())
-				];
+				Box->AddSlot().AutoHeight().Padding(0, 18, 0, 6)[ ScctUi::Label(bDone ? TEXT("Unlocked finishes") : TEXT("Finish rewards")) ];
 			}
-			if ((Row.Data.Flags & EScctCareerAchievementFlags::HasRewards) != 0 && !bDone)
+			for (int32 Index = 0; Index < Rewards.Num() && Index < Ids.Num(); ++Index)
 			{
-				Box->AddSlot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)[ ScctCareerUi::Line(TEXT("LOCKED until earned."), ScctUi::Caps(11.0f), ScctHudStyle::TextFaint()) ];
+				Box->AddSlot().AutoHeight().Padding(0, 2)
+				[
+					SNew(SScctButton).Look(EScctButtonLook::Secondary).FillWidth(true)
+					.Text(FText::FromString(Rewards[Index]))
+					.Description(FText::FromString(TEXT("Preview this finish in the Armoury.")))
+					.OnPressed(FSimpleDelegate::CreateLambda([this, Id = Ids[Index]] { Host.Open(TEXT("armoury/item/") + Id); }))
+				];
 			}
 			return ScctUi::Card(TEXT("Challenge details"), Box, FMargin(20.0f, 16.0f));
 		}
@@ -311,10 +356,14 @@ namespace
 		TArray<FScctAchievementRow> Rows;
 		TSharedPtr<SVerticalBox> List;
 		TSharedPtr<SBox> Detail;
+		TSharedPtr<SScrollBox> Scroll;
+		TSharedPtr<SSearchBox> SearchBox;
 		FString Selected;
+		FString Search;
 		int32 Group = -1;
 		int32 ShownRevision = -2;
 		bool bPickNext = false;
+		bool bRevealSelection = false;
 	};
 }
 

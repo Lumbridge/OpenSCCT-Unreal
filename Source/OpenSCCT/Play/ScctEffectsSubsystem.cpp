@@ -160,7 +160,7 @@ void UScctEffectsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Session->OnSessionChanged.AddUObject(this, &UScctEffectsSubsystem::HandleSessionChanged);
 	Session->OnMatchStarted.AddUObject(this, &UScctEffectsSubsystem::HandleMatchStarted);
 	Session->OnBeforeTicks.AddUObject(this, &UScctEffectsSubsystem::HandleBeforeTicks);
-	Session->OnFrame.AddUObject(this, &UScctEffectsSubsystem::HandleFrame);
+	Session->OnFramePresented.AddUObject(this, &UScctEffectsSubsystem::HandleFrame);
 
 	// Flashes are scaled by the picture's exposure (Play/ScctExposure.h).
 	FScctExposure::Start();
@@ -189,7 +189,7 @@ void UScctEffectsSubsystem::Deinitialize()
 		Session->OnSessionChanged.RemoveAll(this);
 		Session->OnMatchStarted.RemoveAll(this);
 		Session->OnBeforeTicks.RemoveAll(this);
-		Session->OnFrame.RemoveAll(this);
+		Session->OnFramePresented.RemoveAll(this);
 	}
 	Super::Deinitialize();
 }
@@ -310,6 +310,8 @@ bool UScctEffectsSubsystem::EnsureScene()
 	Root->RegisterComponent();
 
 	UStaticMesh* Quad = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
+	FlareCard = Quad;
+	FlareMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/OpenSCCT/Effects/M_ScctFxFlare.M_ScctFxFlare"));
 	// The smoke grenade's cloud is drawn with the game's own picture of it; without the picture or its material the
 	// cloud is the soft grey discs of the smoke layer, in the same places and sizes.
 	UMaterialInterface* SmokeMaterial = LoadObject<UMaterialInterface>(nullptr, SmokeMaterialPath);
@@ -382,6 +384,10 @@ bool UScctEffectsSubsystem::EnsureScene()
 		}
 	}
 
+	if (const FSoftObjectPath* Cartridge = MeshAssets.Find(TEXT("sgameplayobjectsflaregrenade")))
+	{
+		FlareCartridge = Cast<UStaticMesh>(Cartridge->TryLoad());
+	}
 	bSceneReady = true;
 	return true;
 }
@@ -508,21 +514,33 @@ void UScctEffectsSubsystem::UpdateBodyFill(float DeltaSeconds)
 				continue;
 			}
 			const bool bOwnSide = bAids && Local != nullptr && Proxy->GetTeam() == Local->GetTeam();
-			const FScctPawnLighting Lighting = FScctPawnLighting::Sample(FVector(Pawn.X, Pawn.Y, Pawn.Z),
-				Pawn.CollisionRadius + 0.5f * Pawn.CollisionHeight, Proxy->GetKind() == 0 ? Pawn.ActorId : INDEX_NONE);
+			const FVector Centre(Pawn.X, Pawn.Y, Pawn.Z);
+			const bool bLocalGear = Proxy == Local && FirstPerson && FirstPerson->IsShown() && Proxy->GetKind() != 0;
+			FScctPawnLighting Lighting = FScctPawnLighting::Sample(*GetWorld(), Centre, Pawn.CollisionRadius + 0.5f * Pawn.CollisionHeight,
+				Proxy->GetKind() == 0 ? Pawn.ActorId : INDEX_NONE, bLocalGear);
 			TArray<USceneComponent*> Parts;
 			Proxy->GetRootComponent()->GetChildrenComponents(true, Parts);
+			const int32 WorldPartCount = Parts.Num();
 			if (Proxy == Local && FirstPerson && FirstPerson->IsShown())
 			{
 				TArray<USceneComponent*> ViewParts;
 				FirstPerson->GetRootComponent()->GetChildrenComponents(true, ViewParts);
 				Parts.Append(ViewParts);
 			}
-			for (USceneComponent* Part : Parts)
+			for (int32 Index = 0; Index < Parts.Num(); ++Index)
 			{
-				if (UMeshComponent* Mesh = Cast<UMeshComponent>(Part))
+				if (bLocalGear && Index == WorldPartCount)
 				{
-					const bool bBody = Mesh == Proxy->GetBodyMesh();
+					Lighting.UseViewAmbient();
+				}
+				if (UMeshComponent* Mesh = Cast<UMeshComponent>(Parts[Index]))
+				{
+					const bool bLegs = Mesh == Proxy->GetFirstPersonLegs();
+					if (bLegs && !Mesh->IsVisible())
+					{
+						continue;
+					}
+					const bool bBody = Mesh == Proxy->GetBodyMesh() || bLegs;
 					Lighting.Apply(*Mesh, bOwnSide && bBody, bBody);
 				}
 			}
@@ -557,6 +575,10 @@ void UScctEffectsSubsystem::UpdateBodyFill(float DeltaSeconds)
 		if (static_cast<bool>(Body->LightingChannels.bChannel1) != bOwnSide)
 		{
 			Body->SetLightingChannels(true, bOwnSide, false);
+		}
+		if (UPrimitiveComponent* Legs = Proxy->GetFirstPersonLegs(); Legs && Legs->IsVisible() && static_cast<bool>(Legs->LightingChannels.bChannel1) != bOwnSide)
+		{
+			Legs->SetLightingChannels(true, bOwnSide, false);
 		}
 	}
 
@@ -625,17 +647,22 @@ FVector UScctEffectsSubsystem::FindMuzzle(const FScctShot& Shot) const
 		return Estimate;
 	}
 
+	FTransform Barrel;
+	const UScctEquipmentSubsystem* Equipment = GetWorld()->GetSubsystem<UScctEquipmentSubsystem>();
 	const AScctPawnProxy* Proxy = Session->FindProxy(Shot.ShooterId);
-	if (Proxy == nullptr || !Proxy->HasModel() || !Proxy->IsShown() || Proxy->IsFirstPerson())
+	const bool bEyeTracer = Shot.Kind == EScctShotKind::Tracer && Equipment &&
+		Equipment->GetFirstPerson().ActorId == Shot.ShooterId && Equipment->DrawsLocalMuzzleFlash();
+	if (!bEyeTracer && (!Proxy || !Proxy->HasModel() || !Proxy->IsShown() || Proxy->IsFirstPerson()))
 	{
 		return Estimate;
 	}
-	// The gun drawn on the body knows where its barrel ends (a replacement model's muzzle socket included).
-	FTransform Barrel;
-	const UScctEquipmentSubsystem* Equipment = GetWorld()->GetSubsystem<UScctEquipmentSubsystem>();
 	if (Equipment != nullptr && Equipment->FindMuzzle(Shot.ShooterId, Barrel))
 	{
 		return Barrel.GetLocation();
+	}
+	if (Shot.Kind == EScctShotKind::Tracer)
+	{
+		return Estimate;
 	}
 	const FName Hand = Proxy->FindMeshBoneName(TEXT("B R Hand"));
 	if (Hand.IsNone())
@@ -658,7 +685,7 @@ void UScctEffectsSubsystem::DrainShots()
 			if (Shot.Kind == EScctShotKind::Tracer)
 			{
 				++NumTracers;
-				const FVector Start(Shot.X, Shot.Y, Shot.Z);
+				const FVector Start = FindMuzzle(Shot);
 				const FVector Impact(Shot.ImpactX, Shot.ImpactY, Shot.ImpactZ);
 				// The original hides a tracer for the last stretch before its impact; a short shot shows none.
 				const float Distance = static_cast<float>(FVector::Dist(Start, Impact)) - Shot.HideDistance;
@@ -944,7 +971,12 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 			&& SmokeVolumes.CoversEmitter(Record.ActorId, GetName(Fx->ClassId).Contains(TEXT("SmokeEmitter")), Fx->Age);
 		// Rain on a pawn spreads over the drawn body (Play/ScctEffectsFlicFloc.cpp); without its table, a plain splash.
 		const bool bFlicDrawn = Fx->bFlicFloc && UpdateFlicFloc(*Fx, Record, Fx->Location, bHidden, DeltaSeconds);
-		if (Fx->bGrenadeCloud)
+		FVector LightAt = Fx->Location;
+		if (Fx->Style == EStyle::Flare)
+		{
+			LightAt = UpdateFlare(*Fx, Record, Place, Before, DeltaSeconds, bHidden, bRestoring, bHistorical);
+		}
+		else if (Fx->bGrenadeCloud)
 		{
 			// The spy's smoke grenade: the original's cloud, let out once (a cloud first seen late lets out what is left of it).
 			if (!bHidden && !bVolumeSmoke)
@@ -995,12 +1027,12 @@ void UScctEffectsSubsystem::UpdateEffectActors(float DeltaSeconds)
 			const float Radius = FMath::Max(Record.LightRadius, 100.0f);
 			if (Fx->Light == INDEX_NONE)
 			{
-				Fx->Light = AcquireLight(Fx->Location, Color, Candelas, Radius, 0.0f, true);
+				Fx->Light = AcquireLight(LightAt, Color, Candelas, Radius, 0.0f, true);
 			}
 			if (Fx->Light != INDEX_NONE)
 			{
 				UPointLightComponent* Light = LightComponents[Fx->Light];
-				Light->SetWorldLocation(Fx->Location);
+				Light->SetWorldLocation(LightAt);
 				if (Fx->Style == EStyle::Flare && FScctLightPlan::IsOn())
 				{
 					FScctLightRules::SetFlareLight(*Light, Record.LightBrightness, Color);
@@ -1053,7 +1085,8 @@ void UScctEffectsSubsystem::StartActor(FActorFx& Fx, const FScctEffectActor& Rec
 	{
 		UStaticMesh* Mesh = FindMesh(Record.MeshId);
 		// A beam or a puddle without its mesh is better left out than drawn as a ball.
-		Fx.bStandIn = Mesh == nullptr && Record.Kind != EScctEffectKind::Beam && Record.Kind != EScctEffectKind::Decal;
+		Fx.bStandIn = Mesh == nullptr && Record.Kind != EScctEffectKind::Beam && Record.Kind != EScctEffectKind::Decal
+			&& !GetName(Record.ClassId).EndsWith(TEXT("SProjFlare"));
 		if (Mesh != nullptr || Fx.bStandIn)
 		{
 			for (int32 Index = 0; Index < MaxMeshes; ++Index)
@@ -1139,6 +1172,12 @@ void UScctEffectsSubsystem::StartActor(FActorFx& Fx, const FScctEffectActor& Rec
 
 void UScctEffectsSubsystem::EndActor(FActorFx& Fx, bool bKilled)
 {
+	if (Fx.Flare)
+	{
+		if (UStaticMeshComponent* Flame = Fx.Flare->Flame.Get()) Flame->DestroyComponent();
+		if (UStaticMeshComponent* Case = Fx.Flare->Cartridge.Get()) Case->DestroyComponent();
+		Fx.Flare.Reset();
+	}
 	if (Fx.Mesh != INDEX_NONE)
 	{
 		MeshPool[Fx.Mesh]->SetVisibility(false);
@@ -1266,7 +1305,6 @@ void UScctEffectsSubsystem::Emit(EStyle Style, const FVector& At, const FVector&
 	case EStyle::Wisp: Rate = 26.0f; break;
 	case EStyle::Sparks: Rate = 14.0f; break;
 	case EStyle::Electric: Rate = 40.0f; break;
-	case EStyle::Flare: Rate = 40.0f; break;
 	case EStyle::Water: Rate = 30.0f; break;
 	default: return;
 	}
@@ -1324,26 +1362,6 @@ void UScctEffectsSubsystem::Emit(EStyle Style, const FVector& At, const FVector&
 			Particle.SizeStart = 2.5f;
 			Particle.SizeEnd = 1.0f;
 			Particle.Stretch = 0.04f;
-			break;
-		}
-		case EStyle::Flare:
-		{
-			// A burning core with sparks falling from it.
-			FScctFxParticle& Core = Sprites.Spawn(EScctFxLayer::Glow);
-			Core.Position = At;
-			Core.Color = FLinearColor(40.0f, 12.0f, 6.0f, 1.0f);
-			Core.Life = 0.12f;
-			Core.SizeStart = Random.FRandRange(22.0f, 34.0f);
-			Core.SizeEnd = 10.0f;
-			FScctFxParticle& Spark = Sprites.Spawn(EScctFxLayer::Glow);
-			Spark.Position = At;
-			Spark.Velocity = Random.VRand() * Random.FRandRange(60.0f, 260.0f);
-			Spark.Color = FLinearColor(20.0f, 6.0f, 2.0f, 1.0f);
-			Spark.Life = Random.FRandRange(0.3f, 0.8f);
-			Spark.SizeStart = 2.0f;
-			Spark.SizeEnd = 0.5f;
-			Spark.Gravity = 500.0f;
-			Spark.Stretch = 0.03f;
 			break;
 		}
 		case EStyle::Water:

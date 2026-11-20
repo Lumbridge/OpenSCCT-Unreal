@@ -20,6 +20,7 @@ public static class ActionBindings
         (ControlBindings.SpyFireAction, ["fire"]),
         (ControlBindings.SpyGadgetAction, ["altfire"]),
         (ControlBindings.MercGadgetAction, ["altfire"]),
+        (MercBindings.Trigger, ["altfire", MercBindings.AimId]),
         (ControlBindings.CrouchAction, ["crouch"]),
         (ControlBindings.LongRollAction, ["longroll"]),
         (ControlBindings.WallLaserAction, ["wall", "weaponlaser"]),
@@ -119,6 +120,7 @@ public static class ActionBindings
             if (!BindingKey.TryParse(name, out var parsed)) return false;
             bool doubled = parsed.Modifiers.HasFlag(BindingModifiers.Double);
             if ((doubleTapSlot.HasValue && doubled != doubleTapSlot.Value) ||
+                (parsed.IsPulse && action.Id is ControlActionList.MercFreeLookId or MercBindings.AimId) ||
                 (doubled && (parsed.IsPulse || !ControlActionList.SupportsDoubleTap(action.Category, action.Id))))
             {
                 return false;
@@ -164,6 +166,7 @@ public static class ActionBindings
     /// <summary>What a pad control does once it no longer does <paramref name="id"/>: a contextual binding of two actions keeps the other.</summary>
     private static string PadWithout(string bound, string id)
     {
+        if (bound == MercBindings.Trigger && id == MercBindings.AimId) return ControlBindings.MercGadgetAction;
         foreach ((string binding, string[] actions) in s_padContext)
         {
             if (string.Equals(bound, binding, StringComparison.Ordinal))

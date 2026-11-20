@@ -5,14 +5,17 @@ game content). Runs inside the editor's Python, with no window:
 
   Materials/M_ScctGlow         a soft self-lit glow for laser dots, muzzle flashes and torch coronas
   Materials/M_ScctLaserBeam    an additive laser ribbon with a narrow luminous core and a feathered red halo
+  Materials/MercTorchProfile       the angular intensity curve for the merc's weapon light
   Materials/M_ScctGoggleGlow   the lit goggle lenses (parent of the lens materials the character import makes)
-  Materials/M_ScctCloak        the camo suit: the body turns to bent light with a faint rim
+  Materials/M_ScctCloak        the camo suit: the body turns to bent light with a lit surface rim
   DA_ScctWeapons               which mesh stands for each simulation weapon class and where its sockets are
                                (UScctWeaponSet, Source/OpenSCCT/Play/ScctEquipmentData.h). Made once and then left
                                alone, so edits made in the editor are kept; delete it to get the defaults back.
 
-Pass "rebuild" to make the materials again from this script. Pass "--laser-only" to build just the laser ribbon.
+Pass "rebuild" to make the assets again from this script. Pass "--laser-only", "--cloak-only",
+or "--merc-torch-profile-only" to select one asset.
 """
+from pathlib import Path
 import sys
 
 import unreal
@@ -29,6 +32,24 @@ MP = unreal.MaterialProperty
 
 def log(text):
     unreal.log_warning("SCCT-IMPORT " + text)
+
+
+def build_merc_torch_profile():
+    source = Path(__file__).with_name("MercTorchProfile.ies")
+    path = MATERIALS + "/" + source.stem
+    if editor_assets.does_asset_exist(path) and not REBUILD:
+        return
+    task = unreal.AssetImportTask()
+    task.set_editor_property("filename", str(source))
+    task.set_editor_property("destination_path", MATERIALS)
+    task.set_editor_property("automated", True)
+    task.set_editor_property("replace_existing", True)
+    task.set_editor_property("save", True)
+    asset_tools.import_asset_tasks([task])
+    profile = unreal.load_asset(path)
+    if not isinstance(profile, unreal.TextureLightProfile):
+        raise RuntimeError("Could not import the torch light profile at " + path)
+    log("imported " + profile.get_path_name())
 
 
 def new_material(name):
@@ -287,21 +308,15 @@ def build_cloak():
     materials_lib.connect_material_expressions(amount, "", colour, "Alpha")
     materials_lib.connect_material_property(colour, "", MP.MP_BASE_COLOR)
 
-    # Fully on, only the rim of the shape holds a little of the light; the rest is what lies behind, bent.
+    # The lit rim reflects scene lighting. An emissive rim would outline the spy even in a black room.
     rim_opacity = binary(material, unreal.MaterialExpressionMultiply, rim, constant(0.1, -1100, 350), -800, 250)
-    cloaked_opacity = binary(material, unreal.MaterialExpressionAdd, rim_opacity, constant(0.0, -800, 400), -600, 300)
-    opacity = lerp(constant(1.0, -800, 100), cloaked_opacity, amount, -350, 150)
+    opacity = lerp(constant(1.0, -800, 100), rim_opacity, amount, -350, 150)
     materials_lib.connect_material_property(opacity, "", MP.MP_OPACITY)
 
     bend = lerp(constant(1.0, -800, 550), constant(1.2, -800, 650), amount, -350, 550)
     materials_lib.connect_material_property(bend, "", MP.MP_REFRACTION)
 
     materials_lib.connect_material_property(constant(0.25, -350, 750), "", MP.MP_ROUGHNESS)
-    shimmer_colour = vector(material, "Shimmer", (0.35, 0.6, 1.0, 1.0), -1100, 800)
-    shimmer = binary(material, unreal.MaterialExpressionMultiply, shimmer_colour, rim, -800, 850)
-    shimmer_on = binary(material, unreal.MaterialExpressionMultiply, shimmer, amount, -600, 850)
-    shimmer_out = binary(material, unreal.MaterialExpressionMultiply, shimmer_on, scalar(material, "ShimmerStrength", 0.02, -800, 1000), -350, 900)
-    materials_lib.connect_material_property(shimmer_out, "", MP.MP_EMISSIVE_COLOR)
     finish(material)
 
 
@@ -407,9 +422,14 @@ def build_weapon_set():
     log("made " + path)
 
 
-if "--laser-only" in sys.argv[1:]:
+if "--merc-torch-profile-only" in sys.argv[1:]:
+    build_merc_torch_profile()
+elif "--laser-only" in sys.argv[1:]:
     build_laser_beam()
+elif "--cloak-only" in sys.argv[1:]:
+    build_cloak()
 else:
+    build_merc_torch_profile()
     build_glow()
     build_laser_beam()
     build_goggle_glow()

@@ -47,6 +47,10 @@ struct OPENSCCT_API FScctSettingDesc
 	float Step = 0.f;
 	/** For Choice. */
 	TArray<FText> Choices;
+	/** Optional hardware filter. Stored choice indices remain stable when a profile moves to another PC. */
+	TFunction<bool(int32)> SupportsChoice;
+	/** Some supported choices require a different graphics backend at the next launch. */
+	TFunction<bool(int32)> ChoiceRequiresRestart;
 	/** Lower sorts first within the page; ties keep registration order. */
 	int32 Order = 0;
 	/** False hides the option from the settings page (a value only code or the console sets). */

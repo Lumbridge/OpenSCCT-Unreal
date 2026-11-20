@@ -11,5 +11,6 @@ public class OpenSCCTUnrealTarget : TargetRules
 		DefaultBuildSettings = BuildSettingsVersion.V7;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
 		ExtraModuleNames.Add("OpenSCCT");
+		if (Target.Platform == UnrealTargetPlatform.Win64) ExtraModuleNames.Add("OpenSCCTGraphicsStartup");
 	}
 }

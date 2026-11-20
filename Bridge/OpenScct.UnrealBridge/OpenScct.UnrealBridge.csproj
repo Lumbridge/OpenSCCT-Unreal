@@ -26,6 +26,7 @@
   <!-- Discord Rich Presence over the local Discord app's pipe (Social/DiscordPresence.cs), the version the Godot
        client uses (OpenSCCT's Directory.Packages.props). -->
   <ItemGroup>
+    <InternalsVisibleTo Include="EquipmentProbe" />
     <PackageReference Include="DiscordRichPresence" Version="1.6.1.70" />
   </ItemGroup>
   <!-- The play session lives in the Godot project but has no Godot in it; it is linked, as OpenSCCT's map sweep does. -->

@@ -66,5 +66,7 @@ private:
 	FTSTicker::FDelegateHandle TickerHandle;
 	FDelegateHandle SettingHandle;
 	int32 SeenRevision = MIN_int32;
+	mutable TOptional<int32> CatalogueRevision;
+	mutable TArray<FScctArmouryRow> Catalogue;
 	int32 SeenTitleSerial = 0;
 };

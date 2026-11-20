@@ -4,7 +4,8 @@
 #include "Runtime/ScctDemoPlayApi.h"
 #include "Widgets/SCompoundWidget.h"
 
-class SWrapBox;
+class SBox;
+class SScctSelectBox;
 
 /**
  * The playback bar over a demo being watched (Demo/ScctDemoPlayback.h), ported from the Godot client's
@@ -72,7 +73,8 @@ private:
 	TArray<FScctDemoMarker> Markers;
 	TArray<FScctDemoTarget> Targets;
 	FString RosterSignature;
-	TSharedPtr<SWrapBox> PlayerBox;
+	TSharedPtr<SBox> PlayerBox;
+	TSharedPtr<SScctSelectBox> PlayerSelect;
 
 	FString Preview;
 	float Idle = 0.0f;

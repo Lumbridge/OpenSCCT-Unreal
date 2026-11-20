@@ -34,10 +34,11 @@ public sealed class GearMenuModel
     public const string LobbyRule = "Your gear goes on when the round starts; you can still change it in the round.";
 
     /// <summary>The line before any match (the offline page and the main menu): Unreal's own addition.</summary>
-    public const string OfflineRule = "Your gear goes on when the match starts; sidearms and rifles only when the match has them.";
+    public const string OfflineRule = "Your gear goes on when the match starts.";
 
     private readonly IReadOnlyList<string> _options;
     private readonly int _allowed;
+    private string _preferredWeapon;
 
     public GearMenuModel(bool spy, int slots, IReadOnlyList<string> options, int allowedMask, IReadOnlyList<string> weapons,
         LoadoutChoice saved, bool hub, int currentLevel = 1, bool unrestricted = false, bool riflesEnabled = false,
@@ -54,9 +55,7 @@ public sealed class GearMenuModel
         _allowed = allowedMask;
         RiflesEnabled = riflesEnabled;
         SidearmsEnabled = sidearmsEnabled;
-        Weapons = weapons.Where(w => MercRifles.Find(w) is null).Concat(riflesEnabled
-            ? weapons.Where(w => MercRifles.Find(w) is not null).OrderBy(w => MercRifles.Find(w)!.Level)
-            : Enumerable.Empty<string>()).ToArray();
+        Weapons = MercPrimarySelection.Catalogue(weapons, riflesEnabled);
         Hub = hub;
         string[] held = saved.GadgetsOf(spy);
         Gadgets = new string[LoadoutChoice.Slots];
@@ -65,7 +64,8 @@ public sealed class GearMenuModel
             Gadgets[i] = i < held.Length ? held[i] ?? "" : "";
         }
 
-        ChosenWeapon = spy ? "" : saved.MercWeapon;
+        _preferredWeapon = spy ? "" : MercPrimarySelection.SavedPreference(saved.MercWeapon);
+        ChosenWeapon = _preferredWeapon;
         ChosenSidearm = spy ? "" : saved.MercSidearm;
         bool migrated = false;
         for (int i = 0; !spy && i < Gadgets.Length; i++)
@@ -230,7 +230,7 @@ public sealed class GearMenuModel
 
         if (MercRifles.Find(path) is not null)
         {
-            return !Spy && RiflesEnabled && ContainsWeapon(path) && EquipmentUnlocks.LevelAllows(path, CurrentLevel, Unrestricted);
+            return !Spy && ContainsWeapon(path) && EquipmentUnlocks.LevelAllows(path, CurrentLevel, Unrestricted);
         }
 
         if (ContainsWeapon(path))
@@ -303,7 +303,7 @@ public sealed class GearMenuModel
         Array.Copy(defaults, Gadgets, Math.Min(defaults.Length, Gadgets.Length));
         if (!Spy)
         {
-            ChosenWeapon = Loadouts.MercWeapon.Path ?? "";
+            _preferredWeapon = WeaponAttachments.M4;
             ChosenSidearm = LoadoutChoice.DefaultSidearm;
         }
 
@@ -317,7 +317,7 @@ public sealed class GearMenuModel
             return false;
         }
 
-        ChosenWeapon = option;
+        _preferredWeapon = ChosenWeapon = option;
         return true;
     }
 
@@ -358,16 +358,15 @@ public sealed class GearMenuModel
             target.MercSidearm = ChosenSidearm;
         }
 
-        if (!Spy && ChosenWeapon.Length > 0)
+        if (!Spy && _preferredWeapon.Length > 0)
         {
-            target.MercWeapon = ChosenWeapon;
+            target.MercWeapon = _preferredWeapon;
         }
     }
 
     /// <summary>
     /// What a spawn would give: a slot holding an option the host bans, or one an earlier slot holds, takes the first
-    /// allowed option no slot holds (or is emptied), as the spawn's restriction pass does; the weapon falls back to
-    /// the team's first.
+    /// allowed option no slot holds. A restricted primary takes the same legal replacement as it would on spawn.
     /// </summary>
     private void Normalize()
     {
@@ -411,10 +410,8 @@ public sealed class GearMenuModel
             }
         }
 
-        if (!Spy && Weapons.Count > 0 && (!ContainsWeapon(ChosenWeapon) || !IsAllowed(ChosenWeapon)))
-        {
-            ChosenWeapon = Weapons.FirstOrDefault(IsAllowed) ?? "";
-        }
+        // The host can restrict this match while the profile keeps its preferred primary for the next match.
+        if (!Spy) ChosenWeapon = MercPrimarySelection.Choose(_preferredWeapon, Weapons, IsAllowed);
     }
 
     private bool ContainsWeapon(string path) => Weapons.Any(w => Same(w, path));

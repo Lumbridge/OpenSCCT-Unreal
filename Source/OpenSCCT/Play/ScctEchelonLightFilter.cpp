@@ -2,6 +2,7 @@
 
 #include "Algo/Includes.h"
 #include "Animation/SkeletalMeshActor.h"
+#include "Components/DecalComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SpotLightComponent.h"
 #include "Dom/JsonObject.h"
@@ -13,13 +14,16 @@
 #include "EngineUtils.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
+#include "MaterialShared.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Misc/App.h"
 #include "Misc/FileHelper.h"
 #include "Online/ScctMapFolders.h"
 #include "OpenSCCT.h"
 #include "Play/ScctSessionSubsystem.h"
 #include "Play/ScctLightRules.h"
+#include "RHI.h"
 #include "Runtime/ScctWorldApi.h"
 #include "SceneViewExtension.h"
 #include "Serialization/JsonSerializer.h"
@@ -42,6 +46,9 @@ namespace ScctEchelon
 		{
 			constexpr int32 ReceiverViewFlag = 1 << 30; // build_echelon_light_filter.py
 			View.FinalPostProcessSettings.UserFlags &= ~ReceiverViewFlag;
+			// With light functions disabled no shader reads the receiver depth. Rendering it would
+			// still submit extra scene views every time an affected projector enters the frustum.
+			if (!Family.EngineShowFlags.LightFunctions) return;
 			auto* Filter = Owner.Get();
 			auto* Viewport = Filter ? Filter->GetWorld()->GetGameViewport() : nullptr;
 			if (Viewport && Family.RenderTarget == Viewport->Viewport && !View.bIsSceneCapture &&
@@ -207,6 +214,8 @@ void UScctEchelonLightFilter::Deinitialize()
 
 void UScctEchelonLightFilter::Clear()
 {
+	// The steady imported fixture stays in the world when a match becomes a backdrop or another
+	// round starts. Keep the projection that suits the preset while unbinding match receivers.
 	bLightPlanReady = false;
 	Uninstall();
 }
@@ -248,8 +257,10 @@ void UScctEchelonLightFilter::CaptureVisibleProjectors(const FSceneView& View)
 	for (const FLightState& State : Lights)
 	{
 		auto* Spot = Cast<USpotLightComponent>(State.Light.Get());
-		if (!Spot || Requested[State.Capture] || !Spot->IsVisible() || Spot->Intensity <= 0 ||
-			!View.ViewFrustum.IntersectSphere(Spot->GetComponentLocation(), Spot->AttenuationRadius)) continue;
+		if (!Spot || Requested[State.Capture] || !Spot->IsVisible() || Spot->Intensity <= 0) continue;
+		// Match the renderer's cone bounds. The attenuation sphere also covers the room behind the projector.
+		const FSphere Bounds = Spot->GetBoundingSphere();
+		if (!View.ViewFrustum.IntersectSphere(Bounds.Center, Bounds.W)) continue;
 		if (auto* Capture = Captures[State.Capture].Get())
 		{
 			Capture->CaptureSceneDeferred();
@@ -340,6 +351,68 @@ void UScctEchelonLightFilter::AddReceiver(AActor& Actor)
 	}
 }
 
+void UScctEchelonLightFilter::SetSideStairsProjection(ULightComponent& Light, UDecalComponent& Floor)
+{
+	SideStairsLight = &Light;
+	SideStairsFloor = &Floor;
+	UpdateSideStairsProjection();
+}
+
+bool UScctEchelonLightFilter::ManagesSideStairsVisibility(const ULightComponent& Light) const
+{
+	return SideStairsLight.Get() == &Light && SideStairsFloor.IsValid();
+}
+
+void UScctEchelonLightFilter::UpdateSideStairsProjection()
+{
+	ULightComponent* Light = SideStairsLight.Get();
+	UDecalComponent* Floor = SideStairsFloor.Get();
+	if (!Light || !Floor || !FApp::CanEverRender()) return;
+
+	// Low disables the native shadow and light-function passes. The original static aperture
+	// still appears on the floor there. Changes made from the in-game menu apply immediately.
+	static const IConsoleVariable* ShadowQuality = IConsoleManager::Get().FindConsoleVariable(TEXT("r.ShadowQuality"));
+	static const IConsoleVariable* FunctionQuality = IConsoleManager::Get().FindConsoleVariable(TEXT("r.LightFunctionQuality"));
+	const bool bUseNative = ShadowQuality && ShadowQuality->GetInt() > 0 && FunctionQuality && FunctionQuality->GetInt() > 0;
+	UMaterialInterface* Material = bUseNative ? Light->LightFunctionMaterial.Get() : Floor->GetDecalMaterial();
+	const FMaterialResource* Resource = Material
+		? Material->GetMaterialResource(GetFeatureLevelShaderPlatform_Checked(GetWorld()->GetFeatureLevel()))
+		: nullptr;
+	// Switching scalability can compile a different shader map. Show the selected projection only
+	// when its shader is ready so the renderer never draws a bright default decal or unmasked spot.
+	const bool bReady = Resource && Resource->GetGameThreadShaderMap() && Resource->IsGameThreadShaderMapComplete();
+	static const IConsoleVariable* MaterialQuality = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MaterialQualityLevel"));
+	const int32 Quality = MaterialQuality ? MaterialQuality->GetInt() : INDEX_NONE;
+	const bool bShaderChanged = SideStairsShaderMaterial.Get() != Material || SideStairsShaderQuality != Quality;
+	if (bShaderChanged)
+	{
+		SideStairsShaderMaterial = Material;
+		SideStairsShaderQuality = Quality;
+		bSideStairsShaderRequested = false;
+	}
+	if (Material && !bReady && !bSideStairsShaderRequested)
+	{
+		// A hidden decal or light won't ask the renderer for its missing shaders. Queue the new
+		// quality explicitly so the floor recovers when compilation finishes.
+		bSideStairsShaderRequested = true;
+		Material->CacheShaders(EMaterialShaderPrecompileMode::Background);
+	}
+	const bool bShowLight = bUseNative && bReady;
+	const bool bShowDecal = !bUseNative && bReady;
+	const bool bLightChanged = Light->GetVisibleFlag() != bShowLight;
+	const bool bFloorChanged = Floor->GetVisibleFlag() != bShowDecal;
+	if (bLightChanged) Light->SetVisibility(bShowLight);
+	if (bFloorChanged) Floor->SetVisibility(bShowDecal);
+	if (bShaderChanged || bLightChanged || bFloorChanged)
+	{
+		static const IConsoleVariable* LogRules = IConsoleManager::Get().FindConsoleVariable(TEXT("scct.Light.RulesLog"));
+		UE_CLOG(LogRules && LogRules->GetInt() > 0, LogOpenSCCT, Log,
+			TEXT("Side Stairs projection: shadow %d function %d material quality %d, resource %d ready %d requested %d, spot %d decal %d"),
+			ShadowQuality ? ShadowQuality->GetInt() : -1, FunctionQuality ? FunctionQuality->GetInt() : -1, Quality,
+			Resource != nullptr, bReady, bSideStairsShaderRequested, bShowLight, bShowDecal);
+	}
+}
+
 void UScctEchelonLightFilter::Apply()
 {
 	static const IConsoleVariable* MegaChannels = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MegaLights.LightingChannels"));
@@ -357,6 +430,7 @@ void UScctEchelonLightFilter::Apply()
 	for (const auto& Actor : Pending)
 		if (Actor.IsValid()) AddReceiver(*Actor.Get());
 	Pending.Reset();
+	UpdateSideStairsProjection();
 }
 
 void UScctEchelonLightFilter::RegisterMap(const FString& Folder)
@@ -398,6 +472,10 @@ void UScctEchelonLightFilter::RegisterMap(const FString& Folder)
 		ALight* Actor = Placed.FindRef(FScctWorld::LevelTag(*Projector.Key.ToString()));
 		auto* Light = Actor ? Cast<USpotLightComponent>(Actor->GetLightComponent()) : nullptr;
 		if (!Light) continue;
+		// This authored fixture's own world-position gate reaches only the floor. The glass is well
+		// above it, so a receiver capture would only replace the light function that keeps it dark.
+		if (Actor->ActorHasTag(TEXT("ScctSideStairsProjector")) && Light->LightFunctionMaterial
+			&& Light->LightFunctionMaterial->GetBaseMaterial()->GetFName() == TEXT("M_MounE_SideStairsFloorLight")) continue;
 		TArray<FName> Excluded;
 		for (const auto& Rule : Rules)
 		{

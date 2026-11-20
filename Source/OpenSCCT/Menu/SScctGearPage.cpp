@@ -9,6 +9,7 @@
 #include "ImageUtils.h"
 #include "Menu/ScctMenuKit.h"
 #include "Menu/ScctMenuPage.h"
+#include "Menu/SScctAttachmentPanel.h"
 #include "Menu/ScctMenuStyle.h"
 #include "OpenSCCT.h"
 #include "Runtime/ScctLoadoutApi.h"
@@ -194,11 +195,12 @@ void SScctGearPage::Construct(const FArguments& InArgs)
 			.Image(&Dim)
 			.ColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.6f))
 		]
-		+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center).Padding(24.0f)
+		+ SOverlay::Slot().Padding(24.0f)
 		[
-			SNew(SBox).MaxDesiredWidth(GearPageWidth)
+			SNew(SScaleBox).Stretch(EStretch::ScaleToFit).StretchDirection(EStretchDirection::DownOnly)
+			.HAlign(HAlign_Center).VAlign(VAlign_Center)
 			[
-				Ui::Glass(
+				SNew(SBox).WidthOverride(GearPageWidth)[ Ui::Glass(
 					SNew(SVerticalBox)
 					// Title, the side tabs and the slot count.
 					+ SVerticalBox::Slot().AutoHeight()
@@ -310,7 +312,7 @@ void SScctGearPage::Construct(const FArguments& InArgs)
 							Ui::Button(Ui::ToText(TEXT("APPLY LOADOUT")), FOnClicked::CreateLambda([this] { ApplyKit(); return FReply::Handled(); }),
 								TAttribute<bool>::CreateLambda([this] { return State.Changed != 0; }), ScctHudStyle::Good(), 190.0f)
 						]
-					], FMargin(30.0f, 26.0f), 0.82f)
+					], FMargin(30.0f, 26.0f), 0.82f) ]
 			]
 		]
 	];
@@ -438,6 +440,7 @@ void SScctGearPage::ShowSide(int32 Side)
 		return;
 	}
 	Api->SetSide(Side);
+	bShowAttachments = false;
 	Category = Side == 1 ? EScctGearCategory::Weapon : EScctGearCategory::Gadget;
 	Slot = 0;
 	Hovered.Reset();
@@ -466,6 +469,7 @@ void SScctGearPage::SwitchPlayedTeam()
 void SScctGearPage::SelectSlot(int32 InCategory, int32 InSlot)
 {
 	Category = InCategory;
+	bShowAttachments = false;
 	Slot = InSlot;
 	Hovered.Reset();
 	Refresh();
@@ -518,6 +522,14 @@ void SScctGearPage::ApplyKit()
 
 	FScctLoadout Before = {};
 	Loadout->GetLoadout(&Before);
+	const FScctWeaponAttachmentsApi* Attachments = ScctFeature<FScctWeaponAttachmentsApi>();
+	const auto AttachmentDraftChanged = [Attachments, Api](const TCHAR* Weapon)
+	{
+		FScctWeaponAttachmentState Saved = {};
+		return Attachments && Attachments->GetState(Weapon, &Saved) && Saved.Equipped != Api->GetAttachmentMask(Weapon);
+	};
+	const bool bMercAttachmentChange = PlayedSide == 1 &&
+		(AttachmentDraftChanged(Before.MercWeapon) || AttachmentDraftChanged(Before.MercSidearm));
 	if (Api->Apply() == 0)
 	{
 		const FString Error = GearError(Api);
@@ -531,7 +543,7 @@ void SScctGearPage::ApplyKit()
 	UE_LOG(LogOpenSCCT, Log, TEXT("ScctGear: APPLY saved the kit: %s"), *GearSavedJson(Api));
 
 	// In a round the played side's new kit is asked for at once; the server answers with the HUD's message line.
-	if (PlayedSide >= 0 && GearSideKit(Before, PlayedSide) != GearSideKit(After, PlayedSide))
+	if (PlayedSide >= 0 && (bMercAttachmentChange || GearSideKit(Before, PlayedSide) != GearSideKit(After, PlayedSide)))
 	{
 		const int32 Asked = Loadout->RequestGearChange();
 		TCHAR Error[512];
@@ -772,7 +784,8 @@ TSharedRef<SWidget> SScctGearPage::Card(const FScctGearOption& Option)
 				]
 				+ SVerticalBox::Slot().AutoHeight()
 				[
-					Ui::Text(Ui::ToText(FString(Option.Name)), 13.5f, FSlateColor(bAllowed ? ScctHudStyle::Text() : ScctHudStyle::TextDim()))
+					Ui::Text(Ui::ToText(FString(Option.Name)), 13.5f, FSlateColor(bAllowed ? ScctHudStyle::Text() : ScctHudStyle::TextDim()),
+						ScctHudStyle::EWeight::Regular, true)
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 3.0f, 0.0f, 0.0f)
 				[
@@ -797,6 +810,49 @@ TSharedRef<SWidget> SScctGearPage::Card(const FScctGearOption& Option)
 TSharedRef<SWidget> SScctGearPage::BuildCatalogue()
 {
 	const FScctGearMenuApi* Api = ScctFeature<FScctGearMenuApi>();
+	const FString Weapon = SelectedPath();
+	FScctWeaponAttachmentState AttachmentState = {};
+	const FScctWeaponAttachmentsApi* Attachments = ScctFeature<FScctWeaponAttachmentsApi>();
+	const bool bCanCustomise = State.Side == 1 && Category != EScctGearCategory::Gadget &&
+		Api && Attachments && Attachments->GetState(*Weapon, &AttachmentState);
+	const TSharedRef<SVerticalBox> Catalogue = SNew(SVerticalBox);
+	if (bCanCustomise)
+	{
+		const FString Name(Category == EScctGearCategory::Sidearm ? State.SidearmName : State.WeaponName);
+		const auto Tab = [this](const TCHAR* Label, bool bAttachments)
+		{
+			return SNew(SScctButton).Look(EScctButtonLook::Chip).Text(FText::FromString(Label))
+				.Selected(bShowAttachments == bAttachments).Colour(ScctHudStyle::Accent(1))
+				.OnPressed(FSimpleDelegate::CreateLambda([this, bAttachments]
+				{
+					if (bShowAttachments != bAttachments) { bShowAttachments = bAttachments; Refresh(); }
+				}));
+		};
+		Catalogue->AddSlot().AutoHeight().Padding(0, 0, 0, 12)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)[Tab(TEXT("Weapons"), false)]
+			+ SHorizontalBox::Slot().AutoWidth()[Tab(TEXT("Attachments"), true)]
+		];
+		if (bShowAttachments)
+		{
+			Catalogue->AddSlot().AutoHeight().MaxHeight(425)
+			[
+				SNew(SScrollBox) + SScrollBox::Slot()
+				[
+					SNew(SScctAttachmentPanel).Weapon(Weapon).WeaponName(Name).DraftMask(Api->GetAttachmentMask(*Weapon))
+					.OnChoose([this, Api, Weapon](int32 Mask)
+					{
+						if (!Api->SetAttachmentMask(*Weapon, Mask)) { return false; }
+						Api->GetState(&State);
+						ShowIntel(Weapon);
+						return true;
+					})
+				]
+			];
+			return Catalogue;
+		}
+	}
 	TArray<FScctGearOption> Options;
 	Options.SetNumZeroed(48);
 	const int32 Count = Api != nullptr ? FMath::Min(Api->ListOptions(Category, Slot, Options.GetData(), Options.Num()), Options.Num()) : 0;
@@ -812,13 +868,14 @@ TSharedRef<SWidget> SScctGearPage::BuildCatalogue()
 		Cards->AddSlot()[ Card(Options[Index]) ];
 	}
 
-	return SNew(SVerticalBox)
+	Catalogue->AddSlot().AutoHeight()[
+		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)[ Ui::Label(Caption, ScctHudStyle::Accent(State.Side)) ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 12.0f)
 		[
 			Ui::Text(Ui::ToText(Hint), 11.5f, FSlateColor(ScctHudStyle::TextDim()))
 		]
-		+ SVerticalBox::Slot().AutoHeight().MaxHeight(440.0f)
+		+ SVerticalBox::Slot().AutoHeight().MaxHeight(bCanCustomise ? 400.0f : 440.0f)
 		[
 			SNew(SScrollBox)
 			+ SScrollBox::Slot()
@@ -827,7 +884,9 @@ TSharedRef<SWidget> SScctGearPage::BuildCatalogue()
 					? StaticCastSharedRef<SWidget>(Cards)
 					: Ui::Text(Ui::ToText(TEXT("No equipment is available for this slot.")), 13.0f, FSlateColor(ScctHudStyle::TextDim()))
 			]
-		];
+		]
+	];
+	return Catalogue;
 }
 
 TSharedRef<SWidget> SScctGearPage::BuildIntel(const FString& Path)

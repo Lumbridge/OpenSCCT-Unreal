@@ -41,6 +41,9 @@ public static class ControlActionList
     public const string MineHackId = "gadget_minehack";
     public const string PingCommand = "TeamPing";
     public const string AutoHackId = "autohack";
+    public const string MercFreeLookId = "mercfreelook";
+    public const string MercFreeLookButton = "bMercFreeLook";
+    public const string MercFreeLookCommand = "Button " + MercFreeLookButton;
 
     public static readonly IReadOnlyList<ControlActionInfo> All =
     [
@@ -56,13 +59,16 @@ public static class ControlActionList
         A("coop", "Movement", "Co-op move", "Request the co-op movement available with your teammate.", "PerformCoopMvt", "PerformCoopMvt") with { Merc = false },
         A("run_compat", "Movement", "Run (saved shortcut)", "Compatibility for a previously configured run shortcut.", "Run", "Run") with { Available = false },
         A("speed", "Movement", "Walk", "Run by default. Hold or toggle Walk using the behavior selected for this role. Wheel bindings always toggle. Contextual scrolling takes priority in zoom views and interaction menus.", "Walk", "Walk", "ChangeSpeed"),
+        A(MercFreeLookId, "Movement", "Free-look", "Hold to look around without moving your weapon.", MercFreeLookCommand, MercFreeLookButton) with { Spy = false },
         A("fire", "Combat", "Primary fire / contextual attack", "Fire the weapon or perform the primary action allowed by your current combat state.", "Button bFire | Function Fire", "bFire", "Fire"),
+        A(MercBindings.AimId, "Combat", "Aim down sights", "Hold to raise the sights on your equipped mercenary weapon. Right mouse or left trigger by default. The separate scope binding still works.", MercBindings.AimCommand, MercBindings.AimButton) with { Spy = false },
+        A(MercBindings.GadgetId, "Gadgets", "Use selected gadget", "Use the selected gadget while holding your weapon. Defaults to V, the back thumb button, or both controller bumpers.", MercBindings.GadgetCommand, MercBindings.GadgetButton) with { Spy = false },
         A("altfire", "Combat", "Use selected gadget / alternate action", "Use the selected gadget or the alternate action of the current state. Grenade use can require holding and releasing.", "Button bAltFire | Function AltFire", "bAltFire", "AltFire"),
         A("grab", "Combat", "Grab only", "Grab a mercenary from behind, or pull one over the ledge you hang from. Unlike Interact, it never revives or elbows when no grab is possible. Starts unbound.", "GrabOnly", "GrabOnly") with { Merc = false },
         A("ready", "Combat", "Ready / holster weapon", "With the weapon holstered, tap to ready it with the laser; hold longer than 0.5 seconds to ready it without the laser. Press again to leave weapon mode where permitted.", "InvButton bFireMode", "bFireMode") with { Merc = false },
         A("reload", "Combat", "Reload", "Reload the current weapon when permitted.", "Button bReload", "bReload"),
         A("swapweapon", "Combat", "Swap weapon", "Switch between your primary and carried pistol. A pistol occupies one gadget slot.", "SwapWeapon", "SwapWeapon") with { Spy = false },
-        A("rof", "Combat", "Switch fire mode", "Switch the mercenary rifle's firing mode (burst / full auto), once per press.", "Button bROF", "bROF", "SwitchROF") with { Spy = false },
+        A("rof", "Combat", "Switch fire mode", "Cycle the available firing modes on weapons that support more than one.", "Button bROF", "bROF", "SwitchROF") with { Spy = false },
         A("breath", "Combat", "Hold breath", "Hold to steady the mercenary sniper scope when available.", "Button bHoldBreath", "bHoldBreath") with { Spy = false },
         A("cloak", "Combat", "Cloak", "Use the spy's built-in camo suit, independently of gadgets. Hold activates on press and deactivates on release; Toggle switches on each press. Choose the behavior for this action. Wheel bindings always toggle.", "Button bCloak", "bCloak") with { Merc = false },
         A("quick1", "Gadgets", "Quick-use gadget slot 1", "While the spy is unarmed, quick-launch a supported gadget from slot 1.", "GadgetQuickChoice 0", "GadgetQuickChoice 0") with { Merc = false },

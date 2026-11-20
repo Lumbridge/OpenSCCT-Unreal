@@ -1,8 +1,11 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
+using OpenScct.Core.Engine;
 using OpenScct.Net.Scoreboards;
 using OpenScct.UnrealBridge;
+using OpenScct.UnrealBridge.Loadout;
 using OpenScct.UnrealBridge.Social;
 
 /// <summary>
@@ -68,6 +71,23 @@ internal static class CareerCheck
         Console.WriteLine("status: " + model.Status);
         Console.WriteLine($"achievements: {model.AchievementRows.Count} ({model.AchievementsSummary})");
         Check(model.AchievementRows.Count > 0, "the achievement catalogue is listed signed out");
+        string profile = Path.Combine(folder, "mastery-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(profile);
+        var kills = new int[WeaponCareerCounters.Count];
+        kills[WeaponCareerCounters.IndexOf("Svm.M4A1S")] = 75;
+        kills[WeaponCareerCounters.IndexOf("Svm.BoltRifle")] = 51;
+        File.WriteAllText(Path.Combine(profile, "weapon-kills-0.json"), JsonSerializer.Serialize(kills));
+        LoadoutStore.Load(Path.Combine(profile, "loadout.json"));
+        model.Pump();
+        Check(model.AchievementRows.Count(r => r.Achievement.Id.StartsWith("primary_", StringComparison.Ordinal)) == 48,
+            "all eight current primaries have six searchable career milestones");
+        Check(model.UnlockFor("merc.m4a1s.woodland") is { Earned: true, Private: true } &&
+            model.UnlockFor("merc.m4a1s.desert") is { Earned: false, Current: 75, Target: 150 },
+            "the same profile shows earned Woodland and 75 / 150 toward Desert for its M4");
+        Check(model.NextReward?.Id == "merc.m4a1s.desert" && model.AchievementRows[model.NextUnlockIndex()].Achievement.Id == "primary_m4a1s_desert",
+            "the dashboard's next reward leads to the matching weapon challenge");
+        var bolt = model.AchievementRows.First(r => r.Achievement.Id == "primary_boltrifle_woodland");
+        Check(bolt.Earned && !CareerModel.RewardItems(bolt).Any(), "bolt mastery counts without offering a deferred finish");
         Console.WriteLine("stats: " + model.StatsStatus);
         if (args.Length == 0)
         {

@@ -16,6 +16,7 @@ class UScctSessionSubsystem;
 class UScctWeaponSet;
 class USpotLightComponent;
 class UStaticMeshComponent;
+class UTextureLightProfile;
 
 /**
  * Draws what the pawns of the match hold and wear, from the bridge's equipment table (Runtime/ScctEquipmentApi.h).
@@ -26,7 +27,7 @@ class UStaticMeshComponent;
  *     weapon, the lit goggle lenses) on the body's bone with the bridge's offset. They are part of the body: shown,
  *     hidden and shadowed with it, so the local player seen from his own eyes keeps the shadow of his gun.
  *   - the torch: a shadow-casting spot light with the bridge's cone, range and colour that scatters in the
- *     level's fog. On the merc's head bone for others; at the eye for the player holding it.
+ *     level's fog. The local body-camera view uses a reflector hotspot at the visible weapon mount.
  *   - the laser: a thin self-lit beam to the point the bridge's trace hit, a dot and a little red light there.
  *     The local player's beam is traced by the bridge for this frame's camera, so it turns with the view. In
  *     thermal vision both weapon beams are drawn hot and in EMF the merc's sight is a dark grey streak, in place
@@ -91,6 +92,9 @@ public:
 	/** The actor drawing the view model, or null before a match has shown one. */
 	AScctFirstPersonView* GetFirstPersonView() const { return FirstPersonView; }
 
+	/** Root of the secondary weapon currently on the holster, including its attached mesh sections. */
+	const USceneComponent* GetCarriedWeapon(int32 ActorId) const;
+
 	/** For the named checks (Test/Features): holds the camo suit's amount as -ScctForceCloak does; negative gives the simulation's back. */
 	void ForceCloakForCheck(float Amount) { ForcedCloak = Amount; }
 
@@ -124,7 +128,9 @@ private:
 		int32 WeaponSlot = 0;
 		/** The stencil the goggles draw this pawn's beam with, 0 while the beam has its plain look or is off. */
 		int32 LaserVisionStencil = 0;
+		int32 AttachmentMask = 0;
 		bool bSeen = false;
+		bool bGreenLaser = false;
 	};
 
 	void OnMatchStarted();
@@ -206,4 +212,7 @@ private:
 	TObjectPtr<UMaterialInterface> GlowMaterial;
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInterface> LaserBeamMaterial;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextureLightProfile> MercTorchProfile;
 };

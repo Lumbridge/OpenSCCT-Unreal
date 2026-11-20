@@ -42,8 +42,11 @@ public static class ControlActions
         new("wall", "Movement", "Back to wall", "InvButton bUseBackToWall", Merc: false),
         new("coop", "Movement", "Co-op move", "PerformCoopMvt", Merc: false),
         new("speed", "Movement", "Walk", "Walk"),
+        new(ControlActionList.MercFreeLookId, "Movement", "Free-look", ControlActionList.MercFreeLookCommand, Spy: false),
         new("longroll", "Movement", "Long roll", "LongRoll | Button bRoll", Merc: false),
         new("fire", "Combat", "Primary fire / contextual attack", "Button bFire | Function Fire"),
+        new(MercBindings.AimId, "Combat", "Aim down sights", MercBindings.AimCommand, Spy: false),
+        new(MercBindings.GadgetId, "Gadgets", "Use selected gadget", MercBindings.GadgetCommand, Spy: false),
         new("altfire", "Combat", "Use selected gadget / alternate action", "Button bAltFire | Function AltFire"),
         new("grab", "Combat", "Grab only", "GrabOnly", Merc: false),
         new("ready", "Combat", "Ready / holster weapon", "InvButton bFireMode", Merc: false),
@@ -204,7 +207,7 @@ public sealed class ControlBindings
         ("T", "PerformCoopMvt"),
         ("MiddleMouse", "ChangeSpeed"),
         ("LeftMouse", "Button bFire | Function Fire | GadgetQuickChoice 0"),
-        ("RightMouse", "Button bAltFire | Function AltFire | GadgetQuickChoice 1 | Button bHoldBreath"),
+        ("RightMouse", MercBindings.StockRight),
         ("E", "InvButton bFireMode | GadTorcheSwitch"),
         ("R", "Button bReload"),
         ("F", "Button bROF"),
@@ -253,6 +256,7 @@ public sealed class ControlBindings
         ("K", "Button bCloak"),
         ("Double+H", ControlActions.AutoHackCommand),
         ("Enter", "Talk"),
+        ("Alt", ControlActionList.MercFreeLookCommand),
     ];
 
     /// <summary>The pad controls a layout binds (Xbox names), then the held button and the combinations.</summary>
@@ -375,6 +379,7 @@ public sealed class ControlBindings
 
         layout.UpgradeWheelBindings(wheelMode);
         OpenScct.UnrealBridge.Hub.HubBindings.Upgrade(layout);
+        MercBindings.UpgradeKeys(layout);
         return layout;
     }
 
@@ -387,7 +392,7 @@ public sealed class ControlBindings
         ["Y"] = "Action:jump",
         ["LB"] = merc ? ClutchOneAction : "Action:coop",
         ["RB"] = merc ? "Action:scope" : "Action:roll",
-        ["LT"] = merc ? MercGadgetAction : SpyGadgetAction,
+        ["LT"] = merc ? MercBindings.Trigger : SpyGadgetAction,
         ["RT"] = merc ? "Action:fire" : SpyFireAction,
         ["LS"] = "",
         ["RS"] = merc ? ClutchTwoAction : ClutchOneAction,
@@ -412,7 +417,7 @@ public sealed class ControlBindings
         ["LB+A"] = merc ? "" : "Action:launch4",
         ["LB+DpadDown"] = merc ? "Action:rof" : "Action:scope",
         ["LB+Back"] = "Action:session",
-        ["LB+RB"] = merc ? "" : "Action:cloak",
+        ["LB+RB"] = merc ? MercBindings.PadGadget : "Action:cloak",
     };
 
     // ---- JSON ---------------------------------------------------------------------------------------------------
@@ -452,7 +457,7 @@ public sealed class ControlBindings
     }
 
     public string ToJson() => JsonSerializer.Serialize(
-        new BindingsFile { Split = Split, Spy = FileOf(Spy), Merc = FileOf(Merc), Hub = OpenScct.UnrealBridge.Hub.HubBindings.Version }, ControlSettings.Json);
+        new BindingsFile { Version = 3, Split = Split, Spy = FileOf(Spy), Merc = FileOf(Merc), Hub = OpenScct.UnrealBridge.Hub.HubBindings.Version }, ControlSettings.Json);
 
     /// <summary>
     /// Reads bindings. A side's "keys" is the whole layout (a key left out is unbound, as the player left it); a
@@ -461,7 +466,7 @@ public sealed class ControlBindings
     public static ControlBindings FromJson(string json, string wheelMode = "Gadget")
     {
         BindingsFile file = JsonSerializer.Deserialize<BindingsFile>(json, ControlSettings.Json) ?? new BindingsFile();
-        var bindings = new ControlBindings(SideOf(file.Spy, merc: false, wheelMode, file.Hub), SideOf(file.Merc, merc: true, wheelMode, file.Hub));
+        var bindings = new ControlBindings(SideOf(file.Spy, merc: false, wheelMode, file.Hub, file.Version), SideOf(file.Merc, merc: true, wheelMode, file.Hub, file.Version));
         bindings.SetSplit(file.Split);
         return bindings;
     }
@@ -493,7 +498,7 @@ public sealed class ControlBindings
         Order = side.Keys.InputOrders.Count == 0 ? null : new SortedDictionary<string, string[]>(new Dictionary<string, string[]>(side.Keys.InputOrders), StringComparer.Ordinal),
     };
 
-    private static SideBindings SideOf(SideFile? file, bool merc, string wheelMode, int hubVersion)
+    private static SideBindings SideOf(SideFile? file, bool merc, string wheelMode, int hubVersion, int version)
     {
         KeyLayout keys;
         if (file?.Keys is { } saved)
@@ -502,10 +507,11 @@ public sealed class ControlBindings
             foreach ((string key, string command) in saved)
             {
                 // A key name that cannot be one is left out; the rest of the file still loads.
-                keys.Bind(key, command);
+                keys.Bind(key, version < 3 ? MercBindings.UpgradeCommand(command) : command);
             }
 
             keys.UpgradeWheelBindings(wheelMode);
+            if (version < 2) MercBindings.UpgradeKeys(keys);
 
             // A layout saved before the hub's keys gets them once; after that a hub key the player unbound stays unbound.
             if (hubVersion < OpenScct.UnrealBridge.Hub.HubBindings.Version)
@@ -524,7 +530,7 @@ public sealed class ControlBindings
             {
                 if (inputs is not null)
                 {
-                    keys.SetInputOrder(action, inputs);
+                    keys.SetInputOrder(version < 3 ? MercBindings.UpgradeName(action) : action, inputs);
                 }
             }
         }
@@ -532,13 +538,19 @@ public sealed class ControlBindings
         Dictionary<string, string> pad = DefaultPad(merc);
         if (file?.Pad is { } savedPad)
         {
+            if (merc && version < 2)
+            {
+                pad["LT"] = MercGadgetAction;
+                pad["LB+RB"] = "";
+            }
             foreach (string control in PadControls)
             {
                 if (savedPad.TryGetValue(control, out string? action))
                 {
-                    pad[control] = action ?? "";
+                    pad[control] = version < 3 ? MercBindings.UpgradeName(action ?? "") : action ?? "";
                 }
             }
+            if (merc && version < 2) MercBindings.UpgradePad(pad);
         }
 
         return new SideBindings(keys, pad);

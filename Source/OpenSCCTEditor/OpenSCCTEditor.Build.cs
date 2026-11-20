@@ -8,6 +8,6 @@ public class OpenSCCTEditor : ModuleRules
 		PublicIncludePaths.Add(ModuleDirectory);
 
 		PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine" });
-		PrivateDependencyModuleNames.AddRange(new[] { "UnrealEd", "OpenSCCT" });
+		PrivateDependencyModuleNames.AddRange(new[] { "UnrealEd", "OpenSCCT", "RenderCore", "RHI" });
 	}
 }

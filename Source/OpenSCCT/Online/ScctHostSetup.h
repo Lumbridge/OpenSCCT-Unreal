@@ -14,6 +14,9 @@ struct FScctHostMap
 	FString Picture;
 	/** Its modes as mode keys (Story, DiskHunt, Deathmatch, MercDeathMatch, Extraction, Sabotage, Neutralization). */
 	TArray<FString> Modes;
+
+	/** Story when offered, otherwise the map's first available mode. */
+	FString DefaultMode() const;
 };
 
 /** One row of the Create Session page, as the bridge's model describes it for the current setup. */
@@ -63,6 +66,9 @@ namespace ScctHostSetup
 
 	/** A SetupText answer; empty when the bridge is not up. */
 	OPENSCCT_API FString Text(EScctSetupText Kind, const FString& Options, const FString& Argument = FString(), int32 MaxPlayers = 0);
+
+	/** Reload the map's default game mode and rules, keeping the session-wide options. */
+	OPENSCCT_API FString MapDefaults(const FScctHostMap& Map, const FString& Options, int32 MaxPlayers = 0);
 
 	/** The hostable maps that have an imported level here, in the catalog's order. */
 	OPENSCCT_API TArray<FScctHostMap> Maps();

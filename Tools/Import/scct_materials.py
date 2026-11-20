@@ -27,7 +27,7 @@ WATER_NORMAL = MATERIALS + "/T_WaterNormal"
 # picture: Plan 0 makes the surface material compute exactly what it computed before the plan, so the editor, the
 # menus and a match with scct.Light.Plan 0 show the same picture as before. The collection is made once and then only
 # added to: a material holds each value by the id the collection gave it, and a collection made anew would orphan them.
-#   Plan              0 the released formula; 1 the plan's (build_surface, "the lighting plan")
+#   Plan              0 legacy, 1 imported lighting, 2 native fixtures with real-time GI
 #   BakedGain         a factor on the baked light term (display units), 1 unless a measurement says otherwise
 #   BakedScale        what the stored lightmap and vertex colour are multiplied by (the original stored them halved: 2)
 #   BakedSaturation   1 the baked light's own colour, 0 its grey
@@ -48,6 +48,7 @@ LIGHT_PARAMETERS = [
     ("BounceLow", 0.08),
     ("BounceHigh", 0.5),
     ("Floor", 0.0),
+    ("BodycamSurfaces", 0.0),
 ]
 
 # Custom primitive data slot 0 on a mesh component: 1 = sample the detail layer in the mesh's own space, so the
@@ -206,12 +207,16 @@ def light_collection():
 class Graph:
     """Small helpers over the material editing library: every node is laid out left of the last."""
 
-    def __init__(self, path):
+    def __init__(self, path, rebuild_in_place=False):
         folder, name = path.rsplit("/", 1)
-        if editor_assets.does_asset_exist(path):
-            editor_assets.delete_asset(path)
         self.path = path
-        self.material = asset_tools.create_asset(name, folder, unreal.Material, unreal.MaterialFactoryNew())
+        if rebuild_in_place and editor_assets.does_asset_exist(path):
+            self.material = unreal.load_asset(path)
+            lib.delete_all_material_expressions(self.material)
+        else:
+            if editor_assets.does_asset_exist(path):
+                editor_assets.delete_asset(path)
+            self.material = asset_tools.create_asset(name, folder, unreal.Material, unreal.MaterialFactoryNew())
         self.count = 0
 
     def node(self, cls, **properties):
@@ -305,7 +310,8 @@ class Graph:
 
     def finish(self):
         lib.recompile_material(self.material)
-        editor_assets.save_asset(self.path)
+        if not editor_assets.save_asset(self.path):
+            raise RuntimeError("Could not save material " + self.path)
         unreal.log_warning("SCCT-IMPORT made " + self.path)
         return self.material
 
@@ -366,7 +372,7 @@ def build_surface(cosmetic=False, scrolling_overlay=False, translucent_sequence=
         path = SCROLLING_OVERLAY
     elif translucent_sequence:
         path = TRANSLUCENT_SEQUENCE
-    g = Graph(path)
+    g = Graph(path, rebuild_in_place=path == SURFACE)
     material = g.material
     if not cosmetic:
         # Legacy imported and runtime lit-translucent instances inherit this setting from the opaque master.
@@ -415,7 +421,20 @@ def build_surface(cosmetic=False, scrolling_overlay=False, translucent_sequence=
 
     # ---- the surface normal: the map derived from the original texture, turned into world space
     macro = g.texture("Normal", "/Engine/EngineMaterials/DefaultNormal", unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL, uvs=uv)
-    macro_scaled = g.custom("return normalize(float3(N.xy * S, N.z));", FLOAT3, N=(macro, "RGB"), S=g.scalar("MacroNormal", 1.0))
+    macro_strength = g.scalar("MacroNormal", 1.0)
+    detail_strength = g.scalar("DetailNormalStrength", 0.0)
+    rough_amount = g.scalar("DetailRoughness", 0.0)
+    if path == SURFACE:
+        # The profile describes a material's finish, independently of the colour printed or painted on it.
+        # Earlier map imports have class-specific detail maps but no finish profile; use their existing class range.
+        finish = g.vector4("BodycamFinish", (-1, 0, 1, 1))
+        physical = g.custom("return (F.r >= 0 || Detail > 0) ? Active : 0;", FLOAT1,
+                            F=finish, Detail=rough_amount, Active=g.light("BodycamSurfaces"))
+        micro_scale = g.custom("return lerp(1.0, F.r < 0 ? 0.75 : F.a, Active);", FLOAT1, F=finish, Active=physical)
+        macro_strength = g.custom("return S * lerp(1.0, F.r < 0 ? 0.65 : F.b, Active);", FLOAT1,
+                                  S=macro_strength, F=finish, Active=physical)
+        detail_strength = g.custom("return S * Gain;", FLOAT1, S=detail_strength, Gain=micro_scale)
+    macro_scaled = g.custom("return normalize(float3(N.xy * S, N.z));", FLOAT3, N=(macro, "RGB"), S=macro_strength)
     macro_world = g.node(unreal.MaterialExpressionTransform,
                          transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_TANGENT,
                          transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_WORLD)
@@ -453,7 +472,7 @@ def build_surface(cosmetic=False, scrolling_overlay=False, translucent_sequence=
             g.link(plane, sample, "UVs")
             store[axis] = sample
 
-    detailed = g.custom(DETAIL_NORMAL_CODE, FLOAT3, N=facing, S=g.scalar("DetailNormalStrength", 0.0),
+    detailed = g.custom(DETAIL_NORMAL_CODE, FLOAT3, N=facing, S=detail_strength,
                         TX=(normals["X"], "RGB"), TY=(normals["Y"], "RGB"), TZ=(normals["Z"], "RGB"))
     detailed_world = g.node(unreal.MaterialExpressionTransform,
                             transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_LOCAL,
@@ -469,11 +488,16 @@ def build_surface(cosmetic=False, scrolling_overlay=False, translucent_sequence=
     # ---- colour: the original, with the set's grain and pore shadows laid over it. Far away the grain would
     # only show as a repeating pattern, so it fades with distance.
     occlusion_amount = g.scalar("DetailOcclusion", 0.0)
+    colour_amount = g.scalar("DetailColour", 0.0)
+    if path == SURFACE:
+        # A finish can suppress a misclassified legacy detail overlay (e.g. a painted wall with a wood set).
+        occlusion_amount = g.custom("return A * Gain;", FLOAT1, A=occlusion_amount, Gain=micro_scale)
+        colour_amount = g.custom("return A * Gain;", FLOAT1, A=colour_amount, Gain=micro_scale)
     colour = g.custom(
         "float fade = lerp(1.0, 0.35, saturate((Depth - 500.0) / 2500.0));"
         " float grain = clamp(1.0 + (D.b * 2.0 - 1.0) * Amount * fade, 0.45, 1.6);"
         " return Base * Tint * grain * lerp(1.0, D.r, AO * 0.5 * fade);", FLOAT3,
-        Base=base["RGB"], Tint=tint, D=packed, Amount=g.scalar("DetailColour", 0.0), AO=occlusion_amount,
+        Base=base["RGB"], Tint=tint, D=packed, Amount=colour_amount, AO=occlusion_amount,
         Depth=g.node(unreal.MaterialExpressionPixelDepth))
     pawn, spy_light = pawn_light(g, normal, world_position)
     # Real lights still shade the mesh per pixel. A spy wholly in cover must not pick up the room's reflection
@@ -483,10 +507,21 @@ def build_surface(cosmetic=False, scrolling_overlay=False, translucent_sequence=
 
     # ---- roughness: the class sets the level (darker parts of the original read as rougher grime, brighter parts
     # as worn, smoother material); the set adds scratches, pores and smears around it.
+    dark, bright = g.scalar("RoughnessDark", 0.85), g.scalar("RoughnessBright", 0.45)
     roughness = g.custom("return saturate(lerp(Dark, Bright, G) + (D.g - 0.5) * 2.0 * Amount);", FLOAT1,
-                         Dark=g.scalar("RoughnessDark", 0.85), Bright=g.scalar("RoughnessBright", 0.45),
-                         G=base["G"], D=packed, Amount=g.scalar("DetailRoughness", 0.0))
+                         Dark=dark, Bright=bright, G=base["G"], D=packed, Amount=rough_amount)
     metallic = g.scalar("Metallic", 0.0)
+    if path == SURFACE:
+        uniform_finish = g.custom("return F.r < 0 ? float2(0.5 * (Dark + Bright), M) : F.rg;", FLOAT2,
+                                  F=finish, Dark=dark, Bright=bright, M=metallic)
+        atlas = g.texture("BodycamFinishAtlas", "/Engine/EngineMaterials/DefaultDiffuse_TC_Masks",
+                          unreal.MaterialSamplerType.SAMPLERTYPE_MASKS, uvs=uv)
+        atlas_finish = g.custom("return T.rg;", FLOAT2, T=(atlas, "RGB"))
+        response = g.static_switch("UseBodycamFinishAtlas", atlas_finish, uniform_finish)
+        # The packed surface roughness is centred on 0.5. Colour markings keep the finish of the substrate.
+        roughness = g.custom("return lerp(R, clamp(F.x + (D.g - 0.5) * 1.6 * Amount * Gain, 0.08, 1.0), A);",
+                             FLOAT1, R=roughness, F=response, D=packed, Amount=rough_amount, Gain=micro_scale, A=physical)
+        metallic = g.custom("return lerp(M, F.y, A);", FLOAT1, M=metallic, F=response, A=physical)
     # Dry spy cloth uses its painted wear. Suppress the white dielectric reflection that makes dark fabric look wet,
     # including imported map outfits inheriting the surface master's default specular.
     roughness = g.custom("return L >= 1.0 ? max(R, 0.92) : R;", FLOAT1, L=spy_light, R=roughness)
@@ -498,6 +533,9 @@ def build_surface(cosmetic=False, scrolling_overlay=False, translucent_sequence=
         mirror = g.scalar("GoldMirror", 0.0)
         roughness = g.custom("return lerp(R, lerp(.16,.055,Gold), Mask);", FLOAT1, R=roughness, Gold=mirror, Mask=coverage)
         metallic = g.custom("return lerp(M, Gold, Mask);", FLOAT1, M=metallic, Gold=mirror, Mask=coverage)
+    if path == SURFACE:
+        from scct_weapon_finish import weapon_finish
+        roughness, metallic = weapon_finish(g, roughness, metallic)
     g.output(roughness, unreal.MaterialProperty.MP_ROUGHNESS)
     g.output(metallic, unreal.MaterialProperty.MP_METALLIC)
     g.output(specular, unreal.MaterialProperty.MP_SPECULAR)
@@ -542,6 +580,16 @@ def build_surface(cosmetic=False, scrolling_overlay=False, translucent_sequence=
         " float3 stored = float3(lm.r <= 0.0031308 ? lm.r * 12.92 : 1.055 * pow(lm.r, 1.0 / 2.4) - 0.055,"
         " lm.g <= 0.0031308 ? lm.g * 12.92 : 1.055 * pow(lm.g, 1.0 / 2.4) - 0.055,"
         " lm.b <= 0.0031308 ? lm.b * 12.92 : 1.055 * pow(lm.b, 1.0 / 2.4) - 0.055);"
+        # Parts of a retail map have surface irradiance but no surviving world emitter.
+        # Bound the recovered diffuse light in bright pools and keep authored black at zero.
+        # The reference is already indirect illumination. Keep it out of Lumen's emissive cache.
+        " if (Plan > 1.5) { float3 residual = 0;"
+        "\n#if !LUMEN_CARD_CAPTURE && !RAYTRACINGSHADER && !MATERIALBLENDING_ADDITIVE && !MATERIAL_SHADINGMODEL_UNLIT\n"
+        " float3 reference = 2.0 * (stored + saturate(VC.rgb) * (UseVC > 0.5 && UseVC < 1.5));"
+        " float peak = max(reference.r, max(reference.g, reference.b));"
+        " residual = reference * Gain / (1.0 + max(peak - 0.6, 0.0));"
+        "\n#endif\n"
+        " return float4(pow(clamp(residual + Ambient + Boost, 0.0, 2.0), 2.2), 1.0); }"
         " float3 term = Scale * (stored + saturate(VC.rgb) * saturate(UseVC)) + Ambient + Boost;"
         " term = min(term, 2.0);"
         " float level = dot(term, float3(0.3, 0.59, 0.11));"
@@ -587,10 +635,14 @@ def build_surface(cosmetic=False, scrolling_overlay=False, translucent_sequence=
     least = g.custom("return Base * Tint * Floor * (0.55 + 0.45 * saturate(N.z * 0.5 + 0.5)) * AO * (Plan < 0.5 ? 1.0 : Share);", FLOAT3,
                      Base=base["RGB"], Tint=tint, Floor=g.scalar("AmbientFloor", 0.0), N=normal, AO=occlusion,
                      Plan=g.light("Plan"), Share=g.light("Floor"))
-    emissive = g.custom("return Painted > 0.5 ? Glow : Glow + Least + Base * Tint * (Baked + Pawn);", FLOAT3,
+    baked_colour = g.custom("return Base * Tint;", FLOAT3, Base=base["RGB"], Tint=tint)
+    if path == SURFACE:
+        # The original baked term also lights the physical albedo. Never add a reflection or a minimum to dark rooms.
+        baked_colour = g.custom("return lerp(Original, Surface, A);", FLOAT3, Original=baked_colour, Surface=colour, A=physical)
+    emissive = g.custom("return Painted > 0.5 ? Glow : Glow + Least + LitColour * Baked + Base * Tint * Pawn;", FLOAT3,
                         Painted=painted_additive,
                         Glow=g.in_the_picture(glow, g.scalar("GlowInPicture", 1.0)), Least=least, Base=base["RGB"],
-                        Tint=tint, Baked=baked, Pawn=pawn)
+                        Tint=tint, Baked=baked, Pawn=pawn, LitColour=baked_colour)
     if cosmetic:
         # The Armoury's studio reflection follows the light reaching the suit when worn in a match.
         reflection = g.node(unreal.MaterialExpressionReflectionVectorWS)

@@ -100,6 +100,7 @@ public sealed class LightPlanState : IDisposable
 {
     private const ETraceFlags ShadowFlags = ETraceFlags.TRACE_World | ETraceFlags.TRACE_StopAtFirstHit;
     private const float RotatorToDegrees = 360f / 65536f;
+    private const int AdditionalLightCandidateCapacity = 64;
 
     private readonly BridgeSession _session;
     private readonly WorldState _world;
@@ -109,11 +110,11 @@ public sealed class LightPlanState : IDisposable
     private readonly FVector[] _location;
     private readonly FRotator[] _rotation;
     private readonly int[] _worldIndex;
-    private readonly (float Score, int Index)[] _ranked;
+    private readonly (float Score, int Index, bool IsSun)[] _ranked = new (float, int, bool)[ActorLightRules.MaxActorLights];
     private readonly List<Actor> _runtime = [];
     private readonly ActorShadowLighting _shadow = new();
     private readonly List<ActorShadowLight> _shadowLights = [];
-    private BridgeWorldLight[] _drawn = [];
+    private long _drawnRevision = -1;
     private bool _worldMapped;
     private float _liveTime = float.NaN;
     private float _liveAlpha = float.NaN;
@@ -135,7 +136,6 @@ public sealed class LightPlanState : IDisposable
         _location = new FVector[_lights.Length];
         _rotation = new FRotator[_lights.Length];
         _worldIndex = new int[_lights.Length];
-        _ranked = new (float, int)[_lights.Length + 64];
         for (int i = 0; i < _lights.Length; i++)
         {
             _on[i] = _lights[i].InitiallyOn && _lights[i].LightType != 0;
@@ -206,22 +206,22 @@ public sealed class LightPlanState : IDisposable
             }
         }
 
-        int count = _world.LightCount;
-        if (_drawn.Length < count)
+        ReadOnlySpan<BridgeWorldLight> lights = _world.PeekLightRows(out long revision);
+        if (_drawnRevision == revision)
         {
-            _drawn = new BridgeWorldLight[count];
+            return;
         }
+        _drawnRevision = revision;
 
-        _world.PeekLights(_drawn);
         for (int i = 0; i < _lights.Length; i++)
         {
             int at = _worldIndex[i];
-            if (at < 0 || at >= count)
+            if (at < 0 || at >= lights.Length)
             {
                 continue;
             }
 
-            ref readonly BridgeWorldLight d = ref _drawn[at];
+            ref readonly BridgeWorldLight d = ref lights[at];
             _on[i] = (d.Flags & BridgeWorldLightFlags.On) != 0;
             _scale[i] = d.Scale;
             if ((d.Flags & BridgeWorldLightFlags.Moved) != 0 && (d.Flags & BridgeWorldLightFlags.OnBone) == 0)
@@ -300,8 +300,8 @@ public sealed class LightPlanState : IDisposable
         rig.Count = 0;
         rig.SpotCount = 0;
 
-        // Ranking. Runtime lights are numbered after the map's.
-        int n = 0;
+        // Runtime lights are numbered after the map's. Count all candidates for the runtime scan limit.
+        int candidates = 0;
         for (int i = 0; i < _lights.Length; i++)
         {
             PlanLight l = _lights[i];
@@ -323,13 +323,14 @@ public sealed class LightPlanState : IDisposable
                 l.Radius, l.Cone, centre, radius);
             if (score > 0f)
             {
-                _ranked[n++] = (score, i);
+                candidates = RankLight(candidates, score, i, l.Effect);
             }
         }
 
         if (runtime)
         {
-            for (int k = 0; k < _runtime.Count && n < _ranked.Length; k++)
+            int candidateLimit = _lights.Length + AdditionalLightCandidateCapacity;
+            for (int k = 0; k < _runtime.Count && candidates < candidateLimit; k++)
             {
                 Actor actor = _runtime[k];
                 int effect = (int)actor.LightEffect;
@@ -359,28 +360,14 @@ public sealed class LightPlanState : IDisposable
                     centre, radius);
                 if (score > 0f)
                 {
-                    _ranked[n++] = (score, _lights.Length + k);
+                    candidates = RankLight(candidates, score, _lights.Length + k, effect);
                 }
             }
         }
 
-        // Suns first, then by score; ties keep the order (insertion sort: stable, as the field's).
-        for (int i = 1; i < n; i++)
-        {
-            (float Score, int Index) item = _ranked[i];
-            int j = i - 1;
-            while (j >= 0 && Before(item, _ranked[j]))
-            {
-                _ranked[j + 1] = _ranked[j];
-                j--;
-            }
-
-            _ranked[j + 1] = item;
-        }
-
         LightRgb around = ambient;
         LightRgb facing = ambient;
-        int count = Math.Min(ActorLightRules.MaxActorLights, n);
+        int count = Math.Min(_ranked.Length, candidates);
         for (int i = 0; i < count; i++)
         {
             int index = _ranked[i].Index;
@@ -567,14 +554,28 @@ public sealed class LightPlanState : IDisposable
     private static float FieldModulation(int type, float period, float phase, float time) =>
         type == 4 ? ActorLightRules.MeanModulation(4) : ActorLightRules.Modulation(type, period, phase, time);
 
-    private bool Before((float Score, int Index) a, (float Score, int Index) b)
+    private int RankLight(int candidates, float score, int index, int effect)
     {
-        bool sa = EffectOf(a.Index) == ActorLightRules.LE_Sunlight;
-        bool sb = EffectOf(b.Index) == ActorLightRules.LE_Sunlight;
-        return sa != sb ? sa : a.Score > b.Score;
+        // Keep only the lights the rig uses. Equal scores keep the order they were visited.
+        var light = (Score: score, Index: index, IsSun: effect == ActorLightRules.LE_Sunlight);
+        int last = _ranked.Length - 1;
+        if (candidates > last && !Before(light, _ranked[last]))
+        {
+            return candidates + 1;
+        }
+
+        int slot = Math.Min(candidates, last);
+        while (slot > 0 && Before(light, _ranked[slot - 1]))
+        {
+            _ranked[slot] = _ranked[slot - 1];
+            slot--;
+        }
+        _ranked[slot] = light;
+        return candidates + 1;
     }
 
-    private int EffectOf(int index) => index < _lights.Length ? _lights[index].Effect : (int)_runtime[index - _lights.Length].LightEffect;
+    private static bool Before((float Score, int Index, bool IsSun) a, (float Score, int Index, bool IsSun) b) =>
+        a.IsSun != b.IsSun ? a.IsSun : a.Score > b.Score;
 
     /// <summary>The rig of the pawn with this actor id, seen from <paramref name="viewer"/>. False when there is no such pawn.</summary>
     public bool RigOfPawn(int actorId, FVector viewer, int options, RigResult rig)

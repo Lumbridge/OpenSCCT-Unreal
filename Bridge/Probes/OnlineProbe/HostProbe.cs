@@ -9,7 +9,7 @@ using OpenScct.UnrealBridge;
 using OpenScct.UnrealBridge.Online;
 
 /// <summary>
-/// OnlineProbe host [content root] [map] [port] [lan port] [upnp]
+/// OnlineProbe host [content root] [map] [port] [lan port] [other map] [upnp] [legacy-rules]
 ///
 /// Hosting from the game without Unreal: the host table (HostExports.GetApi) starts a listen server on a loopback
 /// UDP port with a LAN beacon and joins its own player as the lobby's host, all through the unmanaged entries;
@@ -76,7 +76,9 @@ internal static unsafe class HostProbe
             s_online.Leave();
 
             // 3. The host and its player.
-            int started = Host("Probe host", $"?MapName={map}?Mode=Story?TimeLimit=5", port, lanPort);
+            bool standardFeatures = !args.Contains("legacy-rules");
+            string overrides = standardFeatures ? "" : "?SvmSidearms=0?SvmRifles=0?SvmResponsiveSmoke=0";
+            int started = Host("Probe host", $"?MapName={map}?Mode=Story?TimeLimit=5{overrides}", port, lanPort);
             Console.WriteLine($"host: returned port {started}, hosting {s_host.IsHosting()}");
             ok &= started == port;
             status = WaitFor(s => s.State == (int)OnlineState.Lobby && s.LocalId >= 0 && s.PlayerCount >= 1, 15);
@@ -89,6 +91,10 @@ internal static unsafe class HostProbe
             OnlineBridge g = guest;
             status = WaitFor(s => s.PlayerCount >= 2 && g.State == OnlineState.Lobby, 20, g);
             Console.WriteLine($"guest: state {g.State}{(g.Error is { } e ? ": " + e : string.Empty)}");
+            var advertised = g.Client?.Lobby.Setup;
+            Console.WriteLine($"guest received sidearms={advertised?.Sidearms}, rifles={advertised?.Rifles}, responsive smoke={advertised?.ResponsiveSmoke}");
+            ok &= advertised != null && advertised.Sidearms == standardFeatures && advertised.Rifles == standardFeatures &&
+                advertised.ResponsiveSmoke == standardFeatures;
             var players = new OnlinePlayer[8];
             int count;
             fixed (OnlinePlayer* p = players)
@@ -146,7 +152,11 @@ internal static unsafe class HostProbe
             ok &= replies >= 2;
 
             // 5b. A changed setup is said in the lobby of both (SetupNoticeProbe.cs).
-            ok &= SetupNoticeProbe.Run(s_online, g, args.Length > 4 ? args[4] : "ClubE");
+            string otherMap = args.Skip(4).FirstOrDefault(arg => arg is not ("upnp" or "legacy-rules")) ?? "ClubE";
+            ok &= SetupNoticeProbe.Run(s_online, g, otherMap);
+            var next = g.Client?.Lobby.Setup;
+            ok &= next != null && next.Sidearms == standardFeatures && next.Rifles == standardFeatures &&
+                next.ResponsiveSmoke == standardFeatures;
 
             // The host's log, as Unreal drains it.
             char* buffer = stackalloc char[512];

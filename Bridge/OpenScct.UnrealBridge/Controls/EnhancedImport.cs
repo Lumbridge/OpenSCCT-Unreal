@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using OpenScct.Game.Equipment;
 
 namespace OpenScct.UnrealBridge.Controls;
 
@@ -370,6 +371,7 @@ public sealed class EnhancedImport
 
         AddFirstRunActions(layout);
         OpenScct.UnrealBridge.Hub.HubBindings.Upgrade(layout);
+        MercBindings.UpgradeKeys(layout);
         layout.UpgradeWheelBindings(wheelMode);
         return layout;
     }
@@ -396,6 +398,7 @@ public sealed class EnhancedImport
 
         AddIfFree(layout, "X", "SwitchSpyPerspective");
         AddIfFree(layout, "K", "Button bCloak");
+        AddIfFree(layout, "Alt", ControlActionList.MercFreeLookCommand);
         AddIfFree(layout, new BindingKey(HackKey(layout), BindingModifiers.Double).Canonical, ControlActions.AutoHackCommand);
     }
 
@@ -809,9 +812,9 @@ public sealed class EnhancedImport
             parts.Add("merc:" + string.Join(",", merc));
         }
 
-        if (ProfileClass("DEFWeapClass") is { } weapon && weapon.StartsWith("SBase.SWeapon", StringComparison.Ordinal))
+        if (ProfileClass("DEFWeapClass") is { } weapon && weapon.StartsWith("SBase.SWeapon", StringComparison.OrdinalIgnoreCase))
         {
-            parts.Add("weapon:" + weapon);
+            parts.Add("weapon:" + MercPrimarySelection.SavedPreference(weapon));
         }
 
         any = parts.Count > 0;

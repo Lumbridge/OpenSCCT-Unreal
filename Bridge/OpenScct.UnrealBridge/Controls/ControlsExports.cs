@@ -37,7 +37,7 @@ public unsafe struct ControlsApi
 
 public static unsafe class ControlsExports
 {
-    public const int ApiVersion = 2;
+    public const int ApiVersion = 5;
 
     // Command names cross as ids: the table only grows, so an id stays good for the life of the process.
     private static readonly List<string> s_names = new();
@@ -82,14 +82,29 @@ public static unsafe class ControlsExports
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Frame(BridgeRawInput* raw)
     {
-        if (raw == null || Exports.Current is not { } session)
+        if (raw == null)
+        {
+            return;
+        }
+        raw->MercAimYaw = raw->MercAimPitch = 0f;
+        if ((raw->Flags & BridgeRawInputFlags.MercFreeLookHeld) != 0)
+        {
+            raw->Flags &= ~BridgeRawInputFlags.MercFreeLookHeld;
+        }
+        if (Exports.Current is not { } session)
         {
             return;
         }
 
         try
         {
-            ControlsFeature.Of(session).Frame(in *raw);
+            var controls = ControlsFeature.Of(session);
+            if (controls.Frame(in *raw))
+            {
+                raw->Flags |= BridgeRawInputFlags.MercFreeLookHeld;
+            }
+            raw->MercAimYaw = controls.MercAimTurn.X;
+            raw->MercAimPitch = controls.MercAimTurn.Y;
         }
         catch (Exception e)
         {

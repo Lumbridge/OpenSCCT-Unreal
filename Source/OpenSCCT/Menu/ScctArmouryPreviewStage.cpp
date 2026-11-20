@@ -18,7 +18,6 @@
 
 namespace
 {
-	const FName ArmouryStageBaseColor(TEXT("BaseColor"));
 
 	// The view: the Godot preview's 28 degrees top to bottom, here across the target's wider side.
 	constexpr float ArmouryStageHalfFov = 14.0f;
@@ -339,7 +338,15 @@ void AScctArmouryPreviewStage::Frame(int32 View)
 	const float Top = Centre.Z + Bounds.BoxExtent.Z;
 	float Radius = FMath::Max(FMath::Max(Height, Across) * 0.5f, 1.0f);
 	const float HeadZ = Top - Height * 0.1f;
-	if (View == EScctArmouryView::Head)
+	if (View == EScctArmouryView::Gun)
+	{
+		// Start broadside so the same painted surfaces stay visible while comparing finishes.
+		Yaw = Bounds.BoxExtent.X >= Bounds.BoxExtent.Y ? 90.0f : 0.0f;
+		Turntable->SetRelativeRotation(FRotator(0.0, Yaw, 0.0));
+		const float Aspect = static_cast<float>(TargetWidth) / TargetHeight;
+		Radius = 0.5f * FMath::Max(Height, Across / Aspect);
+	}
+	else if (View == EScctArmouryView::Head)
 	{
 		// The lights sit on the head: the top of the character.
 		Centre.Z = HeadZ;
@@ -360,10 +367,10 @@ void AScctArmouryPreviewStage::Dress(const FString& Pattern)
 	for (int32 Slot = 0; Slot < Sources.Num(); ++Slot)
 	{
 		UMaterialInterface* Source = Sources[Slot];
-		UTexture* Retail = nullptr;
+		UTexture* Retail = ScctCosmeticMaterial::ColourAtlas(Source);
 		UTexture2D* Made = nullptr;
 		TCHAR Path[1024] = {};
-		if (Api != nullptr && Source != nullptr && !Pattern.IsEmpty() && Source->GetTextureParameterValue(ArmouryStageBaseColor, Retail) && Retail != nullptr)
+		if (Api != nullptr && !Pattern.IsEmpty() && Retail != nullptr)
 		{
 			const FString Package = ArmouryStagePackageOf(*Retail);
 			if (!Package.IsEmpty() && Api->CosmeticTexture(*Pattern, *Package, *Retail->GetName(), Path, UE_ARRAY_COUNT(Path)) > 0)
@@ -388,7 +395,7 @@ void AScctArmouryPreviewStage::Dress(const FString& Pattern)
 void AScctArmouryPreviewStage::Advance(float DeltaSeconds, bool bHeld)
 {
 	Time += DeltaSeconds;
-	if (!bHeld)
+	if (!bHeld && ShownView != EScctArmouryView::Gun)
 	{
 		Yaw = FMath::Fmod(Yaw + ArmouryStageTurnPerSecond * DeltaSeconds, 360.0f);
 	}

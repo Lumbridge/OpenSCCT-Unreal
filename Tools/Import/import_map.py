@@ -9,7 +9,9 @@ atmosphere. The result goes to /Game/Imported/Maps/<Map>/ (never committed: it i
 import json
 import math
 import os
+from pathlib import Path
 import re
+import shutil
 import struct
 import sys
 
@@ -23,6 +25,7 @@ DEST = "/Game/Imported/Maps/" + MAP
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import scct_materials  # noqa: E402  pylint: disable=wrong-import-position
+import scct_surface_finish
 import scct_authored_geometry
 import scct_fx  # noqa: E402  pylint: disable=wrong-import-position
 
@@ -165,6 +168,34 @@ def import_files(files, destination):
     asset_tools.import_asset_tasks(tasks)
 
 
+def apply_hospital_vending_art(instance):
+    """Use the restored cabinet on both colour inputs. The mask still samples the original texture's alpha."""
+    import apply_hospital_base_colors as colours
+
+    source = Path(HERE).parents[1] / "Art/Maps/MounE/Prison_TEX_machine_HD.png"
+    if not source.is_file():
+        log(f"Using the imported Mount Hospital vending cabinet. Put the approved local atlas at {source} to apply the HD cabinet.")
+        return
+    stage = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_intermediate_dir())) / "ScctImport/MounE/Vending"
+    stage.mkdir(parents=True, exist_ok=True)
+    # The Hospital restoration tools use these two package names for the diffuse and illuminated colours.
+    slots = {"BaseColor": "Prison_TEX_machineEMF", "SelfIllumTexture": "Prison_TEX_machine"}
+    selections, originals = {}, {}
+    for parameter, name in slots.items():
+        stock = colours.color_at(instance, parameter)
+        if not stock or stock.get_name() != name:
+            continue
+        file = stage / f"T_MounE_{name}_Base.png"
+        shutil.copyfile(source, file)
+        selections[parameter] = {"source": name + ".png", "file": file.name}
+        originals[parameter] = stock
+    if originals:
+        imported = colours.import_textures_from_directory(stage, selections, originals)
+        if any(texture_size(texture) != (2048, 2048) for texture in imported.values()):
+            raise RuntimeError("Could not import the full-resolution Mount Hospital vending artwork")
+        colours.save_bindings(instance, imported)
+
+
 def rotator(units):
     """[pitch, yaw, roll] in the original's 65536-per-turn units to an Unreal rotator."""
     scale = 360.0 / 65536.0
@@ -189,8 +220,10 @@ def load_surface_classes():
         record["gain"] = {name: min(DETAIL_MAX_GAIN, max(1.0, target / max(stats.get(name, target), 1e-4)))
                           for name, target in DETAIL_TARGETS.items()}
 
-    def look_of(source):
+    def look_of(source, is_unlit_backdrop):
         name = chosen.get(source, fallback)
+        if name == "tank_backdrop" and not is_unlit_backdrop:
+            name = document["materials"].get(source, fallback)
         return name, classes.get(name) or classes[fallback]
 
     return look_of, sets
@@ -388,7 +421,6 @@ def build_materials(material_doc, gltf):
             instances[key(imported)] = instance
             continue
 
-        class_name, look = look_of(record.get("source") or material_name)
         is_additive = key(imported) in additive
         self_lit = flags.get("self_illum")
         mask = flags.get("self_illum_mask")
@@ -396,9 +428,11 @@ def build_materials(material_doc, gltf):
         # Masked self-illumination lights its own pixels; the rest of the diffuse still takes scene lighting.
         unlit = is_additive or (bool(flags.get("unlit")) and (not masked_glow or material_name.endswith("__unlit")))
         translucent = bool(flags.get("translucent"))
+        is_unlit_backdrop = unlit and not (translucent or is_additive or flags.get("masked") or self_lit)
+        class_name, look = look_of(record.get("source") or material_name, is_unlit_backdrop)
         # Glass and water get their own materials only where the original drew a see-through, lit surface.
         kind = look.get("kind", "surface")
-        if kind == "glass" and not (translucent and not is_additive):
+        if kind == "glass" and (not translucent or is_additive or (class_name == "tank_glass" and flags.get("masked"))):
             kind = "plain"
         if kind == "water" and (is_additive or flags.get("masked")):
             kind = "plain"
@@ -436,8 +470,13 @@ def build_materials(material_doc, gltf):
             materials_lib.set_material_instance_parent(instance, parents["glass"])
             texture("BaseColor", base)
             scalar("Roughness", look["rough_dark"])
+            scalar("Specular", look["specular"])
+            # Aquarium galleries can use paired panes with a constant alpha on both. Let the water art
+            # supply the depth of colour and the glass master supply the angle-dependent reflection.
+            scalar("Opacity", look.get("opacity", 1.0))
             scalar("OpacityFloor", look.get("opacity_floor", 0.12))
-            scalar("Emissive", EMISSIVE_ADDITIVE if unlit else 0.0)
+            scalar("GlanceOpacity", look.get("glance_opacity", 0.5))
+            scalar("Emissive", look.get("emissive", EMISSIVE_ADDITIVE) if unlit else 0.0)
         elif kind == "water":
             materials_lib.set_material_instance_parent(instance, parents["water"])
             texture("BaseColor", base)
@@ -477,6 +516,8 @@ def build_materials(material_doc, gltf):
                         raise RuntimeError("the scrolling overlay material is missing: run Import-Assets.ps1 -MaterialsOnly")
                     base = first
             materials_lib.set_material_instance_parent(instance, parent)
+            if parent == parents["surface"] and not unlit and not translucent:
+                scct_surface_finish.bind(instance, record.get("source") or material_name, class_name, look)
             if parent != parents["surface"]:
                 texture("OverlayTexture", overlay)
                 u, v = pan_speed(combine["anim2"])
@@ -520,7 +561,14 @@ def build_materials(material_doc, gltf):
             caustics = is_additive and CAUSTIC_SHEETS.search(record.get("source") or material_name)
             scalar("Emissive", EMISSIVE_CAUSTICS if caustics else EMISSIVE_ADDITIVE if is_additive
                    else (glow or EMISSIVE_UNLIT) if unlit else 0.0)
-            if isinstance(self_lit, str) and self_lit and not unlit:
+            if class_name == "tank_backdrop":
+                # A painted water gradient is seen through the tank pane. In the original even its darkest
+                # part returns some scattered light. Reuse the master's constant self-illumination input.
+                white = unreal.load_asset("/Engine/EngineResources/WhiteSquareTexture")
+                texture("SelfIllumTexture", white)
+                texture("SelfIllumMask", white)
+                scalar("SelfIllum", look["backscatter"])
+            elif isinstance(self_lit, str) and self_lit and not unlit:
                 glow_texture = texture_of(self_lit)
                 mask_texture = texture_of(mask) if masked_glow else None
                 if glow_texture and (not masked_glow or mask_texture):
@@ -612,6 +660,8 @@ def main():
             texture.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_NORMALMAP)
 
     instances = build_materials(material_doc, gltf)
+    if MAP == "MounE" and key("Prison_TEX.machineEMF") in instances:
+        apply_hospital_vending_art(instances[key("Prison_TEX.machineEMF")])
     log("materials: %d" % len(instances))
 
     # Every mesh gets the new materials, and Nanite for crisp shadows and cheap overdraw. Nanite draws only
@@ -1018,6 +1068,10 @@ def main():
 
     world.get_world_settings().set_editor_property("default_game_mode", unreal.load_class(None, "/Script/OpenSCCT.ScctGameMode"))
 
+    import scct_lumen_lighting
+    if MAP in scct_lumen_lighting.ENABLED_MAPS:
+        fixtures, bound = scct_lumen_lighting.prepare(world, lighting["lights"], os.path.dirname(RENDER))
+        log(f"prepared Lumen lighting for {fixtures} environment fixtures among {bound} bound lamps")
     editor_assets.save_loaded_asset(world)
     editor_assets.save_directory(DEST, only_if_is_dirty=True, recursive=True)
     log("saved " + level_path)

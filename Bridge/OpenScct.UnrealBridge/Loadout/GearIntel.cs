@@ -26,19 +26,21 @@ public static class GearIntel
     private static readonly Dictionary<string, Inventory?> s_items = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The card's small line under the name.</summary>
-    public static string SubLine(GearMenuModel model, string path) =>
+    public static string SubLine(GearMenuModel model, string path, int attachments) =>
         !model.IsAllowed(path) && model.RequiredLevel(path) > 0 ? "REQUIRES LEVEL " + model.RequiredLevel(path) :
-        MercRifles.Find(path) is { } rifle ? $"{rifle.Magazine} RDS  /  {rifle.Rpm} RPM" :
-        Sidearms.Find(path) is { } sidearm ? "LEVEL " + sidearm.Level :
+        MercRifles.Find(path) is { } rifle ? $"{WeaponAttachments.MagazineCapacity(path, attachments)} RDS  /  {rifle.Rpm} RPM" :
+        Sidearms.Find(path) is { } sidearm ? $"{sidearm.Magazine} RDS  /  LEVEL {sidearm.Level}" :
+        WeaponAttachments.Key(path) != null ? $"{WeaponAttachments.MagazineCapacity(path, attachments)} RDS" :
         IsQuickUse(path) ? "QUICK USE" : "FIELD EQUIPMENT";
 
     /// <summary>The gadget can be thrown with a quick-use key (the spy's first two slots).</summary>
     public static bool IsQuickUse(string path) => Item(path) is { CanQuickLaunch: true };
 
     /// <summary>A rifle that is suppressed (the card says so).</summary>
-    public static bool IsSuppressed(string path) => MercRifles.Find(path)?.Suppressed == true;
+    public static bool IsSuppressed(string path, int attachments) => (attachments & WeaponAttachments.Suppressor) != 0 ||
+        Sidearms.Find(path)?.Kind == SidearmKind.Suppressed || MercRifles.Find(path)?.Suppressed == true;
 
-    public static GearIntelInfo Describe(GearMenuModel model, string path)
+    public static GearIntelInfo Describe(GearMenuModel model, string path, int attachments)
     {
         ArgumentNullException.ThrowIfNull(model);
         path ??= "";
@@ -53,8 +55,8 @@ public static class GearIntel
         {
             foreach (int metres in new[] { 0, 10, 25, 50 })
             {
-                int body = WeaponRules.DistanceDamage(weapon, metres * 100f);
-                int head = body * 3;
+                int body = rifle is { HeadDamage: > 0 } ? rifle.Damage : WeaponRules.DistanceDamage(weapon, metres * 100f);
+                int head = rifle is { HeadDamage: > 0 } ? rifle.HeadDamage : body * 3;
                 if (weapon is SWeaponDefense_Shotgun shotgun)
                 {
                     body = (int)(body * 9 * shotgun.TotalShotgunDamageMultipler);
@@ -64,14 +66,23 @@ public static class GearIntel
                 stats.Add(("DAMAGE " + metres + " M", metres * 100f > weapon.ShootingRange ? "Out of range" : $"{head} head / {body} body"));
             }
 
-            note = weapon is SWeaponDefense_Shotgun
+            note = rifle is { HeadDamage: > 0 }
+                ? "Head and body damage are constant throughout this weapon's effective range."
+                : weapon is SWeaponDefense_Shotgun
                 ? "Maximum if all 9 pellets hit the same zone. Spread usually reduces damage."
                 : "Against a standing Spy. Limbs deal less damage. Damage falls continuously with distance.";
-            stats.Add(("MAGAZINE / RESERVE", $"{weapon.ClipMaxAmmo} / {weapon.MaxAmmo - weapon.ClipMaxAmmo}"));
+            int magazine = WeaponAttachments.MagazineCapacity(path, attachments);
+            stats.Add(("MAGAZINE / RESERVE", $"{magazine} / {weapon.MaxAmmo - weapon.ClipMaxAmmo}"));
             stats.Add(("RATE OF FIRE", rifle?.BurstDefault == true ? "667 auto / 800 burst RPM" : MathF.Round(60f / weapon.RateOfFire) + " RPM"));
             float reload = rifle?.ReloadSeconds ?? Sidearms.Find(path)?.ReloadSeconds ?? ViewModelClips.DataOf(weapon.AFirstReloSt).Seconds(1f);
-            stats.Add(("RELOAD", reload.ToString("0.00") + " s"));
-            stats.Add(("SIGHTS", rifle is null ? weapon.bCanSnipe ? "Scope" : "Hip fire" : rifle.Id == "M4A1S" ? "Red dot" : "Iron sights"));
+            if (rifle?.EmptyReloadSeconds is float emptyReload)
+                stats.Add(("RELOAD / EMPTY", $"{reload:0.00} / {emptyReload:0.00} s"));
+            else
+                stats.Add(("RELOAD", reload.ToString("0.00") + " s"));
+            stats.Add(("SIGHTS", (attachments & WeaponAttachments.Acog) != 0 ? "ACOG" :
+                (attachments & WeaponAttachments.RedDot) != 0 ? "Red dot" :
+                rifle is { NativeOpticPower: > 1 } ? $"{rifle.NativeOpticPower:0.#}× scope" :
+                rifle != null ? "Iron sights" : weapon.bCanSnipe ? "Scope" : "Hip fire"));
             if (model.RequiredLevel(path) > 0)
             {
                 stats.Add(("UNLOCK", "Level " + model.RequiredLevel(path)));
@@ -146,7 +157,7 @@ public static class GearIntel
     private static string? StockDescription(string path) => path switch
     {
         "SBase.SWeaponDefense" => "The FN2000 is the standard Merc assault rifle. Switch between automatic and three-round burst fire, or use its telescopic scope for precise single shots.",
-        "SBase.SWeaponDefense_Uzi" => "A compact submachine gun with a large magazine and fast automatic fire. Strong at close range, with faster damage loss over distance and no scope.",
+        "SBase.SWeaponDefense_Uzi" => "A compact submachine gun with fast automatic fire. Strong at close range, with faster damage loss over distance.",
         "SBase.SWeaponDefense_Shotgun" => "A pump-action shotgun firing nine pellets in a circular spread. Devastating nearby when the pellets connect; spread and damage loss limit its reach.",
         _ => null,
     };

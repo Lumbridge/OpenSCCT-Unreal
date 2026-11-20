@@ -91,7 +91,8 @@ public sealed partial class AccountService
         string? name = Account is { } current ? current.Name : _state.Name;
         if (string.IsNullOrWhiteSpace(name)) return null;
         int rank = RankOf(Account).Pack();
-        return new(SignedInAccountId, name, Account?.Unlocked, rank, Account?.Progress?.Titles);
+        return new(SignedInAccountId, name, Account?.Unlocked, rank, Account?.Progress?.Titles,
+            OpenScct.Core.Engine.WeaponCareerCounters.FromFeats(Account?.Career?.Feats));
     }
 
     /// <summary>The master the sign-in belongs to (null: none set).</summary>

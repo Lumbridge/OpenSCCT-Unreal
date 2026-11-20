@@ -68,6 +68,11 @@ AScctPawnProxy::AScctPawnProxy()
 
 void AScctPawnProxy::SetKind(int32 NewKind, TConstArrayView<FScctBridgeBoneInfo> Skeleton)
 {
+	if (FirstPersonLegs)
+	{
+		FirstPersonLegs->DestroyComponent();
+		FirstPersonLegs = nullptr;
+	}
 	Kind = NewKind;
 	bHasModel = false;
 	BoneMap.Reset();
@@ -111,7 +116,8 @@ void AScctPawnProxy::SetKind(int32 NewKind, TConstArrayView<FScctBridgeBoneInfo>
 	bHasModel = true;
 }
 
-void AScctPawnProxy::Present(const FScctBridgePawn& NewPawn, TConstArrayView<FScctBridgeBoneInfo> Skeleton, TConstArrayView<FScctBridgeBone> Pose)
+void AScctPawnProxy::Present(const FScctBridgePawn& NewPawn, TConstArrayView<FScctBridgeBoneInfo> Skeleton, TConstArrayView<FScctBridgeBone> Pose,
+	bool bShowFirstPersonLegs)
 {
 	Pawn = NewPawn;
 	if (Pawn.Kind != Kind)
@@ -189,6 +195,75 @@ void AScctPawnProxy::Present(const FScctBridgePawn& NewPawn, TConstArrayView<FSc
 		// The engine cylinder is 100 across and 100 tall; the pawn's cylinder is given as radius and half height.
 		StandIn->SetWorldLocation(FVector(Pawn.X, Pawn.Y, Pawn.Z));
 		StandIn->SetWorldScale3D(FVector(Pawn.CollisionRadius / 50.0, Pawn.CollisionRadius / 50.0, Pawn.CollisionHeight / 50.0));
+	}
+	PresentFirstPersonLegs(bShowFirstPersonLegs && bBodyVisible && IsLocal() && IsFirstPerson() && Kind == 1);
+}
+
+void AScctPawnProxy::PresentFirstPersonLegs(bool bShow)
+{
+	if (!bShow)
+	{
+		if (FirstPersonLegs && FirstPersonLegs->IsVisible())
+		{
+			FirstPersonLegs->SetVisibility(false);
+		}
+		return;
+	}
+
+	if (!FirstPersonLegs)
+	{
+		const int32 Left = FindMeshBone(TEXT("B L Thigh"));
+		const int32 Right = FindMeshBone(TEXT("B R Thigh"));
+		if (Left == INDEX_NONE || Right == INDEX_NONE)
+		{
+			return;
+		}
+
+		FirstPersonLegs = NewObject<UPoseableMeshComponent>(this);
+		FirstPersonLegs->SetupAttachment(Root);
+		FirstPersonLegs->SetRelativeTransform(Body->GetRelativeTransform());
+		FirstPersonLegs->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		FirstPersonLegs->SetGenerateOverlapEvents(false);
+		FirstPersonLegs->SetCanEverAffectNavigation(false);
+		FirstPersonLegs->SetCastShadow(false);
+		FirstPersonLegs->SetHiddenInSceneCapture(true);
+		FirstPersonLegs->SetVisibleInRayTracing(false);
+		FirstPersonLegs->bVisibleInReflectionCaptures = false;
+		FirstPersonLegs->bVisibleInRealTimeSkyCaptures = false;
+		FirstPersonLegs->PrimaryComponentTick.bCanEverTick = false;
+		FirstPersonLegs->SetSkinnedAssetAndUpdate(Body->GetSkinnedAsset());
+		FirstPersonLegs->RegisterComponent();
+
+		// The stock thighs descend from B Spine. Preserve both leg chains and their common ancestors;
+		// hide every other branch at its root, including the head, arms and holster on other outfits.
+		const FReferenceSkeleton& Rig = Body->GetSkinnedAsset()->GetRefSkeleton();
+		TBitArray<> Keep(false, Rig.GetNum());
+		for (int32 Index = 0; Index < Rig.GetNum(); ++Index)
+		{
+			Keep[Index] = Index == Left || Index == Right || Rig.BoneIsChildOf(Index, Left) || Rig.BoneIsChildOf(Index, Right)
+				|| Rig.BoneIsChildOf(Left, Index) || Rig.BoneIsChildOf(Right, Index);
+			const int32 Parent = Rig.GetParentIndex(Index);
+			if (!Keep[Index] && (Parent == INDEX_NONE || Keep[Parent]))
+			{
+				FirstPersonLegs->HideBoneByName(Rig.GetBoneName(Index), PBO_None);
+			}
+		}
+	}
+
+	// Map outfits and dynamic skin effects can replace slots after the mesh has been created.
+	for (int32 Slot = 0; Slot < Body->GetNumMaterials(); ++Slot)
+	{
+		UMaterialInterface* Material = Body->GetMaterial(Slot);
+		if (FirstPersonLegs->GetMaterial(Slot) != Material)
+		{
+			FirstPersonLegs->SetMaterial(Slot, Material);
+		}
+	}
+	FirstPersonLegs->BoneSpaceTransforms = Body->BoneSpaceTransforms;
+	FirstPersonLegs->RefreshBoneTransforms();
+	if (!FirstPersonLegs->IsVisible())
+	{
+		FirstPersonLegs->SetVisibility(true);
 	}
 }
 

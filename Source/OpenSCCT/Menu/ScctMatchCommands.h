@@ -38,6 +38,7 @@ class OPENSCCT_API UScctMatchCommandsSubsystem : public UWorldSubsystem
 public:
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
 	virtual void Deinitialize() override;
 
 	/** Opens the in-match menu on the Equipment page. False when this level has no in-match menu. */

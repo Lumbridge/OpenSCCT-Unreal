@@ -158,7 +158,7 @@ namespace
 	private:
 		static void DescribeResolution()
 		{
-			ScctUi::Describe(ResolutionLabel(), FText::FromString(TEXT("Choose a size in pixels, then select Apply display. Borderless uses the desktop size.")));
+			ScctUi::Describe(ResolutionLabel(), FText::FromString(TEXT("Higher resolutions draw more pixels and need more GPU time and video memory. Borderless uses the desktop resolution. Select Apply display to test a change.")));
 		}
 	};
 	FString Times(float Value) { return FString::Printf(TEXT("%.2f x"), Value); }
@@ -266,6 +266,13 @@ void SScctSettingsPanel::Construct(const FArguments& InArgs, const FScctMenuHost
 				[
 					SNew(SVerticalBox)
 					+ SVerticalBox::Slot().AutoHeight()[ ScctUi::Card(FString(), ScctUi::DescriptionPane(), FMargin(26.0f, 24.0f)) ]
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(SBox).Padding(0, 10, 0, 0)
+						.Visibility_Lambda([this] { return Tabs.IsValid() && Tabs->GetTab() == 0 && SearchBox->GetText().IsEmpty()
+							? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
+						[ ScctUi::VideoMemoryMeter() ]
+					]
 					+ SVerticalBox::Slot().FillHeight(1.0f)
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 16.0f, 0.0f, 0.0f)
 					[
@@ -646,7 +653,7 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 	TSharedPtr<SWidget> First;
 	Add(SAssignNew(First, SScctStepper)
 		.Label(FText::FromString(TEXT("Window mode")))
-		.Description(FText::FromString(TEXT("Fullscreen takes the monitor over; borderless keeps the desktop's resolution and switches away instantly; windowed is a window. Takes effect with Apply display.")))
+		.Description(FText::FromString(TEXT("Fullscreen and Windowed let you choose a resolution. Borderless uses the desktop resolution. A larger image costs more GPU time. Select Apply display to test the change.")))
 		.Options({ TEXT("Fullscreen"), TEXT("Borderless"), TEXT("Windowed") })
 		.Get([this] { return PendingMode; })
 		.Set([this](int32 Value)
@@ -704,12 +711,12 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 	];
 	Add(SNew(SScctToggle)
 		.Label(FText::FromString(TEXT("Vertical sync")))
-		.Description(FText::FromString(TEXT("Wait for the monitor between frames: no tearing, a little more input delay.")))
+		.Description(FText::FromString(TEXT("Synchronizes frames with the display to prevent tearing. It can cap FPS at the refresh rate and add input delay.")))
 		.Get([] { const UGameUserSettings* E = EngineSettings(); return E != nullptr && E->IsVSyncEnabled(); })
 		.Set([this](bool bValue) { if (UGameUserSettings* E = EngineSettings()) { E->SetVSyncEnabled(bValue); ApplyQuality(); } }));
 	Add(SNew(SScctStepper)
 		.Label(FText::FromString(TEXT("Frame limit")))
-		.Description(FText::FromString(TEXT("The most frames a second the game draws. A limit just under the monitor's refresh rate keeps the delay low and the fans quiet.")))
+		.Description(FText::FromString(TEXT("Caps the number of frames drawn each second. A lower cap can reduce CPU and GPU use, power and heat. A higher cap can make input feel quicker.")))
 		.Wrap(false)
 		.GetOptions([] { TArray<FString> Out; for (const int32 Limit : FrameLimits) { Out.Add(Limit == 0 ? FString(TEXT("Unlimited")) : FString::Printf(TEXT("%d fps"), Limit)); } return Out; })
 		.Get([] { const UGameUserSettings* E = EngineSettings(); const int32 Now = E != nullptr ? FMath::RoundToInt32(E->GetFrameRateLimit()) : 0; for (int32 I = 0; I < UE_ARRAY_COUNT(FrameLimits); ++I) { if (FrameLimits[I] == Now) { return I; } } return 0; })
@@ -718,7 +725,7 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Quality")) ];
 	Add(SNew(SScctStepper)
 		.Label(FText::FromString(TEXT("Quality preset")))
-		.Description(FText::FromString(TEXT("Sets every group below at once. Epic is the look this game is made for (ray-traced global illumination and reflections, virtual shadow maps); lower it on a slower graphics card.")))
+		.Description(FText::FromString(TEXT("Sets the quality groups below together. Lower presets reduce GPU work and video memory use. You can adjust individual groups afterward.")))
 		.Wrap(false)
 		.GetOptions([] { TArray<FString> Out = QualityOptions(); Out.Add(TEXT("Custom")); return Out; })
 		.Get([] { const UGameUserSettings* E = EngineSettings(); const int32 Level = E != nullptr ? E->GetOverallScalabilityLevel() : 3; return Level < 0 ? 5 : Level; })
@@ -732,16 +739,16 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 		void (UGameUserSettings::*Set)(int32);
 	};
 	static const FGroup Groups[] = {
-		{ TEXT("Global illumination"), TEXT("How light bounces around the rooms (Lumen). The largest single cost and the largest single part of the look."), &UGameUserSettings::GetGlobalIlluminationQuality, &UGameUserSettings::SetGlobalIlluminationQuality },
-		{ TEXT("Reflections"), TEXT("Reflections in glass, water, wet floors and polished metal."), &UGameUserSettings::GetReflectionQuality, &UGameUserSettings::SetReflectionQuality },
-		{ TEXT("Shadows"), TEXT("The sharpness and reach of shadows. The spies live in them, so keep them as high as you can."), &UGameUserSettings::GetShadowQuality, &UGameUserSettings::SetShadowQuality },
-		{ TEXT("Post-processing"), TEXT("Depth of field, bloom, lens effects and the vision modes' finish."), &UGameUserSettings::GetPostProcessingQuality, &UGameUserSettings::SetPostProcessingQuality },
-		{ TEXT("Textures"), TEXT("Texture detail. Lower it when the graphics card runs out of memory."), &UGameUserSettings::GetTextureQuality, &UGameUserSettings::SetTextureQuality },
-		{ TEXT("Effects"), TEXT("Smoke, sparks, particles and the gadgets' effects."), &UGameUserSettings::GetVisualEffectQuality, &UGameUserSettings::SetVisualEffectQuality },
-		{ TEXT("Anti-aliasing"), TEXT("Smooths jagged edges (temporal super resolution)."), &UGameUserSettings::GetAntiAliasingQuality, &UGameUserSettings::SetAntiAliasingQuality },
-		{ TEXT("View distance"), TEXT("How far detail is kept."), &UGameUserSettings::GetViewDistanceQuality, &UGameUserSettings::SetViewDistanceQuality },
-		{ TEXT("Foliage"), TEXT("Plants and grass density."), &UGameUserSettings::GetFoliageQuality, &UGameUserSettings::SetFoliageQuality },
-		{ TEXT("Shading"), TEXT("The detail of materials and of skin and cloth shading."), &UGameUserSettings::GetShadingQuality, &UGameUserSettings::SetShadingQuality },
+		{ TEXT("Global illumination"), TEXT("Controls indirect lighting. Higher levels can use Lumen to show light bouncing between surfaces and use more GPU time."), &UGameUserSettings::GetGlobalIlluminationQuality, &UGameUserSettings::SetGlobalIlluminationQuality },
+		{ TEXT("Reflections"), TEXT("Controls reflections on glossy surfaces. Higher levels can resolve more reflected detail and use more GPU time."), &UGameUserSettings::GetReflectionQuality, &UGameUserSettings::SetReflectionQuality },
+		{ TEXT("Shadows"), TEXT("Higher levels can sharpen dynamic shadows and draw them farther away. More shadow work costs GPU time and video memory, especially around multiple lights."), &UGameUserSettings::GetShadowQuality, &UGameUserSettings::SetShadowQuality },
+		{ TEXT("Post-processing"), TEXT("Controls effects such as bloom and depth of field. Higher levels can add GPU work across the whole image, especially at high resolutions."), &UGameUserSettings::GetPostProcessingQuality, &UGameUserSettings::SetPostProcessingQuality },
+		{ TEXT("Textures"), TEXT("Higher levels show sharper surface detail up close and use more video memory. Lower this if textures take time to sharpen or the game stutters as you move."), &UGameUserSettings::GetTextureQuality, &UGameUserSettings::SetTextureQuality },
+		{ TEXT("Effects"), TEXT("Controls the detail of visual effects. Higher levels can cost more GPU time when particles and translucent effects overlap."), &UGameUserSettings::GetVisualEffectQuality, &UGameUserSettings::SetVisualEffectQuality },
+		{ TEXT("Anti-aliasing"), TEXT("Sets the quality of edge smoothing for the selected method. Higher levels can reduce shimmer on thin details while using more GPU time."), &UGameUserSettings::GetAntiAliasingQuality, &UGameUserSettings::SetAntiAliasingQuality },
+		{ TEXT("View distance"), TEXT("Higher levels keep distance-scaled objects visible farther away. Drawing more objects can increase CPU and GPU work in open areas."), &UGameUserSettings::GetViewDistanceQuality, &UGameUserSettings::SetViewDistanceQuality },
+		{ TEXT("Foliage"), TEXT("Adjusts the density of scalable grass and foliage. Denser vegetation uses more GPU time on maps that contain it."), &UGameUserSettings::GetFoliageQuality, &UGameUserSettings::SetFoliageQuality },
+		{ TEXT("Shading"), TEXT("Sets the detail of supported surface shading, including skin. Higher levels can use more GPU time on those materials."), &UGameUserSettings::GetShadingQuality, &UGameUserSettings::SetShadingQuality },
 	};
 	for (const FGroup& Group : Groups)
 	{
@@ -756,24 +763,24 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 	}
 	Add(SNew(SScctSlider)
 		.Label(FText::FromString(TEXT("Render scale")))
-		.Description(FText::FromString(TEXT("The share of the screen's pixels the 3D picture is drawn at before it is scaled up. Below 100 % is faster and softer.")))
+		.Description(FText::FromString(TEXT("Sets the 3D resolution when Upscaling is set to Use render scale. At 75% the game draws about 56% as many pixels as at 100%. Lower values save GPU time and can soften details.")))
 		.Min(50.0f).Max(100.0f).Step(5.0f)
 		.Get([Settings] { return static_cast<float>(Settings->RenderScale); })
 		.Set([Settings](float Value) { Settings->RenderScale = FMath::RoundToInt32(Value); Settings->ApplyAll(); })
 		.Format([](float Value) { return Percent(Value); }));
 	Add(SNew(SScctToggle)
 		.Label(FText::FromString(TEXT("Motion blur")))
-		.Description(FText::FromString(TEXT("Blur of fast movement, as a camera sees it.")))
+		.Description(FText::FromString(TEXT("Adds blur during fast movement. Turning it off keeps moving edges clearer and can save GPU time.")))
 		.Get([Settings] { return Settings->bMotionBlur; })
 		.Set([Settings](bool bValue) { Settings->bMotionBlur = bValue; Settings->ApplyAll(); }));
 	Add(SNew(SScctToggle)
 		.Label(FText::FromString(TEXT("Live menu background")))
-		.Description(FText::FromString(TEXT("A match played by bots shows behind the main menu, on a map that changes every few minutes. Off shows a still view of one map.")))
+		.Description(FText::FromString(TEXT("Plays a bot match behind the main menu. A still background uses less CPU and GPU time while the menu is open.")))
 		.Get([Settings] { return Settings->bLiveMenuBackground; })
 		.Set([Settings](bool bValue) { Settings->bLiveMenuBackground = bValue; Settings->ApplyAll(); }));
 	Add(SNew(SScctSlider)
 		.Label(FText::FromString(TEXT("Brightness")))
-		.Description(FText::FromString(TEXT("The display gamma. Raise it until the darkest corners of a room are just visible, no further: the spies need their shadows.")))
+		.Description(FText::FromString(TEXT("Adjusts display gamma with negligible frame-time cost. Use Calibrate brightness to set how much near-black detail your screen shows.")))
 		.Min(FScctTone::GammaMin()).Max(FScctTone::GammaMax()).Step(0.1f)
 		.Get([Settings] { return FMath::Clamp(Settings->Gamma, FScctTone::GammaMin(), FScctTone::GammaMax()); })
 		.Set([Settings](float Value) { Settings->Gamma = Value; Settings->ApplyAll(); })
@@ -789,12 +796,12 @@ TSharedRef<SWidget> SScctSettingsPanel::BuildVideo()
 	Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Field of view")) ];
 	Add(SNew(SScctToggle)
 		.Label(FText::FromString(TEXT("Wider view on widescreen")))
-		.Description(FText::FromString(TEXT("Keep the original 4:3 picture's height and add width on a wide screen (on), or stretch the 4:3 picture (off).")))
+		.Description(FText::FromString(TEXT("Shows more of the scene to either side on a widescreen display. The wider view can draw more objects. Off stretches the original 4:3 view.")))
 		.Get([Controls] { return Controls->bWidescreen; })
 		.Set([this, Controls](bool bValue) { Controls->bWidescreen = bValue; ApplyControls(); }));
 	Add(SNew(SScctSlider)
 		.Label(FText::FromString(TEXT("Mercenary field of view cap")))
-		.Description(FText::FromString(TEXT("The widest horizontal field of view the mercenary's first person view may have, in degrees.")))
+		.Description(FText::FromString(TEXT("Limits the width of the mercenary's first-person view. A higher cap shows more around you, makes distant objects appear smaller and can increase drawing work.")))
 		.Min(95.0f).Max(112.0f).Step(1.0f)
 		.Get([Controls] { return Controls->MercFovCap; })
 		.Set([this, Controls](float Value) { Controls->MercFovCap = Value; ApplyControls(); })
@@ -1361,17 +1368,27 @@ TSharedPtr<SWidget> SScctSettingsPanel::AddRegistryRows(const TSharedRef<SVertic
 		case EScctSettingType::Choice:
 		{
 			TArray<FString> Options;
-			for (const FText& Choice : Desc->Choices)
+			TArray<int32> ChoiceIndices;
+			for (int32 Index = 0; Index < Desc->Choices.Num(); ++Index)
 			{
-				Options.Add(Choice.ToString());
+				if (!Desc->SupportsChoice || Desc->SupportsChoice(Index))
+				{
+					ChoiceIndices.Add(Index);
+					FString ChoiceLabel = Desc->Choices[Index].ToString();
+					if (Desc->ChoiceRequiresRestart && Desc->ChoiceRequiresRestart(Index))
+					{
+						ChoiceLabel += TEXT(" (after restart)");
+					}
+					Options.Add(MoveTemp(ChoiceLabel));
+				}
 			}
 			Row = SNew(SScctStepper)
 				.Label(Label)
 				.Description(Tooltip)
 				.Wrap(false)
 				.Options(Options)
-				.Get([Key, Count = Options.Num()] { return FMath::Clamp(FScctSettings::GetInt(Key), 0, FMath::Max(Count - 1, 0)); })
-				.Set([Key](int32 Value) { FScctSettings::SetInt(Key, Value); });
+				.Get([Key, ChoiceIndices] { return FMath::Max(0, ChoiceIndices.Find(FScctSettings::GetInt(Key))); })
+				.Set([Key, ChoiceIndices](int32 Row) { if (ChoiceIndices.IsValidIndex(Row)) FScctSettings::SetInt(Key, ChoiceIndices[Row]); });
 			break;
 		}
 		default:

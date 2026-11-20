@@ -142,6 +142,34 @@ Heat = lerp(max(Heat, RingLevel * 0.50), Core, Body);
 
 // A detector beam is drawn at its own heat (HeatIntensity: 1 a tripwire, 0.4 a mine's beam).
 Heat = lerp(Heat, max(Heat, BeamHeat), Beam);
+// The actual mine casing writes 32..47 with its simulated heat. Keep its detail inside
+// the visible mesh, using a one-texel inward rim so a small device still reads at range.
+// Its body writes scene depth itself; a small tolerance covers depth quantization only.
+if (S0 >= 32.0 && S0 < 48.0
+    && SceneTextureLookup(SUV, 13, false).r <= SceneTextureLookup(SUV, 1, false).r + 0.15)
+{
+    float depth = SceneTextureLookup(SUV, 13, false).r;
+    float2 cmPerTexel = max(depth * abs(View.ScreenToViewSpace.xy) * View.ViewSizeAndInvSize.zw, 0.001);
+    float2 slope = 0.0;
+    float inside = 0.0;
+    for (int n = 0; n < 4; n++)
+    {
+        float2 offset = n < 2 ? float2(n == 0 ? -1.0 : 1.0, 0.0) : float2(0.0, n == 2 ? -1.0 : 1.0);
+        float2 sampleUV = SUV + offset * SPx;
+        float adjacent = SceneTextureLookup(sampleUV, 25, false).r;
+        if (adjacent >= 32.0 && adjacent < 48.0)
+        {
+            inside += 0.25;
+            slope += 0.5 * offset * (SceneTextureLookup(sampleUV, 13, false).r - depth) / cmPerTexel;
+        }
+    }
+    float casingHeat = (S0 - 32.0) / 15.0;
+    // The facets facing the viewer read hotter than the steep sides and mounting rim.
+    // Retain the housing's markings and the indicator lamp in those mid-tones.
+    float face = rcp(1.0 + dot(slope, slope));
+    float detail = saturate(2.4 * sqrt(saturate(L)));
+    Heat = max(Heat, 0.43 + 0.23 * casingHeat + 0.13 * inside + 0.17 * face + 0.15 * detail);
+}
 Heat = saturate(Heat + Grain * 0.035);
 
 // Palette: deep blue, violet, magenta, orange, yellow, white.

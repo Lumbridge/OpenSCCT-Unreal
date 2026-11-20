@@ -6,6 +6,8 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using OpenScct.Content;
 using OpenScct.Core.Engine;
+using OpenScct.Game.Animation;
+using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
 using OpenScct.Net.Cosmetics;
 using OpenScct.Server;
@@ -177,6 +179,8 @@ public sealed class PawnLooks
         CosmeticLook look = mine
             ? HideMine ? (side == CosmeticSide.Spy ? OwnSpy : OwnMerc) : new CosmeticLook(pri.SvmLook, pri.SvmLookExtra)
             : HideOthers ? CosmeticLook.Default : new CosmeticLook(pri.SvmLook, pri.SvmLookExtra);
+        if (mine && side == CosmeticSide.Merc && !_session.IsRemote && Social.SocialBridge.Existing is { } social)
+            look = social.Account.PrivateMercLook(look);
         TeamOutfit? outfit = _session.Outfits.Outfits.For(spy: side == CosmeticSide.Spy);
         return outfit?.Cosmetics switch
         {
@@ -192,25 +196,19 @@ public sealed class PawnLooks
         pawn.PlayerReplicationInfo is { } pri && ReferenceEquals(_session.Session.LocalController?.PlayerReplicationInfo, pri);
 
     /// <summary>The look's item for the gun in the pawn's hands (port of PawnCosmetics.GunItem).</summary>
-    public static CosmeticItem? GunItem(SBasePawn pawn, CosmeticLook look)
+    public static CosmeticItem? GunItem(SBasePawn pawn, CosmeticLook look, bool carried = false)
     {
         if (pawn is SPawnAttaque or OpenScct.Game.Svm.SpyClone)
         {
-            return look[CosmeticSlot.Pistol];
+            return carried ? null : look[CosmeticSlot.Pistol];
         }
 
-        return SGameInfo.GunClassOf(pawn.MyWeapon) switch
-        {
-            "suppressed" => look[CosmeticSlot.Suppressed],
-            "unsuppressed" => look[CosmeticSlot.Unsuppressed],
-            "automatic" => look[CosmeticSlot.Automatic],
-            "magnum44" => look[CosmeticSlot.Magnum44],
-            "desert_eagle" => look[CosmeticSlot.DesertEagle],
-            "ar" => look[CosmeticSlot.GunAr],
-            "smg" => look[CosmeticSlot.GunSmg],
-            "shotgun" => look[CosmeticSlot.GunShotgun],
-            _ => null,
-        };
+        if (pawn is not SPAWNDEFENSE merc) return null;
+        bool primaryInHand = NetworkPawnAttachments.For(merc).ActiveSlot == 0;
+        SWeapon? displayed = primaryInHand != carried ? merc.PrimaryWeapon : merc.SidearmWeapon;
+        // Observers may receive the selected weapon's world dummy before its inventory actor.
+        string? identity = displayed is SWeaponDefense weapon ? WeaponAttachments.Key(weapon) : carried ? null : merc.WeaponDummy?.Mesh.Path;
+        return look.WeaponItem(identity);
     }
 
     /// <summary>The pattern an item's texture is made with (PawnCosmetics.Dress): its camo, or "tint_rrggbb" for a tint.</summary>

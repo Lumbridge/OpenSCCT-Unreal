@@ -75,22 +75,31 @@ void SScctHostPage::Construct(const FArguments& InArgs)
 	bLan = Defaults.bLan;
 	LanPort = Defaults.LanPort;
 
-	// The last session when its map can still be shown here, else the first map's defaults (Steel when it is there,
-	// as in the Godot client).
+	// Reopen the last map if it is still available. Keep the last rules if they already apply to its default mode.
 	FString Last, LastName;
 	GConfig->GetString(HostUserSection, KeyLastSetup, Last, GGameUserSettingsIni);
 	GConfig->GetString(HostUserSection, KeyLastName, LastName, GGameUserSettingsIni);
 	GConfig->GetBool(HostUserSection, KeyLastPlayersChosen, bPlayersChosen, GGameUserSettingsIni);
-	const auto Shown = [this](const FString& Map) { return Maps.ContainsByPredicate([&Map](const FScctHostMap& Entry) { return Entry.Id.Equals(Map, ESearchCase::IgnoreCase); }); };
-	if (!Last.IsEmpty() && Shown(ScctHostSetup::Option(Last, TEXT("MapName"))))
+	if (const FScctHostMap* Previous = FindMap(ScctHostSetup::Option(Last, TEXT("MapName"))))
 	{
-		Setup = ScctHostSetup::Text(EScctSetupText::Normalize, Last, FString(), PlayersArgument());
+		Setup = Last;
+		const int32 Players = PlayersArgument();
+		const int32 LastMode = FCString::Atoi(*ScctHostSetup::Option(Last, TEXT("GameMode")));
+		Setup = ScctHostSetup::Text(EScctSetupText::NormalizeNewHost, Last, FString(), Players);
+		if (Previous->DefaultMode() != ScctHostSetup::ModeKeyOf(LastMode))
+		{
+			Setup = ScctHostSetup::MapDefaults(*Previous, Setup, Players);
+		}
 	}
 	if (Setup.IsEmpty() && !Maps.IsEmpty())
 	{
-		const FString First = Shown(TEXT("SteeE")) ? FString(TEXT("SteeE")) : Shown(TEXT("AquaE")) ? FString(TEXT("AquaE")) : Maps[0].Id;
+		const FScctHostMap* First = FindMap(TEXT("SteeE"));
+		if (First == nullptr)
+		{
+			First = FindMap(TEXT("AquaE"));
+		}
 		bPlayersChosen = false;
-		Setup = ScctHostSetup::Text(EScctSetupText::Defaults, FString(), FString::Printf(TEXT("?MapName=%s?Mode=Story"), *First));
+		Setup = ScctHostSetup::MapDefaults(First != nullptr ? *First : Maps[0], FString());
 	}
 
 	// The name the player goes online under (kept by the online subsystem, which may not have read it yet).
@@ -121,7 +130,7 @@ void SScctHostPage::Construct(const FArguments& InArgs)
 		Ui::Title(TAttribute<FText>::CreateLambda([this]
 		{
 			const FString Map = ScctHostSetup::Option(Setup, TEXT("MapName"));
-			const FScctHostMap* Entry = Maps.FindByPredicate([&Map](const FScctHostMap& Candidate) { return Candidate.Id.Equals(Map, ESearchCase::IgnoreCase); });
+			const FScctHostMap* Entry = FindMap(Map);
 			return Ui::ToText(Entry != nullptr ? FString::Printf(TEXT("%s  (%s)"), *Entry->Name, *Entry->Id) : Map);
 		}), 18.0f)
 	];
@@ -254,7 +263,15 @@ void SScctHostPage::EditAlternate(const FString& Change)
 
 void SScctHostPage::PickMap(const FString& Map)
 {
-	Edit(TEXT("Map ") + Map);
+	if (const FScctHostMap* Entry = FindMap(Map))
+	{
+		SetSetup(ScctHostSetup::MapDefaults(*Entry, Setup, PlayersArgument()));
+	}
+}
+
+const FScctHostMap* SScctHostPage::FindMap(const FString& Id) const
+{
+	return Maps.FindByPredicate([&Id](const FScctHostMap& Map) { return Map.Id.Equals(Id, ESearchCase::IgnoreCase); });
 }
 
 void SScctHostPage::Refresh()
@@ -332,7 +349,7 @@ TSharedRef<SWidget> SScctHostPage::BuildSettings()
 		Box->AddSlot().AutoHeight()[ Heading(TEXT("Teams & rotation")) ];
 		AddRows(Box, { TEXT("Revenge"), TEXT("GamesInARow"), TEXT("RandomMap"), TEXT("AutoBalance"), TEXT("VoiceInLobby") });
 		Box->AddSlot().AutoHeight()[ Heading(TEXT("Extra rules")) ];
-		AddRows(Box, { TEXT("Practice"), TEXT("Sidearms"), TEXT("Rifles"), TEXT("ResponsiveSmoke"), TEXT("Alternate") });
+		AddRows(Box, { TEXT("Practice"), TEXT("Alternate") });
 		const FScctSetupRow* Alternate = FindRow(TEXT("Alternate"));
 		Box->AddSlot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f).HAlign(HAlign_Left)
 		[
@@ -449,7 +466,10 @@ void SScctHostPage::ApplyPreset(const FString& Preset)
 	const FString* Mode = Values.Find(TEXT("Mode"));
 	if (Map != nullptr || Mode != nullptr)
 	{
-		const FString Argument = FString::Printf(TEXT("?MapName=%s?Mode=%s"), Map != nullptr ? **Map : *ScctHostSetup::Option(Setup, TEXT("MapName")), Mode != nullptr ? **Mode : TEXT(""));
+		const FString MapId = Map != nullptr ? *Map : ScctHostSetup::Option(Setup, TEXT("MapName"));
+		const FScctHostMap* Entry = FindMap(MapId);
+		const FString ModeKey = Mode != nullptr && !Mode->IsEmpty() ? *Mode : Entry != nullptr ? Entry->DefaultMode() : FString();
+		const FString Argument = FString::Printf(TEXT("?MapName=%s?Mode=%s"), *MapId, *ModeKey);
 		Setup = ScctHostSetup::Text(EScctSetupText::Defaults, Setup, Argument, PlayersArgument());
 	}
 

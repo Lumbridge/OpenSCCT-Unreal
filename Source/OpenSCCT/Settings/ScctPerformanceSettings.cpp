@@ -86,14 +86,14 @@ void ScctPerformanceSettings::Register()
 	// Vertical sync and the frame limit are the settings page's own (UGameUserSettings, the Video tab).
 	{
 		FScctSettingDesc Desc = Option(TEXT("Performance.LowLatency"), PerformancePage, TEXT("Latency"), TEXT("Reduce input lag"),
-			TEXT("How far the game may prepare frames ahead of the screen. On waits for the previous frame to be handed to the graphics card; Ultra waits for it to be shown, the least lag at some cost in frame rate."),
+			TEXT("Limits how far the CPU prepares frames ahead of the GPU. On and Ultra can reduce input delay. Ultra waits longer between frames and can reduce FPS."),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		Desc.Choices = ScctVideoOptions::Texts({ TEXT("Off"), TEXT("On"), TEXT("Ultra") });
 		FScctSettings::Register(Desc);
 	}
 	{
-		FScctSettingDesc Desc = Option(TEXT("Performance.Renderer"), PerformancePage, TEXT("Renderer"), TEXT("Renderer (applies after restart)"),
-			*FString::Printf(TEXT("The graphics interface the game draws with. Takes effect the next time the game starts; this run uses %s."), *FApp::GetGraphicsRHI()),
+		FScctSettingDesc Desc = Option(TEXT("Performance.Renderer"), PerformancePage, TEXT("Graphics API"), TEXT("Graphics API (applies after restart)"),
+			*FString::Printf(TEXT("Chooses the graphics API at the next launch. Performance depends on your GPU and driver. This session uses %s."), *FApp::GetGraphicsRHI()),
 			EScctSettingType::Choice, TEXT("0"), Order++);
 		Desc.Choices = VulkanAvailable() ? ScctVideoOptions::Texts({ TEXT("DirectX 12"), TEXT("Vulkan") }) : ScctVideoOptions::Texts({ TEXT("DirectX 12") });
 		FScctSettings::Register(Desc);

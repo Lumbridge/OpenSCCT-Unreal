@@ -44,12 +44,13 @@ public sealed class PadBindingState
     private readonly Stack<Press> _spare = new();
     private IReadOnlyDictionary<string, string>? _layout;
 
+    private bool _mercWeaponLayout;
     public IReadOnlyList<PadBindingEvent> Update(
-        IReadOnlyDictionary<string, string> bindings, HashSet<string> logicalDown, double delta)
+        IReadOnlyDictionary<string, string> bindings, HashSet<string> logicalDown, double delta, bool mercWeaponView = false)
     {
         ArgumentNullException.ThrowIfNull(bindings);
         ArgumentNullException.ThrowIfNull(logicalDown);
-        ReadLayout(bindings);
+        ReadLayout(bindings, mercWeaponView);
         _events.Clear();
         _desired.Clear();
         _taps.Clear();
@@ -212,17 +213,18 @@ public sealed class PadBindingState
         _layout = null;
     }
 
-    private void ReadLayout(IReadOnlyDictionary<string, string> bindings)
+    private void ReadLayout(IReadOnlyDictionary<string, string> bindings, bool mercWeaponView)
     {
-        if (ReferenceEquals(bindings, _layout)) return;
+        if (ReferenceEquals(bindings, _layout) && mercWeaponView == _mercWeaponLayout) return;
         _layout = bindings;
+        _mercWeaponLayout = mercWeaponView;
         _buttons.Clear();
         _holds.Clear();
         _chords.Clear();
         _modifiers.Clear();
         foreach ((string control, string action) in bindings)
         {
-            if (string.IsNullOrEmpty(action)) continue;
+            if (string.IsNullOrEmpty(action) || (!mercWeaponView && action == MercBindings.PadGadget)) continue;
             if (control.EndsWith(":Hold", StringComparison.Ordinal))
             {
                 _holds[control[..^5]] = new Binding(control, action);
@@ -263,7 +265,8 @@ public readonly record struct PadActionContext(
     bool IsSpy = true,
     bool WeaponDrawn = false,
     bool Scoped = false,
-    bool CameraTransition = false);
+    bool CameraTransition = false,
+    bool MercWeaponView = false);
 
 /// <summary>
 /// Expands contextual pad bindings into independent actions. Trigger presses act immediately; their short
@@ -306,6 +309,10 @@ public sealed class PadActionState
                         if (context.IsSpy && context.InCamera) _cameraGadgetAt = _clock;
                         Hold(ev.Control, "Action:altfire", true);
                         break;
+                    case MercBindings.Trigger when context.MercWeaponView:
+                        Hold(ev.Control, ControlActions.PadPrefix + MercBindings.AimId, true);
+                        break;
+                    case MercBindings.Trigger:
                     case ControlBindings.MercGadgetAction:
                         Hold(ev.Control, "Action:altfire", true);
                         if (context.Scoped) Hold(ev.Control + ":breath", "Action:breath", true);
@@ -355,7 +362,7 @@ public sealed class PadActionState
     }
 
     private static bool IsContextual(string action) => action is ControlBindings.SpyFireAction or ControlBindings.SpyGadgetAction
-        or ControlBindings.MercGadgetAction or ControlBindings.CrouchAction or ControlBindings.LongRollAction;
+        or ControlBindings.MercGadgetAction or MercBindings.Trigger or ControlBindings.CrouchAction or ControlBindings.LongRollAction;
 
     private void Hold(string control, string action, bool down)
     {

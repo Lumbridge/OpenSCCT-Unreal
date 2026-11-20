@@ -12,6 +12,8 @@
 #include "Hud/ScctTeamPingView.h"
 #include "Hud/ScctTelemetryView.h"
 
+class AScctViewPawn;
+
 /**
  * The HUD's own labels. Their text is the original game's, read from the player's content with the bridge's
  * Localize; a label the content does not have stays empty and is simply not drawn.
@@ -93,6 +95,7 @@ class FScctHudModel
 public:
 	// --- The snapshot -------------------------------------------------------------------------------------
 	FScctHudState State = {};
+	TWeakObjectPtr<AScctViewPawn> MercView;
 	FScctHudRound Round = {};
 	bool bHasState = false; // the player's HUD is open
 	bool bHasRound = false; // the match state has arrived
@@ -167,6 +170,7 @@ public:
 	 * (ScctHudBinoculars.cpp), empty when the content or the bridge has no such page.
 	 */
 	TArray<FScctHudPageLayer> ScopeLayers;
+	FVector2f ScopeSightOffset = FVector2f::ZeroVector; // in the original page's 480-high units, relative to its centre
 
 	/**
 	 * The merc's motion tracking for this frame's view (ScctHudMotion.cpp): the goggles' lock boxes around moving targets
@@ -239,6 +243,7 @@ public:
 	float HealthLoss = 0.0f;      // 1 when health just dropped, fading to 0
 	float EnergyShown = 0.0f;
 	float DamagePulse = 0.0f;     // 1 on a hit, fading to 0
+	float SoundArrowAge[ScctHudArrowCount] = {}; // seconds since each visible sound cue opened
 	float HitConfirm = 0.0f;      // 1 while the reticle reports a hit, fading to 0
 	float Spread = 0.0f;          // 0 tightest .. 1 widest, eased
 	float AmmoPulse = 0.0f;       // 1 when the clip changed

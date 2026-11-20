@@ -119,7 +119,7 @@ struct FScctHudState
 	int32 EnergyLevelMax;
 
 	// Merc weapon.
-	int32 WeaponKind;          // -1 none, 0 rifle, 1 Uzi, 2 shotgun
+	int32 WeaponKind;          // -1 none, 0 rifle, 1 SMG, 2 shotgun
 	int32 WeaponNameId;
 	int32 ClipAmmo;
 	int32 Ammo;                // every round left, the clip's included

@@ -20,7 +20,12 @@ obj/
 # Converted game content never goes into Git (same rule as OpenSCCT).
 # Imported maps, original textures, meshes, sounds and animations live here.
 Content/Imported/
+# Local Unreal review level generated from the imported texture pairs.
+Content/HospitalTextureReview/
 .content/
+# Local enhanced-map artwork fitted to the original vending cabinet atlas.
+/Art/Maps/MounE/Prison_TEX_machine_HD.png
+/Art/Maps/MounE/Prison_TEX_machine_WrapperDetail.png
 
 # Local tooling
 .mcp.json

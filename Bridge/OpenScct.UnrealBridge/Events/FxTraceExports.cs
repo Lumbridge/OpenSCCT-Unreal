@@ -20,6 +20,18 @@ public struct BridgeFxHit
 
     /// <summary>How far along the line the hit is, 0 at its start and 1 at its end.</summary>
     public float Time;
+
+    internal static BridgeFxHit From(in FCheckResult result)
+    {
+        FVector normal = result.Normal.SafeNormal();
+        return new BridgeFxHit
+        {
+            X = result.Location.X, Y = result.Location.Y, Z = result.Location.Z,
+            NormalX = normal.X, NormalY = normal.Y, NormalZ = normal.Z,
+            ActorId = result.Actor is { } actor && actor is not LevelInfo ? actor.ActorId : 0,
+            Time = result.Time,
+        };
+    }
 }
 
 /// <summary>
@@ -79,15 +91,7 @@ public static unsafe class FxTraceExports
                 return 0;
             }
 
-            FVector n = r.Normal.SafeNormal();
-            hit->X = r.Location.X;
-            hit->Y = r.Location.Y;
-            hit->Z = r.Location.Z;
-            hit->NormalX = n.X;
-            hit->NormalY = n.Y;
-            hit->NormalZ = n.Z;
-            hit->ActorId = r.Actor is { } actor && actor is not LevelInfo ? actor.ActorId : 0;
-            hit->Time = r.Time;
+            *hit = BridgeFxHit.From(r);
             return 1;
         }
         catch (Exception e)

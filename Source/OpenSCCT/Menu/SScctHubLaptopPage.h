@@ -14,7 +14,7 @@ struct FSlateBrush;
  * pad's next match as a lobby's session settings, opened when the hub opens the laptop (U at a pad's laptop) and
  * drawn over the hub, which goes on underneath. A grid of the installed versus maps with their pictures (a map
  * without an imported level here is marked: the match would be refused when it starts), a row per setting with
- * < and > to step it (mode, time limit, lives, players, bots, bot skill, practice, sidearms, rifles), the draft in one
+ * a select box (mode, time limit, lives, players, bots, bot skill, practice), the draft in one
  * line, and Map Defaults, Apply (the hub checks the player still stands at the laptop and says so) and Close (Esc).
  * Everything it shows and does goes through the pads table (FScctHubPads, Runtime/ScctHubPadsApi.h).
  */

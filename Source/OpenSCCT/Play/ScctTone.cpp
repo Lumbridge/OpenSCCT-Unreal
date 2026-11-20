@@ -225,6 +225,18 @@ void FScctTone::Leave()
 	}
 }
 
+void FScctTone::ApplyMercCamera(FPostProcessSettings& Camera, bool bActive)
+{
+	const APostProcessVolume* Volume = ToneHeld.Volume.Get();
+	Camera.bOverride_BloomIntensity = bActive && Volume && IsOn();
+	if (Camera.bOverride_BloomIntensity)
+	{
+		// The map sets the bright-pass threshold and can disable bloom entirely. The camera lets a
+		// bright grille or torch glint bloom locally without the 8x veil over a neighbouring doorway.
+		Camera.BloomIntensity = FMath::Min(Volume->Settings.BloomIntensity, 1.2f);
+	}
+}
+
 bool FScctTone::IsOn()
 {
 	return ToneHeld.bOn && FScctLightPlan::IsOn();

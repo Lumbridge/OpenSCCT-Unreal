@@ -65,6 +65,9 @@ public:
 	/** A side's saved kit as one line ("Sticky Cam, Smoke G., ..."), for the lobby's and the offline page's summary. */
 	static FString SummaryLine(int32 Side);
 
+	/** The cached picture of a piece of gear, shared by Equipment and the Armoury. */
+	static const FSlateBrush* IconOf(const FScctGearIntel& Intel);
+
 	void Construct(const FArguments& InArgs);
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 	virtual bool SupportsKeyboardFocus() const override { return true; }
@@ -117,9 +120,6 @@ private:
 	void ShowIntel(const FString& Path);
 	FString SelectedPath() const;
 
-	/** The picture of a piece of gear (its file and tile, from its intel), made once and kept. Null without one. */
-	static const FSlateBrush* IconOf(const FScctGearIntel& Intel);
-
 	TWeakPtr<SOverlay> Host;
 	TWeakPtr<SWidget> FocusBefore;
 	FSimpleDelegate OnApplied;
@@ -137,6 +137,7 @@ private:
 
 	FScctGearMenuState State = {};
 	int32 Category = EScctGearCategory::Gadget;
+	bool bShowAttachments = false;
 	int32 Slot = 0;
 	FString Hovered;
 	/** The tile the controller is on ("slot:<category>:<slot>" or "item:<path>"), focused again after a rebuild. */

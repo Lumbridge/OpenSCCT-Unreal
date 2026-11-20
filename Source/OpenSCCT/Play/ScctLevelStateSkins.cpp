@@ -45,6 +45,56 @@ namespace
 	}
 }
 
+void UScctLevelStateSubsystem::ApplyMapMaterials(FActorState& State)
+{
+	UStaticMeshComponent* Component = State.Mesh.Get();
+	if (!Component || MapMaterialAssets.IsEmpty()) return;
+	for (int32 Slot = 0; Slot < Component->GetNumMaterials(); ++Slot)
+	{
+		UMaterialInterface* Source = Component->GetMaterial(Slot);
+		if (!Source || !Source->GetOutermost()->GetName().StartsWith(TEXT("/Game/Imported/Fx/SGameplayObjects/Materials/"))) continue;
+		const FSoftObjectPath* Path = MapMaterialAssets.Find(Source->GetFName());
+		if (UMaterialInterface* Material = Path ? Cast<UMaterialInterface>(Path->TryLoad()) : nullptr)
+		{
+			UMaterialInterface* Original = Component->OverrideMaterials.IsValidIndex(Slot) ? Component->OverrideMaterials[Slot].Get() : nullptr;
+			State.MapMaterials.Add({Slot, Original, Material});
+			Component->SetMaterial(Slot, Material);
+			if (bLog)
+			{
+				UE_LOG(LogOpenSCCT, Log, TEXT("Level state: local prop material %s on '%s' slot %d"),
+					*Material->GetName(), *GetName(State.Info.NameId), Slot);
+			}
+		}
+	}
+}
+
+void UScctLevelStateSubsystem::RestoreMapMaterials(FActorState& State)
+{
+	if (UStaticMeshComponent* Component = State.Mesh.Get())
+	{
+		for (const FMapMaterialOverride& Entry : State.MapMaterials)
+		{
+			if (Component->GetMaterial(Entry.Slot) == Entry.Replacement.Get())
+			{
+				Component->SetMaterial(Entry.Slot, Entry.Original.Get());
+			}
+		}
+	}
+	State.MapMaterials.Reset();
+}
+
+UTexture2D* UScctLevelStateSubsystem::GameplaySkinPicture(const FString& Folder, const FString& Relative) const
+{
+	if (!MapColorAssets.IsEmpty() && !Relative.IsEmpty() && FPaths::IsRelative(Relative))
+	{
+		if (const FSoftObjectPath* Path = MapColorAssets.Find(FName(*FPaths::GetBaseFilename(Relative))))
+		{
+			if (UTexture2D* Picture = Cast<UTexture2D>(Path->TryLoad())) return Picture;
+		}
+	}
+	return SkinPicture(Folder, Relative);
+}
+
 void UScctLevelStateSubsystem::ApplyHackPanelDisplay(FActorState& State)
 {
 	// The original switch's second section is a permanent self-lit combiner, independent of
@@ -143,7 +193,7 @@ UMaterialInterface* UScctLevelStateSubsystem::GameplaySkin(const FString& Name)
 	}
 	else
 	{
-		Base = SkinPicture(Folder, TextField(Flags, TEXT("texture")));
+		Base = GameplaySkinPicture(Folder, TextField(Flags, TEXT("texture")));
 	}
 	if (!Base) return nullptr;
 	const TCHAR* Blend = bGhost || Flag(Flags, TEXT("translucent")) ? TEXT("Translucent") : Flag(Flags, TEXT("masked")) ? TEXT("Masked") : TEXT("Opaque");
@@ -159,7 +209,7 @@ UMaterialInterface* UScctLevelStateSubsystem::GameplaySkin(const FString& Name)
 	auto* Material = UMaterialInstanceDynamic::Create(Parent, this);
 	Material->SetTextureParameterValue(TEXT("BaseColor"), Base);
 	Material->SetScalarParameterValue(TEXT("Emissive"), bUnlit ? 1.f : 0.f);
-	if (UTexture2D* Glow = SkinPicture(Folder, SelfLit))
+	if (UTexture2D* Glow = GameplaySkinPicture(Folder, SelfLit))
 	{
 		UTexture2D* Mask = bMaskedGlow ? SkinPicture(Folder, SelfLitMask) : nullptr;
 		if (!bMaskedGlow || Mask)

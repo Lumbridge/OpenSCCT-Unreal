@@ -2,9 +2,12 @@
 
 #include "Hud/ScctCrosshairShape.h"
 #include "Hud/ScctHudStyle.h"
+#include "Hud/ScctHudTextures.h"
 #include "OpenSCCT.h"
 #include "Hud/ScctPoisonOverlay.h"
 #include "Hud/ScctVisorEffects.h"
+#include "Play/ScctPlayerController.h"
+#include "Play/ScctViewPawn.h"
 
 // The blocks about the player: status, equipment, prompt, crosshair, scope and the washes over the picture.
 
@@ -14,8 +17,84 @@ using ScctHudElements::HudBox;
 
 namespace
 {
+	// Hud.mgm's A_Reticule. Positions are relative to its centre dot (61,65) on the 480-high canvas.
+	void PaintSoundDirection(FScctHudPainter& Painter, FVector2f Centre, float Scale, int32 Direction, float Age)
+	{
+		static const FLinearColor Amber = FLinearColor::FromSRGBColor(FColor(255, 182, 68));
+		// A one-pixel shadow separates the amber artwork from similarly coloured lights and walls.
+		const FVector2f ShadowOffset(Scale, Scale);
+		if (Direction == 2 || Direction == 3)
+		{
+			const bool bAbove = Direction == 2;
+			const FVector2f TopLeft = Centre + FVector2f(-9, bAbove ? -58 : 41) * Scale;
+			const FBox2f Box(TopLeft, TopLeft + FVector2f(17, 17) * Scale);
+			if (const auto* Atlas = UScctHudTextures::Find(TEXT("Hud"), TEXT("Interface")))
+			{
+				const FBox2f Region = bAbove ? Atlas->Region(81, 22, 97, 38) : Atlas->Region(99, 18, 115, 34);
+				Painter.Image(FBox2f(Box.Min + ShadowOffset, Box.Max + ShadowOffset), Atlas->Brush, Region,
+					FLinearColor::Black.CopyWithNewOpacity(0.55f));
+				Painter.Image(Box, Atlas->Brush, Region, Amber.CopyWithNewOpacity(150.0f / 255.0f));
+			}
+			else
+			{
+				const FVector2f Tip(Box.GetCenter().X, bAbove ? Box.Min.Y : Box.Max.Y);
+				const float Base = bAbove ? Box.Max.Y : Box.Min.Y;
+				Painter.Polyline({FVector2f(Box.Min.X, Base), Tip, FVector2f(Box.Max.X, Base)}, Amber, 2.0f * Scale);
+			}
+			return;
+		}
+
+		struct FWave
+		{
+			float Rotation;
+			FVector2f TopLeft[4];
+		};
+		static const FWave Waves[] = {
+			{-135, {{-27,-12}, {-34,-15}, {-43,-20}, {-52,-25}}}, // left
+			{  45, {{  2,-13}, {  2,-16}, {  1,-21}, {  2,-26}}}, // right
+			{ -45, {{-13,-28}, {-16,-34}, {-21,-43}, {-26,-52}}}, // ahead
+			{ 135, {{-13,  3}, {-16,  4}, {-21,  2}, {-26,  1}}}  // behind
+		};
+		const FWave& Wave = Waves[Direction > 1 ? Direction - 2 : Direction];
+		const auto* Ring = UScctHudTextures::Find(TEXT("Hud"), TEXT("ret_cercle"));
+		constexpr float Sides[] = {25, 31, 41, 51};
+		for (int32 Band = 0; Band < UE_ARRAY_COUNT(Sides); ++Band)
+		{
+			// Four waves peak three animation frames apart, repeating at frame 12 (10 fps).
+			const float Phase = FMath::Fmod(Age * 10.0f + 12.0f - Band * 3.0f, 12.0f);
+			const float Brightness = Phase < 9.0f ? 1.0f - Phase / 9.0f : (Phase - 9.0f) / 3.0f;
+			const FLinearColor Tint = Amber.CopyWithNewOpacity(FMath::Lerp(50.0f, 255.0f, Brightness) * (128.0f / (255.0f * 255.0f)));
+			if (Ring)
+			{
+				const FVector2f TopLeft = Centre + Wave.TopLeft[Band] * Scale;
+				const FBox2f Box(TopLeft, TopLeft + FVector2f(Sides[Band], Sides[Band]) * Scale);
+				const FBox2f Region(FVector2f(0.4f, 0), FVector2f(1, 0.6f));
+				Painter.RotatedImage(FBox2f(Box.Min + ShadowOffset, Box.Max + ShadowOffset), Ring->Brush, Region,
+					FLinearColor::Black.CopyWithNewOpacity(Tint.A), Wave.Rotation);
+				Painter.RotatedImage(Box, Ring->Brush, Region, Tint, Wave.Rotation);
+			}
+			else
+			{
+				const float Bearing = Wave.Rotation + 45.0f;
+				Painter.Arc(Centre, Sides[Band] * Scale, Bearing - 34.0f, Bearing + 34.0f, Tint, 2.0f * Scale);
+			}
+		}
+	}
+
 	constexpr float PanelWidth = 252.0f;
 	constexpr float PanelHeight = 72.0f;
+
+	void PaintHitMarker(FScctHudPainter& Painter, FVector2f Centre, float Strength, float Gap)
+	{
+		if (Strength <= 0.01f) return;
+		const float Out = Gap + 4.0f + (1.0f - Strength) * 5.0f;
+		const FVector2f Diagonals[] = { FVector2f(1.0f, 1.0f), FVector2f(-1.0f, 1.0f), FVector2f(1.0f, -1.0f), FVector2f(-1.0f, -1.0f) };
+		for (const FVector2f& Diagonal : Diagonals)
+		{
+			const FVector2f Unit = Diagonal * UE_INV_SQRT_2;
+			Painter.Line(Centre + Unit * Out, Centre + Unit * (Out + 7.0f), Fade(Danger(), Strength), 2.0f);
+		}
+	}
 
 	/** A round gauge: a faint three-quarter track, the lit share of it and a number in the middle. */
 	void Gauge(FScctHudPainter& Painter, const FVector2f& Centre, float Fraction, const FLinearColor& Colour, const FString& Value)
@@ -198,14 +277,25 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 	const FLinearColor Accent = ScctHudStyle::Accent(State.Side);
 
 	// The merc's aim point is given on the original's 640 x 480 canvas, stretched over the picture.
-	FVector2f Centre = Size * 0.5f;
+	const FVector2f FixedCentre = Size * 0.5f;
+	FVector2f Centre = FixedCentre;
 	if ((State.Flags & EScctHudFlags::SpotValid) != 0)
 	{
 		Centre = FVector2f(State.SpotX / 640.0f * Size.X, State.SpotY / 480.0f * Size.Y);
 	}
+	// Throw charge and target messages still follow the weapon through the body camera lens.
+	const AScctViewPawn* View = Model.MercView.Get();
+	const bool bMercCamera = View && View->UsesMercCamera();
+	if (bMercCamera)
+	{
+		Centre = View->ProjectMercAim(Centre, Size);
+	}
 
 	const bool bScoped = State.BinocularMode != 0;
-	const bool bMercReticle = (State.Flags & EScctHudFlags::ShowReticle) != 0 && !bScoped && State.Side == 1;
+	const AScctPlayerController* Player = View ? Cast<AScctPlayerController>(View->GetController()) : nullptr;
+	const bool bAiming = Player && Player->GetLookView().RifleAimBlend > 0.0f;
+	const bool bUsingScopeGlass = bAiming && Player->GetLookView().ScopeLensPower > 1.0f;
+	const bool bMercReticle = (State.Flags & EScctHudFlags::ShowReticle) != 0 && !bScoped && State.Side == 1 && !bMercCamera && !bUsingScopeGlass;
 	const ScctCrosshair::FSettings Crosshair = bMercReticle ? ScctCrosshair::Read() : ScctCrosshair::FSettings();
 	// Reloaded's classic_crosshair: the merc reticle 3 units left and 3 down on the original's 480-high canvas.
 	const FVector2f ReticleCentre = Centre + (bMercReticle && Crosshair.bClassicPosition ? FVector2f(-3.0f, 3.0f) * (Size.Y / 480.0f) : FVector2f::ZeroVector);
@@ -213,7 +303,7 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 	{
 		// The custom crosshair (Hud/ScctCrosshairShape.h): at the screen's centre, or on the aim point with follow
 		// recoil; a dynamic style opens as far as the original ticks would, and it is red after a hit like them.
-		const FVector2f FixedSpot = Size * 0.5f + (ReticleCentre - Centre);
+		const FVector2f FixedSpot = FixedCentre + (ReticleCentre - Centre);
 		const FVector2f At = Crosshair.bFollowRecoil ? ReticleCentre : FixedSpot;
 		const TArray<ScctCrosshair::FPiece> Pieces = ScctCrosshair::Build(Crosshair, At, Size.Y, Model.Spread * 24.0f, (State.Flags & EScctHudFlags::ReticleHit) != 0);
 		ScctCrosshair::Paint(Painter, Pieces);
@@ -238,16 +328,16 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 		Painter.Fill(FBox2f(TickCentre - FVector2f(2.0f), TickCentre + FVector2f(2.0f)), FLinearColor(0.0f, 0.0f, 0.0f, 0.5f), 2.0f);
 		Painter.Fill(FBox2f(TickCentre - FVector2f(1.0f), TickCentre + FVector2f(1.0f)), Colour, 1.0f);
 
-		if (Model.HitConfirm > 0.01f)
+	}
+	if (State.Side == 1 && Model.HitConfirm > 0.01f)
+	{
+		if (bAiming)
 		{
-			// The hit mark: short diagonals that fly outwards as they fade.
-			const float Out = Gap + 4.0f + (1.0f - Model.HitConfirm) * 5.0f;
-			const FVector2f Diagonals[] = { FVector2f(1.0f, 1.0f), FVector2f(-1.0f, 1.0f), FVector2f(1.0f, -1.0f), FVector2f(-1.0f, -1.0f) };
-			for (const FVector2f& Diagonal : Diagonals)
-			{
-				const FVector2f Unit = Diagonal * UE_INV_SQRT_2;
-				Painter.Line(TickCentre + Unit * Out, TickCentre + Unit * (Out + 7.0f), Fade(Danger(), Model.HitConfirm), 2.0f);
-			}
+			PaintHitMarker(Painter, Centre, Model.HitConfirm, 5.0f);
+		}
+		else if (bMercReticle && !Crosshair.bCustom)
+		{
+			PaintHitMarker(Painter, ReticleCentre, Model.HitConfirm, 5.0f + Model.Spread * 24.0f);
 		}
 	}
 
@@ -273,26 +363,12 @@ void ScctHudElements::PaintCrosshair(FScctHudPainter& Painter, const FScctHudMod
 		Painter.Text(FVector2f(Centre.X, TextY), Model.Text(State.ReticleMessageId), Font(EWeight::Regular, 11.0f), Text(), EAlign::Centre);
 	}
 
-	// The merc's sound arrows: a noise from that side. Left, right, top, bottom as arcs around the centre;
-	// ahead and behind as a second arc outside the top and the bottom one. The simulation lights the arrow times on any
-	// player's HUD (SHud.NotifyHotSound has no side test), but only the merc's page has the arrows (they are parts of its
-	// reticle, the Godot client's MercHudPage.DriveArrows): a spy gets none.
-	const bool bSoundArrows = State.Side == 1;
-	struct FArrow
+	// Bearings are relative to the listener. Free aim may move the barrel away from his view centre.
+	for (int32 Index = 0; State.Side == 1 && Index < ScctHudArrowCount; ++Index)
 	{
-		float Angle;
-		float Radius;
-	};
-	static const FArrow Arrows[ScctHudArrowCount] = {
-		{ 270.0f, 96.0f }, { 90.0f, 96.0f }, { 0.0f, 96.0f }, { 180.0f, 96.0f }, { 0.0f, 108.0f }, { 180.0f, 108.0f },
-	};
-	for (int32 Index = 0; bSoundArrows && Index < ScctHudArrowCount; ++Index)
-	{
-		const float Seconds = State.ArrowSeconds[Index];
-		if (Seconds > 0.0f)
+		if (State.ArrowSeconds[Index] > 0.0f)
 		{
-			const FArrow& Arrow = Arrows[Index];
-			Painter.Arc(Centre, Arrow.Radius, Arrow.Angle - 16.0f, Arrow.Angle + 16.0f, Fade(Accent, FMath::Min(Seconds * 2.0f, 1.0f)), 2.5f, 1.0f);
+			PaintSoundDirection(Painter, bMercCamera ? FixedCentre : ReticleCentre, Size.Y / 480.0f, Index, Model.SoundArrowAge[Index]);
 		}
 	}
 
@@ -319,16 +395,17 @@ void ScctHudElements::PaintScope(FScctHudPainter& Painter, const FScctHudModel& 
 		return;
 	}
 
+	const FVector2f Size = Painter.Size();
+	const FVector2f Centre = Size * 0.5f;
 	// The content's P_BinocularsDEF page (ScctHudElementsBinoculars.cpp); the drawing below stands in for it only
 	// when the content or the bridge has no such page.
 	if (Model.ScopeLayers.Num() > 0)
 	{
 		PaintScopePage(Painter, Model);
+		PaintHitMarker(Painter, Centre + Model.ScopeSightOffset * (Size.Y / 480.0f), Model.HitConfirm, 5.0f);
 		return;
 	}
 
-	const FVector2f Size = Painter.Size();
-	const FVector2f Centre = Size * 0.5f;
 	const FLinearColor Accent = ScctHudStyle::Accent(State.Side);
 	const bool bHit = (State.Flags & EScctHudFlags::BinocularHit) != 0;
 	const FLinearColor Sight = bHit ? Danger() : Fade(Text(), 0.8f);
@@ -342,6 +419,7 @@ void ScctHudElements::PaintScope(FScctHudPainter& Painter, const FScctHudModel& 
 		Painter.Line(Centre + Direction * (Radius - 12.0f), Centre + Direction * (Radius + 12.0f), Fade(Text(), 0.5f), 1.5f);
 	}
 	Painter.Fill(FBox2f(Centre - FVector2f(1.0f), Centre + FVector2f(1.0f)), Sight, 1.0f);
+	PaintHitMarker(Painter, Centre, Model.HitConfirm, 5.0f);
 
 	// The zoom step: the field of view goes 30, 20, 10 degrees.
 	const int32 Step = State.BinocularFov <= 12.0f ? 3 : (State.BinocularFov <= 22.0f ? 2 : 1);

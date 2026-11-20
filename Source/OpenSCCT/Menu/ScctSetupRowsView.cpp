@@ -1,6 +1,7 @@
 #include "Menu/ScctSetupRowsView.h"
 
 #include "Menu/ScctMenuStyle.h"
+#include "Menu/ScctSelectBox.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SWrapBox.h"
@@ -16,32 +17,26 @@ namespace
 		return Ui::Text(Ui::ToText(Shown), 12.5f, FSlateColor(Colour), ScctHudStyle::EWeight::Bold);
 	}
 
-	/** A number with - and + (editable), or its value. */
-	TSharedRef<SWidget> Stepper(const FString& Shown, int32 Value, int32 Min, int32 Max, float Width, const TFunction<void(int32)>& Set, bool bEditable)
+	TSharedRef<SWidget> NumberSelect(const FText& Label, const FString& Shown, int32 Value, int32 Min, int32 Max, float Width,
+		const TFunction<void(int32)>& Set, bool bEditable, bool bUnlimitedAtZero = false)
 	{
-		if (!bEditable)
+		if (!bEditable || Min >= Max)
 		{
 			return ShownValue(Shown);
 		}
-		return SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				SNew(SBox).IsEnabled(Value > Min)
-				[
-					Ui::Button(Ui::ToText(TEXT("-")), FOnClicked::CreateLambda([Set, Value] { Set(Value - 1); return FReply::Handled(); }))
-				]
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(SBox).WidthOverride(Width).HAlign(HAlign_Center)[ Ui::Text(Ui::ToText(Shown), 13.0f, FSlateColor(ScctHudStyle::Text()), ScctHudStyle::EWeight::Bold) ]
-			]
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				SNew(SBox).IsEnabled(Value < Max)
-				[
-					Ui::Button(Ui::ToText(TEXT("+")), FOnClicked::CreateLambda([Set, Value] { Set(Value + 1); return FReply::Handled(); }))
-				]
-			];
+		TArray<FString> Choices;
+		for (int32 Candidate = Min; Candidate <= Max; ++Candidate)
+		{
+			Choices.Add(Candidate == Value ? Shown : Candidate == 0 && bUnlimitedAtZero ? TEXT("Inf.") : FString::FromInt(Candidate));
+		}
+		return SNew(SBox).MinDesiredWidth(Width)
+		[
+			SNew(SScctSelectBox)
+			.Options(MoveTemp(Choices))
+			.FieldLabel(Label)
+			.Get([Value, Min] { return Value - Min; })
+			.Set([Set, Min](int32 Index) { Set(Min + Index); })
+		];
 	}
 
 	/** An on/off switch (editable), or its state. */
@@ -87,8 +82,11 @@ TSharedRef<SWidget> ScctSetupRowsView::Row(const FScctSetupRow* Found, const FOn
 	switch (Row.Kind)
 	{
 	case FScctSetupRow::EKind::Number:
-		return Line(Caption, Stepper(Row.Shown, Row.Value, Row.Min, Row.Max, 58.0f,
-			[OnEdit, Name = Row.Row](int32 Number) { OnEdit(FString::Printf(TEXT("%s %d"), *Name, Number)); }, bEditable));
+	{
+		const bool bUnlimitedAtZero = Row.Row == TEXT("TimeLimit") || Row.Row == TEXT("SpyLives") || Row.Row == TEXT("MercLives");
+		return Line(Caption, NumberSelect(Ui::ToText(Row.Caption), Row.Shown, Row.Value, Row.Min, Row.Max, 96.0f,
+			[OnEdit, Name = Row.Row](int32 Number) { OnEdit(FString::Printf(TEXT("%s %d"), *Name, Number)); }, bEditable, bUnlimitedAtZero));
+	}
 
 	case FScctSetupRow::EKind::Check:
 		return Line(Caption, Switch(Row.Value != 0, TEXT("YES"), TEXT("NO"), Ui::Accent(), 70.0f,
@@ -145,7 +143,7 @@ TSharedRef<SWidget> ScctSetupRowsView::Alternate(const TArray<FScctAlternateRow>
 				if (Kind == FScctAlternateRow::EKind::Slots)
 				{
 					Caption = TEXT("Number of gadgets");
-					Control = Stepper(FString::FromInt(Row.Value), Row.Value, 0, Row.Most, 34.0f,
+					Control = NumberSelect(Ui::ToText(Caption), FString::FromInt(Row.Value), Row.Value, 0, Row.Most, 64.0f,
 						[OnEditAlternate, RowSide = Row.Side](int32 Count) { OnEditAlternate(FString::Printf(TEXT("slots %d %d"), RowSide, Count)); }, bEditable);
 				}
 				else

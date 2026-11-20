@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 
 class AActor;
+class ULightComponent;
 class UPointLightComponent;
 class UWorld;
 
@@ -11,9 +12,8 @@ class UWorld;
  * surfaces are turned into when a match starts on it, for an imported level and a level built at run time alike.
  * Nothing here runs with scct.Light.Plan 0.
  *
- * THE WORLD is lit by the original's baked light, whole: the surface material gives off its colour times the baked
- * term (Tools/Import/scct_materials.py, "the lighting plan"), switched and tuned through the parameter collection
- * MPC_ScctLight, which this file sets. Bounced and sky light reach a surface only as far as the original lit it.
+ * Levels prepared for Lumen use the converted world fixtures for direct illumination and indirect light.
+ * Other imported levels use their stored surface lightmaps and vertex colours.
  *
  * THE MAP'S LIGHTS are classified by the simulation's light table (Runtime/ScctLightPlanApi.h, EScctLightClass):
  *   projector        a live, shadowed light on world and characters
@@ -49,6 +49,8 @@ class UWorld;
  */
 namespace FScctLightRules
 {
+	/** Selects the local merc camera's surface response for this world. */
+	void SetMercCameraSurfaces(UWorld& World, bool bEnabled);
 	/** A light's strength and falloff exponent in the engine's units. */
 	struct FFit
 	{
@@ -80,10 +82,13 @@ namespace FScctLightRules
 	 * any is bound (the level state multiplies the strength it finds then). NameOf gives a world name id's name.
 	 * False while the simulation's light table is not there yet (ask again; nothing but the surfaces is dressed then).
 	 */
-	bool DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr<AActor>>& TaggedLights, TFunctionRef<const FString&(int32)> NameOf);
+	bool DressLevel(UWorld* World, const TMap<FName, TWeakObjectPtr<AActor>>& TaggedLights, TFunctionRef<const FString&(int32)> NameOf, TSet<int32>& NativeFixtureIds);
 
 	/** Follows the console variables marked live; every frame of a match under the plan. */
 	void Tick(UWorld* World);
+
+	/** Only the fog can receive light from this dressed component. */
+	bool IsHazeOnly(const ULightComponent& Light);
 
 	/** A map light's colour for a display colour the simulation gives it mid-match (its strength stays as dressed). */
 	FLinearColor LightColour(const FLinearColor& Display);

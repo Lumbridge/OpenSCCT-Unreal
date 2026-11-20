@@ -36,6 +36,7 @@ class AScctPawnProxy;
 //   6. OnFrame(DeltaSeconds)         Raised only while a match plays. Everything above is this frame's: features
 //                                    read their per-frame bridge state here and may use FindProxy, GetPawns,
 //                                    GetView and GetSessionInfo.
+//   7. OnFramePresented              The equipment has posed its meshes. Effects can read this frame's sockets.
 //
 // A session changes (step 2 or 3, or StartMatch / StopMatch), always in this order:
 //   a. OnMatchStopped                if a match was playing. The old session may already be gone in the bridge
@@ -112,7 +113,7 @@ struct FScctLocalMatchOptions
 
 	/** The mercs carry OpenSCCT's sidearms. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
-	bool bSidearms = false;
+	bool bSidearms = true;
 
 	/**
 	 * Optional override for direct launches, in the simulation's numbering (EScctSidearm in Runtime/ScctPlayApi.h).
@@ -123,7 +124,7 @@ struct FScctLocalMatchOptions
 
 	/** The mercs may pick OpenSCCT's additional rifles. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
-	bool bRifles = false;
+	bool bRifles = true;
 
 	/** Practice rules: no time limit, unlimited lives, 5 s respawn. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
@@ -131,7 +132,7 @@ struct FScctLocalMatchOptions
 
 	/** Responsive smoke: smoke grenades fill the shared simulated cloud that shots and blasts push through. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
-	bool bResponsiveSmoke = false;
+	bool bResponsiveSmoke = true;
 	/** Visit a Map practice: unlimited gear, instant gear changes, and Switch Team in the in-match menu. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "OpenSCCT")
 	bool bUnlimitedGear = false;
@@ -257,6 +258,7 @@ public:
 	FScctMatchEvent OnMatchStopped;
 	FScctSessionChangedEvent OnSessionChanged;
 	FScctFrameEvent OnFrame;
+	FScctFrameEvent OnFramePresented;
 
 	/**
 	 * Bound by the one feature that owns the camera (the controls): called in step 4 with the bridge's view of
@@ -296,11 +298,12 @@ public:
 	 * A check's own camera (the light parity measurement, Test/ScctLightParitySubsystem.h): the view is held at
 	 * Camera exactly as at a -ScctCams tour point, until the next call or ClearCheckCamera.
 	 */
-	void SetCheckCamera(const FTransform& Camera)
+	void SetCheckCamera(const FTransform& Camera, float Fov = 75.0f)
 	{
 		TourCameras.Reset();
 		TourCameras.Add(Camera);
 		TourIndex = 0;
+		TourFov = Fov;
 		bAdvanceTour = false;
 		bTourView = true;
 	}
@@ -309,6 +312,7 @@ public:
 	{
 		TourCameras.Reset();
 		TourIndex = 0;
+		TourFov = 75.0f;
 		bTourView = false;
 	}
 
@@ -355,6 +359,7 @@ private:
 
 	/** -ScctCams="x,y,z,yaw,pitch;...": where each screenshot is taken from, instead of the player's view. */
 	TArray<FTransform> TourCameras;
+	float TourFov = 75.0f;
 	bool bTourView = false;
 
 	/** The tour point the camera is at; it moves on the tick after a screenshot was requested there. */

@@ -148,6 +148,16 @@ private:
 		Ps2Modem,   // the PS2 modem's destruction preset: two smokes and a flash, once (Play/ScctEffectsDevices.cpp)
 	};
 
+	struct FFlareVisual
+	{
+		TWeakObjectPtr<UStaticMeshComponent> Flame;
+		TWeakObjectPtr<UStaticMeshComponent> Cartridge;
+		FVector ContactOffset = FVector::ZeroVector;
+		FVector ContactNormal = FVector::ZeroVector;
+		FVector FlightDirection = FVector::ForwardVector;
+		bool bFlying = false;
+	};
+
 	struct FActorFx
 	{
 		int32 ClassId = 0;
@@ -161,6 +171,7 @@ private:
 		int32 Light = INDEX_NONE; // index into Lights
 		uint32 SeenFrame = 0;
 		bool bStandIn = false;
+		TUniquePtr<FFlareVisual> Flare;
 		FScctEffectSkins::FWorn Skins; // the run-time skins its mesh wears (the proximity mine's status light)
 
 		// One-shot emitters keep track of how many sprites they have already released.
@@ -329,6 +340,9 @@ private:
 	void EmitGrenadeCloud(FActorFx& Fx);
 	void EmitBarrelSmoke(FActorFx& Fx, float EmissionAge);
 	void EmitStickyGas(FActorFx& Fx, const FQuat& Facing);
+	FVector UpdateFlare(FActorFx& Fx, const FScctEffectActor& Record, const FTransform& Place,
+		const FVector& PreviousLocation, float DeltaSeconds, bool bHidden, bool bRestoring, bool bHistorical);
+	bool FindFlareContact(const FVector& Origin, FVector& Contact, FVector& Normal);
 
 	// The looks.
 	void SpawnMuzzleFlash(const FVector& At, const FVector& Direction, float Scale, bool bSticky, bool bSuppressed, bool bShotgun);
@@ -417,6 +431,13 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMesh> StandInMesh;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> FlareCard;
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> FlareMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> FlareCartridge;
+
 	/** The imported effect meshes by the bridge's mesh name id; null for one that was looked for and not found. */
 	UPROPERTY(Transient)
 	TMap<int32, TObjectPtr<UStaticMesh>> Meshes;
@@ -503,6 +524,7 @@ private:
 	TArray<FProjectionSlot> ProjectionSlots;
 	TMap<int32, int32> ProjectionBySerial;
 	TArray<FScctProjection> ProjectionBuffer;
+	int32 ProjectionCount = 0;
 	bool bProjectionsReported = false;
 	int32 NumProjections = 0;
 	int32 NumProjectionsUndrawn = 0;

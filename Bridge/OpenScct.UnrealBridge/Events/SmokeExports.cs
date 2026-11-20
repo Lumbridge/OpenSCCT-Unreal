@@ -221,6 +221,9 @@ public static unsafe class SmokeExports
 /// <summary>The responsive smoke of one session's client world, as the drawing reads it.</summary>
 public sealed class SmokeFeature
 {
+    // Mirrored by MaxHoles in ScctEffectsSmokeVolume.cpp. Older holes still contribute to the density texture.
+    private const int ShaderHoleLimit = 32;
+    private readonly List<ResponsiveSmokeCarve> _gridCarves = new();
     private readonly BridgeSession _bridge;
     private readonly List<KeyValuePair<SSmokeEmitter, ResponsiveSmokeField>> _live = new();
 
@@ -329,6 +332,20 @@ public sealed class SmokeFeature
         // Computed lazily from the cells; worked out here once so the parallel samples only read it.
         ResponsiveSmokeField cloud = found;
         _ = cloud.ShapeExtents;
+        ReadOnlyMemory<ushort> openAir = cloud.PrepareDensityGrid();
+        // Evaluate wide blasts in the grid. The material applies the newest narrow shot holes at their
+        // exact positions each frame, so neither grid filtering nor its update delay affects their refill.
+        _gridCarves.Clear();
+        int shaderHoles = 0;
+        for (int i = cloud.Carves.Count - 1; i >= 0; --i)
+        {
+            ResponsiveSmokeCarve carve = cloud.Carves[i];
+            float elapsed = now - carve.CreatedAt;
+            if (elapsed < 0f || elapsed >= carve.Hold + carve.Refill) continue;
+            if (carve.Kind == ResponsiveSmokeCarveKind.Bullet && shaderHoles++ < ShaderHoleLimit) continue;
+            _gridCarves.Add(carve);
+        }
+        _gridCarves.Reverse();
         FVector origin = cloud.Origin;
         float step = ResponsiveSmokeField.Dimension * ResponsiveSmokeField.CellSize / resolution;
         int n = resolution;
@@ -337,13 +354,14 @@ public sealed class SmokeFeature
         {
             Parallel.For(0, n, z =>
             {
+                ReadOnlySpan<ResponsiveSmokeCarve> gridCarves = CollectionsMarshal.AsSpan(_gridCarves);
                 for (int y = 0; y < n; y++)
                 {
                     int row = (z * n + y) * n;
                     for (int x = 0; x < n; x++)
                     {
                         var point = new FVector(origin.X + (x + 0.5f) * step, origin.Y + (y + 0.5f) * step, origin.Z + (z + 0.5f) * step);
-                        float density = cloud.SampleDensity(point, now);
+                        float density = cloud.SampleDensity(point, now, gridCarves, openAir.Span);
                         grid[row + x] = (byte)Math.Clamp((int)MathF.Round(density * 255f), 0, 255);
                     }
                 }
@@ -382,7 +400,7 @@ public sealed class SmokeFeature
             FVector origin = field.Origin;
             int count = 0;
             IReadOnlyList<ResponsiveSmokeCarve> carves = field.Carves;
-            for (int i = carves.Count - 1; i >= 0 && count < into.Length; i--)
+            for (int i = carves.Count - 1; i >= 0 && count < Math.Min(into.Length, ShaderHoleLimit); i--)
             {
                 ResponsiveSmokeCarve c = carves[i];
                 float elapsed = now - c.CreatedAt;

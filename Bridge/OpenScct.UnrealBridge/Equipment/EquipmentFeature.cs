@@ -144,7 +144,9 @@ public sealed class EquipmentFeature
         }
         else
         {
-            _merc.OnTick(_session.Session.LocalController);
+            var controls = Controls.ControlsFeature.Of(_session);
+            _merc.OnTick(_session.Session.LocalController, _ticks * (double)Sim.DeltaTime,
+                controls.MercWeaponView, controls.RifleAimBlend);
         }
     }
 
@@ -209,7 +211,9 @@ public sealed class EquipmentFeature
         // view model is drawn over it (the merc in his scope, the spy's eye view with the pistol put away).
         _eyePawn = pc.FreeCameraFlying == 0 && (!pc.bBehindView || play.View.SpyFirstPerson) ? local : null;
 
-        bool shown = _merc.Draw(pc, _frameDt, alpha, ref _firstPerson, Controls.ControlsFeature.Of(_session).RifleAimBlend);
+        var controls = Controls.ControlsFeature.Of(_session);
+        bool shown = _merc.Draw(pc, _frameDt, alpha, ref _firstPerson, controls.RifleAimBlend,
+            controls.MercWeaponView, _frameTime);
         if (!shown && play.View.SpyFirstPerson && pc is { SpyFirstPersonActive: true, FreeCameraFlying: 0 } && local is SPawnAttaque spy)
         {
             // The eye of the frame is the camera the controls handed Unreal (its sockets are traced from it).
@@ -353,9 +357,15 @@ public sealed class EquipmentFeature
             SWeaponDefense? weapon = OwnWeapon(merc);
             SWeaponDefenseDummy? dummy = weapon?.Dummy ?? merc.WeaponDummy;
             e.WeaponClass = EquipmentNames.ClassId((object?)weapon ?? dummy);
-            if ((NetworkPawnAttachments.For(pawn).WeaponInHand ?? dummy?.InHand) == true)
+            bool inHand = (NetworkPawnAttachments.For(pawn).WeaponInHand ?? dummy?.InHand) == true;
+            if (inHand)
             {
                 flags |= BridgeEquipmentFlags.WeaponInHand;
+            }
+            int attachments = e.ActiveWeaponSlot == 0 ? merc.PrimaryAttachmentMask : merc.SidearmWeapon?.AttachmentMask ?? 0;
+            if ((attachments & WeaponAttachments.Laser) != 0)
+            {
+                flags |= BridgeEquipmentFlags.RailLaser;
             }
 
             if (weapon is not null)
@@ -375,7 +385,7 @@ public sealed class EquipmentFeature
             }
 
             flags |= Torch(merc, ref e);
-            flags |= MercLaser(merc, isLocal, ref e);
+            if ((attachments & WeaponAttachments.Laser) != 0) flags |= MercLaser(merc, isLocal, inHand, ref e);
         }
         else if (pawn is SPawnAttaque spy)
         {
@@ -459,7 +469,7 @@ public sealed class EquipmentFeature
     /// camera). For every other merc the simulation places none, so it is worked out here as the Godot client does
     /// (<see cref="DistantBeam"/>).
     /// </summary>
-    private int MercLaser(SPAWNDEFENSE merc, bool isLocal, ref BridgeEquipment e)
+    private int MercLaser(SPAWNDEFENSE merc, bool isLocal, bool inHand, ref BridgeEquipment e)
     {
         if (merc.TorcheLaser is not { bDeleteMe: false, bInUse: true } laser)
         {
@@ -468,7 +478,11 @@ public sealed class EquipmentFeature
 
         int flags = BridgeEquipmentFlags.LaserOn;
         bool inCamera = merc.bUsingCamNetwork && merc.UsedObject is SCamNetwork;
-        if (merc.Health <= 0 || (merc.WeaponLoaded != 2 && !inCamera))
+        // The ladder camera puts the local gun away before WeaponLoaded changes. Observers have the
+        // replicated hand attachment and ladder physics instead of a first-person draw flag.
+        bool stowed = merc.WeaponLoaded != 2 || merc.Physics == EPhysics.PHYS_OnLadder ||
+            (isLocal ? merc.MyWeapon is SWeaponDefense { bDrawWeapon: false, InScope: false } : !inHand);
+        if (merc.Health <= 0 || (!inCamera && stowed))
         {
             // The simulation stops placing the beam here and keeps its last ends: they are stale, not a beam.
             return flags;
@@ -704,12 +718,14 @@ public sealed class EquipmentFeature
 
             Gear gear = GearOf(pawn);
             gear.PistolAnimated = false;
+            gear.WorldAction = null;
             NetworkPawnAttachments presentation = NetworkPawnAttachments.For(pawn);
             SWeaponDefense? selected = presentation.ActiveSlot == 0 ? pawn.PrimaryWeapon as SWeaponDefense : pawn.SidearmWeapon;
             if (pawn is SPAWNDEFENSE merc && (selected?.Dummy ?? merc.WeaponDummy) is { bDeleteMe: false } dummy && !dummy.Mesh.IsNone)
             {
                 Name bone = (presentation.WeaponInHand ?? dummy.InHand) ? s_boneRightHand : s_boneHolster;
-                Add(attachments, ref count, pawn, BridgeAttachmentSlot.Weapon, dummy, dummy.Mesh.Path!, bone, default, default, 0, false);
+                if (bone == s_boneRightHand) PoseWorldAction(gear, selected, dummy.Mesh.Path!);
+                Add(attachments, ref count, pawn, BridgeAttachmentSlot.Weapon, dummy, dummy.Mesh.Path!, bone, default, default, 0, gear.WorldAction is not null);
                 SWeaponDefense? holstered = presentation.ActiveSlot == 0 ? merc.SidearmWeapon : merc.PrimaryWeapon as SWeaponDefense;
                 if (holstered is { bDeleteMe: false, Dummy: { } carried } && !carried.Mesh.IsNone)
                 {
@@ -761,13 +777,45 @@ public sealed class EquipmentFeature
     /// </summary>
     public int GetAttachmentPose(int actorId, int slot, Span<BridgeBone> bones)
     {
-        if (slot != BridgeAttachmentSlot.Weapon || !_gear.TryGetValue(actorId, out Gear? gear) ||
-            !gear.PistolAnimated || gear.PistolApplier is not { } applier)
-        {
-            return 0;
-        }
+        if (slot != BridgeAttachmentSlot.Weapon || !_gear.TryGetValue(actorId, out Gear? gear)) return 0;
+        if (gear.WorldAction is { } action)
+            return Write(action.Positions, action.Rotations, action.Scales, bones);
+        return gear.PistolAnimated && gear.PistolApplier is { } applier
+            ? Write(applier.Positions, applier.Rotations, applier.Scales, bones) : 0;
+    }
 
-        return Write(applier.Positions, applier.Rotations, applier.Scales, bones);
+    private void PoseWorldAction(Gear gear, SWeaponDefense? selected, string asset)
+    {
+        if (Model(asset) is not { } model || model.Character.Find("Fire") is not { } fire ||
+            model.Character.Find("Reload") is not { } reload) return;
+        var clip = fire;
+        float phase;
+        // The owner's reload can jump directly to its ending after the final shell.
+        // Other clients have the replicated pawn's body animation and muzzle counter.
+        const int channel = SWeaponDefense.ACTIONCHANNEL;
+        if (selected is not null && selected.ViewAnim.IsAnimating(channel) &&
+            selected.ViewAnim.Sequence(channel) == selected.AFirstReloSt)
+        {
+            clip = reload;
+            var anim = selected.ViewAnim;
+            var data = anim.Data(channel);
+            phase = anim.Elapsed(channel, data) / Math.Max(.001f, data.Seconds(anim.Rate(channel)));
+        }
+        else if (gear.BodyReloads(gear.Pawn))
+        {
+            clip = reload;
+            phase = gear.Pawn.PawnAnim[SBasePawn.WEAPONCHANNEL].Frame;
+        }
+        else
+        {
+            if (gear.Shots == 0) return;
+            phase = (float)((_ticks - gear.LastShotTick + _session.Alpha) * Sim.DeltaTime / fire.Length);
+            if (phase >= 1f) return;
+        }
+        if (gear.WorldPose is not { } pose || !ReferenceEquals(pose.Model, model))
+            gear.WorldPose = pose = new(model);
+        model.Sample(clip, phase, pose.Positions, pose.Rotations, pose.Scales);
+        gear.WorldAction = pose;
     }
 
     /// <summary>
@@ -961,6 +1009,14 @@ public sealed class EquipmentFeature
         return positions.Length;
     }
 
+    private sealed class WorldActionPose(EquipmentModel model)
+    {
+        public EquipmentModel Model { get; } = model;
+        public Vector3[] Positions { get; } = new Vector3[model.Character.BoneCount];
+        public Quaternion[] Rotations { get; } = new Quaternion[model.Character.BoneCount];
+        public Vector3[] Scales { get; } = new Vector3[model.Character.BoneCount];
+    }
+
     /// <summary>What the bridge keeps for one pawn between ticks and frames.</summary>
     private sealed class Gear(SBasePawn pawn)
     {
@@ -999,6 +1055,8 @@ public sealed class EquipmentFeature
 
         /// <summary>The pistol was posed for the frame's attachments.</summary>
         public bool PistolAnimated { get; set; }
+        public WorldActionPose? WorldPose { get; set; }
+        public WorldActionPose? WorldAction { get; set; }
 
         /// <summary>
         /// Adds the shots fired since the last tick. The count read is the replicated muzzle count of the gun others

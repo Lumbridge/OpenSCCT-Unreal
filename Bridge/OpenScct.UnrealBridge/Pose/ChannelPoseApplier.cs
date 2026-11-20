@@ -330,7 +330,17 @@ public sealed class ChannelPoseApplier
     /// </summary>
     public void Apply(ReadOnlySpan<ChannelPose> channels, RootLock rootLock = RootLock.None, float lockClipFrame = 0f,
         Vector3? rootOffset = null, Quaternion? rootTurn = null)
+        => ApplyChannels(channels, rootLock, lockClipFrame, rootOffset, rootTurn, -1, -1);
+
+    /// <summary>Also measures the inverse rigid motion that one channel gives an anchor bone in skeleton space.
+    /// Applying this to the model removes that channel's whole-gun movement while keeping finger and part animation.</summary>
+    internal Xform ApplyWithAnchor(ReadOnlySpan<ChannelPose> channels, int channel, int anchorBone)
+        => ApplyChannels(channels, RootLock.None, 0f, null, null, channel, anchorBone);
+
+    private Xform ApplyChannels(ReadOnlySpan<ChannelPose> channels, RootLock rootLock, float lockClipFrame,
+        Vector3? rootOffset, Quaternion? rootTurn, int anchorChannel, int anchorBone)
     {
+        Xform correction = Xform.Identity;
         bool hasRootLock = rootLock != RootLock.None && RootBone >= 0 && channels.Length > 0 && channels[0].Clip is not null;
         if (_hadRootLock && !hasRootLock && RootBone >= 0)
         {
@@ -360,7 +370,13 @@ public sealed class ChannelPoseApplier
 
             Mark(c == 0 ? -1 : ch.StartBone);
             float step = TweenStep(c, ch);
+            bool measure = c == anchorChannel && anchorBone >= 0;
+            Xform before = measure ? BoneTransform(anchorBone) : default;
             ApplyClip(ch, alpha, step);
+            if (measure)
+            {
+                correction = before * BoneTransform(anchorBone).AffineInverse();
+            }
         }
 
         // Tweens start from the blended animation pose, before the per-frame corrections below. Caching
@@ -394,6 +410,15 @@ public sealed class ChannelPoseApplier
         }
 
         _hasFrom = true;
+        return correction;
+    }
+
+    private Xform BoneTransform(int bone)
+    {
+        Xform pose = Xform.Identity;
+        for (; bone >= 0; bone = _parent[bone])
+            pose = Xform.FromTrs(_pos[bone], _rot[bone], _scale[bone]) * pose;
+        return pose;
     }
 
     /// <summary>

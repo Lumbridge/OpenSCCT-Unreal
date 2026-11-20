@@ -1,0 +1,75 @@
+{
+  "map": "MounE",
+  "textures": {
+    "SGameplayObjectsTex_FX_hacked.png": {
+      "sha256": "e0a600268e4e838cbb2d645ad9b64530a4ccac386ae25907aad6d9f68271b733",
+      "size": [
+        64,
+        64
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "material": "SGameplayObjectsTex.Neutralisation.FX_hacked",
+          "field": "texture"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_FX_locked.png": {
+      "sha256": "002aab13e5f4718d4692faace6a780286c83fe4e7e17be01268d918ed91afa52",
+      "size": [
+        64,
+        64
+      ],
+      "uses": [
+        {
+          "role": "Self-illumination image",
+          "material": "SGameplayObjectsTex.Neutralisation.FX_neutre_locked_heat",
+          "field": "self_illum"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_FX_neutre_hack_heat__comb.png": {
+      "sha256": "addb45dd83505ed072db8e7f849178abc3f4cbf669cb3619ec97634418656d4f",
+      "size": [
+        64,
+        64
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "material": "SGameplayObjectsTex.Neutralisation.FX_neutre_hack_heat",
+          "field": "texture"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_FX_neutre_locked_heat.png": {
+      "sha256": "002aab13e5f4718d4692faace6a780286c83fe4e7e17be01268d918ed91afa52",
+      "size": [
+        64,
+        64
+      ],
+      "uses": [
+        {
+          "role": "base colour",
+          "material": "SGameplayObjectsTex.Neutralisation.FX_neutre_locked_heat",
+          "field": "texture"
+        }
+      ]
+    },
+    "SGameplayObjectsTex_fx_hack_comb.png": {
+      "sha256": "2497d07bc7b66257378716db85a5e2536288aa7f04d522413d706c1ea35d35e7",
+      "size": [
+        64,
+        64
+      ],
+      "uses": [
+        {
+          "role": "Self-illumination image",
+          "material": "SGameplayObjectsTex.Neutralisation.FX_neutre_hack_heat",
+          "field": "self_illum"
+        }
+      ]
+    }
+  }
+}

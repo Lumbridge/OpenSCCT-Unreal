@@ -11,6 +11,8 @@
 //                      applicable" when the bridge has no voice table
 //   cloak              the camo suit held fully on puts the cloak material at Amount 1 on every slot of the spy's body
 //                      and takes its shadow; let go, the body's own materials are back
+//                      -ScctCloakRoom217=dark|lit starts a spy at the chosen Room 217 spot in MounE and, with
+//                      -ScctFeatureShots, captures cloak off and on from the same camera in plain sight
 //   lasers             detector beams are streaks only for the beams the map shows the naked eye, and in thermal and EMF
 //                      every beam is a custom-depth-only cylinder and no streak is left
 //   vision             each vision mode held in turn has its post-process material in the goggles' volume at Amount 1
@@ -21,11 +23,14 @@
 
 #include "Components/ExponentialHeightFogComponent.h"
 #include "Components/PoseableMeshComponent.h"
+#include "Engine/Engine.h"
 #include "Engine/ExponentialHeightFog.h"
 #include "Engine/GameInstance.h"
 #include "Engine/PostProcessVolume.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Engine/StaticMeshActor.h"
+#include "Components/StaticMeshComponent.h"
 #include "Hud/ScctHudLayout.h"
 #include "Hud/ScctHudModel.h"
 #include "Hud/ScctHudSubsystem.h"
@@ -44,6 +49,7 @@
 #include "Runtime/ScctVoiceApi.h"
 #include "Settings/ScctSettings.h"
 #include "Test/Features/ScctFeatureKit.h"
+#include "Test/ScctFeatureTestApi.h"
 #include "Voice/ScctVoiceSubsystem.h"
 
 namespace ScctPresentationFeatureLocal
@@ -65,7 +71,7 @@ namespace ScctPresentationFeatureLocal
 				}
 				bOpened = true;
 				FString Error;
-				if (!Stage.Open(Context, FScctTestContext::GetTestMap(TEXT("AquaE")), GetOptions(), Error))
+				if (!OpenStage(Context, Error))
 				{
 					return FScctTestResult::Fail(Error);
 				}
@@ -85,6 +91,10 @@ namespace ScctPresentationFeatureLocal
 
 	protected:
 		virtual FString GetOptions() const { return TEXT("?Side=spy?Bots=0"); }
+		virtual bool OpenStage(FScctTestContext& Context, FString& Error)
+		{
+			return Stage.Open(Context, FScctTestContext::GetTestMap(TEXT("AquaE")), GetOptions(), Error);
+		}
 		virtual FScctTestResult Play(FScctTestContext& Context) = 0;
 		/** Puts back what the check held (a forced mode, a key). */
 		virtual void Restore(FScctTestContext& Context) {}
@@ -474,47 +484,192 @@ namespace ScctPresentationFeatureLocal
 		return Read;
 	}
 
+	struct FRoom217CloakFixture
+	{
+		const TCHAR* Variant;
+		FVector Feet;
+		FVector Camera;
+		FRotator ViewRotation;
+	};
+
+	// Volume335's world bounds are (96,480,160)..(992,928,608). The dark camera matches the cabinet glass in
+	// the reported shot; the lit spot is inside the room near actor light Light364 at the partition opening.
+	const FRoom217CloakFixture Room217CloakFixtures[] = {
+		{ TEXT("dark"), FVector(150.0, 833.0, 160.0), FVector(353.04, 718.73, 275.06), FRotator(-7.11, 155.41, 0.0) },
+		{ TEXT("lit"), FVector(520.0, 530.0, 160.0), FVector(805.0, 530.0, 273.0), FRotator(-1.0, 180.0, 0.0) },
+	};
+
+	constexpr float Room217CameraFov = 72.03f; // 88.2° horizontal at 16:9, measured from the cabinet's four corners.
+	constexpr float Room217SpawnTolerance = 32.0f;
+
 	class FCloakTest : public FPresentationTest
 	{
 	protected:
+		virtual bool OpenStage(FScctTestContext& Context, FString& Error) override
+		{
+			FString Variant;
+			if (!FParse::Value(FCommandLine::Get(), TEXT("ScctCloakRoom217="), Variant))
+			{
+				return FPresentationTest::OpenStage(Context, Error);
+			}
+			for (const FRoom217CloakFixture& Candidate : Room217CloakFixtures)
+			{
+				if (Variant.Equals(Candidate.Variant, ESearchCase::IgnoreCase))
+				{
+					Fixture = &Candidate;
+					break;
+				}
+			}
+			if (Fixture == nullptr)
+			{
+				Error = TEXT("-ScctCloakRoom217 must be dark or lit");
+				return false;
+			}
+			const FScctFeatureTestApi* Api = ScctFeature<FScctFeatureTestApi>(&Error);
+			if (Api == nullptr)
+			{
+				return false;
+			}
+			if (!Api->SetNextStart(Fixture->Feet.X, Fixture->Feet.Y, Fixture->Feet.Z + 79.0f, 0))
+			{
+				Error = TEXT("the bridge could not set the Room 217 spawn");
+				return false;
+			}
+			if (Stage.Open(Context, TEXT("MounE"), GetOptions(), Error))
+			{
+				return true;
+			}
+			Api->ClearNextStart();
+			return false;
+		}
+
 		virtual FScctTestResult Play(FScctTestContext& Context) override
 		{
 			UWorld* World = Context.GetWorld();
 			UScctEquipmentSubsystem* Equipment = World != nullptr ? World->GetSubsystem<UScctEquipmentSubsystem>() : nullptr;
-			const UScctSessionSubsystem* Session = Context.GetSession();
+			UScctSessionSubsystem* Session = Context.GetSession();
 			const AScctPawnProxy* Proxy = Session != nullptr ? Session->FindLocalProxy() : nullptr;
 			const UMeshComponent* Body = Proxy != nullptr ? Proxy->GetBodyMesh() : nullptr;
 			if (Equipment == nullptr || Body == nullptr)
 			{
 				return FScctTestResult::Fail(TEXT("the spy has no drawn body or the world no equipment subsystem"));
 			}
-			if (Phase == 0)
+			switch (Phase)
 			{
+			case SetUp:
+				if (Fixture != nullptr)
+				{
+					Phase = CaptureOff;
+					return SetUpRoom217(Context, *Session, *Equipment);
+				}
 				Before = ReadCloak(*Body);
+				[[fallthrough]];
+			case Enable:
+				// Leave the previous state in place until the viewport has drawn its screenshot.
+				if (Fixture != nullptr && !Waited(Context, 0.0))
+				{
+					return FScctTestResult::Running();
+				}
 				if (!ScctFeatureKit::IsBroken())
 				{
 					Equipment->ForceCloakForCheck(1.0f);
 				}
-				Phase = 1;
+				Phase = CaptureOn;
+				return FScctTestResult::Running();
+			case CaptureOff:
+			{
+				if (!Waited(Context, 2.0))
+				{
+					return FScctTestResult::Running();
+				}
+				const UScctVisionSubsystem* Vision = UScctVisionSubsystem::Find(World);
+				if (Vision == nullptr || Vision->GetVisionMode() != 0 || !Body->IsVisible() || Body->bHiddenInGame)
+				{
+					return FScctTestResult::Fail(TEXT("Room 217 needs the spy drawn from the plain-sight camera"));
+				}
+				Before = ReadCloak(*Body);
+				ScctFeatureKit::Shot(GetName(), FString::Printf(TEXT("room-217-%s-cloak-off"), Fixture->Variant));
+				Phase = Enable;
 				return FScctTestResult::Running();
 			}
-			if (Phase == 1)
-			{
+			case CaptureOn:
 				if (!Waited(Context, 1.0))
 				{
 					return FScctTestResult::Running();
 				}
-				ScctFeatureKit::Shot(GetName(), TEXT("cloaked"));
+				ScctFeatureKit::Shot(GetName(), Fixture != nullptr
+					? FString::Printf(TEXT("room-217-%s-cloak-on"), Fixture->Variant) : TEXT("cloaked"));
 				On = ReadCloak(*Body);
+				Phase = Release;
+				if (Fixture != nullptr)
+				{
+					return FScctTestResult::Running();
+				}
+				[[fallthrough]];
+			case Release:
+				if (Fixture != nullptr && !Waited(Context, 0.0))
+				{
+					return FScctTestResult::Running();
+				}
 				Equipment->ForceCloakForCheck(-1.0f);
-				Phase = 2;
+				Phase = VerifyRestored;
 				return FScctTestResult::Running();
+			case VerifyRestored:
+				return Waited(Context, 1.0) ? CheckRestored(*Body) : FScctTestResult::Running();
 			}
-			if (!Waited(Context, 1.0))
+			return FScctTestResult::Fail(TEXT("unknown cloak test phase"));
+		}
+
+		virtual void Restore(FScctTestContext& Context) override
+		{
+			UWorld* World = Context.GetWorld();
+			if (UScctEquipmentSubsystem* Equipment = World != nullptr ? World->GetSubsystem<UScctEquipmentSubsystem>() : nullptr)
 			{
-				return FScctTestResult::Running();
+				Equipment->ForceCloakForCheck(-1.0f);
 			}
-			const FCloakRead After = ReadCloak(*Body);
+			if (bFixtureViewHeld)
+			{
+				if (UScctVisionSubsystem* Vision = World != nullptr ? World->GetSubsystem<UScctVisionSubsystem>() : nullptr)
+				{
+					Vision->ForceModeForCheck(INDEX_NONE);
+				}
+				if (UScctSessionSubsystem* Session = Context.GetSession())
+				{
+					Session->ClearCheckCamera();
+				}
+				bFixtureViewHeld = false;
+			}
+		}
+
+	private:
+		enum ECloakPhase { SetUp, CaptureOff, Enable, CaptureOn, Release, VerifyRestored };
+
+		FScctTestResult SetUpRoom217(FScctTestContext& Context, UScctSessionSubsystem& Session, UScctEquipmentSubsystem& Equipment)
+		{
+			const FScctBridgePawn* Pawn = ScctFeatureKit::GetLocalPawn(Context);
+			UScctVisionSubsystem* Vision = Context.GetWorld()->GetSubsystem<UScctVisionSubsystem>();
+			if (Pawn == nullptr || Vision == nullptr)
+			{
+				return FScctTestResult::Fail(TEXT("Room 217 needs the local spy and the vision subsystem"));
+			}
+			const FVector Feet(Pawn->X, Pawn->Y, Pawn->Z - Pawn->CollisionHeight);
+			if (FVector::Dist(Feet, Fixture->Feet) > Room217SpawnTolerance)
+			{
+				return FScctTestResult::Fail(FString::Printf(TEXT("Room 217 %s: spy feet at %s, expected %s"),
+					Fixture->Variant, *Feet.ToCompactString(), *Fixture->Feet.ToCompactString()));
+			}
+			Session.SetCheckCamera(FTransform(Fixture->ViewRotation, Fixture->Camera), Room217CameraFov);
+			Vision->ForceModeForCheck(0);
+			Equipment.ForceCloakForCheck(0.0f);
+			bFixtureViewHeld = true;
+			ScctFeatureKit::Note(GetName(), FString::Printf(TEXT("Room 217 %s: spy feet at %s; fixed plain-sight camera at %s"),
+				Fixture->Variant, *Feet.ToCompactString(), *Fixture->Camera.ToCompactString()));
+			return FScctTestResult::Running();
+		}
+
+		FScctTestResult CheckRestored(const UMeshComponent& Body) const
+		{
+			const FCloakRead After = ReadCloak(Body);
 			const FString Figures = FString::Printf(TEXT("body of %d material slots: %d cloaked before; held on, %d cloaked at Amount %.2f, shadow %s; let go, %d cloaked, shadow %s"),
 				Before.Slots, Before.CloakSlots, On.CloakSlots, On.CloakSlots > 0 ? On.LeastAmount : 0.0f, On.bCastShadow ? TEXT("cast") : TEXT("gone"), After.CloakSlots, After.bCastShadow ? TEXT("cast") : TEXT("gone"));
 			ScctFeatureKit::Note(GetName(), Figures);
@@ -550,16 +705,8 @@ namespace ScctPresentationFeatureLocal
 			return Verdict(Problems, Figures);
 		}
 
-		virtual void Restore(FScctTestContext& Context) override
-		{
-			UWorld* World = Context.GetWorld();
-			if (UScctEquipmentSubsystem* Equipment = World != nullptr ? World->GetSubsystem<UScctEquipmentSubsystem>() : nullptr)
-			{
-				Equipment->ForceCloakForCheck(-1.0f);
-			}
-		}
-
-	private:
+		const FRoom217CloakFixture* Fixture = nullptr;
+		bool bFixtureViewHeld = false;
 		FCloakRead Before;
 		FCloakRead On;
 	};
@@ -603,6 +750,17 @@ namespace ScctPresentationFeatureLocal
 				bHeld = true;
 				// -ScctFeatureBreak holds plain sight throughout.
 				Vision->ForceModeForCheck(ScctFeatureKit::IsBroken() ? 0 : Mode);
+				if (Mode == 38)
+				{
+					for (TActorIterator<AStaticMeshActor> It(Context.GetWorld()); It; ++It)
+					{
+						UStaticMeshComponent* Mesh = It->GetStaticMeshComponent();
+						if (Mesh && Mesh->bRenderInMainPass && Mesh->bRenderInDepthPass)
+						{
+							OrdinarySurfaces.Add(Mesh);
+						}
+					}
+				}
 				if (Mode == 0)
 				{
 					// Sample the first frame out of EMF. By the settled-mode checks below the old
@@ -610,11 +768,31 @@ namespace ScctPresentationFeatureLocal
 					const UScctSessionSubsystem* Session = Context.GetWorld()->GetSubsystem<UScctSessionSubsystem>();
 					const AScctPawnProxy* Spy = Session ? Session->FindLocalProxy() : nullptr;
 					const UPoseableMeshComponent* Body = Spy ? Spy->GetBodyMesh() : nullptr;
-					if (!Body || Body->bRenderInMainPass)
+					if (!Body || Body->bRenderInMainPass || !Vision->ShouldHideCoronasAndSky())
 					{
 						return FScctTestResult::Fail(TEXT("the idle spy was not hidden from the main pass in EMF"));
 					}
+					OrdinarySurfaces.RemoveAll([](const TWeakObjectPtr<UStaticMeshComponent>& Mesh)
+					{
+						return !Mesh.IsValid() || Mesh->bRenderInMainPass;
+					});
+					if (OrdinarySurfaces.IsEmpty())
+					{
+						return FScctTestResult::Fail(TEXT("no level surfaces became transparent in the EMF fixture"));
+					}
 					Vision->Present(Mode, 1.0f / 60.0f);
+					for (const auto& Mesh : OrdinarySurfaces)
+					{
+						if (!Mesh->bRenderInMainPass || !Mesh->bRenderInDepthPass)
+						{
+							return FScctTestResult::Fail(FString::Printf(TEXT("%s still transparent on the first frame after EMF"), *Mesh->GetPathName()));
+						}
+					}
+					ScctFeatureKit::Note(GetName(), FString::Printf(TEXT("%d EMF surfaces restored on frame one"), OrdinarySurfaces.Num()));
+					if (Vision->ShouldHideCoronasAndSky())
+					{
+					    return FScctTestResult::Fail(TEXT("EMF still hides the level backdrop on the first frame of normal sight"));
+					}
 					if (!Body->bRenderInMainPass || !Body->bRenderInDepthPass || Vision->GetModeCheck(3).Amount <= 0.0f)
 					{
 						return FScctTestResult::Fail(TEXT("the spy's normal colour and depth did not return on the first frame of EMF fade-out"));
@@ -675,6 +853,7 @@ namespace ScctPresentationFeatureLocal
 		}
 
 	private:
+		TArray<TWeakObjectPtr<UStaticMeshComponent>> OrdinarySurfaces;
 		bool bHeld = false;
 		TArray<FString> Problems;
 		TArray<FString> Report;

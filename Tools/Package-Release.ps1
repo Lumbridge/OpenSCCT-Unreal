@@ -63,9 +63,8 @@ The output folder. Default Saved/Release/<version>.
 The Unreal Engine 5.8 root (the folder holding Engine\). Default: UE_ROOT, else F:\UE_5.8.
 
 .PARAMETER OpenScct
-The OpenSCCT checkout the bridge is built against. Its commit decides which servers the game can join (the protocol
-hash is computed from OpenSCCT's code), so build from the commit the live servers run. Default: ..\OSC-unreal-bridge
-next to this repo (the bridge project's own default).
+The OpenSCCT checkout the bridge is built against. It must retain the baseline recorded in Bridge/OpenScct.revision.
+Its protocol hash decides which servers the game can join. Default: ..\OSC-unreal-bridge next to this repo.
 
 .PARAMETER Repository
 The GitHub repository (owner/name) the release is published to. Players' launchers read its releases without a
@@ -203,6 +202,10 @@ $rifleMeshes = [ordered]@{
     galil = @('galil'); galil_first = @('galil_first', 'galil_parts')
     m4a1s = @('m4a1s', 'MicroRedDot'); m4a1s_first = @('m4a1s_first', 'm4a1s_parts', 'Object_83')
 }
+foreach ($model in 'compactsmg', 'pumpshotgun', 'boltrifle', 'designatedmarksman') {
+    $rifleMeshes[$model] = @($model)
+    $rifleMeshes["${model}_first"] = @("${model}_first", "${model}_parts")
+}
 $rifleFolder = 'Content/Imported/Chars/OpenScctRifles'
 $rifleAssets = @("$rifleFolder/Materials/M_RifleGltf.uasset") + @(foreach ($model in $rifleMeshes.Keys) {
     foreach ($part in $rifleMeshes[$model]) { "$rifleFolder/$model/SkeletalMeshes/$part.uasset" }
@@ -250,6 +253,11 @@ if (-not $OpenScct) { $OpenScct = Join-Path (Split-Path -Parent $repo) 'OSC-unre
 $OpenScct = [IO.Path]::GetFullPath($OpenScct)
 if (-not (Test-Path -LiteralPath (Join-Path $OpenScct 'src/OpenScct.Server/OpenScct.Server.csproj'))) { Fail "no OpenSCCT checkout at $OpenScct (pass -OpenScct)" }
 $openScctCommit = ([string](git -C $OpenScct rev-parse HEAD)).Trim()
+$openScctBaseline = (Get-Content -LiteralPath (Join-Path $repo 'Bridge/OpenScct.revision') -Raw).Trim()
+git -C $OpenScct merge-base --is-ancestor $openScctBaseline $openScctCommit 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Warn-Or-Fail "the OpenSCCT checkout $OpenScct is at $openScctCommit and is missing required baseline $openScctBaseline. Pass -OpenScct with a checkout that includes it."
+}
 $openScctDescribe = ([string](git -C $OpenScct describe --tags --always HEAD 2>$null)).Trim()
 $openScctProps = Get-Content -LiteralPath (Join-Path $OpenScct 'Directory.Build.props') -Raw
 $openScctVersion = [regex]::Match($openScctProps, '<VersionPrefix>([^<]+)</VersionPrefix>').Groups[1].Value
@@ -492,6 +500,7 @@ if (-not $NoDotNet) {
 Write-Text (Join-Path $folder 'README.txt') ($readme -join "`n")
 # The repository's list of the third-party components a release ships, with their licences.
 Copy-Item -LiteralPath (Join-Path $repo 'THIRD-PARTY-NOTICES.md') -Destination $folder
+& (Join-Path $PSScriptRoot 'Copy-GraphicsLicences.ps1') -Package $folder -Engine $Engine
 
 # --- version.json --------------------------------------------------------------------------------------------------
 $entries = @(Get-ChildItem -LiteralPath $folder -Force | ForEach-Object Name) + 'version.json' | Sort-Object -Unique

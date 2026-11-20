@@ -52,6 +52,7 @@ UTexture2D* UScctEffectsSubsystem::FindProjectionTexture(int32 AssetId)
 
 void UScctEffectsSubsystem::ResetProjections()
 {
+	ProjectionCount = 0;
 	if (NumProjections > 0 || NumProjectionsUndrawn > 0)
 	{
 		UE_LOG(LogOpenSCCT, Log, TEXT("Effects: %d abandoned projections drawn this match, %d not drawn (no texture or no free decal)"), NumProjections, NumProjectionsUndrawn);
@@ -107,8 +108,8 @@ void UScctEffectsSubsystem::UpdateProjections()
 
 	const UScctVisionSubsystem* ProjectionVision = UScctVisionSubsystem::Find(GetWorld());
 	const bool bHeatOrEmf = ProjectionVision != nullptr && ProjectionVision->IsHeatOrEmf();
-	const int32 Count = Projections->GetProjections(ProjectionBuffer.GetData(), ProjectionBuffer.Num());
-	for (int32 Index = 0; Index < Count; ++Index)
+	ProjectionCount = Projections->GetProjections(ProjectionBuffer.GetData(), ProjectionBuffer.Num());
+	for (int32 Index = 0; Index < ProjectionCount; ++Index)
 	{
 		const FScctProjection& Record = ProjectionBuffer[Index];
 		int32 SlotIndex = INDEX_NONE;
@@ -212,10 +213,10 @@ void UScctEffectsSubsystem::UpdateProjections()
 		Slot = FProjectionSlot();
 	}
 	// Undrawn serials are forgotten once the bridge no longer lists them.
-	if (ProjectionBySerial.Num() > Count)
+	if (ProjectionBySerial.Num() > ProjectionCount)
 	{
 		TSet<int32> Listed;
-		for (int32 Index = 0; Index < Count; ++Index)
+		for (int32 Index = 0; Index < ProjectionCount; ++Index)
 		{
 			Listed.Add(ProjectionBuffer[Index].Serial);
 		}

@@ -76,10 +76,12 @@ public sealed class PadMapper
     public bool Active { get; private set; }
 
     /// <summary>One rendered frame of the controller's state.</summary>
-    public void Frame(ReadOnlySpan<byte> keys, Vector2 leftStick, Vector2 rightStick, float leftTrigger, float rightTrigger,
-        ControlSettings settings, Dictionary<string, string> buttons, bool merc, bool play, double delta)
+    public bool Frame(ReadOnlySpan<byte> keys, Vector2 leftStick, Vector2 rightStick, float leftTrigger, float rightTrigger,
+        ControlSettings settings, Dictionary<string, string> buttons, bool merc, bool play, double delta,
+        out Vector2 lookCounts, bool allowMercFreeLook = false, bool reserveReleaseFrame = false)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        lookCounts = Vector2.Zero;
         ArgumentNullException.ThrowIfNull(buttons);
         PadTuning pad = settings.Pad;
         LookSettings swaps = settings.LookOf(merc, pad: true);
@@ -99,7 +101,7 @@ public sealed class PadMapper
             ReleaseAll();
             _buttonsState.Reset(_down);
             _suppressButtonsUntilRelease = true;
-            return;
+            return play && allowMercFreeLook && (reserveReleaseFrame || _keys.MercFreeLookHeld);
         }
 
         if (!ReferenceEquals(_padFor, buttons) || merc != _wasMerc || !ReferenceEquals(_settingsFor, settings))
@@ -182,7 +184,8 @@ public sealed class PadMapper
             _buttonsState.Reset(_down);
         }
 
-        if (pad.Aim)
+        bool freeLook = allowMercFreeLook && (reserveReleaseFrame || _keys.MercFreeLookHeld);
+        if (pad.Aim && !freeLook)
         {
             Vector2 look = Radial(new Vector2(rightStick.X, -rightStick.Y), pad.DeadzoneRight);
             if (look != Vector2.Zero)
@@ -194,11 +197,11 @@ public sealed class PadMapper
                 string response = !merc && _session.LocalPawn?.WeaponLoaded == 2 ? group.GunLookResponse : group.LookResponse;
                 bool camera = _session.LocalController is { } viewer && MouseLook.InCameraView(viewer);
                 Vector2 shaped = Shape(look, response) * clutch * CurveGain(response, camera, merc);
-                _session.Input.MouseX += shaped.X * k * h;
-                _session.Input.MouseY -= shaped.Y * k * v * pad.VerticalScale;
+                lookCounts = new Vector2(shaped.X * k * h, -shaped.Y * k * v * pad.VerticalScale);
                 Active = true;
             }
         }
+        return freeLook;
     }
 
     /// <summary>Lets go of everything the controller holds (play interrupted, the controller switched off).</summary>
@@ -233,8 +236,9 @@ public sealed class PadMapper
             IsSpy: !merc,
             WeaponDrawn: pawn?.WeaponLoaded == 2,
             Scoped: pc?.bBinocularVision == true,
-            CameraTransition: pc?.IsInState("s_UseObject_StickyCam_SmoothToPosition") == true);
-        IReadOnlyList<PadBindingEvent> events = _actionState.Update(_buttonsState.Update(buttons, _down, delta), delta, context);
+            CameraTransition: pc?.IsInState("s_UseObject_StickyCam_SmoothToPosition") == true,
+            MercWeaponView: _keys.MercControls);
+        IReadOnlyList<PadBindingEvent> events = _actionState.Update(_buttonsState.Update(buttons, _down, delta, context.MercWeaponView), delta, context);
         for (int i = 0; i < events.Count; i++)
         {
             PadBindingEvent ev = events[i];

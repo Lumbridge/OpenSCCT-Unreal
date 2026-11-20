@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using OpenScct.Core.Engine;
 using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
@@ -32,10 +33,11 @@ void Check(bool ok, string what)
 unsafe
 {
     Console.WriteLine("Sizes:");
-    Check(sizeof(GearMenuApi) == 96, $"GearMenuApi {sizeof(GearMenuApi)}");
+    Check(sizeof(GearMenuApi) == 112, $"GearMenuApi {sizeof(GearMenuApi)}");
     Check(sizeof(BridgeGearMenuState) == 1912, $"BridgeGearMenuState {sizeof(BridgeGearMenuState)}");
     Check(sizeof(BridgeGearOption) == 328, $"BridgeGearOption {sizeof(BridgeGearOption)}");
     Check(sizeof(BridgeGearIntel) == 3544, $"BridgeGearIntel {sizeof(BridgeGearIntel)}");
+    Check(sizeof(BridgeWeaponAttachmentState) == 68, $"BridgeWeaponAttachmentState {sizeof(BridgeWeaponAttachmentState)}");
 }
 
 BridgeSession.Configure(content);
@@ -57,6 +59,26 @@ internal static unsafe class Probe
         getLoadout(&loadout);
         s_api = api;
         check(version == GearMenuExports.ApiVersion && api.Version == version, $"GetApi version {version}");
+        string legacyFile = Path.ChangeExtension(file, "legacy.json");
+        foreach ((string old, string migrated, string stock) in new[]
+        {
+            ("SBase.SWeaponDefense", WeaponAttachments.M4, MercPrimarySelection.Smg),
+            ("sbase.sweapondefense_uzi", MercPrimarySelection.Smg, MercPrimarySelection.Smg),
+            ("SBase.SWeaponDefense_Shotgun", MercPrimarySelection.Shotgun, MercPrimarySelection.Shotgun),
+        })
+        {
+            File.WriteAllText(legacyFile, JsonSerializer.Serialize(new LoadoutChoice { MercWeapon = old }));
+            LoadoutStore.Load(legacyFile);
+            check(LoadoutStore.Current.MercWeapon == migrated, $"loading a saved {old} migrates to {migrated}");
+            var restricted = new GearMenuModel(false, 0, [], 0,
+                [old, MercPrimarySelection.Smg, MercPrimarySelection.Shotgun, WeaponAttachments.M4], LoadoutStore.Current,
+                false, unrestricted: true, riflesEnabled: false);
+            var draft = LoadoutStore.Current.Clone();
+            restricted.SaveTo(draft);
+            check(restricted.Weapons.SequenceEqual(new[] { MercPrimarySelection.Smg, MercPrimarySelection.Shotgun }) &&
+                restricted.ChosenWeapon == stock && draft.MercWeapon == migrated,
+                "the restricted match offers both stock primaries and preserves the saved preference on Apply");
+        }
         fixed (char* f = file)
         {
             loadout.Load(f);
@@ -107,7 +129,13 @@ internal static unsafe class Probe
         List<(string Path, string Name, string Sub, int Flags)> sidearms = Options(2, 0);
         Console.WriteLine($"   weapon {s.WeaponName}, sidearm {s.SidearmName}; weapons [{string.Join(", ", weapons.Select(w => w.Name + " " + w.Sub))}]");
         Console.WriteLine($"   sidearms [{string.Join(", ", sidearms.Select(w => w.Name + " " + w.Sub))}]");
-        check(s.Side == 1 && weapons.Count >= 3 && sidearms.Count == Sidearms.All.Count, "the merc has his weapons (rifles shown) and every sidearm");
+        check(s.Side == 1 && weapons.Count == 8 &&
+            !weapons.Any(w => MercPrimarySelection.IsLegacy(w.Path)) && sidearms.Count == Sidearms.All.Count,
+            "the merc can choose two stock guns, six optional rifles and every sidearm");
+        check(s.WeaponName == GearMenuModel.NameOf(WeaponAttachments.M4) &&
+            Choose(1, 0, "SBase.SWeaponDefense") == 0 && Choose(1, 0, "SBase.SWeaponDefense_Uzi") == 0 &&
+            Choose(1, 0, "SBase.SWeaponDefense_Shotgun") == 0,
+            "new profiles start on the M4 and cannot choose the removed catalogue entries");
         string shotgun = weapons.First(w => w.Path.Contains("Shotgun", StringComparison.OrdinalIgnoreCase)).Path;
         string magnum = sidearms.First(w => w.Path.Contains("magnum", StringComparison.OrdinalIgnoreCase)).Path;
         check(Choose(1, 0, shotgun) == 1 && Choose(2, 0, magnum) == 1, "the merc takes the shotgun and the .44 Magnum");
@@ -160,6 +188,44 @@ internal static unsafe class Probe
         check(locked.Count == 0 || !model.Choose(0, locked[0]), "choosing a locked gadget is refused");
 
         // ---- in a merc's round -----------------------------------------------------------------------------------
+        // The Gear screen must keep per-weapon edits in its draft until Apply, including while switching tabs.
+        string attachmentFolder = Path.Combine(Path.GetDirectoryName(file)!, "attachments");
+        Directory.CreateDirectory(attachmentFolder);
+        string attachmentKit = Path.Combine(attachmentFolder, "loadout.json");
+        File.Delete(attachmentKit);
+        int[] earned = new int[WeaponCareerCounters.Count];
+        earned[WeaponCareerCounters.IndexOf(WeaponAttachments.M4)] = 50;
+        File.WriteAllText(Path.Combine(attachmentFolder, "weapon-kills-0.json"), JsonSerializer.Serialize(earned));
+        LoadoutStore.Load(attachmentKit);
+        api.Open(1, GearEditor.MenuContext);
+        fixed (char* m4 = WeaponAttachments.M4, other = "Svm.AK47")
+        {
+            int two = WeaponAttachments.RedDot | WeaponAttachments.ExtendedMagazine;
+            check(api.SetAttachmentMask(other, WeaponAttachments.RedDot) == 0, "M4 kills do not unlock another gun's sight");
+            check(api.SetAttachmentMask(m4, two | WeaponAttachments.Suppressor) == 0, "four points exceed the three-point budget");
+            check(api.SetAttachmentMask(m4, two) != 0 && State().Changed == 1, "editing just attachments marks the kit as changed");
+            api.SetSide(0);
+            check(api.GetAttachmentMask(m4) == two && !File.Exists(attachmentKit), "changing side preserves the unsaved attachment draft");
+            api.Open(1, GearEditor.MenuContext);
+            check(api.GetAttachmentMask(m4) == 0 && State().Changed == 0, "reopening discards unapplied attachments");
+            check(api.SetAttachmentMask(m4, two) != 0 && api.Apply() != 0, "Apply saves the magazine and sight together");
+            LoadoutStore.Load(attachmentKit);
+            api.Open(1, GearEditor.MenuContext);
+            Info configured = Intel(WeaponAttachments.M4);
+            check(api.GetAttachmentMask(m4) == two && configured.Values.Contains("30 / 80") && configured.Values.Contains("Red dot"),
+                "a reloaded M4 shows its equipped sight and 30-round magazine");
+            int acogAndMagazine = WeaponAttachments.Acog | WeaponAttachments.ExtendedMagazine;
+            check(api.SetAttachmentMask(m4, two | WeaponAttachments.Acog) == 0 && api.GetAttachmentMask(m4) == two,
+                "trying to fit both optics leaves the current setup intact");
+            check(api.SetAttachmentMask(m4, acogAndMagazine) == 1 && api.Apply() == 1 &&
+                Intel(WeaponAttachments.M4).Values.Contains("ACOG"), "replacing the red dot with the ACOG consumes its full two points");
+            api.Reset();
+            check(api.GetAttachmentMask(m4) == 0 && api.Apply() != 0 &&
+                Intel(WeaponAttachments.M4).Values.Contains("20 / 80"), "resetting merc gear restores the original 20-round magazine");
+        }
+        CheckAttachmentCatalogue(attachmentFolder, check);
+        LoadoutStore.Load(file);
+
         delegate* unmanaged<BridgeApi*, int, int> getBridge = &Exports.GetApiSized;
         BridgeApi bridge;
         getBridge(&bridge, sizeof(BridgeApi));
@@ -187,10 +253,101 @@ internal static unsafe class Probe
         s = State();
         Console.WriteLine($"   side {s.Side}, own {s.OwnSide}, from team {s.FromTeam}, slots {s.GadgetSlots}, rule \"{s.Rule}\"");
         check(s.Side == 1 && s.OwnSide == 1 && s.FromTeam == 1, "the picker opens on the side played, decided by his team");
+        var matchWeapons = Options(1, 0).Select(o => o.Path).ToArray();
+        check(matchWeapons.Contains(MercPrimarySelection.Smg) && matchWeapons.Contains(MercPrimarySelection.Shotgun) &&
+            !matchWeapons.Any(MercPrimarySelection.IsLegacy) &&
+            matchWeapons.Any(MercPrimarySelection.RequiresRifleOption) == GearEditor.Current.RiflesEnabled,
+            "the live match offers the replacement stock guns and obeys the room's optional-rifle setting");
+        var armoury = LoadoutGear.List(1, out _).Where(item => item.Kind == GearKind.Weapon).ToArray();
+        check(armoury.Length == 8 && !armoury.Any(item => MercPrimarySelection.IsLegacy(item.Path)) &&
+            armoury.Single(item => item.Flags.HasFlag(GearFlags.Equipped)).Path == GearEditor.Current.ChosenWeapon,
+            "the Armoury catalogue agrees with Change Gear on the equipped primary");
         api.SetSide(0);
         s = State();
         check(s.OwnSide == 0 && s.Rule.Contains("other side"), "the spy tab is the other side's kit");
         bridge.Stop();
+    }
+
+    private static void CheckAttachmentCatalogue(string folder, Action<bool, string> check)
+    {
+        string[] rifles = ["SBase.SWeaponDefense", "SBase.SWeaponDefense_Uzi", .. MercRifles.All.Select(r => r.ClassPath).Where(p => p is not ("Svm.PumpShotgun" or "Svm.BoltRifle"))];
+        var catalogue = rifles.Select(w => (Weapon: w, Capacity: 20, CanExtend: true))
+            .Append(("SBase.SWeaponDefense_Shotgun", 6, false))
+            .Append(("Svm.PumpShotgun", 6, false))
+            .Append(("Svm.BoltRifle", 5, false))
+            .Concat(Sidearms.All.Select(s => (s.CarryId, s.Magazine, false))).ToArray();
+        string profile = Path.Combine(folder, "all-guns");
+        Directory.CreateDirectory(profile);
+        string kit = Path.Combine(profile, "loadout.json");
+        File.Delete(kit);
+        File.WriteAllText(Path.Combine(profile, "weapon-kills-0.json"), JsonSerializer.Serialize(
+            Enumerable.Repeat(50, WeaponCareerCounters.Count).ToArray()));
+        LoadoutStore.Load(kit);
+        s_api.Open(1, GearEditor.MenuContext);
+        delegate* unmanaged<WeaponAttachmentsApi*, int> getApi = &WeaponAttachmentsExports.GetApi;
+        WeaponAttachmentsApi attachments;
+        check(getApi(&attachments) == 3 && attachments.Version == 3, "attachment bridge ABI v3");
+        foreach ((string weapon, int capacity, bool canExtend) in catalogue)
+        {
+            fixed (char* path = weapon)
+            {
+                BridgeWeaponAttachmentState state;
+                bool read = attachments.GetState(path, &state) == 1;
+                bool thresholds = read && state.KillsRequired[0] == 20 && state.KillsRequired[1] == 10 &&
+                    state.KillsRequired[2] == 30 && state.KillsRequired[3] == 40 && state.KillsRequired[4] == 50;
+                bool support = read && (state.Supported & WeaponAttachments.Acog) != 0 && state.Costs[4] == 2 &&
+                    ((state.Supported & WeaponAttachments.ExtendedMagazine) != 0) == canExtend;
+                bool stock = state.BaseMagazine == capacity && Intel(weapon).Values.Any(v => v.StartsWith(capacity + " / "));
+                check(thresholds && support && stock, $"{weapon} shows the correct magazine, unlocks and ACOG cost");
+                if (weapon is "Svm.CompactSMG" or "Svm.PumpShotgun" or "Svm.BoltRifle" or "Svm.DesignatedMarksman")
+                {
+                    string picture = Intel(weapon).IconFile;
+                    check(File.Exists(picture) && Path.GetFileName(picture) == weapon[4..].ToLowerInvariant() + "_icon.png",
+                        $"{weapon} uses its own rendered equipment picture");
+                }
+                if (weapon is "Svm.BoltRifle" or "Svm.DesignatedMarksman")
+                {
+                    string damage = weapon == "Svm.BoltRifle" ? "100 head / 70 body" : "60 head / 35 body";
+                    int zoom = weapon == "Svm.BoltRifle" ? 6 : 4;
+                    Info baseIntel = Intel(weapon);
+                    check(baseIntel.Values.Count(v => v == damage) == 4 && state.NativeOpticPower == zoom &&
+                        baseIntel.Values.Contains($"{zoom}× scope"), $"{weapon} displays its fixed damage at every range and its native scope");
+                }
+                int choice = WeaponAttachments.Acog | (canExtend ? WeaponAttachments.ExtendedMagazine : 0);
+                check(s_api.SetAttachmentMask(path, choice) == 1 && Intel(weapon).Values.Contains("ACOG") &&
+                    Intel(weapon).Values.Any(v => v.StartsWith((canExtend ? 30 : capacity) + " / ")),
+                    $"{weapon} updates its sight and capacity from the draft");
+            }
+        }
+
+        string legacy = Path.Combine(folder, "old-thresholds");
+        Directory.CreateDirectory(legacy);
+        string oldKit = Path.Combine(legacy, "loadout.json");
+        int[] oldKills = new int[WeaponCareerCounters.Count];
+        oldKills[WeaponCareerCounters.IndexOf(WeaponAttachments.M4)] = 30;
+        oldKills[WeaponCareerCounters.IndexOf("Svm.BoltRifle")] = 50;
+        File.WriteAllText(Path.Combine(legacy, "weapon-kills-0.json"), JsonSerializer.Serialize(oldKills));
+        var old = LoadoutStore.Fresh();
+        old.AttachmentMasks[WeaponAttachments.M4] = WeaponAttachments.RedDot | WeaponAttachments.ExtendedMagazine;
+        old.AttachmentMasks["Svm.BoltRifle"] = WeaponAttachments.Acog | WeaponAttachments.ExtendedMagazine;
+        File.WriteAllText(oldKit, LoadoutStore.ToJson(old));
+        LoadoutStore.Load(oldKit);
+        s_api.Open(1, GearEditor.MenuContext);
+        fixed (char* bolt = "Svm.BoltRifle")
+        {
+            BridgeWeaponAttachmentState state;
+            check(attachments.GetState(bolt, &state) == 1 && state.BaseMagazine == 5 &&
+                (state.Supported & WeaponAttachments.ExtendedMagazine) == 0 && state.Equipped == WeaponAttachments.Acog &&
+                s_api.GetAttachmentMask(bolt) == WeaponAttachments.Acog && Intel("Svm.BoltRifle").Values.Contains("5 / 40"),
+                "a previous bolt kit keeps its scope and lists five rounds after removing the extended magazine");
+        }
+        fixed (char* path = WeaponAttachments.M4)
+        {
+            BridgeWeaponAttachmentState state;
+            check(attachments.GetState(path, &state) == 1 && state.Equipped == WeaponAttachments.RedDot &&
+                s_api.GetAttachmentMask(path) == WeaponAttachments.RedDot &&
+                Intel(WeaponAttachments.M4).Values.Contains("20 / 80"), "an old 30-kill setup retains its earned sight and uses its standard magazine");
+        }
     }
 
     internal sealed record Snap(int Side, int GadgetSlots, int CurrentLevel, int Unrestricted, int Changed, int OwnSide, int FromTeam,

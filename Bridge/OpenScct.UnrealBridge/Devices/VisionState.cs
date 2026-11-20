@@ -127,6 +127,9 @@ public struct BridgeVisionActor
 
 public static class BridgeVisionActorFlags
 {
+    /// <summary>The placed mine body, including proximity, laser, poison and spy-trap variants.</summary>
+    public const int Mine = 32;
+
     /// <summary>Actor.bEMFIsOn.</summary>
     public const int EmfOn = 1;
 
@@ -373,7 +376,8 @@ public sealed class VisionState
                         (EmfVision.Shows(a) ? BridgeVisionActorFlags.EmfShows : 0) |
                         (a.bHidden ? BridgeVisionActorFlags.Hidden : 0) |
                         (nameId != 0 ? BridgeVisionActorFlags.MapActor : 0) |
-                        (_locked.Contains(a) ? BridgeVisionActorFlags.Tracked : 0),
+                        (_locked.Contains(a) ? BridgeVisionActorFlags.Tracked : 0) |
+                        (a is SMines ? BridgeVisionActorFlags.Mine : 0),
                     HeatIntensity = a.HeatIntensity,
                     HeatOpacity = a.HeatOpacity,
                     EMFIntensity = a.EMFIntensity,

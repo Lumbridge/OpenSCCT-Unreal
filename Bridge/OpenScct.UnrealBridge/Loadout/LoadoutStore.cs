@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using OpenScct.Core.Engine;
@@ -11,7 +12,7 @@ namespace OpenScct.UnrealBridge.Loadout;
 /// The player's chosen gear per side (an OpenSCCT addition, spec/additions/gear-change.md): the class paths of the
 /// spy's four gadget slots, the merc's four, his weapon and his sidearm. The Godot client keeps the same block in its
 /// settings file (game/Scripts/Options/GameSettings.cs LoadoutSettings) under the same JSON names, so the file reads the
-/// same in both. Defaults are the fixed kits (loadouts.md rule 2.1) and the unsuppressed pistol.
+/// same in both. New profiles use the fixed gadget kits, the M4 primary and the unsuppressed pistol.
 /// </summary>
 public sealed class LoadoutChoice
 {
@@ -24,10 +25,13 @@ public sealed class LoadoutChoice
     public string[] MercGadgets { get; set; } = DefaultMerc();
 
     [JsonPropertyName("merc_weapon")]
-    public string MercWeapon { get; set; } = Loadouts.MercWeapon.Path ?? "";
+    public string MercWeapon { get; set; } = WeaponAttachments.M4;
 
     [JsonPropertyName("merc_sidearm")]
     public string MercSidearm { get; set; } = DefaultSidearm;
+
+    [JsonPropertyName("weapon_attachments")]
+    public Dictionary<string, int> AttachmentMasks { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public static string DefaultSidearm => Sidearms.Get(SidearmKind.Unsuppressed).CarryId;
 
@@ -44,6 +48,7 @@ public sealed class LoadoutChoice
         MercGadgets = (string[])MercGadgets.Clone(),
         MercWeapon = MercWeapon,
         MercSidearm = MercSidearm,
+        AttachmentMasks = new(AttachmentMasks ?? []),
     };
 
     /// <summary>
@@ -53,6 +58,14 @@ public sealed class LoadoutChoice
     /// </summary>
     public void Clamp()
     {
+        var masks = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (weapon, mask) in AttachmentMasks ?? [])
+        {
+            if (mask == 0 || WeaponAttachments.Key(weapon) is not { } key) continue;
+            int fitted = WeaponAttachments.EarnedSelection(key, mask, int.MaxValue);
+            if (fitted != 0) masks[key] = fitted;
+        }
+        AttachmentMasks = masks;
         SpyGadgets = Fit(SpyGadgets, DefaultSpy());
         for (int i = 0; i < SpyGadgets.Length; i++)
         {
@@ -65,7 +78,7 @@ public sealed class LoadoutChoice
         }
 
         MercGadgets = Fit(MercGadgets, DefaultMerc());
-        MercWeapon = (MercWeapon ?? "").Trim();
+        MercWeapon = MercPrimarySelection.SavedPreference(MercWeapon);
         MercSidearm = (MercSidearm ?? "").Trim();
         bool migrated = false;
         for (int i = 0; i < MercGadgets.Length; i++)
@@ -181,6 +194,19 @@ public static class LoadoutStore
     /// <summary>Writes the choice in use to <paramref name="path"/> (null or empty: the file loaded last).</summary>
     public static void Save(string? path)
     {
+        Write(Current, path);
+    }
+
+    public static void SaveChoice(LoadoutChoice choice)
+    {
+        var copy = choice.Clone();
+        copy.Clamp();
+        Write(copy, null);
+        System.Threading.Volatile.Write(ref s_current, copy);
+    }
+
+    private static void Write(LoadoutChoice choice, string? path)
+    {
         string target = string.IsNullOrWhiteSpace(path) ? FilePath : Path.GetFullPath(path);
         if (target.Length == 0)
         {
@@ -195,7 +221,7 @@ public static class LoadoutStore
 
         // Written beside and moved over, so a crash mid-write cannot leave half a file.
         string temp = target + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(Current, s_json));
+        File.WriteAllText(temp, JsonSerializer.Serialize(choice, s_json));
         File.Move(temp, target, overwrite: true);
         FilePath = target;
     }

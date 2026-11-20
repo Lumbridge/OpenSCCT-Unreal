@@ -253,7 +253,14 @@ TSharedRef<SWidget> SScctFrontEnd::BuildFooter()
 					.ColorAndOpacity(ScctHudStyle::TextFaint())
 					.Text(TAttribute<FText>::CreateLambda([] { return FText::FromString(ScctUi::BuildLabel()); }))
 				]
-				// The master's own version under the game's (the Godot client's BuildLabel and MasterVersionCheck).
+				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0.0f, 3.0f, 0.0f, 0.0f)
+				[
+					SNew(STextBlock)
+					.Font(ScctUi::Caps(10.0f))
+					.ColorAndOpacity(ScctHudStyle::TextFaint())
+					.Text(TAttribute<FText>::CreateLambda([] { return FText::FromString(ScctUi::BridgeBuildLabel()); }))
+				]
+				// The master's own version comes from the dashboard.
 				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0.0f, 3.0f, 0.0f, 0.0f)
 				[
 					SNew(STextBlock)

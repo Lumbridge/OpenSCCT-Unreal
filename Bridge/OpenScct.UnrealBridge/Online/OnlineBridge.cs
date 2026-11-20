@@ -390,6 +390,9 @@ public sealed partial class OnlineBridge : IDisposable
         {
             Revenge = now.Revenge,
             GamesInARow = now.GamesInARow,
+            Sidearms = now.Sidearms,
+            Rifles = now.Rifles,
+            ResponsiveSmoke = now.ResponsiveSmoke,
         });
         return true;
     }

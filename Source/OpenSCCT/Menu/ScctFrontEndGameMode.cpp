@@ -14,6 +14,7 @@
 #include "Menu/SScctStrategicMapPage.h"
 #include "Menu/ScctFrontEndWidget.h"
 #include "Menu/ScctMenuBackdrop.h"
+#include "Menu/ScctMenuSubsystem.h"
 #include "Menu/ScctTutorialPlay.h"
 #include "Misc/CommandLine.h"
 #include "Misc/MessageDialog.h"
@@ -376,19 +377,13 @@ void AScctFrontEndGameMode::ShowMenu()
 		Menu->AskQuit();
 	}
 	// -ScctGear[=spy|merc] opens the Equipment page over the offline page; -ScctGearApply also picks and applies.
-	FString GearSide, GearScript;
-	const bool bGearApply = FParse::Value(FCommandLine::Get(), TEXT("ScctGearApply="), GearScript, false);
-	if (bGearApply || FParse::Param(FCommandLine::Get(), TEXT("ScctGear")) || FParse::Value(FCommandLine::Get(), TEXT("ScctGear="), GearSide))
+	FScctGearLaunch GearLaunch;
+	if (UScctMenuSubsystem* Menus = UScctMenuSubsystem::Get(this); Menus && Menus->TakeGearLaunch(GearLaunch, false))
 	{
-		if (bGearApply)
-		{
-			GearScript.Split(TEXT(","), &GearSide, nullptr);
-		}
 		Menu->ShowPageNamed(TEXT("offline"));
-		const int32 Side = GearSide.Equals(TEXT("merc"), ESearchCase::IgnoreCase) ? 1 : 0;
-		if (const TSharedPtr<SScctGearPage> Gear = Menu->ShowGear(Side); Gear.IsValid() && bGearApply)
+		if (const TSharedPtr<SScctGearPage> Gear = Menu->ShowGear(FMath::Max(0, GearLaunch.Side)); Gear.IsValid() && !GearLaunch.Script.IsEmpty())
 		{
-			Gear->RunScript(GearScript);
+			Gear->RunScript(GearLaunch.Script);
 		}
 	}
 	// -ScctStrategicMap=<Map> opens a map's strategic map as the lobby's STRATEGIC MAP does (the lobby's own map

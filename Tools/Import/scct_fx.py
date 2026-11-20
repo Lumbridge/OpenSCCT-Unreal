@@ -63,6 +63,11 @@ DRAW_MESH = 2      # Actor.DrawType DT_Mesh: a skeletal mesh
 GLOW_BRIGHTNESS = 1.5
 # How much of the original's alpha an alpha-blended, lit sprite keeps.
 LIT_OPACITY = 0.7
+# This pipe-steam sprite carries its own colour even in the unlit sewer. Its
+# texture alpha, per-particle colour and fade curves set the density.
+SOURCE_SPRITE_SCALARS = {
+    ("mhosfx_xbox_fumee_tuyau_light", ALPHA_BLEND): {"Opacity": 1.0, "Emissive": 0.35},
+}
 FOREVER = 1.0e9
 
 
@@ -308,6 +313,7 @@ class MapEffects:
         else:
             # Smoke and dust are thin: a puff of twenty sprites laid over each other is a cloud, not a wall.
             scalars["Opacity"] = LIT_OPACITY
+        scalars.update(SOURCE_SPRITE_SCALARS.get((stem.casefold(), style), {}))
         return self.instance(name, scct_effects.PARTICLE_GLOW if glow else scct_effects.PARTICLE_LIT, scalars, {"Texture": texture})
 
     def place_emitters(self, document):

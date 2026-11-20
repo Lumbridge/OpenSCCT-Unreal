@@ -5,6 +5,12 @@
 	"Description": "OpenSCCT on Unreal Engine 5: the OpenSCCT simulation and servers with an Unreal presentation.",
 	"Modules": [
 		{
+			"Name": "OpenSCCTGraphicsStartup",
+			"Type": "ClientOnly",
+			"LoadingPhase": "PostConfigInit",
+			"PlatformAllowList": [ "Win64" ]
+		},
+		{
 			"Name": "OpenSCCT",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
@@ -16,6 +22,9 @@
 		}
 	],
 	"Plugins": [
+		{ "Name": "DLSS", "Enabled": true, "Optional": true, "PlatformAllowList": [ "Win64" ] },
+		{ "Name": "StreamlineDLSSG", "Enabled": true, "Optional": true, "PlatformAllowList": [ "Win64" ] },
+		{ "Name": "FSR", "Enabled": true, "Optional": true, "PlatformAllowList": [ "Win64" ] },
 		{
 			"Name": "ModelContextProtocol",
 			"Enabled": true,

@@ -169,7 +169,22 @@ Check(Value("Voice.PushToTalk") == "true" && Value("Voice.Threshold") == "0.05" 
 Check(Value("Audio.Effects") == "60" && Value("Audio.Objective") == "0" && Value("Audio.ObjectiveSounds") == "false" && Value("Audio.Music") == "25" &&
     Value("Hud.DistanceInFeet") == "true", "profile: effects 60, objective sounds off, music 25, feet");
 Check(result.Loadout == "spy:SBase.SGadSmokeGrenade,SBase.SGadFlashBang,SBase.SGadStickyCam,SBase.SGadHeartBeatSensor;" +
-    "merc:SBase.SGadFragGrenade,SBase.SGadMultiMinesLauncher,SBase.SGadGasMask,SBase.SGadBackPack;weapon:SBase.SWeaponDefense", "profile: both kits and the merc's weapon");
+    "merc:SBase.SGadFragGrenade,SBase.SGadMultiMinesLauncher,SBase.SGadGasMask,SBase.SGadBackPack;weapon:Svm.M4A1S", "profile: both kits and the migrated merc primary");
+string profilePath = Path.Combine(profiles, "Tester_prf.ini");
+string originalProfile = File.ReadAllText(profilePath, Encoding.Latin1);
+try
+{
+    foreach ((string old, string replacement) in new[] { ("SWeaponDefense_Uzi", "Svm.CompactSMG"), ("SWeaponDefense_Shotgun", "Svm.PumpShotgun") })
+    {
+        File.WriteAllText(profilePath, originalProfile.Replace("SWeaponDefense", old, StringComparison.Ordinal), Encoding.Latin1);
+        var imported = EnhancedImport.Find(system)!.Apply(new ControlSettings(), new ControlBindings());
+        Check(imported.Loadout.EndsWith(";weapon:" + replacement, StringComparison.Ordinal), $"profile: {old} imports as {replacement}");
+    }
+}
+finally
+{
+    File.WriteAllText(profilePath, originalProfile, Encoding.Latin1);
+}
 
 KeyLayout spy = result.Bindings.KeysOf(false), merc = result.Bindings.KeysOf(true);
 string Key(KeyLayout layout, string key) => layout.Bindings.TryGetValue(key, out string? command) ? command : "(unbound)";

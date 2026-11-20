@@ -4,6 +4,7 @@
 
 class APostProcessVolume;
 class UWorld;
+struct FPostProcessSettings;
 
 /**
  * The lighting plan's tone curve (scct.Light.Plan 1, Play/ScctLightPlan.h): what display value the picture shows for
@@ -36,6 +37,9 @@ namespace FScctTone
 	 * the map world: sets the curve's settings and material on it while bPlan, and nothing at all otherwise.
 	 */
 	void Apply(UWorld* World, APostProcessVolume* Volume, bool bPlan, float ExposureScale);
+
+	/** Limit bright-pass bloom on the local merc camera while its sensor response is active. */
+	void ApplyMercCamera(FPostProcessSettings& Camera, bool bActive);
 
 	/** No map is played: gives back what Apply held outside the volume (the display gamma). */
 	void Leave();

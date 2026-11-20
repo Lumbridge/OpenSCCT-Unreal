@@ -403,11 +403,11 @@ public sealed class HudReader
             s.FireModeNameId = _texts.Id(weapon.GetROFName());
             s.WeaponKind = weapon switch
             {
-                SWeaponDefense_Uzi => 1,
+                SWeaponDefense_Uzi or CompactSMG => 1,
                 SWeaponDefense_Shotgun => 2,
                 _ => 0,
             };
-            if (pawn.WeaponLoaded != 0 && !pc.bNoReticule && !laser && !pc.bLaserEtaitAllume && weapon is not MercRifle { AimRequested: true })
+            if (pawn.WeaponLoaded != 0 && !pc.bNoReticule && !laser && !pc.bLaserEtaitAllume && !(weapon is MercRifle or MercSidearm && weapon.AimRequested))
             {
                 flags |= HudFlags.ShowReticle;
             }
@@ -1162,11 +1162,10 @@ public sealed class HudReader
             return;
         }
 
-        float now = pc.Level.TimeSeconds;
         s.BinocularFov = pc.fBinocularVisionFOV;
         s.BreathTime = pc.BinocularHoldBreathTime;
         flags |= (pc.bHoldBreath != 0 ? HudFlags.HoldBreath : 0) |
-            (pc.fDateLastShootedPawn + ReticleHitTime > now ? HudFlags.BinocularHit : 0);
+            ((flags & HudFlags.ReticleHit) != 0 ? HudFlags.BinocularHit : 0);
         s.HackPromptId = _texts.Id(_strings.Get("MagmaDynamic", "HUD", "TextChat2"));
         flags |= pc.VoiceChatTarget is { bDeleteMe: false } ? HudFlags.BinocularHackPrompt : 0;
 

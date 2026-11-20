@@ -13,6 +13,7 @@ class ULightComponent;
 class UNiagaraComponent;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
+class UTexture2D;
 class UScctSessionSubsystem;
 class UStaticMesh;
 class UStaticMeshComponent;
@@ -84,6 +85,7 @@ class OPENSCCT_API UScctLevelStateSubsystem : public UWorldSubsystem
 	GENERATED_BODY()
 
 public:
+	bool IsNativeFixture(int32 SourceIndex) const { return NativeFixtureIds.Contains(SourceIndex); }
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
@@ -92,6 +94,8 @@ public:
 
 	/** The mesh actor that stands for a simulation actor's name: the level's own (by the importer's tag) or the one spawned here; or null. */
 	AActor* FindLevelActor(const FString& Name) const;
+	/** Look up a lamp independently of any mesh sharing its source tag. */
+	ULightComponent* FindLevelLight(const FString& Name) const;
 
 	/** The drawn meshes of the map's panes of glass (SVitre) known so far, broken or not; for the effects warm-up. ScctLevelStateGlass.cpp. */
 	void GatherPaneMeshes(TArray<UStaticMeshComponent*>& Out);
@@ -100,6 +104,13 @@ protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 
 private:
+	struct FMapMaterialOverride
+	{
+		int32 Slot;
+		TWeakObjectPtr<UMaterialInterface> Original;
+		TWeakObjectPtr<UMaterialInterface> Replacement;
+	};
+
 	/** One followed simulation actor, by its name id. */
 	struct FActorState
 	{
@@ -131,6 +142,7 @@ private:
 		bool bVisibilityOnly = false; // a skeletal prop: shown and hidden, never placed
 		bool bSpawnTried = false;   // a stand-in was looked for (it is looked for once)
 		TArray<int32> WornSkins;
+		TArray<FMapMaterialOverride> MapMaterials;
 		bool bSkinned = false;      // a material was replaced on it
 		bool bMobilityChanged = false;
 	};
@@ -177,6 +189,7 @@ private:
 		FLinearColor OriginalColor = FLinearColor::White;
 		float OriginalIntensity = 0.0f;
 		bool bOriginalVisible = true;
+		bool bHazeOnly = false;
 
 		// The table's colour when the light was first seen: only a colour that changes from it is applied.
 		FLinearColor FirstColor = FLinearColor::White;
@@ -355,6 +368,7 @@ private:
 	/** The level's tagged mesh actors and, apart from them, its tagged lights, by tag. Actors spawned here are added to the first. */
 	TMap<FName, TWeakObjectPtr<AActor>> TaggedActors;
 	TMap<FName, TWeakObjectPtr<AActor>> TaggedLights;
+	TSet<int32> NativeFixtureIds;
 	/** The importer's corona cards by the name of their light. */
 	TMultiMap<FName, TWeakObjectPtr<AActor>> TaggedCoronas;
 	/** The importer's particle emitters by the tag of their map Emitter, and the wet-ground decals by their rain volume's. */
@@ -409,11 +423,16 @@ private:
 	TObjectPtr<class UMaterialInstanceDynamic> HackPanelDisplay;
 	bool bTriedHackPanelDisplay = false;
 	void ApplyHackPanelDisplay(FActorState& State);
+	void ApplyMapMaterials(FActorState& State);
+	void RestoreMapMaterials(FActorState& State);
+	UTexture2D* GameplaySkinPicture(const FString& Folder, const FString& Relative) const;
 	int32 BombFrame = INDEX_NONE;
 	UMaterialInterface* GameplaySkin(const FString& Name);
 	int32 SourceSlot(const UStaticMesh* Mesh, int32 Slot) const;
 	TMap<FString, FSoftObjectPath> MeshAssets;
 	TMap<FString, FSoftObjectPath> MaterialAssets;
+	TMap<FName, FSoftObjectPath> MapMaterialAssets;
+	TMap<FName, FSoftObjectPath> MapColorAssets;
 
 	TArray<FActorState> ActorStates;
 	TArray<FLightState> LightStates;

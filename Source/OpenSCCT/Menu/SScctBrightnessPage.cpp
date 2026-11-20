@@ -6,6 +6,7 @@
 #include "Engine/GameViewportClient.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Menu/ScctMenuStyle.h"
+#include "Menu/ScctSelectBox.h"
 #include "OpenSCCT.h"
 #include "Rendering/DrawElements.h"
 #include "Menu/ScctUserSettings.h"
@@ -170,15 +171,17 @@ void SScctBrightnessPage::Construct(const FArguments& InArgs)
 		];
 
 	{
-		const float StepSize = GammaStep;
+		const int32 FirstStep = FMath::RoundToInt32(BrightnessGammaMin() / GammaStep);
+		const int32 LastStep = FMath::RoundToInt32(BrightnessGammaMax() / GammaStep);
+		TArray<FString> GammaOptions;
+		for (int32 StepIndex = FirstStep; StepIndex <= LastStep; ++StepIndex)
+		{
+			GammaOptions.Add(FormatBrightness(StepIndex * GammaStep));
+		}
 		Box->AddSlot().AutoHeight().HAlign(HAlign_Center).Padding(0.0f, 0.0f, 0.0f, 30.0f)
 		[
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 16.0f, 0.0f)[ Ui::Label(TEXT("Brightness")) ]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				Ui::Button(Ui::ToText(TEXT("<")), FOnClicked::CreateLambda([this] { Step(-1); return FReply::Handled(); }))
-			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(10.0f, 0.0f)
 			[
 				SNew(SBox).WidthOverride(360.0f)
@@ -186,7 +189,7 @@ void SScctBrightnessPage::Construct(const FArguments& InArgs)
 					SNew(SSlider)
 					.MinValue(BrightnessGammaMin())
 					.MaxValue(BrightnessGammaMax())
-					.StepSize(StepSize)
+					.StepSize(GammaStep)
 					.MouseUsesStep(true)
 					.IsFocusable(false)
 					.SliderBarColor(FLinearColor(1.0f, 1.0f, 1.0f, 0.25f))
@@ -195,18 +198,15 @@ void SScctBrightnessPage::Construct(const FArguments& InArgs)
 					.OnValueChanged(FOnFloatValueChanged::CreateLambda([](float Value) { SetBrightness(Value); }))
 				]
 			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				Ui::Button(Ui::ToText(TEXT(">")), FOnClicked::CreateLambda([this] { Step(1); return FReply::Handled(); }))
-			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(16.0f, 0.0f, 0.0f, 0.0f)
 			[
-				SNew(SBox).WidthOverride(64.0f)
+				SNew(SBox).MinDesiredWidth(90.0f)
 				[
-					Ui::Text(TAttribute<FText>::CreateLambda([]
-					{
-						return Ui::ToText(FormatBrightness(GetBrightness()));
-					}), 14.0f)
+					SNew(SScctSelectBox)
+					.Options(MoveTemp(GammaOptions))
+					.FieldLabel(Ui::ToText(TEXT("Brightness")))
+					.Get([FirstStep] { return FMath::RoundToInt32(GetBrightness() / GammaStep) - FirstStep; })
+					.Set([FirstStep](int32 Index) { SetBrightness((FirstStep + Index) * GammaStep); })
 				]
 			]
 		];

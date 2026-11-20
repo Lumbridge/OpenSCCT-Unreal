@@ -28,7 +28,8 @@ public:
 	 * Places and poses the body for this frame. Skeleton is the bridge's bone list for the pawn's kind and Pose
 	 * its bones this frame (empty before the pawn has one).
 	 */
-	void Present(const FScctBridgePawn& Pawn, TConstArrayView<FScctBridgeBoneInfo> Skeleton, TConstArrayView<FScctBridgeBone> Pose);
+	void Present(const FScctBridgePawn& Pawn, TConstArrayView<FScctBridgeBoneInfo> Skeleton, TConstArrayView<FScctBridgeBone> Pose,
+		bool bShowFirstPersonLegs = false);
 
 	/** The pawn as the bridge described it in the last Present: id, kind, team, health, flags, place, aim. */
 	const FScctBridgePawn& GetPawn() const { return Pawn; }
@@ -56,6 +57,7 @@ public:
 
 	/** The posed character mesh. It has no model (GetSkinnedAsset is null) until the imported characters exist. */
 	UPoseableMeshComponent* GetBodyMesh() const { return Body; }
+	UPoseableMeshComponent* GetFirstPersonLegs() const { return FirstPersonLegs; }
 
 	/** The imported character model was found and the bridge's skeleton was matched to it. */
 	bool HasModel() const { return bHasModel; }
@@ -111,12 +113,17 @@ public:
 
 private:
 	void SetKind(int32 NewKind, TConstArrayView<FScctBridgeBoneInfo> Skeleton);
+	void PresentFirstPersonLegs(bool bShow);
 
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<USceneComponent> Root;
 
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UPoseableMeshComponent> Body;
+
+	/** The local merc's legs in first person. The full Body still owns the shadow and all equipment. */
+	UPROPERTY(Transient)
+	TObjectPtr<UPoseableMeshComponent> FirstPersonLegs;
 
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UStaticMeshComponent> StandIn;

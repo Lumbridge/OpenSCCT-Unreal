@@ -142,6 +142,8 @@ enum class EScctCareerString : int32
 	AchievementsSummary = 25,
 	DetailsError = 26,
 	ArchiveFolder = 27,
+	AchievementRewardIds = 28, // the visible cosmetic ids in the same order as AchievementRewards
+	AchievementWeapon = 29, // the primary weapon whose mastery this achievement tracks
 };
 
 enum class EScctCareerCommand : int32

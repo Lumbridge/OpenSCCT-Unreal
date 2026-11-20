@@ -122,9 +122,15 @@ namespace ScctUi
 	/** The help pane: what the focused control does (ScctUi::Describe). */
 	TSharedRef<SWidget> DescriptionPane();
 
+	/** The current game process's graphics memory usage against its driver budget. */
+	TSharedRef<SWidget> VideoMemoryMeter();
+
 	/** Asks a yes/no question; Yes runs OnYes. The No button has the focus and is what Escape presses. */
 	void Confirm(const TSharedPtr<SScctDialogLayer>& Dialogs, const FString& Title, const FString& Body, const FString& YesLabel, const FString& NoLabel, TFunction<void()> OnYes, bool bDanger = false);
 
-	/** "OpenSCCT 0.8.150 · Unreal" for a corner of a page. */
+	/** The Unreal release version from the project's packaging settings. */
 	FString BuildLabel();
+
+	/** The shared OpenSCCT version and build used by the bridge. */
+	FString BridgeBuildLabel();
 }

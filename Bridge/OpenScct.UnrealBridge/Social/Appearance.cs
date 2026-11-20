@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using OpenScct.Net.Cosmetics;
 using OpenScct.Net.Discovery;
 using OpenScct.UnrealBridge.Hub;
+using OpenScct.UnrealBridge.Loadout;
 using OpenScct.UnrealBridge.Online;
 using OpenScct.UnrealBridge.Pose;
 
@@ -80,6 +81,33 @@ public sealed partial class AccountService
     private bool _appearanceDirty;
     private (string Spy, string Merc)? _lookSent;
     private object? _lookSentTo;
+    private readonly PrivateWeaponFinishes _privateFinishes = new();
+
+    private PrivateWeaponFinishes PrivateFinishes()
+    {
+        _privateFinishes.UseProfile(LoadoutStore.FilePath, SignedInAccountId);
+        return _privateFinishes;
+    }
+
+    internal bool CanEquipCosmetic(CosmeticItem item) => Account?.Unlocked.Contains(item.Id) == true ||
+        (CareerModel.UsesPrivateMastery && WeaponCareerView.PrivateUnlocks().Contains(item.Id));
+
+    internal CosmeticLook PrivateMercLook(CosmeticLook look)
+    {
+        // A standalone host can spawn with an empty replicated look. Use its selected rifle finishes there too.
+        foreach (string id in ArmouryLook.Merc)
+            if (CosmeticCatalog.Find(id) is { } item && CosmeticCatalog.PrimaryClass(item.Slot) is not null &&
+                look[item.Slot] is null && Account?.Unlocked.Contains(id) == true)
+                look = look.With(item.Slot, item);
+        return PrivateFinishes().Apply(look);
+    }
+
+    internal bool IsCosmeticSelected(CosmeticItem item)
+    {
+        if (CosmeticCatalog.PrimaryClass(item.Slot) is not null && CareerModel.UsesPrivateMastery && PrivateFinishes().Has(item.Slot))
+            return PrivateFinishes().Apply(ArmouryLook.Own(item.Side))[item.Slot]?.Id == item.Id;
+        return ArmouryLook.Of(item.Side).Contains(item.Id);
+    }
 
     public string AppearanceStatus { get; private set; } = string.Empty;
 
@@ -135,14 +163,28 @@ public sealed partial class AccountService
     public bool ChooseCosmetic(CosmeticSide side, CosmeticSlot slot, string? id, bool force)
     {
         CosmeticItem? item = string.IsNullOrWhiteSpace(id) ? null : CosmeticCatalog.Find(id.Trim());
-        if (item is not null && (item.Side != side || item.Slot != slot))
+        if ((!string.IsNullOrWhiteSpace(id) && item is null) || (item is not null && (item.Side != side || item.Slot != slot)))
         {
             return false;
         }
 
-        if (item is not null && !force && Account?.Unlocked.Contains(item.Id) != true)
+        if (!force && item is not null && Account?.Unlocked.Contains(item.Id) != true)
         {
-            return false;
+            if (!CanEquipCosmetic(item) || !PrivateFinishes().Set(slot, item.Id)) return false;
+            Touch();
+            return true;
+        }
+
+        if (side == CosmeticSide.Merc && CareerModel.UsesPrivateMastery && PrivateFinishes().Has(slot))
+        {
+            // Clearing a private finish must not clear a separately equipped account finish on the same rifle.
+            bool privateDefault = item is null && ArmouryLook.Own(side)[slot] is not null;
+            if (!PrivateFinishes().Set(slot, privateDefault ? string.Empty : null)) return false;
+            if (item is null)
+            {
+                Touch();
+                return true;
+            }
         }
 
         string[] kept = ArmouryLook.Of(side).Where(i => CosmeticCatalog.Find(i) is { } other && other.Slot != slot).ToArray();
@@ -165,9 +207,10 @@ public sealed partial class AccountService
         }
 
         CosmeticItem item = CosmeticCatalog.All[index];
-        AccountInfo? account = Account;
-        bool open = account?.Unlocked.Contains(item.Id) == true;
-        AchievementInfo? from = account?.Achievements.FirstOrDefault(a => a.Rewards.Contains(item.Id));
+        bool open = CanEquipCosmetic(item);
+        var career = CareerModel.Instance;
+        career.Pump();
+        var from = career.UnlockFor(item.Id);
         block.Side = (int)item.Side;
         block.Slot = (int)item.Slot;
         block.Kind = (int)item.Kind;
@@ -175,13 +218,13 @@ public sealed partial class AccountService
             : item.Kind == CosmeticKind.Texture && CosmeticCatalog.PatternOf(item.Pattern) is { Colours.Count: > 0 } p ? (int)p.Colours[p.Colours.Count / 2]
             : (int)item.Rgb;
         block.Rgb2 = item.Kind == CosmeticKind.Texture && CosmeticCatalog.PatternOf(item.Pattern) is { Colours.Count: > 1 } q ? (int)q.Colours[0] : block.Rgb;
-        block.Flags = (open ? 1 : 0) | (ArmouryLook.Of(item.Side).Contains(item.Id) ? 2 : 0);
+        block.Flags = (open ? 1 : 0) | (IsCosmeticSelected(item) ? 2 : 0);
         block.Current = from?.Current ?? 0;
         block.Target = from?.Target ?? 0;
         id = item.Id;
         name = item.Name;
-        tip = open ? CosmeticCatalog.Describe(item)
-            : "Locked. Unlocked by: " + (from is null ? LevelSkinRequirement(item) : from.Title + " (" + from.Description + ")");
+        tip = from is null ? (open ? ArmouryPresentation.Describe(item) : "Unlock at " + LevelSkinRequirement(item) + ".")
+            : from.Achievement.Description;
         return true;
     }
 

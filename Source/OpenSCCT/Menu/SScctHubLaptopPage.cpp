@@ -4,8 +4,10 @@
 #include "Engine/Texture2D.h"
 #include "Hub/ScctHubPads.h"
 #include "Menu/ScctMenuStyle.h"
+#include "Menu/ScctSelectBox.h"
 #include "Misc/PackageName.h"
 #include "Online/ScctOnlineSubsystem.h"
+#include "Runtime/ScctFeatures.h"
 #include "Styling/CoreStyle.h"
 #include "Styling/SlateBrush.h"
 #include "Widgets/Images/SImage.h"
@@ -47,6 +49,18 @@ namespace
 void SScctHubLaptopPage::Construct(const FArguments& InArgs)
 {
 	Pads = InArgs._Pads;
+	MapGroups = ScctMapBrowser::Groups();
+	MapDetails = ScctMapBrowser::Details();
+	const FString SavedGroup = ScctMapBrowser::ActiveGroup();
+	MapGroupIndex = FMath::Max(MapGroups.IndexOfByPredicate([&SavedGroup](const FScctMapGroup& Group)
+	{
+		return Group.Name.Equals(SavedGroup, ESearchCase::IgnoreCase);
+	}), 0);
+	TArray<FString> MapGroupLabels;
+	for (const FScctMapGroup& Group : MapGroups)
+	{
+		MapGroupLabels.Add(Group.Title);
+	}
 	ChildSlot
 	.HAlign(HAlign_Center)
 	.VAlign(VAlign_Center)
@@ -78,20 +92,19 @@ void SScctHubLaptopPage::Construct(const FArguments& InArgs)
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 12.0f, 0.0f)[ LaptopUi::Label(TEXT("Map")) ]
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)
 							[
-								LaptopUi::Button(
-									TAttribute<FText>::CreateLambda([this] { return LaptopUi::ToText(TEXT("GROUP: ") + (MapGroups.IsValidIndex(MapGroupIndex) ? MapGroups[MapGroupIndex].Title.ToUpper() : FString(TEXT("ALL INSTALLED MAPS")))); }),
-									FOnClicked::CreateLambda([this]
-									{
-										if (MapGroups.Num() > 1)
-										{
-											MapGroupIndex = (MapGroupIndex + 1) % MapGroups.Num();
-											ScctMapBrowser::SetActiveGroup(MapGroups[MapGroupIndex].Name);
-											MapsKey.Reset();
-											RebuildMaps();
-										}
-										return FReply::Handled();
-									}),
-									TAttribute<bool>::CreateLambda([this] { return MapGroups.IsValidIndex(MapGroupIndex) && !MapGroups[MapGroupIndex].bAll; }))
+								SNew(SScctSelectBox)
+								.Options(MoveTemp(MapGroupLabels))
+								.Prefix(TEXT("Group: "))
+								.FieldLabel(LaptopUi::ToText(TEXT("Map group")))
+								.EmptyText(LaptopUi::ToText(TEXT("All installed maps")))
+								.Get([this] { return MapGroupIndex; })
+								.Set([this](int32 Index)
+								{
+									MapGroupIndex = Index;
+									ScctMapBrowser::SetActiveGroup(MapGroups[MapGroupIndex].Name);
+									MapsKey.Reset();
+									RebuildMaps();
+								})
 							]
 							+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)
 							[
@@ -221,10 +234,10 @@ void SScctHubLaptopPage::RebuildRows()
 	TArray<FScctHubLaptopRow> Rows;
 	Rows.SetNumZeroed(MaxRows);
 	Rows.SetNum(FMath::Min(Api->GetLaptopRows(Rows.GetData(), Rows.Num()), MaxRows));
-	FString Key;
+	FString Key = Shared->ReadText(EScctHubPadsText::LaptopMap);
 	for (const FScctHubLaptopRow& Row : Rows)
 	{
-		Key += FString::Printf(TEXT("%s=%s:%d;"), Row.Key, Row.Value, Row.Enabled);
+		Key += FString::Printf(TEXT("%s=%s:%d:%d:%d;"), Row.Key, Row.Value, Row.Enabled, Row.Index, Row.Count);
 	}
 	if (Key == RowsKey)
 	{
@@ -232,46 +245,51 @@ void SScctHubLaptopPage::RebuildRows()
 	}
 	RowsKey = Key;
 
+	const FScctHubLaptopChoicesApi* ChoicesApi = ScctFeature<FScctHubLaptopChoicesApi>();
 	RowBox->ClearChildren();
 	for (int32 Index = 0; Index < Rows.Num(); ++Index)
 	{
 		const FScctHubLaptopRow& Row = Rows[Index];
-		const bool bEnabled = Row.Enabled != 0;
-		const FLinearColor Colour = bEnabled ? ScctHudStyle::Text() : ScctHudStyle::TextFaint();
-		auto Step = [this, Index](int32 Delta)
+		const FText Label = LaptopUi::ToText(Fixed(Row.Label, UE_ARRAY_COUNT(Row.Label)));
+		const FText Value = LaptopUi::ToText(Fixed(Row.Value, UE_ARRAY_COUNT(Row.Value)));
+		TSharedRef<SWidget> Control = LaptopUi::Text(Value, 12.5f, FSlateColor(ScctHudStyle::TextFaint()), ScctHudStyle::EWeight::Bold);
+		if (ChoicesApi && Row.Enabled != 0 && Row.Count > 1)
 		{
-			return FOnClicked::CreateLambda([this, Index, Delta]
+			TArray<FScctHubLaptopChoice> Choices;
+			Choices.SetNumZeroed(Row.Count);
+			const int32 Count = ChoicesApi->GetChoices(Index, Choices.GetData(), Choices.Num());
+			if (Count == Choices.Num())
 			{
-				if (const TSharedPtr<FScctHubPads> Pinned = Pads.Pin(); Pinned.IsValid() && Pinned->GetApi() != nullptr)
+				TArray<FString> Labels;
+				for (const FScctHubLaptopChoice& Choice : Choices)
 				{
-					Pinned->GetApi()->StepLaptopRow(Index, Delta);
-					Refresh(false);
+					Labels.Add(Fixed(Choice.Label, UE_ARRAY_COUNT(Choice.Label)));
 				}
-				return FReply::Handled();
-			});
-		};
+				Control = SNew(SScctSelectBox)
+					.Options(MoveTemp(Labels))
+					.FieldLabel(Label)
+					.EmptyText(Value)
+					.Get([Selected = Row.Index] { return Selected; })
+					.Set([this, ChoicesApi, Index](int32 Selected)
+					{
+						if (ChoicesApi->Select(Index, Selected))
+						{
+							Refresh(false);
+						}
+					});
+			}
+		}
+		const FLinearColor Colour = Row.Enabled != 0 ? ScctHudStyle::Text() : ScctHudStyle::TextFaint();
 		RowBox->AddSlot().AutoHeight().Padding(0.0f, 2.0f)
 		[
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
 			[
-				LaptopUi::Text(LaptopUi::ToText(Fixed(Row.Label, UE_ARRAY_COUNT(Row.Label))), 12.5f, FSlateColor(Colour))
+				LaptopUi::Text(Label, 12.5f, FSlateColor(Colour))
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[
-				SNew(SBox).Visibility(bEnabled ? EVisibility::Visible : EVisibility::Hidden)[ LaptopUi::Button(LaptopUi::ToText(TEXT("<")), Step(-1), false, LaptopUi::Accent(), 34.0f) ]
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6.0f, 0.0f)
-			[
-				SNew(SBox).WidthOverride(150.0f).HAlign(HAlign_Center)
-				[
-					LaptopUi::Text(LaptopUi::ToText(Fixed(Row.Value, UE_ARRAY_COUNT(Row.Value))), 12.5f, FSlateColor(bEnabled ? LaptopUi::Accent() : ScctHudStyle::TextFaint()),
-						ScctHudStyle::EWeight::Bold)
-				]
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(SBox).Visibility(bEnabled ? EVisibility::Visible : EVisibility::Hidden)[ LaptopUi::Button(LaptopUi::ToText(TEXT(">")), Step(1), false, LaptopUi::Accent(), 34.0f) ]
+				SNew(SBox).MinDesiredWidth(150.0f)[ Control ]
 			]
 		];
 	}
@@ -304,14 +322,6 @@ void SScctHubLaptopPage::RebuildMaps()
 	if (Api == nullptr || !MapBox.IsValid())
 	{
 		return;
-	}
-	if (MapGroups.IsEmpty())
-	{
-		// Once per page: the catalog's groups with the one picked last, and the search words.
-		MapGroups = ScctMapBrowser::Groups();
-		MapDetails = ScctMapBrowser::Details();
-		const FString Saved = ScctMapBrowser::ActiveGroup();
-		MapGroupIndex = FMath::Max(MapGroups.IndexOfByPredicate([&Saved](const FScctMapGroup& Group) { return Group.Name.Equals(Saved, ESearchCase::IgnoreCase); }), 0);
 	}
 	TArray<FScctHubLaptopMap> Maps;
 	Maps.SetNumZeroed(MaxMaps);

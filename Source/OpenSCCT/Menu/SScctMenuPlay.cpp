@@ -54,7 +54,7 @@ namespace
 				// AquaE first when it is there: the map everything was first seen on.
 				MapIndex = FMath::Max(MapIds.IndexOfByPredicate([](const FString& Id) { return Id.Equals(TEXT("AquaE"), ESearchCase::IgnoreCase); }), 0);
 			}
-			FixMode();
+			SelectDefaultMode();
 
 			if (MapIds.IsEmpty())
 			{
@@ -223,13 +223,10 @@ namespace
 			return Modes;
 		}
 
-		void FixMode()
+		void SelectDefaultMode()
 		{
-			const TArray<int32> Modes = GetModes();
-			if (!Modes.Contains(ModeIndex))
-			{
-				ModeIndex = Modes[0];
-			}
+			const FScctMenuMapInfo* Map = GetMap();
+			ModeIndex = Map != nullptr ? Map->DefaultModeIndex() : 0;
 		}
 
 		const FScctMenuMode* GetModeRules() const
@@ -245,7 +242,7 @@ namespace
 			if (Index != MapIndex && MapIds.IsValidIndex(Index))
 			{
 				MapIndex = Index;
-				FixMode();
+				SelectDefaultMode();
 				RefreshHero();
 			}
 		}
@@ -485,7 +482,7 @@ namespace
 				.Look(EScctButtonLook::Menu)
 				.Text(FText::FromString(TEXT("EQUIPMENT")))
 				.SubText_Lambda([this] { return FText::FromString(SScctGearPage::SummaryLine(bMerc ? 1 : 0)); })
-				.Description(FText::FromString(TEXT("Choose the gadgets and weapons you take into the match. Mercenaries can use their equipped pistol when sidearms are enabled under Rules.")))
+				.Description(FText::FromString(TEXT("Choose the gadgets and weapons you take into the match.")))
 				.OnPressed(FSimpleDelegate::CreateLambda([this] { Host.Open(bMerc ? TEXT("gear/merc") : TEXT("gear/spy")); })));
 
 			Rows->AddSlot().AutoHeight()[ ScctUi::Section(TEXT("Bots")) ];
@@ -538,21 +535,6 @@ namespace
 				.Description(FText::FromString(TEXT("No time limit, unlimited lives and a 5 second respawn, unless set above, with unlimited ammunition, gadgets and mask air, instant gear changes and Switch Team in the match menu. For learning a map.")))
 				.Get([this] { return bPractice; })
 				.Set([this](bool bValue) { bPractice = bValue; }));
-			Add(SNew(SScctToggle)
-				.Label(FText::FromString(TEXT("Mercenary sidearms")))
-				.Description(FText::FromString(TEXT("Allow mercenaries to use the pistol they selected in Equipment.")))
-				.Get([this] { return bSidearms; })
-				.Set([this](bool bValue) { bSidearms = bValue; }));
-			Add(SNew(SScctToggle)
-				.Label(FText::FromString(TEXT("Additional rifles")))
-				.Description(FText::FromString(TEXT("The mercenaries may pick OpenSCCT's additional rifles.")))
-				.Get([this] { return bRifles; })
-				.Set([this](bool bValue) { bRifles = bValue; }));
-			Add(SNew(SScctToggle)
-				.Label(FText::FromString(TEXT("Responsive smoke")))
-				.Description(FText::FromString(TEXT("Smoke grenades fill a shared simulated cloud that walls hold back and that shots and blasts push through, instead of the original's smoke.")))
-				.Get([this] { return bResponsiveSmoke; })
-				.Set([this](bool bValue) { bResponsiveSmoke = bValue; }));
 			Add(SNew(SScctStepper)
 				.Label(FText::FromString(TEXT("Match size")))
 				.Description(FText::FromString(TEXT("The player count the map lays its objectives, doors and starts out for (its match-size rules). Auto: the bots and you. A larger count plays a small match on the full map.")))
@@ -604,10 +586,7 @@ namespace
 				UScctMenuSubsystem::ModeKey(ModeIndex), bMerc || IsMercDeathmatch() ? TEXT("merc") : TEXT("spy"), Bots, Skill + 1);
 			// Practice is the Godot client's --practice (PlayConfig.FromOptions): the offline rules and unlimited gear.
 			if (bPractice) { Url += TEXT("?Practice=1?UnlimitedGear=1"); }
-			if (bResponsiveSmoke) { Url += TEXT("?ResponsiveSmoke=1"); }
 			if (MatchPlayers > 0) { Url += FString::Printf(TEXT("?MatchPlayers=%d"), MatchPlayers); }
-			if (bSidearms) { Url += TEXT("?Sidearms=1"); }
-			if (bRifles) { Url += TEXT("?Rifles=1"); }
 			if (TimeLimit >= 0) { Url += FString::Printf(TEXT("?TimeLimit=%d"), TimeLimit); }
 			if (SpyLives >= 0) { Url += FString::Printf(TEXT("?SpyLives=%d"), SpyLives); }
 			if (MercLives >= 0) { Url += FString::Printf(TEXT("?MercLives=%d"), MercLives); }
@@ -625,7 +604,6 @@ namespace
 		{
 			const FString& Ini = GGameUserSettingsIni;
 			GConfig->GetString(PlaySection, TEXT("Map"), SavedMap, Ini);
-			GConfig->GetInt(PlaySection, TEXT("Mode"), ModeIndex, Ini);
 			GConfig->GetBool(PlaySection, TEXT("Merc"), bMerc, Ini);
 			GConfig->GetInt(PlaySection, TEXT("Bots"), Bots, Ini);
 			GConfig->GetInt(PlaySection, TEXT("Skill"), Skill, Ini);
@@ -634,18 +612,8 @@ namespace
 			GConfig->GetInt(PlaySection, TEXT("MercLives"), MercLives, Ini);
 			GConfig->GetInt(PlaySection, TEXT("Respawn"), Respawn, Ini);
 			GConfig->GetBool(PlaySection, TEXT("Practice"), bPractice, Ini);
-			if (!GConfig->GetBool(PlaySection, TEXT("Sidearms"), bSidearms, Ini))
-			{
-				// A pistol selected in the old Rules menu enabled sidearms for the match.
-				int32 SavedSidearm = 0;
-				GConfig->GetInt(PlaySection, TEXT("Sidearm"), SavedSidearm, Ini);
-				bSidearms = SavedSidearm >= 1 && SavedSidearm <= 5;
-			}
-			GConfig->GetBool(PlaySection, TEXT("Rifles"), bRifles, Ini);
-			GConfig->GetBool(PlaySection, TEXT("ResponsiveSmoke"), bResponsiveSmoke, Ini);
 			GConfig->GetInt(PlaySection, TEXT("MatchPlayers"), MatchPlayers, Ini);
 			MatchPlayers = MatchPlayers < PlayMatchPlayersMin ? 0 : FMath::Min(MatchPlayers, PlayMatchPlayersMax);
-			ModeIndex = FMath::Clamp(ModeIndex, 0, 3);
 			Bots = FMath::Clamp(Bots, 0, 15);
 			Skill = FMath::Clamp(Skill, 0, 3);
 		}
@@ -657,7 +625,6 @@ namespace
 			{
 				GConfig->SetString(PlaySection, TEXT("Map"), *MapIds[MapIndex], Ini);
 			}
-			GConfig->SetInt(PlaySection, TEXT("Mode"), ModeIndex, Ini);
 			GConfig->SetBool(PlaySection, TEXT("Merc"), bMerc, Ini);
 			GConfig->SetInt(PlaySection, TEXT("Bots"), Bots, Ini);
 			GConfig->SetInt(PlaySection, TEXT("Skill"), Skill, Ini);
@@ -666,9 +633,6 @@ namespace
 			GConfig->SetInt(PlaySection, TEXT("MercLives"), MercLives, Ini);
 			GConfig->SetInt(PlaySection, TEXT("Respawn"), Respawn, Ini);
 			GConfig->SetBool(PlaySection, TEXT("Practice"), bPractice, Ini);
-			GConfig->SetBool(PlaySection, TEXT("Sidearms"), bSidearms, Ini);
-			GConfig->SetBool(PlaySection, TEXT("Rifles"), bRifles, Ini);
-			GConfig->SetBool(PlaySection, TEXT("ResponsiveSmoke"), bResponsiveSmoke, Ini);
 			GConfig->SetInt(PlaySection, TEXT("MatchPlayers"), MatchPlayers, Ini);
 			GConfig->Flush(false, Ini);
 		}
@@ -685,9 +649,6 @@ namespace
 		int32 MercLives = -1;
 		int32 Respawn = -1;
 		bool bPractice = false;
-		bool bSidearms = false;
-		bool bRifles = false;
-		bool bResponsiveSmoke = false;
 		int32 MatchPlayers = 0;
 
 		TSharedPtr<SBox> HeroBox;

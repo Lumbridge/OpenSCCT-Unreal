@@ -27,10 +27,6 @@ namespace OpenScct.UnrealBridge.Equipment;
 /// third-person weapon by OpenSCCT's ObservedWeaponViewModel (linked from game/Scripts/Views) and sampled after
 /// every tick as FirstPersonView.OnObservedTick and DrawObserved do: <see cref="OnObservedTick"/> and
 /// <see cref="DrawObserved"/>.</para>
-/// <para>Not run yet: OpenSCCT's own pistols (OpenScctSidearms.*_first). Their sight offset, revolver kick and
-/// reload handling are ported below and the files load (their clips move scene nodes outside the skin, the gun's
-/// parts and a "Root" node above the skeleton, which <see cref="GlbCharacter"/> lists as extra bones), but no
-/// probe has put a pistol in a merc's hands, so the view model of a merc holding one is unchecked.</para>
 /// </summary>
 internal sealed class MercFirstPerson
 {
@@ -42,6 +38,9 @@ internal sealed class MercFirstPerson
     private readonly Dictionary<string, Loaded?> _loaded = new(StringComparer.OrdinalIgnoreCase);
     private readonly string? _sharedRoot;
     private SWeaponDefense? _lastWeapon;
+    private RecoilRecoveryRifle? _trackedRifle;
+    private int _trackedRifleShots;
+    private MercRifleRecoil _rifleRecoil;
     private int _lastShot;
     private float _revolverKick;
 
@@ -65,13 +64,40 @@ internal sealed class MercFirstPerson
     public (Xform Barrel, Xform? Neutral)? Sight { get; private set; }
 
     /// <summary>After each client tick: samples the view model channels of the local merc's weapon.</summary>
-    public void OnTick(SPlayerController? pc) => _pose.OnTick(((pc?.Pawn as SBasePawn)?.MyWeapon as SWeaponDefense)?.ViewAnim);
+    public void OnTick(SPlayerController? pc, double time, bool localWeaponView, float aimBlend)
+    {
+        var weapon = (pc?.Pawn as SBasePawn)?.MyWeapon as SWeaponDefense;
+        _pose.OnTick(weapon?.ViewAnim);
+        var rifle = weapon as RecoilRecoveryRifle;
+        if (!ReferenceEquals(_trackedRifle, rifle))
+        {
+            _trackedRifle = rifle;
+            _trackedRifleShots = rifle?.ShotCounter ?? 0;
+            _rifleRecoil = default;
+        }
+        else if (rifle is not null)
+        {
+            // The owner's predicted shot is emitted once on the simulation tick. The server's reliable reply
+            // confirms that same ID. Sample every tick, even when several ticks run between rendered frames.
+            if (!localWeaponView || !rifle.bDrawWeapon || rifle.StateNode is not (SWeaponDefense.s_Selected or SWeaponDefense.s_Firing) ||
+                rifle.ShotCounter < _trackedRifleShots)
+                _rifleRecoil = default;
+            else if (rifle.ShotCounter > _trackedRifleShots)
+                _rifleRecoil.Fire(time, rifle.ShotCounter, aimBlend);
+            _trackedRifleShots = rifle.ShotCounter;
+        }
+    }
 
     /// <summary>
     /// After each client tick of a demo: moves the weapon rebuilt for the watched <paramref name="pawn"/> on by a
     /// tick (its shots and the body's reloads) and samples its channels (FirstPersonView.OnObservedTick).
     /// </summary>
-    public void OnObservedTick(SBasePawn? pawn) => _pose.OnTick(_observed.Update(pawn, Sim.DeltaTime)?.ViewAnim);
+    public void OnObservedTick(SBasePawn? pawn)
+    {
+        _trackedRifle = null;
+        _rifleRecoil = default;
+        _pose.OnTick(_observed.Update(pawn, Sim.DeltaTime)?.ViewAnim);
+    }
 
     /// <summary>
     /// The view model of a merc watched from his eyes in a demo, from the weapon rebuilt out of his recorded
@@ -97,7 +123,8 @@ internal sealed class MercFirstPerson
     /// (Estimated in OpenSCCT: the view model sits at the camera's location and rotation; the original's weapon draw
     /// offset is not in the specs.)
     /// </summary>
-    public bool Draw(SPlayerController? pc, float dt, float alpha, ref BridgeFirstPerson view, float aimBlend = 0f)
+    public bool Draw(SPlayerController? pc, float dt, float alpha, ref BridgeFirstPerson view, float aimBlend,
+        bool localWeaponView, double time)
     {
         Model = null;
         Applier = null;
@@ -105,10 +132,12 @@ internal sealed class MercFirstPerson
         var weapon = (pc?.Pawn as SBasePawn)?.MyWeapon as SWeaponDefense;
         bool show = pc is { bBehindView: false } && weapon is { bDrawWeapon: true, bDeleteMe: false } && !weapon.Mesh.IsNone &&
             ReferenceEquals(pc.ViewTarget ?? pc.Pawn, pc.Pawn);
-        return show && DrawWeapon(weapon!, weapon!.ShotCounter, dt, alpha, ref view, aimBlend);
+        return show && DrawWeapon(weapon!, weapon!.ShotCounter, dt, alpha, ref view, aimBlend,
+            localWeaponView && _trackedRifle is not null && ReferenceEquals(weapon, _trackedRifle), time);
     }
 
-    private bool DrawWeapon(SWeaponDefense weapon, int shotCount, float dt, float alpha, ref BridgeFirstPerson view, float aimBlend = 0f)
+    private bool DrawWeapon(SWeaponDefense weapon, int shotCount, float dt, float alpha, ref BridgeFirstPerson view,
+        float aimBlend = 0f, bool useRifleRecoil = false, double time = 0)
     {
         if (Load(weapon.Mesh.Path!) is not { } loaded)
         {
@@ -131,22 +160,52 @@ internal sealed class MercFirstPerson
 
         // A pistol's reload, and a reload of OpenSCCT's own rifles, owns both arms: nothing else is layered over it.
         Name action = weapon.ViewAnim.Sequence(SWeaponDefense.ACTIONCHANNEL);
-        bool customHandling = weapon is MercSidearm or MercRifle &&
+        bool customHandling = weapon is MercSidearm or MercRifle or PumpShotgun &&
             (weapon is MercSidearm { ReloadUntil: > 0 } || action == weapon.AFirstReloGrenSt || action == weapon.AFirstReloSt);
         // A clip of an animation project bound to this model for gameplay runs at the project clip's frame rate.
         _rates.Bind(weapon.XLevel?.GetService<AnimationWorld>()?.Project, weapon.Mesh.Path!);
         loaded.Clips.Bind(_rates.Project, weapon.Mesh.Path!);
-        loaded.Applier.Apply(_pose.Update(weapon.ViewAnim, loaded.Model.Character, dt, alpha, exclusiveAction: customHandling,
-            blendLandingRecovery: weapon is MercSidearm, blendLocomotion: aimBlend > .001f, rates: _rates, replacements: loaded.Clips));
+        var channels = _pose.Update(weapon.ViewAnim, loaded.Model.Character, dt, alpha, exclusiveAction: customHandling,
+            blendLandingRecovery: weapon is MercSidearm, blendLocomotion: true, rates: _rates, replacements: loaded.Clips);
+        Xform removeClipKick = Xform.Identity;
+        if (useRifleRecoil && action == weapon.AFirstShooSt && loaded.Model.MuzzleBone >= 0)
+        {
+            var skeleton = loaded.Model.ActorToSkeleton;
+            removeClipKick = skeleton * loaded.Applier.ApplyWithAnchor(channels, SWeaponDefense.ACTIONCHANNEL,
+                loaded.Model.MuzzleBone) * skeleton.AffineInverse();
+        }
+        else
+        {
+            loaded.Applier.Apply(channels);
+        }
 
         Xform root = Xform.Identity;
         if (weapon is MercSidearm && loaded.SightOffset is { } sight)
         {
             root *= sight;
         }
-        else if (weapon is MercRifle && loaded.SightOffset is { } ads)
+        if ((weapon.AttachmentMask & WeaponAttachments.Acog) != 0 && loaded.AcogAim is { } scope)
+        {
+            root = EquipmentMath.Interpolate(root, scope, aimBlend);
+        }
+        else if (((weapon is M4A1S && (weapon.AttachmentMask & WeaponAttachments.Optics) == 0) ||
+                  (weapon is PrecisionRifle or MercSidearm && (weapon.AttachmentMask & WeaponAttachments.RedDot) != 0)) &&
+                 loaded.CloseSightAim is { } closeSight)
+        {
+            // These sights share a 12 cm eye position. The M4's rear opening is
+            // framed to occupy about 2.8% of the mercenary view's width.
+            root = EquipmentMath.Interpolate(root, closeSight, aimBlend);
+        }
+        else if (weapon is MercRifle or PumpShotgun && loaded.SightOffset is { } ads)
         {
             root *= EquipmentMath.Interpolate(Xform.Identity, ads, aimBlend);
+        }
+        else if ((weapon is MercSidearm || (weapon is not MercRifle && (weapon.AttachmentMask & WeaponAttachments.RedDot) != 0)) &&
+                 loaded.BoreAim is { } boreAim)
+        {
+            // These rigs only have FX. The native presenter aligns either the physical
+            // iron sight line or the mounted glass to this animated reference.
+            root = EquipmentMath.Interpolate(root, boreAim, aimBlend);
         }
 
         if (_revolverKick > 0f)
@@ -158,11 +217,16 @@ internal sealed class MercFirstPerson
             _revolverKick *= MathF.Exp(-10f * dt);
         }
 
+        Xform neutralRoot = root;
+        if (useRifleRecoil)
+        {
+            root = _rifleRecoil.TransformAt(time) * root * removeClipKick;
+        }
         Model = loaded.Model;
         Applier = loaded.Applier;
         Sight = loaded.Model.MuzzleBone >= 0
             ? (root * loaded.Model.ActorToSkeleton * loaded.Model.Global(loaded.Model.MuzzleBone, loaded.Applier.Positions,
-                loaded.Applier.Rotations, loaded.Applier.Scales), loaded.NeutralMuzzle is { } neutral ? root * neutral : null)
+                loaded.Applier.Rotations, loaded.Applier.Scales), loaded.NeutralMuzzle is { } neutral ? neutralRoot * neutral : null)
             : null;
         view.Kind = BridgeFirstPersonKind.Merc;
         view.PartCount = 1;
@@ -186,7 +250,15 @@ internal sealed class MercFirstPerson
         if (EquipmentModel.Load(asset, _sharedRoot) is { } model)
         {
             Xform? neutral = IdleSocket(model, model.MuzzleBone, .5f);
-            loaded = new Loaded(model, new ChannelPoseApplier(model.Character), SidearmSight(asset, neutral) ?? RifleSight(asset, model), neutral, new StudioClips(model.Character));
+            bool pistol = asset.StartsWith("OpenScctSidearms.", StringComparison.OrdinalIgnoreCase);
+            Xform? boreAim = neutral is { } bore ? AlignSight(bore, pistol ? .38f : .24f) : null;
+            Xform? ads = IdleSocket(model, model.Character.FindBone("ADS"), 0f);
+            // The 4x ocular needs consistent eye relief across receivers. The AK's
+            // native 11 cm iron sight distance clips the scope against the screen edges.
+            Xform? acogAim = (ads ?? neutral) is { } anchor ? AlignSight(anchor, pistol ? .22f : .26f) : null;
+            Xform? closeReferenceSocket = pistol ? neutral : ads;
+            Xform? closeSightAim = closeReferenceSocket is { } closeReference ? AlignSight(closeReference, .12f) : null;
+            loaded = new Loaded(model, new ChannelPoseApplier(model.Character), SidearmSight(asset, neutral) ?? RifleSight(asset, ads), neutral, boreAim, acogAim, closeSightAim, new StudioClips(model.Character));
         }
 
         _loaded[asset] = loaded;
@@ -228,19 +300,24 @@ internal sealed class MercFirstPerson
         return model.ActorToSkeleton * model.Global(bone, positions, rotations, scales);
     }
 
-    private static Xform? RifleSight(string asset, EquipmentModel model)
+    private static Xform? RifleSight(string asset, Xform? ads)
     {
         MercRifleDefinition? rifle = MercRifles.All.FirstOrDefault(r => string.Equals(r.Asset + "_first", asset, StringComparison.OrdinalIgnoreCase));
-        if (rifle is null || IdleSocket(model, model.Character.FindBone("ADS"), 0f) is not { } sight)
+        if (rifle is null || ads is not { } sight)
         {
             return null;
         }
 
-        Basis3 rotation = Basis3.FromQuaternion(EquipmentMath.ShortestArc(sight.Basis.X, Vector3.UnitX));
-        return new Xform(rotation, Vector3.UnitX * rifle.EyeRelief - rotation * sight.Origin);
+        return AlignSight(sight, rifle.EyeRelief);
     }
 
-    private sealed record Loaded(EquipmentModel Model, ChannelPoseApplier Applier, Xform? SightOffset, Xform? NeutralMuzzle, StudioClips Clips);
+    private static Xform AlignSight(Xform sight, float eyeRelief)
+    {
+        Basis3 rotation = Basis3.FromQuaternion(EquipmentMath.ShortestArc(sight.Basis.X, Vector3.UnitX));
+        return new Xform(rotation, Vector3.UnitX * eyeRelief - rotation * sight.Origin);
+    }
+
+    private sealed record Loaded(EquipmentModel Model, ChannelPoseApplier Applier, Xform? SightOffset, Xform? NeutralMuzzle, Xform? BoreAim, Xform? AcogAim, Xform? CloseSightAim, StudioClips Clips);
 }
 
 /// <summary>

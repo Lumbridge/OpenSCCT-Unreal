@@ -7,6 +7,7 @@ Runs inside the editor's Python:
 The materials go to /Game/OpenSCCT/Effects/ and are committed: they are ours, made from nothing but maths.
   M_ScctFxGlow    additive unlit sprite; colour and opacity per instance (the first four custom data floats) and
                   the distance in cm over which it dims into a surface behind it (the fifth)
+  M_ScctFxFlare   an animated burning tip and halo for the merc's flare
   M_ScctFxSmoke   soft translucent sprite lit by the scene; colour and opacity per instance
   M_ScctFxCloud   a textured cloud sprite lit by the scene (the spy's smoke grenade): one cell of its Texture's
                   Grid per instance (the fifth custom value), times the instance's colour and opacity
@@ -73,13 +74,18 @@ def new_material(name):
     if editor_assets.does_asset_exist(path):
         if not FORCE and name not in FORCE_ONLY:
             return None
-        editor_assets.delete_asset(path)
-    return asset_tools.create_asset(name, FOLDER, unreal.Material, unreal.MaterialFactoryNew())
+        if not editor_assets.delete_asset(path):
+            raise RuntimeError("Could not replace " + path)
+    material = asset_tools.create_asset(name, FOLDER, unreal.Material, unreal.MaterialFactoryNew())
+    if not material:
+        raise RuntimeError("Could not create " + path)
+    return material
 
 
 def finish(material):
     lib.recompile_material(material)
-    editor_assets.save_loaded_asset(material, only_if_is_dirty=False)
+    if not editor_assets.save_loaded_asset(material, only_if_is_dirty=False):
+        raise RuntimeError("Could not save " + material.get_path_name())
     log("material built: " + material.get_path_name())
 
 
@@ -174,6 +180,64 @@ def build_glow():
     connect(light, "", soft, "A")
     connect(fade, "", soft, "B")
     connect_output(in_the_picture(material, soft, 250, 100), "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    finish(material)
+
+
+def build_flare():
+    material = new_material("M_ScctFxFlare")
+    if not material:
+        return
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_ADDITIVE)
+    material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property("two_sided", True)
+    # The flame starts at the cartridge mouth, 22% up the card. The renderer turns the
+    # local Y axis along the plume, so it stays attached even viewed from above.
+    vertex = lib.create_material_expression(material, unreal.MaterialExpressionPreSkinnedPosition, -1040, -200)
+    local = lib.create_material_expression(material, unreal.MaterialExpressionVertexInterpolator, -800, -200)
+    connect(vertex, "", local, "")
+    time = lib.create_material_expression(material, unreal.MaterialExpressionTime, -800, 0)
+    params = []
+    for index, (name, default) in enumerate((("Phase", 0.0), ("Strength", 1.0))):
+        param = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -800, 160 + index * 140)
+        param.set_editor_property("parameter_name", name)
+        param.set_editor_property("default_value", default)
+        param.set_editor_property("use_custom_primitive_data", True)
+        param.set_editor_property("primitive_data_index", index)
+        params.append(param)
+    flame = lib.create_material_expression(material, unreal.MaterialExpressionCustom, -470, 0)
+    flame.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    names = ("Local", "TimeSec", "Phase", "Strength")
+    pins = []
+    for name in names:
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    flame.set_editor_property("inputs", pins)
+    flame.set_editor_property("code", """
+float2 p = Local.xy * 0.01;
+p.y += 0.28;
+float t = TimeSec + Phase;
+float h = max(p.y, 0.0);
+float rise = saturate(h * 2.0);
+float drift = rise * (0.085 * sin(13.0*h - 8.1*t) + 0.043 * sin(24.0*h - 11.3*t));
+float x = p.x - drift;
+float pulse = 0.5 + 0.5 * sin(9.3*t + 0.9*sin(15.0*t));
+float width = 0.019 + 0.064 * saturate(1.0 - abs(h - 0.07) * 2.5);
+float feed = smoothstep(-0.06, 0.015, p.y);
+float hot = exp2(-dot(p * float2(22,17), p * float2(22,17)));
+float jet = exp2(-pow(abs(x)/width, 2.0)) * feed
+    * (1.0 - smoothstep(0.08, 0.58 + pulse*0.10, h));
+float split = x + 0.11 * rise + 0.024 * sin(19.0*h - 10.4*t);
+float tongue = exp2(-pow(abs(split) / (0.026 + 0.024 * rise), 2.0)) * feed
+    * smoothstep(0.02, 0.12, h) * (1.0 - smoothstep(0.18, 0.47, h));
+float halo = exp2(-dot(p * float2(6.0,5.6), p * float2(6.0,5.6))) * smoothstep(-0.22, -0.08, p.y);
+return saturate(Strength) * (float3(11.0, 8.3, 4.7) * hot
+    + float3(4.2, 1.10, 0.14) * jet + float3(1.8, 0.28, 0.035) * tongue
+    + float3(0.35, 0.080, 0.015) * halo);
+""")
+    for name, source in zip(names, (local, time, *params)):
+        connect(source, "", flame, name)
+    connect_output(in_the_picture(material, flame, -60, 0), "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     finish(material)
 
 
@@ -472,46 +536,30 @@ def build_projection():
     finish(material)
 
 
-# The ray march of a responsive smoke cloud. Inputs: CamRel (the camera in the box's frame, cm), PixelRel (the pixel
-# from the camera, cm), PixDepth and SceneD (the pixel's and the scene's depth along the view axis), the two density
-# atlases (DensA, DensB) and Blend between them, N (grid cells per axis), Tiles (slices per atlas row), Size (the
-# box's edge), Ext (optical depth per cm at density 1: ResponsiveSmokeField.Extinction, the same as gas and AI use),
-# Steps and ShadowSteps (the quality), Ambient, LightCol and LightDir (the light at the cloud), Albedo, Time and Flow,
-# and the shot holes: HoleTex holds HoleCount rows of (start, radius), (end, strength), (feather) in the box's frame.
-# Each density atlas holds the N slices of the grid side by side, Tiles to a row; a slice is read with the texture's
-# own bilinear filter and two slices are mixed by hand, so the grid reads as a smooth volume.
+# A filtered RG volume holds consecutive density fields. Rays skip empty space outside the
+# union of their occupied cells. Both the main ray and self-shadow use the same filtered history.
 SMOKE_VOLUME_CODE = r"""
 struct FSmokeGrid
 {
-    float N;
-    float Tiles;
     float Size;
     float Time;
     float Flow;
-    float Slices(Texture2D Tex, SamplerState Smp, float3 p)
+    // The grid already contains the rolling envelope and wall boundaries. Move detail within that envelope.
+    float Density(Texture3D History, SamplerState Smp, float Blend, Texture2D H, int Holes, float3 q, out float ambientScatter)
     {
-        p = saturate(p);
-        float z = p.z * N - 0.5;
-        float z0 = clamp(floor(z), 0.0, N - 1.0);
-        float z1 = min(z0 + 1.0, N - 1.0);
-        float f = saturate(z - z0);
-        float2 inner = clamp(p.xy * N, 0.5, N - 0.5) / N;
-        float2 tile0 = float2(fmod(z0, Tiles), floor(z0 / Tiles));
-        float2 tile1 = float2(fmod(z1, Tiles), floor(z1 / Tiles));
-        float a = Tex.SampleLevel(Smp, (tile0 + inner) / Tiles, 0).r;
-        float b = Tex.SampleLevel(Smp, (tile1 + inner) / Tiles, 0).r;
-        return lerp(a, b, f);
-    }
-    // The density at q (cm in the box's frame): the grid read through a slow rolling warp, broken up at a finer
-    // scale. Both only move what is drawn; where the field is empty (a wall, a hole a shot left) it stays empty.
-    float Density(Texture2D A, SamplerState SA, Texture2D B, SamplerState SB, float Blend, Texture2D H, int Holes, float3 q)
-    {
-        float3 warp = float3(sin(q.z * 0.011 + Time * 0.9), sin(q.x * 0.012 - Time * 0.7 + 1.7), sin(q.y * 0.010 + Time * 0.8 + 3.1));
-        float3 p = (q + warp * (14.0 * Flow) + float3(0.0, 0.0, -6.0 * Flow * sin(Time * 0.31))) / Size;
-        float d = lerp(Slices(A, SA, p), Slices(B, SB, p), Blend);
-        float fine = sin(q.x * 0.043 + Time * 1.3) * sin(q.y * 0.051 - Time * 1.1) * sin(q.z * 0.037 + Time * 0.9);
-        float broad = sin(q.x * 0.017 - Time * 0.5 + 0.4) * sin(q.y * 0.015 + Time * 0.6) * sin(q.z * 0.019 + Time * 0.4 + 2.2);
-        d = saturate(d * (1.0 + Flow * (0.30 * fine + 0.25 * broad)));
+        ambientScatter = 1.0;
+        float3 p = q / Size;
+        if (any(p < 0.0) || any(p > 1.0)) return 0.0;
+        float2 snapshots = History.SampleLevel(Smp, p, 0).rg;
+        float d = lerp(snapshots.r, snapshots.g, Blend);
+        if (d <= 0.0) return 0.0;
+        float3 flow = q * 0.023 - float3(0.13, 0.19, 0.53) * Time;
+        float roll = sin(flow.x + 0.77 * flow.z + sin(flow.y - 0.48 * flow.z));
+        float curl = sin(2.1 * flow.y - 1.3 * flow.x + 1.55 * roll);
+        // Soft indirect-light shading gives dense billows depth even when walls block the nearby lamps.
+        // The variation affects in-scattered light only; looking through the cloud uses its actual density.
+        ambientScatter = 0.94 - 0.18 * d + Flow * (0.14 * roll + 0.07 * curl);
+        d = saturate(d + Flow * d * (1.0 - d) * (0.44 * roll + 0.20 * curl));
         // The shot holes, exactly where they run (finer than the grid), at the real position as in the simulation:
         // each holds back 1 - smoothstep(r, r + feather, distance to its line) of the smoke, times how open it still is.
         for (int i = 0; i < Holes && d > 0.0; i++)
@@ -530,7 +578,7 @@ struct FSmokeGrid
     }
 };
 FSmokeGrid g;
-g.N = max(N, 2.0); g.Tiles = max(Tiles, 1.0); g.Size = max(Size, 1.0); g.Time = Time; g.Flow = Flow;
+g.Size = max(Size, 1.0); g.Time = Time; g.Flow = Flow;
 
 float dist = length(PixelRel);
 if (dist < 0.001) return float4(0, 0, 0, 0);
@@ -551,7 +599,15 @@ if (tExit <= tEnter) return float4(0, 0, 0, 0);
 
 float stepLen = g.Size / max(Steps, 4.0);
 float jitter = frac(sin(dot(Parameters.SvPosition.xy, float2(12.9898, 78.233))) * 43758.5453);
-float t = tEnter + stepLen * jitter;
+// Skip only whole empty steps. Retain the same sample phase and the original scene-clipped segment length.
+if (any(DensityMin > DensityMax)) return float4(0, 0, 0, 0);
+float3 occ0 = (DensityMin - CamRel) / d;
+float3 occ1 = (DensityMax - CamRel) / d;
+float3 occNear = min(occ0, occ1), occFar = max(occ0, occ1);
+float occEnter = max(tEnter, max(occNear.x, max(occNear.y, occNear.z)));
+float occExit = min(tExit, min(occFar.x, min(occFar.y, occFar.z)));
+if (occExit <= occEnter) return float4(0, 0, 0, 0);
+float t = tEnter + floor((occEnter - tEnter) / stepLen) * stepLen;
 float T = 1.0;
 float3 L = 0;
 float3 lightDir = normalize(LightDir + float3(0, 0, 1e-4));
@@ -559,12 +615,14 @@ float shadowStep = 28.0;
 [loop]
 for (int i = 0; i < 160; i++)
 {
-    if (t >= tExit) break;
-    float3 q = CamRel + dir * t;
-    float dens = g.Density(DensA, DensASampler, DensB, DensBSampler, Blend, HoleTex, (int)HoleCount, q);
+    if (t >= occExit) break;
+    // Jitter the sample inside each actual segment, including partial segments at a wall or character.
+    float dt = min(stepLen, tExit - t);
+    float3 q = CamRel + dir * (t + dt * jitter);
+    float ambientScatter;
+    float dens = g.Density(History, HistorySampler, Blend, HoleTex, (int)HoleCount, q, ambientScatter);
     if (dens > 0.002)
     {
-        float dt = min(stepLen, tExit - t);
         float a = 1.0 - exp(-dens * Ext * dt);
         // Self-shadow: the smoke between this point and the light (fewer steps at lower quality).
         float tau = 0.0;
@@ -572,16 +630,19 @@ for (int i = 0; i < 160; i++)
         [loop]
         for (int s = 1; s <= shadowSteps; s++)
         {
-            tau += g.Density(DensA, DensASampler, DensB, DensBSampler, Blend, HoleTex, 0, q + lightDir * (shadowStep * s)) * Ext * shadowStep;
+            float unusedScatter;
+            tau += g.Density(History, HistorySampler, Blend, HoleTex, 0, q + lightDir * (shadowStep * s), unusedScatter) * Ext * shadowStep;
         }
-        float3 lit = Ambient + LightCol * exp(-tau * 0.35);
+        float3 lit = Ambient * ambientScatter + LightCol * exp(-tau * 0.35);
         L += T * a * lit * Albedo;
         T *= 1.0 - a;
         if (T < 0.004) break;
     }
     t += stepLen;
 }
-return float4(L, saturate(1.0 - T));
+// L is already integrated with opacity; translucent material blending expects straight colour.
+float opacity = saturate(1.0 - T);
+return float4(L / max(opacity, 1e-5), opacity);
 """
 
 
@@ -625,17 +686,12 @@ def build_smoke_volume():
     scene_depth = node(unreal.MaterialExpressionSceneDepth, -1650, 50)
     time = node(unreal.MaterialExpressionTime, -1650, 150)
 
-    texture_a = node(unreal.MaterialExpressionTextureObjectParameter, -1650, 300)
-    texture_a.set_editor_property("parameter_name", "DensityA")
-    texture_b = node(unreal.MaterialExpressionTextureObjectParameter, -1650, 500)
-    texture_b.set_editor_property("parameter_name", "DensityB")
-    default = unreal.load_asset("/Engine/EngineResources/Black")
-    if default:
-        texture_a.set_editor_property("texture", default)
-        texture_b.set_editor_property("texture", default)
-
+    history = node(unreal.MaterialExpressionTextureObjectParameter, -1650, 300)
+    history.set_editor_property("parameter_name", "DensityHistory")
+    history.set_editor_property("texture", unreal.load_asset("/Engine/EngineResources/DefaultVolumeTexture"))
     holes = node(unreal.MaterialExpressionTextureObjectParameter, -1650, 700)
     holes.set_editor_property("parameter_name", "Holes")
+    default = unreal.load_asset("/Engine/EngineResources/Black")
     if default:
         holes.set_editor_property("texture", default)
 
@@ -644,11 +700,10 @@ def build_smoke_volume():
         ("PixelRel", pixel_rel),
         ("PixDepth", pixel_depth),
         ("SceneD", scene_depth),
-        ("DensA", texture_a),
-        ("DensB", texture_b),
+        ("History", history),
         ("Blend", scalar("Blend", 1.0, -1300, 300)),
-        ("N", scalar("GridSize", 32.0, -1300, 400)),
-        ("Tiles", scalar("Tiles", 6.0, -1300, 500)),
+        ("DensityMin", vector("DensityMin", (0, 0, 0), -1300, 400)),
+        ("DensityMax", vector("DensityMax", (625, 625, 625), -1300, 500)),
         ("Size", scalar("BoxSize", 625.0, -1300, 600)),
         ("Ext", scalar("Extinction", 0.06, -1300, 700)),
         ("Steps", scalar("Steps", 56.0, -1300, 800)),
@@ -870,6 +925,7 @@ def build_skin():
 
 
 build_glow()
+build_flare()
 build_smoke()
 build_cloud()
 build_decal()

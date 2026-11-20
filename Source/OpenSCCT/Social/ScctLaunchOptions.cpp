@@ -290,7 +290,7 @@ void ScctLaunchOptions::Apply()
 	Desc.Key = LaunchThrottleStopKey;
 	Desc.Page = TEXT("Performance");
 	Desc.Label = LOCTEXT("ThrottleStop", "Stop Windows power throttling (restart)");
-	Desc.Tooltip = LOCTEXT("ThrottleStopTip", "Keeps Windows from running the game on efficiency cores or at a low clock speed when its window is not in front. Read when the game starts.");
+	Desc.Tooltip = LOCTEXT("ThrottleStopTip", "Asks Windows to keep the game running at full CPU speed in the background. This can improve background frame pacing and increase power use. Takes effect after restart.");
 	Desc.Type = EScctSettingType::Bool;
 	Desc.Default = TEXT("false");
 	Desc.Order = 900;

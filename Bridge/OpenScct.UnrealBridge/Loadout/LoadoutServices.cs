@@ -81,6 +81,9 @@ public sealed class StoreLoadoutSource(Level level) : ILoadoutSource
 
     public ClassRef Sidearm() => new(LoadoutStore.Current.MercSidearm);
 
+    public int Attachments(string weaponClass) => WeaponAttachments.EarnedSelection(weaponClass,
+        LoadoutStore.Current.AttachmentMasks.GetValueOrDefault(weaponClass), WeaponCareerView.GetKills(weaponClass));
+
     public ClassRef Weapon(bool Spy)
     {
         if (Spy)
@@ -89,7 +92,7 @@ public sealed class StoreLoadoutSource(Level level) : ILoadoutSource
         }
 
         string merc = LoadoutStore.Current.MercWeapon;
-        return merc.Length == 0 ? Loadouts.MercWeapon : new ClassRef(merc);
+        return new ClassRef(MercPrimarySelection.SavedPreference(merc));
     }
 }
 
