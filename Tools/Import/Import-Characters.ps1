@@ -7,6 +7,8 @@ Imports the characters and everything they hold and wear, and builds the project
 Runs build_equipment_assets.py (materials and the weapon table under /Game/OpenSCCT/Weapons, committed) and then
 import_characters.py (bodies, weapons, first-person models and goggle lenses under /Game/Imported/Chars, never
 committed). Build the game's C++ first: the weapon table is an asset of a class of the game module.
+For a selective long-gun import from a temporary folder, set SVM_CONTENT to the persistent converted
+content directory. An identical source in Art/Weapons/LongGuns/Export can also supply the reimport file.
 
 .EXAMPLE
 Tools\Import\Import-Characters.ps1 -Content C:\path\to\.content
@@ -15,10 +17,10 @@ Tools\Import\Import-Characters.ps1 -Content C:\path\to\.content
 Tools\Import\Import-Characters.ps1 -Content C:\path\to\.content -RebuildMaterials
 
 .EXAMPLE
-Tools\Import\Import-Characters.ps1 -Content "$env:LOCALAPPDATA\OpenSCCT\packs" -RiflesOnly
+Tools\Import\Import-Characters.ps1 -Content C:\path\to\.content -RiflesOnly
 
 .EXAMPLE
-Tools\Import\Import-Characters.ps1 -Content "$env:LOCALAPPDATA\OpenSCCT\packs" -MagnumReloadOnly
+Tools\Import\Import-Characters.ps1 -Content C:\path\to\.content -MagnumReloadOnly
 #>
 param(
     [string] $Content = $env:SVM_CONTENT,
@@ -34,9 +36,15 @@ param(
 $ErrorActionPreference = 'Stop'
 $project = (Resolve-Path "$PSScriptRoot\..\..").Path
 if (-not $Content) { throw 'Pass -Content <converted content folder> or set SVM_CONTENT.' }
-if (-not (Test-Path (Join-Path $Content 'shared\chars'))) { throw "No converted characters at $Content\shared\chars." }
+if (-not (Test-Path -LiteralPath (Join-Path $Content 'shared\chars') -PathType Container)) { throw "No converted characters at $Content\shared\chars." }
+$Content = (Resolve-Path -LiteralPath $Content).Path
 
 . "$PSScriptRoot\..\EditorScript.ps1"
+$importArgs = foreach ($path in @("$PSScriptRoot\import_characters.py", $Content)) {
+    $argument = Fwd $path
+    if ($argument -match '\s') { '"' + $argument + '"' } else { $argument }
+}
+$importCommand = $importArgs -join ' '
 if ($MagnumReloadOnly) {
     if ($RiflesOnly -or $RebuildMaterials) { throw '-MagnumReloadOnly cannot be combined with the other import switches.' }
     $source = Join-Path $Content 'shared/chars/OpenScctSidearms/magnum44_first.glb'
@@ -62,7 +70,7 @@ if ($MagnumReloadOnly) {
     }
     try {
         $imported = Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'import-magnum-reload' `
-            -Script "$(Fwd "$PSScriptRoot\import_characters.py") $(Fwd $Content) --magnum-reload-only"
+            -Script "$importCommand --magnum-reload-only"
         if (-not $imported) { throw 'The Magnum reload import failed.' }
     } catch {
         if (Test-Path -LiteralPath $folder) { Move-Item -LiteralPath $folder -Destination (Join-Path $backup 'failed') }
@@ -79,5 +87,5 @@ if (-not $RiflesOnly) {
     Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'build-equipment' -Script "$(Fwd "$PSScriptRoot\build_equipment_assets.py")$rebuild" | Out-Null
 }
 $selection = if ($RiflesOnly) { ' --rifles-only' } else { '' }
-Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'import-characters' -Script "$(Fwd "$PSScriptRoot\import_characters.py") $(Fwd $Content)$selection" | Out-Null
+Invoke-ScctEditorScript -Project $project -Engine $Engine -Name 'import-characters' -Script "$importCommand$selection" | Out-Null
 Exit-ScctScripts

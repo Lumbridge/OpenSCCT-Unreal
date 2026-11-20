@@ -10,12 +10,17 @@ Tools\Import\Import-HospitalEffectTextures.ps1 -Restore
 #>
 [CmdletBinding()]
 param(
-    [string] $Content = "$env:LOCALAPPDATA\OpenSCCT\packs",
+    [string] $Content = $env:SVM_CONTENT,
     [switch] $Restore,
     [string] $Engine = 'F:\UE_5.8'
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $Restore) {
+    if (-not $Content) { throw 'Pass -Content <converted content folder> or set SVM_CONTENT.' }
+    $textures = Join-Path $Content 'svmap\MounE\render\textures'
+    if (-not (Test-Path -LiteralPath $textures -PathType Container)) { throw "No converted Mount Hospital textures at $textures." }
+}
 $project = (Resolve-Path "$PSScriptRoot\..\..").Path
 $map = Get-Item -LiteralPath (Join-Path $project 'Content\Imported\Maps\MounE')
 $folders = @($map, $map.Parent, $map.Parent.Parent, $map.Parent.Parent.Parent)
@@ -28,7 +33,7 @@ if ($linked) {
 . "$PSScriptRoot\..\EditorScript.ps1"
 $mode = if ($Restore) { 'restore' } else { 'apply' }
 $arguments = if ($Restore) { '--restore' } else {
-    $textures = Fwd (Resolve-Path -LiteralPath (Join-Path $Content 'svmap\MounE\render\textures')).Path
+    $textures = Fwd (Resolve-Path -LiteralPath $textures).Path
     if ($textures -match '\s') { $textures = '"' + $textures + '"' }
     "--textures $textures"
 }

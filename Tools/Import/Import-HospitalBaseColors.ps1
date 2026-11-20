@@ -13,7 +13,7 @@ Tools\Import\Import-HospitalBaseColors.ps1 -Restore
 param(
     [Parameter(Mandatory, ParameterSetName = 'Apply')] [string] $Manifest,
     [Parameter(ParameterSetName = 'Apply')] [string] $Inventory,
-    [Parameter(ParameterSetName = 'Apply')] [string] $Content = "$env:LOCALAPPDATA\OpenSCCT\packs",
+    [Parameter(ParameterSetName = 'Apply')] [string] $Content = $env:SVM_CONTENT,
     [Parameter(ParameterSetName = 'Apply')] [switch] $PrepareOnly,
     [Parameter(Mandatory, ParameterSetName = 'Restore')] [switch] $Restore,
     [string] $Engine = 'F:\UE_5.8'
@@ -25,8 +25,10 @@ $work = Join-Path $project 'Saved\TextureRemasterQA\MounEBaseColor'
 $plan = Join-Path $work 'base-color-plan.json'
 $snapshot = Join-Path $work 'base-color-rollback.json'
 if (-not $Restore) {
+    if (-not $Content) { throw 'Pass -Content <converted content folder> or set SVM_CONTENT.' }
     if (-not $Inventory) { $Inventory = Join-Path $project 'Saved\TextureRemasterQA\MounE\detail-manifest.json' }
     $originals = Join-Path $Content 'svmap\MounE\render\textures'
+    if (-not (Test-Path -LiteralPath $originals -PathType Container)) { throw "No converted Mount Hospital textures at $originals." }
     python -B "$PSScriptRoot\prepare_hospital_base_colors.py" $Manifest $Inventory $originals $work
     if ($LASTEXITCODE -ne 0) { throw 'Mount Hospital base colour preparation failed.' }
     if ($PrepareOnly) { return }

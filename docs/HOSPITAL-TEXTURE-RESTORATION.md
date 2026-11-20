@@ -12,6 +12,7 @@ cabinet's alpha coverage. The optional `Prison_TEX_machine_WrapperDetail.png` in
 an authoring intermediate. Git ignores both files. Then run:
 
 ```powershell
+$env:SVM_CONTENT = 'D:\OpenSCCTUnreal\Converted'
 Tools/Import/Restore-HospitalPreview.ps1 -Stage Saved/HospitalPreview -Weights 'C:\models\realesr-general-x4v3.pth'
 ```
 
@@ -28,8 +29,8 @@ tile grid. Run `python Tools/Import/build_hospital_finish_masks.py` to regenerat
 `Art/Maps/MounE`. Their Unreal textures live under `Content/OpenSCCT/Materials/Finishes`.
 
 Use `-PrepareOnly` to create the stage on the CPU. Use `-ValidateOnly` to verify an existing stage and its private
-map destination without writing files or starting Unreal. Pass `-Content` to use a different converted packs
-directory and `-Engine` to use a different Unreal installation. Use `-NeuralPython` if CPU PyTorch is in a
+map destination without writing files or starting Unreal. Set `SVM_CONTENT` to your converted content directory
+or pass `-Content` for one run. Use `-Engine` for a different Unreal installation and `-NeuralPython` if CPU PyTorch is in a
 separate environment. Keep the stage and its colour rollback record together for later runs on the same map.
 
 ## Prepare source textures separately
@@ -42,7 +43,7 @@ The reviewed build used Python 3.10, NumPy 2.2.6, OpenCV 4.12.0.88, Pillow 12.0.
 ImageMagick 7.1.2-15 Q16-HDRI.
 
 ```powershell
-$map = Join-Path $env:LOCALAPPDATA 'OpenSCCT/packs/svmap/MounE'
+$map = Join-Path $env:SVM_CONTENT 'svmap/MounE'
 $stage = Join-Path $PWD 'Saved/HospitalRestoration'
 python -B Tools/Import/restore_hospital_textures.py $map $stage
 ```

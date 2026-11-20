@@ -1,8 +1,10 @@
 """Install the long guns' authored PBR maps with the same occluded lamp term as the pawn."""
+import filecmp
 import json
 import os
 from pathlib import Path
 import struct
+import tempfile
 
 import unreal
 from scct_materials import Graph, FLOAT1, FLOAT3, pawn_light
@@ -11,6 +13,27 @@ MODELS = ('boltrifle', 'designatedmarksman', 'compactsmg', 'pumpshotgun')
 PARENT = '/Game/OpenSCCT/Weapons/Materials/M_ScctLongGun'
 LIB = unreal.MaterialEditingLibrary
 ASSETS = unreal.EditorAssetLibrary
+
+
+def is_staged(path):
+    return (path.is_relative_to(Path(tempfile.gettempdir()).resolve()) or
+            any(part.lower() in ('saved', 'intermediate') for part in path.parts))
+
+
+def reimport_source(directory, relative, package):
+    imported = (directory / relative).resolve(strict=True)
+    if not is_staged(imported):
+        return imported
+    roots = []
+    if os.environ.get('SVM_CONTENT'):
+        roots.append(Path(os.environ['SVM_CONTENT']) / 'shared' / 'chars' / package)
+    roots.append(Path(__file__).resolve().parents[2] / 'Art/Weapons/LongGuns/Export')
+    for root in roots:
+        candidate = (root / relative).resolve()
+        if not is_staged(candidate) and candidate.is_file() and filecmp.cmp(imported, candidate, shallow=False):
+            return candidate
+    raise RuntimeError(f'No matching persistent reimport source for {imported}. Set SVM_CONTENT to the '
+                       f'converted content folder containing the same {relative}, or import from that folder directly.')
 
 
 def parent_material():
@@ -73,18 +96,26 @@ def apply(chars, package, model, meshes):
         LIB.update_material_instance(instance)
         if not ASSETS.save_loaded_asset(instance,only_if_is_dirty=False):
             raise RuntimeError('Could not save weapon material '+instance.get_path_name())
-    # A selective import can stage a subset of the content pack. Source reimport must
-    # resolve the actual installed GLB after that temporary staging directory is gone.
-    canonical=Path(os.environ.get('LOCALAPPDATA',''))/'OpenSCCT/packs/shared/chars'/package
-    if (canonical/path.name).exists():
-        for asset_path in list(meshes) + list(ASSETS.list_assets(base+'/Textures',recursive=False)):
-            asset=unreal.load_asset(asset_path)
-            source=asset.get_editor_property('asset_import_data')
-            old=source.get_first_filename() if source else ''
-            if 'WeaponsRefreshQA' not in old: continue
-            target=canonical/Path(old).name
-            if not target.exists(): target=canonical/'textures'/Path(old).name
-            if target.exists():
-                source.scripted_add_filename(str(target),0,'')
-                if not ASSETS.save_loaded_asset(asset,only_if_is_dirty=False):
-                    raise RuntimeError('Could not save canonical import source for '+asset.get_path_name())
+    # Unreal also stores reimport paths for external textures. Keep these usable when
+    # a selective import used a temporary pack containing only this weapon.
+    sources = {path.name: Path(path.name)}
+    for image in gltf.get('images', []):
+        if image.get('uri'):
+            relative = Path(image['uri'])
+            sources[relative.name] = relative
+    for asset_path in list(meshes) + list(ASSETS.list_assets(base + '/Textures', recursive=False)):
+        asset = unreal.load_asset(asset_path)
+        source = asset.get_editor_property('asset_import_data')
+        old = source.get_first_filename() if source else ''
+        if not old:
+            continue
+        relative = sources.get(Path(old).name)
+        if relative is None:
+            if is_staged(Path(old).resolve()):
+                raise RuntimeError(f'Cannot identify staged source {old} for {asset_path}.')
+            continue
+        target = reimport_source(directory, relative, package)
+        if Path(old) != target:
+            source.scripted_add_filename(str(target), 0, '')
+            if not ASSETS.save_loaded_asset(asset, only_if_is_dirty=False):
+                raise RuntimeError('Could not save reimport source for ' + asset.get_path_name())

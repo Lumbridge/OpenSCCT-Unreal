@@ -24,7 +24,7 @@ using OpenScct.UnrealBridge.Voice;
 //      the visit's voice after it) and a plain OpenSCCT OnlineClient with its own OnlineVoice, as the Godot client and
 //      the bots have. First the bridge's player talks (the tone into SubmitCapture) and the other hears him, then the
 //      other talks and the bridge's player hears him through GetTalkers and ReadFrame: the same wire Godot uses.
-// The server CLI is run with --no-build; build it once beforehand (dotnet build -c Release src/OpenScct.Server.Cli).
+// The server CLI is run with --no-build; build it once beforehand (dotnet build -c Release Runtime/src/OpenScct.Server.Cli).
 //
 // VoiceProbe listen <address> <content root> [seconds] [talker name] [tone Hz]
 //

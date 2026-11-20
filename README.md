@@ -1,8 +1,7 @@
 # OpenSCCT Unreal
 
-OpenSCCT on Unreal Engine 5.8: the same game, servers and netcode as
-[OpenSCCT](https://github.com/OpenSCCT/OpenSCCT), with a new Unreal presentation built for looks
-rather than 1:1 parity with the original.
+OpenSCCT Unreal is a standalone Unreal Engine 5.8 edition of Spies vs. Mercenaries. This repository
+contains the game module, its C# simulation and server, and the tools that convert a player's Steam installation.
 
 The [OpenSCCT project directory](https://github.com/OpenSCCT/OpenSCCT) covers the original
 PS2 disc edition, the original PC/Steam edition and this modern Unreal client.
@@ -14,8 +13,8 @@ and choose **Play in Unreal**. To run a compiled map from outside the editor, st
 
 ## How it fits together
 
-- **Gameplay and netcode** stay in OpenSCCT's C# simulation. The Unreal client hosts those libraries
-  in-process and connects to the existing OpenSCCT servers, so Unreal and Godot players share matches.
+- **Gameplay and netcode** live in the C# simulation under `Runtime/`. Unreal hosts the simulation
+  in-process and connects to dedicated and listen servers running a compatible protocol.
 - **Unreal** owns everything you see and hear: Lumen lighting, Nanite geometry, virtual shadow maps,
   materials, characters, weapons, effects, audio, HUD and menus.
 - **Maps**: the first map pool is the Enhanced maps. They are imported from a converted OpenSCCT
@@ -27,31 +26,46 @@ and choose **Play in Unreal**. To run a compiled map from outside the editor, st
 |---|---|
 | `Source/OpenSCCT` | Unreal game module (C++) |
 | `Bridge/` | C# bridge assembly that exposes the OpenSCCT client simulation to Unreal |
+| `Runtime/` | Source for the simulation, networking, dedicated server and Steam converter used by this edition |
+| `Tools/SteamSetup/` and `Tools/UnrealContent/` | Windows Steam setup and the release converter recipe |
 | `Content/` | Unreal assets made for this project |
 | `Content/Imported/` | Imported original game content. Never committed. |
 | `docs/` | Design notes |
 
 ## Building
 
-Needs Unreal Engine 5.8.4, Visual Studio with the C++ game workload and the .NET 10 SDK.
+Clone this repository with Git LFS installed. The Windows editor build needs Unreal Engine 5.8.4,
+Visual Studio with the C++ game workload, and the .NET 10 SDK specified in `Runtime/global.json`.
 
 ```powershell
 & "F:\UE_5.8\Engine\Build\BatchFiles\Build.bat" OpenSCCTEditor Win64 Development -project="$PWD\OpenSCCTUnreal.uproject" -waitmutex
 ```
 
-Build the bridge too, before the first run and after any C# change (output lands in `Binaries/Bridge`):
+Build the bridge before the first run and after C# gameplay changes. Its output goes to `Binaries/Bridge`.
 
 ```powershell
-dotnet build -c Release Bridge\OpenScct.UnrealBridge -p:OpenScctRoot=<OpenSCCT checkout>\
+dotnet build -c Release Bridge\OpenScct.UnrealBridge
 ```
 
 ## Assets after a fresh checkout
 
-Build the C++ first (the weapon table and the front end level name classes of the game module). Then, in this
-order, with `$c` the converted content folder. Every script runs headless (no window), prints its own log lines
-and ends with exit code 0 only when its editor script really finished:
+Build the C++ module first. For the original assets, run this edition's Steam setup on an installed copy of
+Splinter Cell Chaos Theory (Steam app 13570). On a development machine with Python 3.11, you can assemble
+and launch the same setup from the checkout. Select the Steam game folder when prompted.
 
 ```powershell
+py -3.11 Tools/UnrealContent/package.py Saved/UnrealDev/contenttools
+dotnet Saved/UnrealDev/contenttools/setup/OpenScct.UnrealSetup.dll
+```
+
+Setup records the active conversion in `steam-current.json`. The following commands select that build and import it into the editor. Set
+`OPENSCCT_UNREAL_CONTENT_DIR` if setup used a custom installation directory.
+
+```powershell
+$install = if ($env:OPENSCCT_UNREAL_CONTENT_DIR) { $env:OPENSCCT_UNREAL_CONTENT_DIR } else { "$env:LOCALAPPDATA\OpenSCCT\unreal\content" }
+$id = (Get-Content -Raw (Join-Path $install 'steam-current.json') | ConvertFrom-Json).build
+$c = (Resolve-Path -LiteralPath (Join-Path $install "steam-builds\$id")).Path
+$env:SVM_CONTENT = $c
 Tools\Import\Import-Characters.ps1 -Content $c     # bodies, weapons, view models, goggle lenses -> Content\Imported\Chars
 Tools\Effects\Build-EffectAssets.ps1 -Content $c   # the game's effect meshes -> Content\Imported\Fx
 Tools\Import\Import-Map.ps1 -Map AquaE -Content $c # once per map -> Content\Imported\Maps\<Map>
@@ -74,8 +88,9 @@ Enhanced Mount Hospital's restored colour textures can be regenerated from the i
 An imported level starts a local match with bots when it opens. Game URL options (all optional, see
 `Source/OpenSCCT/Play/ScctGameMode.h`): `?Side=spy|merc`, `?Bots=3`, `?Mode=Story`,
 `?Difficulty=easy|normal|hard|expert`, `?Sidearms=1`, `?Rifles=1`, `?Practice=1` (no time limit, unlimited
-lives, unlimited gear and the practice aids such as `scct.GrabArea`), `?Name=Sam`, `?ScctMap=AquaE`. The converted content folder comes from `-ScctContent=<folder>`, else
-the `SVM_CONTENT` variable, else `ContentRoot` under `[OpenSCCT]` in the game ini.
+lives, unlimited gear and the practice aids such as `scct.GrabArea`), `?Name=Sam`, `?ScctMap=AquaE`.
+For an editor run, `-ScctContent=<folder>` selects a converted content directory explicitly.
+The packaged game uses the active content build prepared by its Steam setup.
 
 The TestRange drills (`scct.Drill vision-cancelling|spy-grab`, or TestRange with `?Drill=<kind>`) need the fixture
 level: `Tools\Test\Import-Fixtures.ps1 -Content <folder>` imports it.
@@ -85,31 +100,26 @@ screenshots to `Saved\ScctShots` and quits.
 
 ## Front end and online play
 
-The game starts in the front end (`/Game/OpenSCCT/Maps/L_FrontEnd`, built by `Tools\Menu\Build-FrontEnd.ps1`;
-the menu is C++ in `Source/OpenSCCT/Menu`): play offline, join a server by address, or pick one from the master
-server's list. The servers are OpenSCCT's own: the bridge speaks their protocol, so the Unreal game joins the
-same dedicated and listen servers as the Godot client (`Source/OpenSCCT/Online/ScctOnlineSubsystem.h` describes
-the flow: lobby in the front end, each round in the imported level of its map). The master server and invite
-key are under `[OpenSCCT.Online]` in `Config/DefaultGame.ini`.
+The front end offers offline play, a server browser and direct connections. It opens the lobby before
+travelling to the imported level for each round. The master server and invite key are configured under
+`[OpenSCCT.Online]` in `Config/DefaultGame.ini`. [Online subsystem](Source/OpenSCCT/Online/ScctOnlineSubsystem.h)
 
-`Tools\Run-OnlineCheck.ps1 -Content <folder> -OpenScct <OpenSCCT checkout>` starts a real dedicated server on
-localhost with bots, joins it with the game off-screen, plays a round and saves screenshots and logs.
-`Tools\Run-HostCheck.ps1 -Map AquaE -Content <folder>` does the same for hosting, with two or more game processes
-and no OpenSCCT checkout: one hosts, the others join it, and each lobby and round step (password, side, settings
+Build the dedicated server with `dotnet build -c Release Runtime/src/OpenScct.Server.Cli`. Then run
+`Tools\Run-OnlineCheck.ps1 -Content <folder>` to start the server on localhost, join with the off-screen client
+and save screenshots and logs from a round with bots. `Tools\Run-HostCheck.ps1 -Map AquaE -Content <folder>`
+starts two or more local game processes. One hosts, the others join, and each lobby and round step (password, side, settings
 un-readying, team chat, kick, rejoin by address, bots filling 2v2, a revenge pair and results Next) prints PASS or
 FAIL from both sides' logs.
 
 ## Packaging
 
-The bridge is staged with the game as loose files (`RuntimeDependencies` in `OpenSCCT.Build.cs`), so build
-it before packaging. The .NET runtime is looked for in this order: `Binaries/DotNet` (a private runtime laid
-out as a .NET install root: copy the contents of a .NET 10 runtime zip there and players need nothing
-installed), the `DOTNET_ROOT` variable, `Program Files\dotnet`. The converted content folder is not staged:
-it is the player's own.
+Unreal stages the bridge as loose files using `RuntimeDependencies` in `OpenSCCT.Build.cs`.
+The shipping game loads its private .NET runtime from `Binaries/DotNet`. Development builds can
+also locate .NET through `DOTNET_ROOT` or `Program Files\dotnet`.
 
-`Tools\Package-Release.ps1` makes a release: a Shipping build of the `OpenSCCTUnreal` target, with the bridge and
-a private .NET runtime, zipped with its checksums and the launcher handshake. Nothing under `/Game/Imported` is
-cooked. `docs/RELEASING.md` has the procedure.
+`Tools\Package-Release.ps1` assembles the Windows Shipping build, the bridge, the private .NET runtime and
+this edition's Steam conversion tools. The release guide covers the distribution manifest and content checks.
+[Release procedure](docs/RELEASING.md)
 
 ## Content rule
 

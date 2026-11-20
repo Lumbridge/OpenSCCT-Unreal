@@ -2,17 +2,21 @@ param(
     [string[]]$Maps = @('MounE', 'AquaE'),
     [switch]$Diagnose,
     [string]$Engine = 'F:/UE_5.8',
-    [string]$Content = "$env:LOCALAPPDATA/OpenSCCT/packs",
+    [string]$Content = $env:SVM_CONTENT,
     [int]$Width = 2560,
     [int]$Height = 1440
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Content) { throw 'Pass -Content <converted content folder> or set SVM_CONTENT to read map lighting zones.' }
+$Content = (Resolve-Path -LiteralPath $Content).Path
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
 $run = Join-Path $root ('Saved/ZoneSurveys/' + (Get-Date -Format 'yyyyMMdd-HHmmssfff'))
 foreach ($map in $Maps) {
     if ($map -notmatch '^[a-zA-Z0-9_-]+$' -or !(Test-Path "$root/Content/Imported/Maps/$map/$map.umap")) {
         throw "Missing imported map $map"
     }
+    $lighting = Join-Path $Content "svmap/$map/render/lighting.json"
+    if (-not (Test-Path -LiteralPath $lighting -PathType Leaf)) { throw "No converted map lighting at $lighting." }
     $dir = Join-Path $run $map
     New-Item $dir -ItemType Directory -Force | Out-Null
     $settings = @{ map=$map; output=$dir; content=$Content; diagnose=$Diagnose.IsPresent; viewport=@($Width, $Height) }

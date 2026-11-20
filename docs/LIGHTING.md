@@ -24,7 +24,10 @@ At 2.25, mean absolute pixel error fell in all three merc views and rose in all 
 
 ### Reproducing the room comparison
 
-The merc references are `local/merc-kit/eye/<pose>-000.png` in SVM-Rewrite. Their adjacent JSON files give the camera location, rotation and field of view in `rows[0]`. The spy references and camera records are in `local/golden/game/SteeE`. Use `shots[pose].camera` in `cameras.json`.
+The original comparison used locally captured retail screenshots. To repeat it, supply the merc captures
+from `local/merc-kit/eye/<pose>-000.png` and their adjacent JSON files, which give the camera location,
+rotation and field of view in `rows[0]`. The spy captures use `local/golden/game/SteeE` and the
+`shots[pose].camera` entries in `cameras.json`. These private captures are optional inputs to this comparison.
 
 Run `Tools/Run-Offscreen.ps1` on SteeE with zero bots, the recorded side, one shot per pose and a separate shot directory per setting. Supply each camera to `-Cams` as `X,Y,Z,yaw,pitch`, converting retail rotation units to degrees with `360/65536`. Use `-Exec 'fov 95'` for the merc group and `-Exec 'fov 75'` for the spy group. The renders used `-ScctLightPlan=1 -ResX=1280 -ResY=720` and `-dpcvars=scct.Light.LightmapScale=<scale>`. To reproduce the means, convert both PNGs to Pillow's grayscale `L`. Keep the top 396 rows plus the leftmost 576 columns for mercs and the top 324 rows for spies.
 

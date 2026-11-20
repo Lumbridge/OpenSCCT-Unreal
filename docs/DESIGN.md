@@ -9,24 +9,22 @@ Started 2026-11-17.
   flashy, beautiful graphics, new textures and models, a cool gun for the merc.
 - The first map pool is the Enhanced maps (the E maps: AquaE, CineE, ClubE, FactE, KrauE, MissE, MounE,
   MuseE, OrphE, PolaE, RiveE, SancE, ScheE, StatE, SteeE, VertE).
-- Use the existing OpenSCCT server if possible; otherwise write a new server in Rust.
+- Run the dedicated server from the same managed simulation as the Unreal client.
 - Models and animations may be downloaded from online sources or made with local tools.
 
 ## Approaches considered
 
 1. **Host the OpenSCCT C# client simulation inside Unreal (chosen).** Unreal loads the .NET runtime and a
    small bridge assembly that runs OpenSCCT's client session: networking, prediction, world state, animation
-   channels and events. Unreal reads that state every frame and draws it. Works with the existing servers,
-   the master server, bots and maps unchanged, and every gameplay fix lands in both clients. Cost: gameplay
-   is not driven by Unreal's own character movement, replication or ability systems.
+   channels and events. Unreal reads that state every frame and draws it. The dedicated server and bots
+   use the same simulation, and the Unreal edition can evolve its own gameplay and protocol.
 2. **Rewrite gameplay in Unreal C++ with Unreal replication.** The most "native" result, but it re-creates
    about 1,300 files of movement, rules, gear and netcode before anything is playable, cannot join the
    existing servers, and splits every later gameplay change in two.
 3. **New Rust server plus native Unreal client.** Same rewrite cost as 2 on the client and a second rewrite
    on the server. Only worth it if 1 turned out impossible.
 
-The preference for the existing server picks 1. The Rust fallback is not needed unless hosting .NET in
-Unreal fails.
+The Unreal edition implements option 1 and builds the managed runtime as part of this repository.
 
 ## Calls made (mine, open to correction)
 
@@ -34,12 +32,12 @@ Unreal fails.
   Project `OpenSCCTUnreal`, game module `OpenSCCT`.
 - **Runtime hosting**: the full .NET runtime through `hostfxr`, not NativeAOT, so the simulation runs
   unmodified whatever it does with reflection. The bridge exposes a flat C interface.
-- **OpenSCCT source**: referenced from a sibling checkout of `OpenSCCT/OpenSCCT` at a pinned commit, not
-  copied in.
-- **Content**: original game content is never committed, as in OpenSCCT. Maps are imported locally from a
-  converted `.content` folder into `Content/Imported/` (ignored by Git). Releases bundle the imported maps, cooked,
-  as the enhanced versions (docs/RELEASING.md); everything else comes from the player's converted content. New art made for this project is
-  committed through Git LFS, with source and licence recorded in `docs/ASSETS.md`.
+- **Managed source.** The bridge, dedicated server and conversion tools build against this edition's
+  copy in `Runtime/`. Source history and release builds belong to the Unreal repository.
+- **Content.** The bundled Steam converter builds a local content directory from the player's installation.
+  Editor import writes to `Content/Imported/`, which Git ignores. The Unreal release guide describes
+  its cooked content. Source artwork and its credits are recorded in the repository.
+  [Release procedure](RELEASING.md) · [Art sources](ASSETS.md)
 - **Rendering**: DirectX 12, Lumen with hardware ray tracing, Nanite, virtual shadow maps, Substrate
   materials, fully dynamic lighting (no baked lightmaps). Target hardware: RTX 4070 class.
 - **Look**: imported levels keep their layout and collision (the simulation owns collision) and get new

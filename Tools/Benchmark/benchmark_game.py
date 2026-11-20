@@ -40,14 +40,14 @@ def parse_resolution(value):
 def select_level(args, map_id):
     level = f"/Game/Imported/Maps/{map_id}/{map_id}"
     cooked = (args.project / f"Content/Imported/Maps/{map_id}/{map_id}.umap").is_file()
-    pack = args.content / "svmap" / map_id
-    if not (pack / "sim/gameplay.json").is_file():
+    pack = args.content / "svmap" / map_id if args.content else None
+    if pack and not (pack / "sim/gameplay.json").is_file():
         raise ValueError(f"{map_id}: no installed simulation data in {pack}")
     if args.map_source == "cooked" and not cooked:
         raise ValueError(f"{map_id}: no imported level in {args.project}")
     if cooked and args.map_source != "runtime":
         return "cooked", level, level
-    if not (pack / "render/world.glb").is_file():
+    if pack and not (pack / "render/world.glb").is_file():
         raise ValueError(f"{map_id}: no runtime geometry in {pack}")
     level = "/Game/OpenSCCT/RuntimeMap/L_RuntimeMap"
     return "runtime", level, level + f"?ScctMap={map_id}"
@@ -181,7 +181,7 @@ def run_match(args, engine, run_dir, map_id, quality, source, level, url):
         f"-ResX={width} -ResY={height}",
         "-ScctNoAccountSync -ScctNoTokenStore -ScctNoPresenceLease",
         switch("ScctAutoplay", ";".join(ROUTE + (MOTION_TAIL if args.aa_motion else ()))),
-        switch("ScctContent", args.content.as_posix()),
+        switch("ScctContent", args.content.as_posix()) if args.content else "",
         switch("UserDir", profile.as_posix()),
         switch("abslog", log.as_posix()),
         switch("ExecCmds", f"py {route_script.as_posix()}"),
@@ -233,11 +233,14 @@ def main():
     parser.add_argument("--bots", type=int, choices=range(4), default=2)
     parser.add_argument("--project", type=Path, default=DEFAULT_PROJECT)
     parser.add_argument("--engine", type=Path, default=Path("F:/UE_5.8"), help="Unreal Engine root")
-    parser.add_argument("--content", type=Path, default=Path(os.environ.get("LOCALAPPDATA", ".")) / "OpenSCCT/packs")
+    parser.add_argument("--content", type=Path, default=os.getenv("SVM_CONTENT") or None,
+                        help="converted content directory (defaults to SVM_CONTENT or game discovery)")
     parser.add_argument("--output", type=Path, help="parent directory for a fresh run directory")
     parser.add_argument("--timeout", type=int, default=180, help="maximum seconds per standalone match")
     args = parser.parse_args()
-    args.project, args.content = args.project.resolve(), args.content.resolve()
+    args.project = args.project.resolve()
+    if args.content:
+        args.content = args.content.resolve()
     engine = args.engine.resolve() / "Engine/Binaries/Win64/UnrealEditor.exe"
     if args.timeout <= 0 or not engine.is_file() or not (args.project / "OpenSCCTUnreal.uproject").is_file():
         parser.error("positive timeout, UnrealEditor.exe and OpenSCCTUnreal.uproject required")

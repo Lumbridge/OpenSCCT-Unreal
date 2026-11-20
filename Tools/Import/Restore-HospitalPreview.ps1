@@ -9,7 +9,7 @@ Tools/Import/Restore-HospitalPreview.ps1 -Stage Saved/HospitalPreview -ValidateO
 [CmdletBinding(DefaultParameterSetName = 'Apply')]
 param(
     [Parameter(Mandatory)] [string] $Stage,
-    [string] $Content = "$env:LOCALAPPDATA/OpenSCCT/packs",
+    [string] $Content = $env:SVM_CONTENT,
     [string] $Weights,
     [string] $NeuralPython,
     [int] $Threads = 3,
@@ -19,6 +19,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $Content) { throw 'Pass -Content <converted content folder> or set SVM_CONTENT.' }
+$stockTextures = Join-Path $Content 'svmap/MounE/render/textures'
+if (-not (Test-Path -LiteralPath $stockTextures -PathType Container)) { throw "No converted Mount Hospital textures at $stockTextures." }
 $project = (Resolve-Path -LiteralPath "$PSScriptRoot/../..").Path
 $stagePath = [IO.Path]::GetFullPath($Stage, (Get-Location).Path)
 $projectContent = Join-Path $project 'Content'
@@ -53,7 +56,7 @@ $openProject = @(Get-CimInstance Win32_Process -Filter "Name LIKE 'UnrealEditor%
 if ($openProject.Count) {
     throw "Close the candidate project before reapplying its map assets (PIDs $($openProject.ProcessId -join ', '))."
 }
-$stockTextures = (Resolve-Path -LiteralPath (Join-Path $Content 'svmap/MounE/render/textures')).Path
+$stockTextures = (Resolve-Path -LiteralPath $stockTextures).Path
 $backup = Join-Path $stagePath ('MapBackup-' + [Guid]::NewGuid().ToString('N'))
 Copy-Item -LiteralPath $map.FullName -Destination $backup -Recurse
 Write-Host "Saved a copy of the imported map at $backup."

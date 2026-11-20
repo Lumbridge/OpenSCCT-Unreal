@@ -351,8 +351,8 @@ internal static unsafe class Probe
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        // --no-build: the probe never rebuilds the OpenSCCT projects other work shares; build the CLI once beforehand
-        // (dotnet build -c Release --no-dependencies src/OpenScct.Server.Cli).
+        // --no-build: the probe starts the previously built bundled server; build the CLI first
+        // (dotnet build -c Release Runtime/src/OpenScct.Server.Cli).
         foreach (string arg in new[]
         {
             "run", "--no-build", "-c", "Release", "--project", Path.Combine(openScct, "src", "OpenScct.Server.Cli"), "--",

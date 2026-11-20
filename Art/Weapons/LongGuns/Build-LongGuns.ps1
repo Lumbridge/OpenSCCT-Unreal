@@ -2,7 +2,7 @@
 .SYNOPSIS
 Build the four merc gun models, their first-person rigs, and their authored game animations.
 .EXAMPLE
-.\Build-LongGuns.ps1 -ContentRoot "$env:LOCALAPPDATA\OpenSCCT\packs" -Install
+.\Build-LongGuns.ps1 -ContentRoot $env:SVM_CONTENT -Install
 .NOTES
 Use the bundled Runtime/content/svmbuild with its Python requirements and Blender 5.2.
 For a fresh Unreal project, run Tools/Import/Import-Characters.ps1 -Content <content root> -RiflesOnly

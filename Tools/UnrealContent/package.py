@@ -84,13 +84,24 @@ def receipt_for(folder, names):
     paths = {file.relative_to(folder / "repo").as_posix() for file in (folder / "repo").rglob("*") if file.is_file()}
     if paths != set(names):
         raise ValueError(f"Unexpected converter payload: extra={sorted(paths - set(names))}, missing={sorted(set(names) - paths)}")
-    source_hash = check_sources(folder / "repo", names)
     for name in ("python/python.exe", "python/LICENSE.txt", "steam-builder-v1", f"setup/{SETUP}"):
         if not (folder / name).is_file():
             raise ValueError(f"Incomplete Unreal content tools: {name}")
     if (folder / "steam-builder-v1").read_text(encoding="ascii").strip() != "win-x64":
         raise ValueError("The converter is not the Windows x64 build.")
-    return {"schema": 1, "platform": "win-x64", "recipeDigest": source_hash, "sourceFiles": len(names)}
+    return source_receipt(folder / "repo", names)
+
+
+def source_receipt(path, names):
+    return {"schema": 1, "platform": "win-x64", "recipeDigest": check_sources(path, names), "sourceFiles": len(names)}
+
+
+def write_receipt(folder, receipt):
+    folder.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=folder) as temporary:
+        pending = Path(temporary) / RECEIPT
+        pending.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+        pending.replace(folder / RECEIPT)
 
 
 def package(output):
@@ -113,7 +124,7 @@ def package(output):
                         "-c", "Release", "-r", "win-x64", "--self-contained", "false", "-p:UseAppHost=false",
                         "-o", str(stage / "setup")], check=True)
         receipt = receipt_for(stage, names)
-        (stage / RECEIPT).write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+        write_receipt(stage, receipt)
         previous = Path(temporary) / "previous"
         if output.exists():
             output.rename(previous)
@@ -129,10 +140,15 @@ def package(output):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="Unreal release's contenttools directory")
-    parser.add_argument("--verify", action="store_true", help="verify a staged release against its vendored sources")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--verify", action="store_true", help="verify a staged release against its vendored sources")
+    mode.add_argument("--receipt-only", action="store_true", help="write the expected recipe into a server release without installing tools")
     args = parser.parse_args()
     folder = args.output.resolve()
-    if args.verify:
+    if args.receipt_only:
+        receipt = source_receipt(RUNTIME, tracked_sources())
+        write_receipt(folder, receipt)
+    elif args.verify:
         receipt = receipt_for(folder, tracked_sources())
         if receipt != json.loads((folder / RECEIPT).read_text(encoding="utf-8")):
             raise ValueError("The Unreal Steam recipe does not match its receipt.")
