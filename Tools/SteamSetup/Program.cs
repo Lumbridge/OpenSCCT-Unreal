@@ -29,7 +29,7 @@ internal static class Program
             }
             string? selected = Option(args, "--source");
             string? source = GodotSteamContent.FindSource(selected);
-            if (interactive && selected is null) source = ChooseSource(source);
+            if (interactive && (selected is null || source is null)) source = ChooseSource(source);
             if (source is null) throw new InvalidDataException("Select the installed Steam copy of Splinter Cell Chaos Theory (app 13570).");
             await BuildAsync(source, directory, tools, recipe, cancel.Token);
             Console.WriteLine("Unreal game files are ready.");

@@ -166,7 +166,8 @@ public sealed class BridgeSession : IDisposable
         string? bridge = Path.GetDirectoryName(typeof(BridgeSession).Assembly.Location);
         string? requested = string.IsNullOrWhiteSpace(contentRoot) ? null : Path.GetFullPath(contentRoot);
         // Older launchers request shared packs or a Godot generation. Use the local Unreal conversion for those launches.
-        bool managed = requested is null || new DirectoryInfo(requested).Parent?.Name == OpenScct.Maps.SteamContentInstall.BuildsDirectory
+        bool managed = requested is null || string.Equals(new DirectoryInfo(requested).Parent?.Name,
+                OpenScct.Maps.SteamContentInstall.BuildsDirectory, StringComparison.OrdinalIgnoreCase)
             || Path.GetFileName(Path.TrimEndingDirectorySeparator(requested)).Equals("packs", StringComparison.OrdinalIgnoreCase);
         if (managed)
         {
