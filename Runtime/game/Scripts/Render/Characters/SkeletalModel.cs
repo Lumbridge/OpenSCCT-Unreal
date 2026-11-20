@@ -1,0 +1,1564 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
+using Godot;
+using OpenScct.Core;
+using OpenScctGame.Render.Data;
+using OpenScctGame.Render.Gltf;
+using OpenScctGame.Render.Materials;
+
+namespace OpenScctGame.Render.Characters;
+
+/// <summary>
+/// A skeletal mesh of the shared packs (.content/shared/chars: the spy ATT_01, the merc DEF_01, animated props such
+/// as SteeE's crane) with its sequences, drawn with the actor-lit Faithful material and posed by
+/// <see cref="Ue2PoseApplier"/>. Placement follows UE2: world = Location + PrePivot, then Rotation, then the mesh's
+/// RotOrigin and scale. docs/RENDERING.md#characters.
+/// </summary>
+public sealed class SkeletalModel : OpenScctGame.Views.IFirstPersonRigModel
+{
+    private readonly List<MeshInstance3D> _meshes = [];
+    private readonly List<(MeshInstance3D Mesh, int Surface, string Name, Material? Own)> _surfaces = [];
+
+    private SkeletalModel(Node3D root, Node3D pivot, Skeleton3D skeleton, AnimSampler sampler, FRotator rotOrigin, Vector3 meshScale)
+    {
+        Root = root;
+        Pivot = pivot;
+        Skeleton = skeleton;
+        Sampler = sampler;
+        RotOrigin = rotOrigin;
+        MeshScale = meshScale;
+    }
+
+    /// <summary>Extra culling margin of skinned meshes, in metres.</summary>
+    public const float CullMargin = 64f;
+
+    /// <summary>The actor node: placed at Location + PrePivot with the actor's rotation.</summary>
+    public Node3D Root { get; }
+
+    /// <summary>The mesh node under <see cref="Root"/>: RotOrigin and scale.</summary>
+    public Node3D Pivot { get; }
+
+    public Skeleton3D Skeleton { get; }
+    public bool SampleClip(string name, float frame)
+    {
+        if (!Sampler.Play(name, loop: false, frame: frame)) return false;
+        Pose(); return true;
+    }
+    public Transform3D BonePose(int bone) => CurrentBonePose(bone);
+
+    /// <summary>Original package bone order, retained through glTF import for pawn BoneMirrors indices.</summary>
+    public IReadOnlyList<string> PackageBones => _template?.PackageBones ?? Array.Empty<string>();
+
+    /// <summary>Current bone pose before Skeleton3D's deferred per-frame update.</summary>
+    public Transform3D CurrentBonePose(int bone)
+    {
+        Transform3D pose = Skeleton.GetBonePose(bone);
+        for (int parent = Skeleton.GetBoneParent(bone); parent >= 0; parent = Skeleton.GetBoneParent(parent))
+            pose = Skeleton.GetBonePose(parent) * pose;
+        return pose;
+    }
+
+    public AnimSampler Sampler { get; private set; }
+
+    public void ApplyAnimations(OpenScct.Animation.AnimationProject? project, string? target = null)
+    {
+        if (project is null || _template is null || ReferenceEquals(_studioProject, project)) return;
+        _studioProject = project;
+        string glb = _template.Glb;
+        target ??= Path.GetFileName(Path.GetDirectoryName(glb)) + "." + Path.GetFileNameWithoutExtension(glb);
+        Sampler = Sampler.WithBindings(project, target);
+    }
+    private OpenScct.Animation.AnimationProject? _studioProject;
+
+    public IReadOnlyList<MeshInstance3D> Meshes => _meshes;
+
+    public FRotator RotOrigin { get; }
+
+    public Vector3 MeshScale { get; }
+
+    /// <summary>The shared folder of a skeletal mesh asset path such as <c>SPerso.ATT_01</c>.</summary>
+    public static string? FindGlb(string asset, string? sharedRoot = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(asset);
+        sharedRoot ??= DefaultSharedRoot();
+        int dot = asset.IndexOf('.', StringComparison.Ordinal);
+        if (dot <= 0)
+        {
+            return null;
+        }
+
+        string path = Path.Combine(sharedRoot, "chars", asset[..dot], asset[(dot + 1)..] + ".glb");
+        return File.Exists(path) ? path : null;
+    }
+
+    /// <summary>
+    /// A skeletal mesh a map places (an SAnimatedMesh prop, a DT_Mesh fish): the map's own copy
+    /// (<c>render/chars/&lt;Package&gt;/&lt;Mesh&gt;.glb</c>, which the converter writes so a downloaded map does not need its
+    /// anim package in the player's install), else the shared one.
+    /// </summary>
+    public static string? FindMapGlb(string asset, string? mapFolder, string? sharedRoot = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(asset);
+        if (!string.IsNullOrEmpty(mapFolder) && FindGlb(asset, Path.Combine(mapFolder, "render")) is { } own)
+        {
+            return own;
+        }
+
+        return FindGlb(asset, sharedRoot);
+    }
+
+    /// <summary>The shared folder next to the executable for an export, else the project's .content/shared.</summary>
+    public static string DefaultSharedRoot()
+    {
+        // An installed build: the content the launcher built (--svm-content).
+        if (OpenScct.Server.ContentPaths.Shared is { } content)
+        {
+            return content;
+        }
+
+        string executableDir = Path.GetDirectoryName(OS.GetExecutablePath()) ?? ".";
+        string beside = Path.Combine(executableDir, "shared");
+        if (OS.HasFeature("template") && Directory.Exists(beside))
+        {
+            return Path.GetFullPath(beside);
+        }
+
+        string projectDir = ProjectSettings.GlobalizePath("res://");
+        return Path.GetFullPath(Path.Combine(projectDir, "..", ".content", "shared"));
+    }
+
+    /// <summary>
+    /// A model of <paramref name="glbPath"/>. The file is read, its scene generated and its materials compiled once per
+    /// path; later loads duplicate that scene and share its meshes, materials and clips. Reading the glTF again for
+    /// every pawn view took half a second each time a pawn respawned (the drawn pawn is made anew).
+    /// With <paramref name="animationsFrom"/> (a map outfit's model) the model plays that mesh's clips instead of its
+    /// own, matched by bone name, and is drawn warm like the pawns it stands in for.
+    /// </summary>
+    public static SkeletalModel Load(string glbPath, string? animationsFrom = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(glbPath);
+        Template template = TemplateOf(glbPath, animationsFrom);
+        var scene = (Node3D)template.Scene.Duplicate();
+        Skeleton3D skeleton = FindFirst<Skeleton3D>(scene) ?? throw new InvalidDataException($"{glbPath}: no skeleton");
+        string name = Path.GetFileNameWithoutExtension(glbPath);
+        var root = new Node3D { Name = name };
+        var pivot = new Node3D { Name = "Mesh", Transform = new Transform3D(UeSpace.RotationToGodot(template.RotOrigin), Vector3.Zero) };
+        root.AddChild(pivot);
+        pivot.AddChild(scene);
+        pivot.Scale = UeSpace.DirectionToGodot(new FVector(template.MeshScale.X, template.MeshScale.Y, template.MeshScale.Z));
+        var model = new SkeletalModel(root, pivot, skeleton, template.Sampler.For(skeleton), template.RotOrigin, template.MeshScale)
+        {
+            _template = template,
+        };
+        foreach (MeshInstance3D mesh in FindAll<MeshInstance3D>(scene))
+        {
+            mesh.ExtraCullMargin = CullMargin;
+            if (!template.Warm && (template.CullBounds ??= new AnimatedCullBounds(template.Sampler)).TryGet(mesh, skeleton, out Aabb bounds))
+            {
+                mesh.CustomAabb = bounds;
+                mesh.ExtraCullMargin = 0f;
+            }
+            model._meshes.Add(mesh);
+            if (mesh.Mesh is null)
+            {
+                continue;
+            }
+
+            for (int s = 0; s < mesh.Mesh.GetSurfaceCount(); s++)
+            {
+                string? matName = mesh.Mesh.SurfaceGetMaterial(s)?.ResourceName;
+                model._surfaces.Add((mesh, s, matName ?? "", mesh.GetSurfaceOverrideMaterial(s)));
+            }
+        }
+
+        // Characters are warm (HeatIntensity 1 for both sides); views set the EMF values from the pawn's state.
+        if (template.Warm)
+        {
+            model.SetVision(new Vector4(RenderK.PawnHeatIntensity, RenderK.DefaultHeatOpacity, 0f, 1f));
+        }
+
+        return model;
+    }
+
+    private static Template TemplateOf(string glbPath, string? animationsFrom)
+    {
+        string key = Path.GetFullPath(glbPath) + (animationsFrom is null ? "" : "|" + Path.GetFullPath(animationsFrom));
+        if (s_templates.TryGetValue(key, out Template? template) && GodotObject.IsInstanceValid(template.Scene))
+        {
+            Reused++;
+            return template;
+        }
+
+        template = BuildTemplate(glbPath, animationsFrom is null ? null : TemplateOf(animationsFrom, null));
+        s_templates[key] = template;
+        FilesRead++;
+        return template;
+    }
+
+    /// <summary>Model files read (main thread; for the frame-time smoke's report).</summary>
+    public static int FilesRead { get; private set; }
+
+    /// <summary>Models made from a scene already read.</summary>
+    public static int Reused { get; private set; }
+
+    /// <summary>The bone names of <paramref name="glbPath"/>'s package, in its order (read once, as <see cref="Load"/> does).</summary>
+    public static IReadOnlyList<string> PackageBonesOf(string glbPath)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(glbPath);
+        return TemplateOf(glbPath, null).PackageBones;
+    }
+
+    /// <summary>
+    /// Models read so far, by full path (and the clips' mesh for a model playing another's): the generated scene (never
+    /// in the tree) with its materials, and its clips.
+    /// </summary>
+    private static readonly Dictionary<string, Template> s_templates = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Frees the kept scenes (at exit; a later load reads the file again).</summary>
+    public static void ReleaseTemplates()
+    {
+        foreach (Template t in s_templates.Values)
+        {
+            if (GodotObject.IsInstanceValid(t.Scene))
+            {
+                t.Scene.Free();
+            }
+        }
+
+        s_templates.Clear();
+        TextureCache.ReleaseShared();
+    }
+
+    private sealed record Template(Node3D Scene, AnimSampler Sampler, FRotator RotOrigin, Vector3 MeshScale, bool Warm,
+        string Folder, MaterialCompiler Compiler, Dictionary<string, MaterialEntry> Materials)
+    {
+        public string[] PackageBones { get; init; } = [];
+        /// <summary>The model's file.</summary>
+        public string Glb { get; init; } = "";
+        /// <summary>The textures its materials draw (by URI under <see cref="Folder"/>, or a full path).</summary>
+        public TextureCache? Textures { get; init; }
+        /// <summary>Materials made for skins (UE2 Skins[]) over a slot, by the slot's own material and the skin.</summary>
+        public Dictionary<(string Own, string Skin), Material?> Swaps { get; } = new();
+        public AnimatedCullBounds? CullBounds { get; set; }
+
+        /// <summary>
+        /// <paramref name="own"/>'s material drawing the texture of the material <paramref name="skin"/> (package and
+        /// name, as the mesh export names materials) instead: textures/Package_Name.png next to the model. Null when
+        /// the chars step did not export that texture.
+        /// </summary>
+        public Material? Swap(string own, string skin)
+        {
+            if (Swaps.TryGetValue((own, skin), out Material? made))
+            {
+                return made;
+            }
+
+            // Map-authored skeletal skins can carry their own complete shader,
+            // including the PS2 terminal's moving liquid and emissive mask.
+            Materials.TryGetValue(skin, out MaterialEntry? authoredSkin);
+            if (authoredSkin is null)
+                foreach (MaterialEntry candidate in Materials.Values)
+                    if (string.Equals(candidate.Source, skin, StringComparison.OrdinalIgnoreCase))
+                    {
+                        authoredSkin = candidate;
+                        break;
+                    }
+            if (authoredSkin is not null)
+            {
+                made = Compiler.Build(authoredSkin, LightSource.Actor);
+                Swaps[(own, skin)] = made;
+                return made;
+            }
+
+            string uri = "textures/" + skin.Replace('.', '_') + ".png";
+            made = Materials.TryGetValue(own, out MaterialEntry? entry) && File.Exists(Path.Combine(Folder, uri))
+                ? Compiler.Build(new MaterialEntry
+                {
+                    Name = skin,
+                    Texture = uri,
+                    // The ROF screen changes its emissive image along with its diffuse image.
+                    SelfIllum = IsFireModeScreen(skin) ? uri : entry.SelfIllum,
+                    SelfIllumMask = IsFireModeScreen(skin) ? uri : entry.SelfIllumMask,
+                    SpecMask = entry.SpecMask,
+                    EnvColor = entry.EnvColor,
+                    EnvTexture = entry.EnvTexture,
+                    EnvWorld = entry.EnvWorld,
+                    Unlit = entry.Unlit,
+                    NormalTexture = entry.NormalTexture,
+                    Masked = entry.Masked,
+                    Translucent = entry.Translucent,
+                    TwoSided = entry.TwoSided,
+                }, LightSource.Actor)
+                : null;
+            Swaps[(own, skin)] = made;
+            return made;
+        }
+
+        /// <summary>
+        /// <paramref name="own"/>'s material drawing the image at <paramref name="texturePath"/> (a full path: a map
+        /// outfit's slot texture) as its diffuse, keeping everything else, its name too, so the vision lookup still finds
+        /// the slot's heat and EMF skins. Null when the slot has no material or the file is missing.
+        /// </summary>
+        public Material? Outfit(string own, string texturePath)
+        {
+            string key = "outfit:" + texturePath;
+            if (Swaps.TryGetValue((own, key), out Material? made))
+            {
+                return made;
+            }
+
+            // The texture cache resolves URIs under the model's folder; a full path stays as it is.
+            made = Materials.TryGetValue(own, out MaterialEntry? e) && (File.Exists(texturePath) || Textures?.Holds(texturePath) == true)
+                ? Compiler.Build(new MaterialEntry
+                {
+                    Name = e.Name, Source = e.Source, Texture = texturePath, NormalTexture = e.NormalTexture, Masked = e.Masked,
+                    Translucent = e.Translucent, TwoSided = e.TwoSided, Unlit = e.Unlit, SelfIllum = e.SelfIllum,
+                    SelfIllumMask = e.SelfIllumMask, SpecMask = e.SpecMask, EnvColor = e.EnvColor, EnvTexture = e.EnvTexture,
+                    EnvWorld = e.EnvWorld, UvAnim = e.UvAnim, ListBlend = e.ListBlend,
+                }, LightSource.Actor)
+                : null;
+            Swaps[(own, key)] = made;
+            return made;
+        }
+
+        /// <summary>
+        /// <paramref name="own"/>'s material with its diffuse replaced by the content builder's camo version
+        /// (textures/cosmetic_&lt;pattern&gt;_&lt;own texture file&gt;), keeping everything else (self-illumination,
+        /// blending). Null when that file was not built.
+        /// </summary>
+        public Material? Cosmetic(string own, string pattern)
+        {
+            string key = "cosmetic:" + pattern;
+            if (Swaps.TryGetValue((own, key), out Material? made))
+            {
+                return made;
+            }
+
+            made = null;
+            if (Materials.TryGetValue(own, out MaterialEntry? e) && e.Texture is { } texture)
+            {
+                string uri = "textures/cosmetic_" + pattern + "_" + Path.GetFileName(texture);
+                if (File.Exists(Path.Combine(Folder, uri)))
+                {
+                    made = Compiler.Build(new MaterialEntry
+                    {
+                        Name = e.Name + "+" + pattern, Source = e.Source, Texture = uri, NormalTexture = e.NormalTexture, Masked = e.Masked, Translucent = e.Translucent,
+                        TwoSided = e.TwoSided, Unlit = e.Unlit, SelfIllum = e.SelfIllum, SelfIllumMask = e.SelfIllumMask, SpecMask = e.SpecMask,
+                        EnvColor = e.EnvColor, EnvTexture = e.EnvTexture, EnvWorld = e.EnvWorld,
+                        UvAnim = e.UvAnim, ListBlend = e.ListBlend,
+                    }, LightSource.Actor);
+                    if (made is ShaderMaterial shiny)
+                    {
+                        // Painted in screen colours: the world shader brings its texels into the retail range
+                        // (svm_cosmetic_level) so pale camos light up without clipping to white.
+                        shiny.SetShaderParameter(CamoParameter, true);
+                        string maskPath = Path.ChangeExtension(Path.Combine(Folder, uri), ".mask.png");
+                        if (File.Exists(maskPath))
+                        {
+                            using Image mask = Image.LoadFromFile(maskPath);
+                            mask.GenerateMipmaps();
+                            shiny.SetShaderParameter("svm_finish_mask", ImageTexture.CreateFromImage(mask));
+                        }
+
+                        // The world shader's sheen (svm_sheen): on the golden and mastercraft camos a full gold mirror that stays bright
+                        // in any light (a special finish), on the pyre camo glossy black lacquer with near-white
+                        // highlights that darkens in shadow like everything else.
+                        if (pattern is "golden" or "mastercraft")
+                        {
+                            shiny.SetShaderParameter(SheenParameter, 1f);
+                            shiny.SetShaderParameter(SheenTintParameter, new Vector3(1f, 0.8f, 0.36f));
+                            shiny.SetShaderParameter(SheenMirrorParameter, 1f);
+                        }
+                        else if (pattern == "pyre")
+                        {
+                            shiny.SetShaderParameter(SheenParameter, 0.7f);
+                            shiny.SetShaderParameter(SheenTintParameter, new Vector3(1f, 0.93f, 0.85f));
+                        }
+                    }
+                }
+            }
+
+            Swaps[(own, key)] = made;
+            return made;
+        }
+
+        /// <summary>The meshes made by <see cref="Split"/>, by source mesh and material.</summary>
+        private Dictionary<(Mesh, string), MeshSplit?> Splits { get; } = new();
+
+        /// <summary>
+        /// <paramref name="mesh"/> cut in two: the surfaces drawing <paramref name="material"/> and the rest, each a mesh
+        /// of its own (made once and shared by every model of this file). Null when no surface draws it or every
+        /// surface does.
+        /// </summary>
+        public MeshSplit? Split(Mesh? mesh, string material)
+        {
+            if (mesh is not ArrayMesh source)
+            {
+                return null;
+            }
+
+            if (Splits.TryGetValue((source, material), out MeshSplit? made))
+            {
+                return made;
+            }
+
+            var rest = new List<int>();
+            var part = new List<int>();
+            for (int s = 0; s < source.GetSurfaceCount(); s++)
+            {
+                (source.SurfaceGetMaterial(s)?.ResourceName == material ? part : rest).Add(s);
+            }
+
+            made = part.Count == 0 || rest.Count == 0 ? null : new MeshSplit(Pick(source, rest), [.. rest], Pick(source, part), [.. part]);
+            Splits[(source, material)] = made;
+            return made;
+        }
+
+        // The flags a surface keeps when copied: 8 bone weights and the custom channel formats.
+        private static readonly Mesh.ArrayFormat KeptFlags = Mesh.ArrayFormat.FlagUse8BoneWeights | (Mesh.ArrayFormat)(((1L << 12) - 1) << 13);
+
+        private static ArrayMesh Pick(ArrayMesh source, List<int> surfaces)
+        {
+            var made = new ArrayMesh { ResourceName = source.ResourceName, BlendShapeMode = source.BlendShapeMode };
+            for (int b = 0; b < source.GetBlendShapeCount(); b++)
+            {
+                made.AddBlendShape(source.GetBlendShapeName(b));
+            }
+
+            foreach (int s in surfaces)
+            {
+                MeshCpuArrays.Add(made, source.SurfaceGetPrimitiveType(s), MeshCpuArrays.Get(source, s),
+                    MeshCpuArrays.BlendShapes(source, s), null, source.SurfaceGetFormat(s) & KeptFlags);
+                int i = made.GetSurfaceCount() - 1;
+                made.SurfaceSetMaterial(i, source.SurfaceGetMaterial(s));
+                made.SurfaceSetName(i, source.SurfaceGetName(s));
+            }
+
+            return made;
+        }
+    }
+
+    /// <summary>A mesh cut in two by material: each half with the source surface index of each of its surfaces.</summary>
+    private sealed record MeshSplit(ArrayMesh Rest, int[] RestSurfaces, ArrayMesh Part, int[] PartSurfaces);
+
+    // The per-mesh shader values a split-off part takes over from its source mesh.
+    // (A property: the parameter names are static fields declared further down, not yet set while this one would be.)
+    private static StringName[] InstanceParameters => [TintParameter, GlowHueParameter, GameplayObjects.VisionActorParameter];
+
+    /// <summary>
+    /// Moves the surfaces drawing <paramref name="material"/> (as the mesh export names it, such as SWeaponTex.1DEF_01)
+    /// into mesh instances of their own, on the same skeleton and skin with the same materials, so a camo or tint can
+    /// be put on them apart from the rest (<see cref="SetCosmetic(MeshInstance3D, string?)"/>,
+    /// <see cref="SetTint(MeshInstance3D, Vector3, float)"/>). Returns those instances (a mesh drawing nothing but
+    /// that material is returned as it is); empty when no surface draws it. Material slots (<see cref="Slots"/>) keep
+    /// their order. Call it right after <see cref="Load"/>, before any skin.
+    /// </summary>
+    public IReadOnlyList<MeshInstance3D> SplitPart(string material)
+    {
+        var parts = new List<MeshInstance3D>();
+        if (_template is null)
+        {
+            return parts;
+        }
+
+        foreach (MeshInstance3D mesh in _meshes.ToArray())
+        {
+            if (mesh.Mesh is null)
+            {
+                continue;
+            }
+
+            if (_template.Split(mesh.Mesh, material) is not { } split)
+            {
+                bool all = mesh.Mesh.GetSurfaceCount() > 0;
+                for (int s = 0; s < mesh.Mesh.GetSurfaceCount(); s++)
+                {
+                    all &= mesh.Mesh.SurfaceGetMaterial(s)?.ResourceName == material;
+                }
+
+                if (all)
+                {
+                    parts.Add(mesh);
+                }
+
+                continue;
+            }
+
+            var part = new MeshInstance3D
+            {
+                Name = mesh.Name + "_" + material.Replace('.', '_'),
+                Mesh = split.Part,
+                Skin = mesh.Skin,
+                Skeleton = mesh.Skeleton,
+                Transform = mesh.Transform,
+                ExtraCullMargin = mesh.ExtraCullMargin,
+                CastShadow = mesh.CastShadow,
+                Layers = mesh.Layers,
+                Transparency = mesh.Transparency,
+                MaterialOverlay = mesh.MaterialOverlay,
+            };
+            mesh.GetParent().AddChild(part);
+            foreach (StringName p in InstanceParameters)
+            {
+                Variant value = OpenScctGame.Render.InstanceParams.Get(mesh, p);
+                if (value.VariantType != Variant.Type.Nil)
+                {
+                    OpenScctGame.Render.InstanceParams.Set(part, p, value);
+                }
+            }
+
+            // Each surface's override material by its index in the source mesh, then laid on the two halves.
+            var overrides = new Material?[mesh.Mesh.GetSurfaceCount()];
+            for (int s = 0; s < overrides.Length; s++)
+            {
+                overrides[s] = mesh.GetSurfaceOverrideMaterial(s);
+            }
+
+            mesh.Mesh = split.Rest;
+            var moved = new Dictionary<int, (MeshInstance3D, int)>();
+            for (int i = 0; i < split.RestSurfaces.Length; i++)
+            {
+                mesh.SetSurfaceOverrideMaterial(i, overrides[split.RestSurfaces[i]]);
+                moved[split.RestSurfaces[i]] = (mesh, i);
+            }
+
+            for (int i = 0; i < split.PartSurfaces.Length; i++)
+            {
+                part.SetSurfaceOverrideMaterial(i, overrides[split.PartSurfaces[i]]);
+                moved[split.PartSurfaces[i]] = (part, i);
+            }
+
+            // The surface list in place, so the material slots keep their order (UE2 Skins indices).
+            for (int e = 0; e < _surfaces.Count; e++)
+            {
+                (MeshInstance3D m, int s, string name, Material? own) = _surfaces[e];
+                if (ReferenceEquals(m, mesh))
+                {
+                    (MeshInstance3D to, int index) = moved[s];
+                    _surfaces[e] = (to, index, name, own);
+                }
+            }
+
+            _meshes.Add(part);
+            parts.Add(part);
+        }
+
+        return parts;
+    }
+
+    /// <summary>A model file read and turned into a scene ahead of <see cref="BuildTemplate"/>.</summary>
+    private sealed record Prefetched(GlbDocument Glb, bool Authored, Dictionary<string, MaterialEntry> Materials, Node3D Scene);
+
+    private static readonly Dictionary<string, System.Threading.Tasks.Task<Prefetched>> s_prefetched = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>SVM_MODEL_THREADS=0 reads every model on the main thread, one after another (measurement).</summary>
+    private static readonly bool s_prefetchThreads = !OperatingSystem.IsBrowser() &&
+        System.Environment.GetEnvironmentVariable("SVM_MODEL_THREADS") != "0";
+
+    /// <summary>
+    /// Starts reading the model files of <paramref name="glbPaths"/> on worker threads: the file, its JSON and the scene
+    /// Godot makes of it, which is most of a model's load (half a second to a second each for the first-person pistols
+    /// on a laptop). <see cref="Load"/> then takes each one as it is asked for and builds its materials on the main
+    /// thread as before. Paths already loaded, already asked for or missing are skipped.
+    /// </summary>
+    public static void Prefetch(IEnumerable<string?> glbPaths)
+    {
+        if (!s_prefetchThreads) return;
+        foreach (string? path in glbPaths)
+        {
+            if (path is null || !File.Exists(path)) continue;
+            string key = Path.GetFullPath(path);
+            if (s_prefetched.ContainsKey(key)) continue;
+            if (s_templates.TryGetValue(key, out Template? template) && GodotObject.IsInstanceValid(template.Scene)) continue;
+            s_prefetched[key] = System.Threading.Tasks.Task.Run(() => Read(key));
+        }
+    }
+
+    private static Prefetched Read(string glbPath)
+    {
+        GlbDocument glb = GlbDocument.Load(glbPath);
+        try
+        {
+            bool authored = AuthoredAnimationTracks.IsConverted(glb);
+            Dictionary<string, MaterialEntry> materials = ReadMaterials(glb.Root);
+            return new Prefetched(glb, authored, materials, ImportScene(glbPath, glb.Root, materials, authored));
+        }
+        catch
+        {
+            glb.Dispose();
+            throw;
+        }
+    }
+
+    private static Template BuildTemplate(string glbPath, Template? clipsFrom)
+    {
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        Prefetched? ahead = null;
+        if (clipsFrom is null && s_prefetched.Remove(Path.GetFullPath(glbPath), out System.Threading.Tasks.Task<Prefetched>? reading))
+        {
+            try
+            {
+                ahead = reading.GetAwaiter().GetResult();
+            }
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException)
+            {
+                // Read again below, where the failure is reported as for any model.
+            }
+        }
+
+        using GlbDocument glb = ahead?.Glb ?? GlbDocument.Load(glbPath);
+        long parsed = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool authored = ahead?.Authored ?? (clipsFrom is null && AuthoredAnimationTracks.IsConverted(glb));
+        Dictionary<string, MaterialEntry> materials = ahead?.Materials ?? ReadMaterials(glb.Root);
+        Node3D scene = ahead?.Scene ?? ImportScene(glbPath, glb.Root, materials, authored);
+        long generated = System.Diagnostics.Stopwatch.GetTimestamp();
+        Skeleton3D skeleton = FindFirst<Skeleton3D>(scene) ?? throw new InvalidDataException($"{glbPath}: no skeleton");
+        var animations = authored ? AuthoredAnimationTracks.Read(glb, skeleton) : new List<(string, Animation)>();
+        if (FindFirst<AnimationPlayer>(scene) is { } player)
+        {
+            foreach (StringName animName in player.GetAnimationList())
+            {
+                animations.Add((animName.ToString(), player.GetAnimation(animName)));
+            }
+
+            // The player never drives the pose: the sampler and the pose applier do.
+            player.GetParent()?.RemoveChild(player);
+            player.Free();
+        }
+
+        if (clipsFrom is not null)
+        {
+            // The team's clips drive an outfit's model; its own (if any) are not the team's moves.
+            animations.Clear();
+            foreach (string clip in clipsFrom.Sampler.ClipNames)
+            {
+                animations.Add((clip, clipsFrom.Sampler.Find(clip)!.Animation));
+            }
+        }
+
+        FRotator rotOrigin = default;
+        Vector3 meshScale = Vector3.One;
+        var packageBones = new List<string>();
+        {
+            ReadExtras(glb.Root, ref rotOrigin, ref meshScale);
+            if (glb.Root.TryGetProperty("skins", out JsonElement skins) && skins.GetArrayLength() > 0)
+            {
+                JsonElement nodes = glb.Root.GetProperty("nodes");
+                foreach (JsonElement joint in skins[0].GetProperty("joints").EnumerateArray())
+                    packageBones.Add(nodes[joint.GetInt32()].GetProperty("name").GetString() ?? "");
+            }
+        }
+
+        long compiling = System.Diagnostics.Stopwatch.GetTimestamp();
+        // Shared: the sidearm, arms and outfit models of a package name the same PNGs, made once for all of them.
+        var textures = new TextureCache(Path.GetDirectoryName(glbPath) ?? ".") { Shared = true };
+        // shared/chars/<Package>/<Mesh>.glb: the render pack (heat and EMF skins) is shared/render.
+        string? shared = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(glbPath))));
+        var compiler = new MaterialCompiler(new MaterialsDoc(), textures)
+        {
+            // A map's own mesh (render/chars) has no render pack beside it: an outfit model takes its team's.
+            Pack = clipsFrom?.Compiler.Pack ?? (shared is null ? null : RenderPack.Load(shared)),
+            VisionLookup = VisionLookup.SkinBase,
+            // Character models carry OpenSCCT's cosmetics (tints, light hues, camos).
+            Cosmetics = true,
+            // An outfit's own materials have no heat or EMF skins: masks made from the stock mesh it stands in for.
+            // Any other model's are in the pack, except the pistols' (SidearmVision).
+            OwnVision = clipsFrom is null ? SidearmVision : name => OutfitSkins.For(glbPath, clipsFrom.Glb)?.Vision(name),
+            // Stock first-person sleeves share an all-black EMF modifier with the weapon.
+            // Cloth must not become another white weapon silhouette. Keep its thermal mask.
+            EmfOverride = glbPath.Replace('\\', '/').Contains("/SWeaponFirst/", StringComparison.OrdinalIgnoreCase)
+                ? name => name.StartsWith("SWeaponTex.1DEF_", StringComparison.OrdinalIgnoreCase)
+                    ? (s_fabricVision ??= new VisionMasks(Flat(.25f), Flat(1f))).Emf : null
+                : null,
+        };
+
+        // The PNGs of the materials built below, decoded on worker threads first (textures are made here).
+        var wanted = new List<(string Uri, bool Mipmaps)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (MeshInstance3D mesh in FindAll<MeshInstance3D>(scene))
+        {
+            for (int s = 0; s < (mesh.Mesh?.GetSurfaceCount() ?? 0); s++)
+            {
+                if (mesh.Mesh!.SurfaceGetMaterial(s)?.ResourceName is { } name && seen.Add(name) &&
+                    materials.TryGetValue(name, out MaterialEntry? entry))
+                {
+                    wanted.AddRange(compiler.TexturesOf(entry));
+                    if (entry.NormalTexture is { } normal) wanted.Add((normal, true));
+                }
+            }
+        }
+
+        textures.Prefetch(wanted);
+        foreach (MeshInstance3D mesh in FindAll<MeshInstance3D>(scene))
+        {
+            // The pose moves skinned vertices far from the rest pose the culling box is made of (SteeE's crane, drawn
+            // at DrawScale 10, was culled out of views it fills): cull by a generous box instead.
+            mesh.ExtraCullMargin = CullMargin;
+            if (mesh.Mesh is null)
+            {
+                continue;
+            }
+
+            for (int s = 0; s < mesh.Mesh.GetSurfaceCount(); s++)
+            {
+                string? matName = mesh.Mesh.SurfaceGetMaterial(s)?.ResourceName;
+                if (matName is not null && materials.TryGetValue(matName, out MaterialEntry? entry))
+                {
+                    mesh.SetSurfaceOverrideMaterial(s, compiler.Build(entry, LightSource.Actor));
+                }
+            }
+        }
+
+        // A texture the materials did not ask for after all (a self-illum image of an unlit pass) is not kept.
+        textures.DropPrefetched();
+
+        OpenScctGame.Diagnostics.LoadTimer.Glb(glbPath,
+            System.Diagnostics.Stopwatch.GetElapsedTime(started, parsed).TotalMilliseconds,
+            System.Diagnostics.Stopwatch.GetElapsedTime(parsed, generated).TotalMilliseconds,
+            System.Diagnostics.Stopwatch.GetElapsedTime(compiling).TotalMilliseconds, textures.Count);
+        bool warm = clipsFrom is not null ||
+            string.Equals(Path.GetFileName(Path.GetDirectoryName(Path.GetFullPath(glbPath))), "SPerso", StringComparison.OrdinalIgnoreCase);
+        return new Template(scene, new AnimSampler(skeleton, animations), rotOrigin, meshScale, warm,
+            Path.GetDirectoryName(Path.GetFullPath(glbPath)) ?? ".", compiler, materials)
+        {
+            PackageBones = packageBones.ToArray(),
+            Glb = Path.GetFullPath(glbPath),
+            Textures = textures,
+        };
+    }
+
+    /// <summary>
+    /// The glTF scene of <paramref name="glbPath"/>. Godot's importer reads, decodes and uploads every image the file
+    /// names, yet every surface with a named material draws a Faithful material made from the same PNGs instead. So the
+    /// file is read with a 1x1 stand-in for each image (nothing else in it changes: names, texture indices and texCoord
+    /// sets stay, so meshes and UVs come out the same), and read again as it is if any surface would keep the
+    /// importer's own material.
+    /// </summary>
+    private static Node3D ImportScene(string glbPath, JsonElement root, Dictionary<string, MaterialEntry> materials, bool authored)
+    {
+        if (ForImport(glbPath, root, authored) is { } stripped)
+        {
+            if (Import(glbPath, stripped, authored, out _) is { } scene)
+            {
+                if (AllReplaced(scene, materials))
+                {
+                    return scene;
+                }
+
+                scene.Free();
+            }
+        }
+
+        return Import(glbPath, null, authored, out Error error) ?? throw new InvalidDataException($"{glbPath}: glTF load failed ({error})");
+    }
+
+    private static Node3D? Import(string glbPath, byte[]? bytes, bool authored, out Error error)
+    {
+        using var document = new GltfDocument();
+        // Converted clips already contain the original key times. The default 30 Hz bake misses
+        // their sharp changes (including 8 Hz death clips), shifting limbs between authored keys.
+        using var state = new GltfState { CreateAnimations = !authored };
+        if (bytes is null)
+        {
+            error = document.AppendFromFile(glbPath, state);
+        }
+        else
+        {
+            // What AppendFromFile sets besides: the name the scene and meshes are named from (the file's base name).
+            // The base path is the file's folder in both.
+            state.FileName = Path.GetFileNameWithoutExtension(glbPath);
+            error = document.AppendFromBuffer(bytes, Path.GetDirectoryName(glbPath) ?? "", state);
+        }
+
+        if (error != Error.Ok)
+        {
+            return null;
+        }
+
+        Node? generated = document.GenerateScene(state);
+        if (OperatingSystem.IsBrowser())
+            foreach (GltfMesh mesh in state.GetMeshes())
+                if (mesh.Mesh is { } imported) MeshCpuArrays.Remember(imported);
+        if (generated is Node3D scene)
+        {
+            return scene;
+        }
+
+        generated?.Free();
+        return null;
+    }
+
+    /// <summary>True when every surface with a material gets a Faithful one (BuildTemplate's rule).</summary>
+    private static bool AllReplaced(Node3D scene, Dictionary<string, MaterialEntry> materials)
+    {
+        foreach (MeshInstance3D mesh in FindAll<MeshInstance3D>(scene))
+        {
+            for (int s = 0; s < (mesh.Mesh?.GetSurfaceCount() ?? 0); s++)
+            {
+                if (mesh.Mesh!.SurfaceGetMaterial(s) is { } material && !materials.ContainsKey(material.ResourceName))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static string? s_pixelUri;
+
+    /// <summary>
+    /// The .glb as Godot's importer needs it, every other byte as it is: its "images" array replaced by 1x1 PNGs (same
+    /// count, order and names; left alone when the file names an image format extension), and, for a file whose clips
+    /// are read here (<paramref name="authored"/>), without its "animations" and the accessors and buffer views after
+    /// the last one a mesh or skin uses. The importer decodes every clip's keys while it parses, wanted or not: the
+    /// stock spy's 339 clips cost half a second a load. Null when nothing is to change.
+    /// </summary>
+    private static byte[]? ForImport(string glbPath, JsonElement root, bool authored)
+    {
+        bool extensions = root.TryGetProperty("extensionsUsed", out JsonElement used) && used.ValueKind == JsonValueKind.Array &&
+            used.GetArrayLength() > 0;
+        bool images = root.TryGetProperty("images", out JsonElement imageList) && imageList.ValueKind == JsonValueKind.Array &&
+            imageList.GetArrayLength() > 0;
+        if (images && extensions)
+        {
+            foreach (JsonElement e in used.EnumerateArray())
+            {
+                if (e.GetString() is "KHR_texture_basisu" or "EXT_texture_webp" or "EXT_texture_avif" or "MSFT_texture_dds"
+                    or "KHR_materials_pbrSpecularGlossiness")
+                {
+                    images = false;
+                }
+            }
+        }
+
+        bool clips = authored && root.TryGetProperty("animations", out JsonElement clipList) && clipList.ValueKind == JsonValueKind.Array &&
+            clipList.GetArrayLength() > 0;
+        if (!images && !clips)
+        {
+            return null;
+        }
+
+        // What a mesh or skin reads comes first in the files the converter writes; the clips' data follows. An image
+        // kept in the file may name a buffer view, and an extension anything: nothing is cut then.
+        int keepAccessors = -1, keepViews = -1;
+        if (clips && !extensions && (images || !root.TryGetProperty("images", out _)))
+        {
+            UsedByGeometry(root, out keepAccessors, out keepViews);
+        }
+
+        byte[] file = File.ReadAllBytes(glbPath);
+        ReadOnlySpan<byte> span = file;
+        if (span.Length < 20 || System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span) != 0x46546C67 ||
+            System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span[16..]) != 0x4E4F534A)
+        {
+            return null;
+        }
+
+        int jsonLength = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(span[12..]);
+        if (jsonLength <= 0 || 20 + jsonLength > span.Length)
+        {
+            return null;
+        }
+
+        // The byte ranges of the root values to replace, in file order.
+        ReadOnlySpan<byte> json = span.Slice(20, jsonLength);
+        var edits = new List<(int Start, int End, byte[] Put)>();
+        var reader = new Utf8JsonReader(json);
+        while (reader.Read())
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
+            {
+                continue;
+            }
+
+            bool isImages = images && reader.ValueTextEquals("images"u8);
+            bool isClips = clips && reader.ValueTextEquals("animations"u8);
+            int keep = reader.ValueTextEquals("accessors"u8) ? keepAccessors : reader.ValueTextEquals("bufferViews"u8) ? keepViews : -1;
+            reader.Read();
+            if (reader.TokenType != JsonTokenType.StartArray)
+            {
+                reader.Skip();
+                continue;
+            }
+
+            int start = (int)reader.TokenStartIndex;
+            if (isImages || isClips)
+            {
+                reader.Skip();
+                edits.Add((start, (int)reader.BytesConsumed, isImages ? ImageStubs(imageList) : "[]"u8.ToArray()));
+            }
+            else if (keep > 0)
+            {
+                // Everything after the last element kept, up to the closing bracket.
+                int count = 0, cut = -1;
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+                {
+                    reader.Skip();
+                    if (++count == keep) cut = (int)reader.BytesConsumed;
+                }
+
+                if (cut >= 0 && count > keep) edits.Add((cut, (int)reader.TokenStartIndex, []));
+            }
+            else
+            {
+                reader.Skip();
+            }
+        }
+
+        if (edits.Count == 0)
+        {
+            return null;
+        }
+
+        using var body = new MemoryStream(jsonLength);
+        int at = 0;
+        foreach ((int start, int end, byte[] put) in edits)
+        {
+            body.Write(json[at..start]);
+            body.Write(put);
+            at = end;
+        }
+
+        body.Write(json[at..]);
+        int newLength = (int)body.Length;
+        int padded = (newLength + 3) & ~3;
+        int rest = span.Length - (20 + jsonLength);
+        byte[] result = new byte[20 + padded + rest];
+        Span<byte> output = result;
+        span[..12].CopyTo(output);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(output[8..], (uint)result.Length);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(output[12..], padded);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(output[16..], 0x4E4F534A);
+        Span<byte> target = output.Slice(20, padded);
+        body.GetBuffer().AsSpan(0, newLength).CopyTo(target);
+        target[newLength..].Fill((byte)' ');
+        span[(20 + jsonLength)..].CopyTo(output[(20 + padded)..]);
+        return result;
+    }
+
+    /// <summary>
+    /// How many accessors, and buffer views, from the first to the last one a mesh or skin reads (-1 each when the
+    /// file is not laid out as expected).
+    /// </summary>
+    private static void UsedByGeometry(JsonElement root, out int accessors, out int views)
+    {
+        accessors = views = -1;
+        try
+        {
+            int last = -1;
+            if (root.TryGetProperty("meshes", out JsonElement meshes))
+            {
+                foreach (JsonElement mesh in meshes.EnumerateArray())
+                {
+                    foreach (JsonElement prim in mesh.GetProperty("primitives").EnumerateArray())
+                    {
+                        foreach (JsonProperty attribute in prim.GetProperty("attributes").EnumerateObject()) last = Math.Max(last, attribute.Value.GetInt32());
+                        if (prim.TryGetProperty("indices", out JsonElement indices)) last = Math.Max(last, indices.GetInt32());
+                        if (prim.TryGetProperty("targets", out JsonElement targets))
+                        {
+                            foreach (JsonElement target in targets.EnumerateArray())
+                            {
+                                foreach (JsonProperty attribute in target.EnumerateObject()) last = Math.Max(last, attribute.Value.GetInt32());
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (root.TryGetProperty("skins", out JsonElement skins))
+            {
+                foreach (JsonElement skin in skins.EnumerateArray())
+                {
+                    if (skin.TryGetProperty("inverseBindMatrices", out JsonElement bind)) last = Math.Max(last, bind.GetInt32());
+                }
+            }
+
+            if (last < 0 || !root.TryGetProperty("accessors", out JsonElement list))
+            {
+                return;
+            }
+
+            int lastView = -1, index = 0;
+            foreach (JsonElement accessor in list.EnumerateArray())
+            {
+                if (index++ > last) break;
+                if (accessor.TryGetProperty("sparse", out _)) return;
+                if (accessor.TryGetProperty("bufferView", out JsonElement view)) lastView = Math.Max(lastView, view.GetInt32());
+            }
+
+            accessors = last + 1;
+            views = lastView + 1;
+        }
+        catch (Exception e) when (e is KeyNotFoundException or InvalidOperationException or FormatException)
+        {
+            accessors = views = -1;
+        }
+    }
+
+    /// <summary>An "images" array of 1x1 PNGs with the names of <paramref name="images"/>.</summary>
+    private static byte[] ImageStubs(JsonElement images)
+    {
+        if (s_pixelUri is null)
+        {
+            using Image pixel = Image.CreateEmpty(1, 1, false, Image.Format.Rgba8);
+            s_pixelUri = "data:image/png;base64," + Convert.ToBase64String(pixel.SavePngToBuffer());
+        }
+
+        using var stub = new MemoryStream();
+        var options = new JsonWriterOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+        using (var writer = new Utf8JsonWriter(stub, options))
+        {
+            writer.WriteStartArray();
+            foreach (JsonElement image in images.EnumerateArray())
+            {
+                writer.WriteStartObject();
+                if (image.TryGetProperty("name", out JsonElement name) && name.ValueKind == JsonValueKind.String)
+                {
+                    writer.WriteString("name", name.GetString());
+                }
+
+                writer.WriteString("mimeType", "image/png");
+                writer.WriteString("uri", s_pixelUri);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        return stub.ToArray();
+    }
+
+    /// <summary>UE2 placement: Location + PrePivot, the actor rotation, and DrawScale on the mesh.</summary>
+    /// <summary>
+    /// Puts skins over the mesh's own materials (UE2 Skins[]): <paramref name="skin"/> gives, for a surface's material
+    /// name (the package and texture name, as the mesh export names it), the material to draw instead, or null for
+    /// the mesh's own. A null <paramref name="skin"/> puts every surface back.
+    /// </summary>
+    public int SetSkins(Func<string, Material?>? skin)
+    {
+        int replaced = 0;
+        foreach ((MeshInstance3D mesh, int surface, string name, Material? own) in _surfaces)
+        {
+            Material? over = skin?.Invoke(name);
+            SetSurfaceMaterial(mesh, surface, over ?? Base(mesh, surface, own));
+            if (over is null)
+            {
+                _skinned.Remove((mesh, surface));
+            }
+            else
+            {
+                _skinned.Add((mesh, surface));
+            }
+
+            replaced += over is null ? 0 : 1;
+        }
+
+        return replaced;
+    }
+
+    // ---- OpenSCCT's own cosmetics (camo textures, tints, light hues) ----------------------------------------------
+
+    /// <summary>Surfaces drawing a cosmetic camo under any skin: what a skin's end puts back instead of the mesh's own.</summary>
+    private readonly Dictionary<(MeshInstance3D, int), Material> _cosmetic = [];
+    private readonly HashSet<(MeshInstance3D, int)> _skinned = [];
+    private readonly Dictionary<MeshInstance3D, string?> _cosmeticPatterns = [];
+
+    private Material? Base(MeshInstance3D mesh, int surface, Material? own) =>
+        _cosmetic.TryGetValue((mesh, surface), out Material? camo) ? camo : own;
+
+    /// <summary>
+    /// Draws the camo <paramref name="pattern"/> (CosmeticItem.Pattern; null for none) on every surface the content
+    /// builder made a camo texture for. Skins (Sticky shock, Skins[]) still draw over it and give it back when they end.
+    /// </summary>
+    public void SetCosmetic(string? pattern)
+    {
+        foreach (MeshInstance3D mesh in _meshes)
+        {
+            SetCosmetic(mesh, pattern);
+        }
+    }
+
+    /// <summary><see cref="SetCosmetic(string?)"/> on one mesh of the model only (a part made by <see cref="SplitPart"/>, or the rest).</summary>
+    public void SetCosmetic(MeshInstance3D only, string? pattern)
+    {
+        if (_template is null || _cosmeticPatterns.GetValueOrDefault(only) == pattern)
+        {
+            return;
+        }
+
+        _cosmeticPatterns[only] = pattern;
+        IReadOnlyList<string> slots = Slots;
+        var slotted = new HashSet<string>();
+        foreach (int slot in _slotSkins.Keys)
+        {
+            if (slot < slots.Count)
+            {
+                slotted.Add(slots[slot]);
+            }
+        }
+
+        foreach ((MeshInstance3D mesh, int surface, string name, Material? own) in _surfaces)
+        {
+            if (!ReferenceEquals(mesh, only))
+            {
+                continue;
+            }
+
+            _cosmetic.Remove((mesh, surface));
+            if (pattern is not null && _template.Cosmetic(name, pattern) is { } camo)
+            {
+                _cosmetic[(mesh, surface)] = camo;
+            }
+
+            if (!_skinned.Contains((mesh, surface)) && !slotted.Contains(name))
+            {
+                SetSurfaceMaterial(mesh, surface, Base(mesh, surface, own));
+            }
+        }
+    }
+
+    /// <summary>
+    /// A colour tint over every mesh: a texel of the retail suits' mean brightness takes <paramref name="rgb"/>,
+    /// brighter and darker texels in proportion (the world shader's SVM_TINT_REF), brought into the retail range
+    /// (svm_cosmetic_level); <paramref name="strength"/> 0 is none.
+    /// </summary>
+    public void SetTint(Vector3 rgb, float strength)
+    {
+        foreach (MeshInstance3D mesh in _meshes)
+        {
+            SetTint(mesh, rgb, strength);
+        }
+    }
+
+    /// <summary><see cref="SetTint(Vector3, float)"/> on one mesh of the model only.</summary>
+    public static void SetTint(MeshInstance3D mesh, Vector3 rgb, float strength)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        OpenScctGame.Render.InstanceParams.Set(mesh, TintParameter, new Vector4(rgb.X, rgb.Y, rgb.Z, strength));
+    }
+
+    /// <summary>
+    /// Turns the hue of the self-illumination (goggle lenses, lamps) by <paramref name="radians"/>, keeping its
+    /// brightness; with <paramref name="diffuse"/> the textures too (the goggle beams). Null puts the retail colour back.
+    /// </summary>
+    public void SetGlowHue(float? radians, bool diffuse = false)
+    {
+        Vector4 value = radians is { } r ? new Vector4(r, 1f, diffuse ? 1f : 0f, 0f) : Vector4.Zero;
+        foreach (MeshInstance3D mesh in _meshes)
+        {
+            Variant previous = OpenScctGame.Render.InstanceParams.Get(mesh, GlowHueParameter);
+            value.W = previous.VariantType == Variant.Type.Vector4 ? previous.AsVector4().W : 0f;
+            // Called every frame for every character (GoggleGlowView): written only when it changes.
+            if (previous.VariantType == Variant.Type.Vector4 && previous.AsVector4() == value) continue;
+            OpenScctGame.Render.InstanceParams.Set(mesh, GlowHueParameter, value);
+        }
+    }
+
+    /// <summary>Keep the local weapon in foreground depth while retaining its material and surface ordering.</summary>
+    public void SetFirstPersonDepth()
+    {
+        foreach (MeshInstance3D mesh in _meshes)
+        {
+            Variant previous = OpenScctGame.Render.InstanceParams.Get(mesh, GlowHueParameter);
+            Vector4 value = previous.VariantType == Variant.Type.Vector4 ? previous.AsVector4() : Vector4.Zero;
+            value.W = 1f;
+            OpenScctGame.Render.InstanceParams.Set(mesh, GlowHueParameter, value);
+        }
+    }
+
+    public static readonly StringName TintParameter = "svm_tint";
+    public static readonly StringName CamoParameter = "svm_camo";
+    public static readonly StringName SheenParameter = "svm_sheen";
+    public static readonly StringName SheenTintParameter = "svm_sheen_tint";
+    public static readonly StringName SheenMirrorParameter = "svm_sheen_mirror";
+    public static readonly StringName GlowHueParameter = "svm_glow_hue";
+
+    private Template? _template;
+    private readonly Dictionary<int, string> _slotSkins = [];
+
+    /// <summary>The mesh's material names by material slot (the UE2 Skins index): the surfaces' materials in order.</summary>
+    public IReadOnlyList<string> Slots
+    {
+        get
+        {
+            var names = new List<string>();
+            foreach ((_, _, string name, _) in _surfaces)
+            {
+                if (!names.Contains(name))
+                {
+                    names.Add(name);
+                }
+            }
+
+            return names;
+        }
+    }
+
+    /// <summary>
+    /// Puts the material <paramref name="skin"/> (a package path such as SWeaponTex.Armes.SI_rof_auto; null or the
+    /// slot's own material: none) over material slot <paramref name="slot"/>, as UE2 Skins[slot]. False when the
+    /// skin's texture was not exported (the slot keeps its own material).
+    /// </summary>
+    public bool SetSlotSkin(int slot, string? skin)
+    {
+        IReadOnlyList<string> slots = Slots;
+        if (slot < 0 || slot >= slots.Count || _template is null)
+        {
+            return false;
+        }
+
+        // The mesh export names materials by package and name, without the groups.
+        string? key = null;
+        if (!string.IsNullOrEmpty(skin))
+        {
+            int first = skin.IndexOf('.', StringComparison.Ordinal), last = skin.LastIndexOf('.');
+            key = first > 0 ? skin[..first] + skin[last..] : skin;
+        }
+
+        string own = slots[slot];
+        if (key is not null && string.Equals(key, own, StringComparison.OrdinalIgnoreCase))
+        {
+            key = null;
+        }
+
+        if (_slotSkins.TryGetValue(slot, out string? current) ? current == key : key is null)
+        {
+            return true;
+        }
+
+        Material? over = key is null ? null : _template.Swap(own, key);
+        foreach ((MeshInstance3D mesh, int surface, string name, Material? material) in _surfaces)
+        {
+            if (name == own)
+            {
+                SetSurfaceMaterial(mesh, surface, over ?? Base(mesh, surface, material));
+            }
+        }
+
+        if (key is null)
+        {
+            _slotSkins.Remove(slot);
+        }
+        else
+        {
+            _slotSkins[slot] = key;
+        }
+
+        return over is not null || key is null;
+    }
+
+    /// <summary>The skin key over material slot <paramref name="slot"/> (package and name), or null for the mesh's own.</summary>
+    public string? SlotSkin(int slot) => _slotSkins.TryGetValue(slot, out string? key) ? key : null;
+
+    /// <summary>
+    /// Makes the image at <paramref name="texturePath"/> (a full path) the diffuse of the surfaces drawing
+    /// <paramref name="surfaceMaterial"/>: a map outfit's slot texture. It becomes those surfaces' own material, so
+    /// skins and camo still draw over it and give it back. False when the mesh has no such surface or no such file.
+    /// </summary>
+    public bool SetOutfitTexture(string surfaceMaterial, string texturePath)
+    {
+        if (_template?.Outfit(surfaceMaterial, texturePath) is not { } material)
+        {
+            return false;
+        }
+
+        for (int e = 0; e < _surfaces.Count; e++)
+        {
+            (MeshInstance3D mesh, int surface, string name, _) = _surfaces[e];
+            if (name != surfaceMaterial)
+            {
+                continue;
+            }
+
+            _surfaces[e] = (mesh, surface, name, material);
+            if (!_skinned.Contains((mesh, surface)))
+            {
+                SetSurfaceMaterial(mesh, surface, Base(mesh, surface, material));
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="SetOutfitTexture(string, string)"/> with a texture made in memory, kept under <paramref name="key"/>
+    /// (a name no file has): the first-person arms redrawn in the merc's outfit.
+    /// </summary>
+    public bool SetOutfitTexture(string surfaceMaterial, string key, Texture2D texture)
+    {
+        ArgumentNullException.ThrowIfNull(texture);
+        if (_template?.Textures is not { } textures)
+        {
+            return false;
+        }
+
+        textures.Add(key, texture);
+        return SetOutfitTexture(surfaceMaterial, key);
+    }
+
+    public void Place(FVector location, FRotator rotation, FVector prePivot, float drawScale = 1f) =>
+        Place(location, rotation, prePivot, new FVector(drawScale, drawScale, drawScale));
+
+    /// <summary>
+    /// Places the model with the actor's scale per axis, <paramref name="actorScale"/> = DrawScale x DrawScale3D (UE2's
+    /// actor LocalToWorld scales in the actor's own axes, after the mesh's RotOrigin; Polar's wind sock has DrawScale3D
+    /// 1, 1.5, 1).
+    /// </summary>
+    public void Place(FVector location, FRotator rotation, FVector prePivot, FVector actorScale)
+    {
+        Transform3D root = UeSpace.TransformToGodot(location + prePivot, rotation);
+        if (Root.Transform != root) Root.Transform = root;
+        // Scaled multiplies in the parent's (actor's) axes, so the UE axes of DrawScale3D map to Godot X, Z, Y as any
+        // direction does.
+        Transform3D pivot = new Transform3D(UeSpace.RotationToGodot(RotOrigin), Vector3.Zero)
+            .Scaled(UeSpace.DirectionToGodot(new FVector(MeshScale.X, MeshScale.Y, MeshScale.Z)))
+            .Scaled(UeSpace.DirectionToGodot(actorScale));
+        if (Pivot.Transform != pivot) Pivot.Transform = pivot;
+    }
+
+    /// <summary>Samples the current sequence and poses the skeleton.</summary>
+    public void Pose() => Ue2PoseApplier.Apply(Sampler);
+
+    private Vector4? _visionDrawn;
+    private int _visionMeshCount;
+
+    /// <summary>
+    /// The actor's vision values on every mesh: HeatIntensity, HeatOpacity, EMF glow (EMFIntensity while bEMFIsOn) and
+    /// EMFOpacity (0 hides the pawn in EMF vision). docs/RENDERING.md#vision-modes.
+    /// </summary>
+    public void SetVision(Vector4 vision)
+    {
+        // SplitPart can add a cosmetic mesh after the first vision update. A changed count resubmits to every
+        // mesh, while an unchanged model/value avoids redundant native instance-parameter calls.
+        if (_visionDrawn == vision && _visionMeshCount == _meshes.Count)
+        {
+            return;
+        }
+
+        foreach (MeshInstance3D mesh in _meshes)
+        {
+            OpenScctGame.Render.InstanceParams.Set(mesh, GameplayObjects.VisionActorParameter, vision);
+        }
+
+        _visionDrawn = vision;
+        _visionMeshCount = _meshes.Count;
+    }
+
+    private readonly CloakMaterials _cloakMaterials = new();
+    private float _glass;
+    private int _glassMeshCount;
+
+    private void SetSurfaceMaterial(MeshInstance3D mesh, int surface, Material? material)
+    {
+        material ??= mesh.Mesh?.SurfaceGetMaterial(surface);
+        mesh.SetSurfaceOverrideMaterial(surface, _glass > 0f && material is not null ? _cloakMaterials.Get(material) : material);
+        OpenScctGame.Render.InstanceParams.MaterialChanged(mesh);
+    }
+
+    /// <summary>
+    /// The camo suit on every mesh (docs/RENDERING.md#cloak): <paramref name="amount"/> is GlassEffect / 255, 0 draws
+    /// the model as usual.
+    /// </summary>
+    public void SetGlass(float amount)
+    {
+        amount = Math.Clamp(amount, 0f, 1f);
+        if (amount == _glass && _glassMeshCount == _meshes.Count)
+        {
+            return;
+        }
+
+        bool on = amount > 0f;
+        if (on != (_glass > 0f) || _glassMeshCount != _meshes.Count)
+        {
+            foreach (MeshInstance3D mesh in _meshes)
+            {
+                if (mesh.Mesh is null) continue;
+                for (int surface = 0; surface < mesh.Mesh.GetSurfaceCount(); surface++)
+                {
+                    Material? material = mesh.GetSurfaceOverrideMaterial(surface) ?? mesh.Mesh.SurfaceGetMaterial(surface);
+                    if (material is not null)
+                        mesh.SetSurfaceOverrideMaterial(surface, on ? _cloakMaterials.Get(material) : _cloakMaterials.Original(material));
+                }
+            }
+        }
+
+        _glass = amount;
+        _glassMeshCount = _meshes.Count;
+        // Actor lighting occupies all 16 instance-uniform slots. Keep the fade on this model's own materials.
+        _cloakMaterials.SetAmount(amount);
+    }
+
+    /// <summary>Lights every mesh of the model with one actor light set.</summary>
+    public void Light(ActorLightSet set)
+    {
+        foreach (MeshInstance3D mesh in _meshes)
+        {
+            ActorLighting.Apply(mesh, set);
+        }
+    }
+
+    private static void ReadExtras(JsonElement root, ref FRotator rotOrigin, ref Vector3 meshScale)
+    {
+        if (!root.TryGetProperty("extras", out JsonElement extras) || !extras.TryGetProperty("svmap", out JsonElement sv))
+        {
+            return;
+        }
+
+        if (sv.TryGetProperty("rotOrigin", out JsonElement r) && r.GetArrayLength() >= 3)
+        {
+            rotOrigin = new FRotator(r[0].GetInt32(), r[1].GetInt32(), r[2].GetInt32());
+        }
+
+        if (sv.TryGetProperty("meshScale", out JsonElement s) && s.GetArrayLength() >= 3)
+        {
+            meshScale = new Vector3(s[0].GetSingle(), s[1].GetSingle(), s[2].GetSingle());
+        }
+    }
+
+    private static Dictionary<string, MaterialEntry> ReadMaterials(JsonElement root)
+    {
+        var result = new Dictionary<string, MaterialEntry>(StringComparer.Ordinal);
+        var images = new List<string?>();
+        if (root.TryGetProperty("images", out JsonElement imgs))
+        {
+            foreach (JsonElement i in imgs.EnumerateArray())
+            {
+                images.Add(i.TryGetProperty("uri", out JsonElement u) ? u.GetString() : null);
+            }
+        }
+
+        var textures = new List<int>();
+        if (root.TryGetProperty("textures", out JsonElement texs))
+        {
+            foreach (JsonElement t in texs.EnumerateArray())
+            {
+                textures.Add(t.TryGetProperty("source", out JsonElement src) ? src.GetInt32() : -1);
+            }
+        }
+
+        if (!root.TryGetProperty("materials", out JsonElement mats))
+        {
+            return result;
+        }
+
+        foreach (JsonElement m in mats.EnumerateArray())
+        {
+            string name = m.TryGetProperty("name", out JsonElement n) ? n.GetString() ?? "" : "";
+            string? texture = null;
+            if (m.TryGetProperty("pbrMetallicRoughness", out JsonElement pbr) && pbr.TryGetProperty("baseColorTexture", out JsonElement bct))
+            {
+                int ti = bct.GetProperty("index").GetInt32();
+                int ii = ti >= 0 && ti < textures.Count ? textures[ti] : -1;
+                texture = ii >= 0 && ii < images.Count ? images[ii] : null;
+            }
+
+            JsonElement ex = m.TryGetProperty("extras", out JsonElement e) ? e : default;
+            string? normalTexture = null;
+            if (m.TryGetProperty("normalTexture", out JsonElement nt))
+            {
+                int ti = nt.GetProperty("index").GetInt32();
+                int ii = ti >= 0 && ti < textures.Count ? textures[ti] : -1;
+                normalTexture = ii >= 0 && ii < images.Count ? images[ii] : null;
+            }
+            bool hasEx = ex.ValueKind == JsonValueKind.Object;
+            if (hasEx && ex.TryGetProperty("scct_material_flags", out JsonElement nativeFlags))
+            {
+                MaterialEntry authored = MaterialsDoc.FromFlags(name, nativeFlags, MaterialsDoc.Str(ex, "scct_vision_source"));
+                result[name] = authored;
+                continue;
+            }
+            result[name] = new MaterialEntry
+            {
+                Name = name,
+                Source = hasEx ? MaterialsDoc.Str(ex, "scct_vision_source") : null,
+                Texture = texture,
+                NormalTexture = normalTexture,
+                // Older shared packs contain only the ROF screen's diffuse image. These three known display
+                // materials are self-illuminated even in a room with no actor lights (including the own slot).
+                SelfIllum = (hasEx ? MaterialsDoc.Str(ex, "scct_self_illum") : null)
+                    ?? (IsFireModeScreen(name) ? texture : null),
+                SelfIllumMask = hasEx ? MaterialsDoc.Str(ex, "scct_self_illum_mask") : null,
+                SpecMask = hasEx ? MaterialsDoc.Str(ex, "scct_spec_mask") : null,
+                EnvTexture = hasEx ? MaterialsDoc.Str(ex, "scct_env_texture") : null,
+                EnvColor = hasEx && ex.TryGetProperty("scct_env_color", out JsonElement env)
+                    && env.ValueKind == JsonValueKind.Array && env.GetArrayLength() >= 3
+                    ? new Vector3(env[0].GetSingle(), env[1].GetSingle(), env[2].GetSingle()) : null,
+                EnvWorld = hasEx && MaterialsDoc.Bool(ex, "scct_env_world"),
+                Masked = m.TryGetProperty("alphaMode", out JsonElement am) && am.GetString() == "MASK",
+                Translucent = m.TryGetProperty("alphaMode", out JsonElement ab) && ab.GetString() == "BLEND",
+                TwoSided = m.TryGetProperty("doubleSided", out JsonElement ds) && ds.GetBoolean(),
+            };
+        }
+
+        return result;
+    }
+
+    // OpenSCCT's pistols are not in the game's packages, so no heat or EMF modifier names their materials. A material
+    // without one draws in EMF vision as a wall does (the bare environment), so the pistol could not be told from the
+    // room behind it, while the merc's rifle is white there: its EMF texture is black where its faces lie. The pistols
+    // take a black EMF texture, and a heat texture that leaves the actor's flat heat as it is (HEATTEX_Cool, 4 x 0.25).
+    private const string SidearmMaterials = "OpenScctSidearms.";
+    private static VisionMasks? s_sidearmVision;
+    private static VisionMasks? s_fabricVision;
+
+    private static VisionMasks? SidearmVision(string material) =>
+        (material.StartsWith(SidearmMaterials, StringComparison.OrdinalIgnoreCase) ||
+         material.StartsWith("OpenScctRifles.", StringComparison.OrdinalIgnoreCase))
+            ? material.EndsWith(".Arms", StringComparison.OrdinalIgnoreCase) || material.EndsWith(".Gloves", StringComparison.OrdinalIgnoreCase)
+                ? s_fabricVision ??= new VisionMasks(Flat(0.25f), Flat(1f))
+                : s_sidearmVision ??= new VisionMasks(Flat(0.25f), Flat(0f))
+            : null;
+
+    private static ImageTexture Flat(float value)
+    {
+        using Image image = Image.CreateEmpty(1, 1, false, Image.Format.Rgba8);
+        image.Fill(new Color(value, value, value));
+        return ImageTexture.CreateFromImage(image);
+    }
+
+    private static bool IsFireModeScreen(string name) => name is
+        "SWeaponTex.SI_rof_single" or "SWeaponTex.SI_rof_burst" or "SWeaponTex.SI_rof_auto";
+
+    private static T? FindFirst<T>(Node node)
+        where T : Node
+    {
+        if (node is T t)
+        {
+            return t;
+        }
+
+        foreach (Node child in node.GetChildren())
+        {
+            if (FindFirst<T>(child) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    private static List<T> FindAll<T>(Node node)
+        where T : Node
+    {
+        var list = new List<T>();
+        void Walk(Node n)
+        {
+            if (n is T t)
+            {
+                list.Add(t);
+            }
+
+            foreach (Node child in n.GetChildren())
+            {
+                Walk(child);
+            }
+        }
+
+        Walk(node);
+        return list;
+    }
+}

@@ -1,0 +1,209 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using OpenScct.Core;
+using OpenScct.Game.Movement;
+using OpenScct.Game.Combat;
+using OpenScct.Game.Camera;
+using OpenScct.Game.SBase;
+using OpenScct.Net;
+using OpenScct.Physics.Collision;
+using OpenScct.Server;
+
+namespace OpenScctGame.Smoke;
+
+/// <summary>Shared lab evidence format for rendered clients and the isolated dedicated server.</summary>
+public static class NetworkLabState
+{
+    private static readonly JsonSerializerOptions Json = new();
+    private static readonly ConditionalWeakTable<ServerHost, Queue<object>> Disconnects = new();
+
+    private static Queue<object> ObserveDisconnects(ServerHost server)
+    {
+        var history = new Queue<object>();
+        server.PlayerLeft += slot =>
+        {
+            if (history.Count == 16) history.Dequeue();
+            history.Enqueue(new
+            {
+                utc = DateTimeOffset.UtcNow, player = slot.Name, reason = slot.Connection.CloseReason,
+                movement = slot.Controller is { } pc ? server.Movement.PeekEndpoint(pc)?.Sequenced?.DescribePending() : null,
+            });
+        };
+        return history;
+    }
+    public static void Atomic(string path, object value)
+    {
+        string temp = path + ".tmp";
+        File.WriteAllText(temp, JsonSerializer.Serialize(value, Json));
+        for (int attempt = 0; ; attempt++)
+        {
+            try { File.Move(temp, path, overwrite: true); return; }
+            catch (Exception e) when (attempt < 5 && e is IOException or UnauthorizedAccessException)
+            {
+                // Windows scanners/readers can briefly hold the replaced status file without delete sharing.
+                // Keep replacement atomic and bounded; a persistent error must still fail the lab.
+                System.Threading.Thread.Sleep(5);
+            }
+        }
+    }
+
+    public static object Server(ServerHost server, string phase) => new
+    {
+        tick = server.World.TickCount, phase, started = server.StartGate?.Started, pawns = Pawns(server.World),
+        grenades = Grenades(server.World),
+        gasClouds = GasClouds(server.World), stickyCameras = StickyCameras(server.World),
+        hackingPanels = HackingPanels(server.World),
+        ended = server.Game?.bGameEnded, winningTeam = server.Game?.GameReplicationInfo?.WinningTeam,
+        lag = server.World.Level.GetService<LagCompensation>() is { } lag ? new { lag.Enabled, lag.CeilingMs, lag.RewoundShots, lag.LastRewindMs } : null,
+        disconnects = Disconnects.GetValue(server, ObserveDisconnects).ToArray(),
+        players = server.Players.Select(p => new
+        {
+            name = p.Name, ready = p.Controller?.PlayerReplicationInfo?.bWaitingPlayer, pawn = p.Controller?.Pawn?.ActorId,
+            movement = p.Controller is { } pc ? server.Movement.PeekEndpoint(pc)?.Sequenced?.DescribePending() : null,
+            inputClock = p.Controller is { } clockPc ? server.Movement.PeekEndpoint(clockPc)?.Sequenced?.DescribeInputClock() : null,
+            controller = Controller(p.Controller as SPlayerController),
+        }).ToArray(),
+    };
+
+    public static object? Controller(SPlayerController? pc) => pc is null ? null : new
+    {
+        name = pc.PlayerReplicationInfo?.PlayerName, team = pc.PlayerReplicationInfo?.Team?.TeamIndex,
+        gameEnded = pc.bGameEnded, winningTeam = pc.GameReplicationInfo?.WinningTeam,
+        behindView = pc.bBehindView, firstPersonWithPawn = pc.bFirstPersonWithPawn,
+        camera = Camera(pc),
+        state = pc.GetStateName().ToString(), pawn = pc.Pawn?.ActorId, fastSpeed = pc.bFastSpeed,
+        health = (pc.Pawn as SBasePawn)?.Health, lives = pc.PlayerReplicationInfo?.NumLives,
+        deaths = pc.PlayerReplicationInfo?.Deaths, kills = pc.PlayerReplicationInfo?.Kills,
+        shots = pc.PlayerReplicationInfo?.Stats?.ShotsFired, hits = pc.PlayerReplicationInfo?.Stats?.ShotsHit,
+        spectating = pc.PlayerReplicationInfo?.bIsSpectator, onlySpectator = pc.PlayerReplicationInfo?.bOnlySpectator,
+        target = (pc.PC_spectated as SPlayerController)?.PlayerReplicationInfo?.PlayerName ??
+            (pc.SpecTarget as SBasePawn)?.PlayerReplicationInfo?.PlayerName,
+        view = pc.ViewTarget?.ActorId, targetPawn = pc.SpecTarget?.ActorId,
+        canStop = pc.bCanStop, ledgeGrabStarted = pc.fGrabFromLedgeStartTime,
+        ledgeGrabs = pc.PlayerReplicationInfo?.Stats?.Spy_LedgeGrabs,
+        ledgeGrabDeaths = pc.PlayerReplicationInfo?.Stats?.Merc_DeathFromLedgeGrab,
+    };
+
+    private static object? Camera(SPlayerController pc) => PlayerCamera.Of(pc) is { } camera ? new
+    {
+        state = camera.GetStateName().ToString(), mode = camera.m_camMode.ToString(),
+        presetDistance = camera.GetCurrentDistance(), distance = camera.m_prevDistance, idealDistance = camera.m_prevIdealDistance,
+        attached = camera.m_bAttachToBone, parentBone = camera.m_parentBone.ToString(),
+        previousPosition = new[] { camera.m_PrevPosition.X, camera.m_PrevPosition.Y, camera.m_PrevPosition.Z },
+    } : null;
+
+    public static object[] Pawns(World world, NetConnection? connection = null)
+    {
+        var pawns = new List<object>();
+        foreach (SBasePawn p in world.Level.AllActors<SBasePawn>())
+            if (!p.bDeleteMe) pawns.Add(Pawn(p, connection));
+        return pawns.ToArray();
+    }
+
+    public static object[] HackingPanels(World world) => world.Level.Actors.OfType<SInterrupteur>()
+        .Where(panel => !panel.bDeleteMe && panel.iHackingTime > 0 && panel.TriggerInteraction is not null)
+        .Select(panel => new
+        {
+            id = panel.ActorId, eventName = panel.Event.ToString(), duration = panel.iHackingTime,
+            position = new[] { panel.Location.X, panel.Location.Y, panel.Location.Z },
+            useYaw = (panel.Rotation + new FRotator(0, panel.UseRelativeRotation.Yaw, 0)).Yaw,
+            deadline = panel.TriggerInteraction!.MinTriggerTime, usable = panel.TriggerInteraction.bUsable,
+            state = panel.TriggerInteraction.GetStateName().ToString(), time = panel.Level.TimeSeconds,
+            elapsed = panel.Level.GRI?.ElapsedTime, precise = panel.Level.GRI?.PreciseElapsedTime(),
+        }).Cast<object>().ToArray();
+
+    public static object[] Grenades(World world, NetConnection? connection = null)
+    {
+        var grenades = new List<object>();
+        foreach (SProjGrenade g in world.Level.AllActors<SProjGrenade>())
+        {
+            if (!g.bDeleteMe) grenades.Add(new
+            {
+                id = g.ActorId, netGuid = connection is null ? (uint)g.ActorId : connection.FindActorChannel(g)?.NetGuid,
+                type = g.GetType().Name, temporary = g.bNetTemporary, owner = g.Instigator?.PlayerReplicationInfo?.PlayerName,
+                position = new[] { g.Location.X, g.Location.Y, g.Location.Z }, physics = g.Physics.ToString(),
+            });
+        }
+        return grenades.ToArray();
+    }
+
+    public static object Pawn(SBasePawn p, NetConnection? connection) => new
+    {
+        id = p.ActorId, name = p.PlayerReplicationInfo?.PlayerName, role = p.Role.ToString(),
+        netGuid = connection is null ? (uint)p.ActorId : connection.FindActorChannel(p)?.NetGuid,
+        action = p.sAction,
+        position = new[] { p.Location.X, p.Location.Y, p.Location.Z }, velocity = new[] { p.Velocity.X, p.Velocity.Y, p.Velocity.Z },
+        yaw = p.Rotation.Yaw, pitch = p.Rotation.Pitch, physics = p.Physics.ToString(), state = p.Controller?.GetStateName().ToString(),
+        aim = p.iDesiredYawPitch, view = p.iYawPitchFromView, ik = p.IK_Type.ToString(),
+        fullYaw = p.PawnAnim.Aim.FullYaw, fullPitch = p.PawnAnim.Aim.FullPitch,
+        grabAllowed = (p.Controller as SPlayerController)?.GameReplicationInfo?.bAvlb_SPY_Grab,
+        stateTime = (p.Controller as SPlayerController)?.MirrorStateLastTime,
+        stateAck = (p.Controller as SPlayerController)?.MirrorStateAcknowledgementTime,
+        crouched = p.bIsCrouched, rolling = p.bIsRolling, height = p.CollisionHeight, radius = p.CollisionRadius, grabbable = p.bCanBeGrabbed,
+        health = p.Health, sleeping = p.bSleeping, lying = p.bLyingOnGround,
+        weaponLoaded = p.WeaponLoaded, gasMask = p.bGasMask, maskDuration = GasMask(p)?.MaskDuration,
+        eyeHeight = CombatServices.Ports(p).EyePosition(p).Z,
+        gadget = p.SelectedGadget is { } gadget ? new { type = gadget.GetType().Name, charge = gadget.Charge } : null,
+        weapon = p.MyWeapon is { } weapon ? new
+        {
+            type = weapon.GetType().Name, state = weapon.GetStateName().ToString(), ammo = weapon.Ammo,
+            shot = weapon.ShotCounter, clip = (weapon as SWeaponDefense)?.ClipAmmo,
+            clipMax = (weapon as SWeaponDefense)?.ClipMaxAmmo, mode = (weapon as SWeaponDefense)?.ROFMode.ToString(),
+            drawn = (weapon as SWeaponDefense)?.bDrawWeapon,
+        } : null,
+        pivot = new[] { p.PrePivot.X, p.PrePivot.Y, p.PrePivot.Z }, zone = p.ZoneConfig,
+        wakeTime = p.iLastWakeTime, time = p.Level.TimeSeconds, poseReady = p.NetworkPoseReady,
+        attacker = p.m_AttackedBy?.ActorId, target = p.m_AttackTarget?.ActorId,
+        attackerName = p.m_AttackedBy?.PlayerReplicationInfo?.PlayerName, targetName = p.m_AttackTarget?.PlayerReplicationInfo?.PlayerName,
+        repositionTarget = new[] { p.vVandammePos.X, p.vVandammePos.Y, p.vVandammePos.Z },
+        repositionByServer = p.bServerControlsRepos, rootMotionLastTime = p.fLastRootMotionTimeCalled,
+        supported = Supported(p),
+        channels = Enumerable.Range(0, PawnAnimation.ChannelCount).Select(i => new
+        {
+            i, sequence = p.PawnAnim[i].Sequence.ToString(), frame = p.PawnAnim[i].Frame,
+            alpha = p.PawnAnim[i].BlendAlpha, bone = p.PawnAnim[i].StartBone.ToString(), rate = p.PawnAnim[i].Rate,
+        }).ToArray(),
+    };
+
+    private static bool? Supported(SBasePawn pawn)
+    {
+        var collision = MovementNatives.Driver(pawn)?.Collision;
+        if (collision is null) return null;
+        var extent = new FVector(pawn.CollisionRadius, pawn.CollisionRadius, pawn.CollisionHeight);
+        return collision.LineCheck(out var hit, pawn, pawn.Location - new FVector(0, 0, 12),
+            pawn.Location + new FVector(0, 0, 2), extent,
+            ETraceFlags.TRACE_Level | ETraceFlags.TRACE_Movers | ETraceFlags.TRACE_LevelGeometry) && hit.Normal.Z >= .7f;
+    }
+
+    private static SGadGasMask? GasMask(SBasePawn p)
+    {
+        int guard = 0;
+        for (SGadget? gadget = p.MyGadget; gadget is not null && guard++ < 64; gadget = gadget.MyGadget)
+            if (gadget is SGadGasMask mask) return mask;
+        return null;
+    }
+
+    public static object[] GasClouds(World world)
+    {
+        var clouds = new List<object>();
+        foreach (SStickyCamEmitter gas in world.Level.AllActors<SStickyCamEmitter>())
+            if (!gas.bDeleteMe) clouds.Add(new { id = gas.ActorId, position = new[] { gas.Location.X, gas.Location.Y, gas.Location.Z },
+                yaw = gas.Rotation.Yaw, pitch = gas.Rotation.Pitch, hidden = gas.bHidden, gas.LifeSpan });
+        return clouds.ToArray();
+    }
+
+    public static object[] StickyCameras(World world)
+    {
+        var cameras = new List<object>();
+        foreach (SStickyCam cam in world.Level.AllActors<SStickyCam>())
+            if (!cam.bDeleteMe && cam is not SCamNetwork) cameras.Add(new { id = cam.ActorId,
+                owner = (cam.Owner as SBasePawn)?.PlayerReplicationInfo?.PlayerName,
+                position = new[] { cam.Location.X, cam.Location.Y, cam.Location.Z }, yaw = cam.Rotation.Yaw,
+                pitch = cam.Rotation.Pitch, doses = cam.Smoke_NbDoses });
+        return cameras.ToArray();
+    }
+}

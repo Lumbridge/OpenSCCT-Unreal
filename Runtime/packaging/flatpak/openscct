@@ -1,0 +1,66 @@
+#!/bin/sh
+# Desktop Join links carry only a public server id. Never interpret URI text as shell or Godot options.
+valid_join_id() (
+    LC_ALL=C
+    export LC_ALL
+    case "$1" in
+        ''|*[!A-Za-z0-9_-]*) return 1 ;;
+    esac
+    [ "${#1}" -le 128 ]
+)
+for argument in "$@"; do
+    case "$argument" in
+        [Oo][Pp][Ee][Nn][Ss][Cc][Cc][Tt]:*)
+            if [ "$#" -ne 1 ]; then
+                printf '%s\n' 'OpenSCCT: open a Join link without additional arguments.' >&2
+                exit 64
+            fi
+            case "$argument" in
+                openscct://join/*)
+                    join_id=${argument#openscct://join/}
+                    if valid_join_id "$join_id"; then
+                        set -- -- "--svm-join-server=$join_id"
+                    else
+                        printf '%s\n' 'OpenSCCT: invalid server id in Join link.' >&2
+                        exit 64
+                    fi
+                    ;;
+                *)
+                    printf '%s\n' 'OpenSCCT: unsupported Join link.' >&2
+                    exit 64
+                    ;;
+            esac
+            ;;
+    esac
+done
+# Host profiles (notably Guix/Nix) can export trust paths that don't exist in the sandbox.
+# Preserve readable custom trust settings; otherwise use the runtime's CA store.
+if [ -z "${SSL_CERT_FILE:-}" ] || [ ! -r "$SSL_CERT_FILE" ]; then
+    export SSL_CERT_FILE=/etc/ssl/cert.pem
+    printf 'OpenSCCT TLS: using runtime CA bundle %s\n' "$SSL_CERT_FILE" >&2
+fi
+has_readable_cert_dir() (
+    IFS=:
+    set -f
+    for cert_dir in $1; do
+        if [ -d "$cert_dir" ] && [ -r "$cert_dir" ]; then
+            return 0
+        fi
+    done
+    return 1
+)
+if ! has_readable_cert_dir "${SSL_CERT_DIR:-}"; then
+    export SSL_CERT_DIR=/etc/ssl/certs
+    printf 'OpenSCCT TLS: using runtime CA directory %s\n' "$SSL_CERT_DIR" >&2
+fi
+# The native launcher publishes the player's converted Steam assets here.
+# The sandbox can read completed base and map builds. Its private saves and local downloads stay writable.
+export OPENSCCT_GODOT_CONTENT_DIR="${HOST_XDG_DATA_HOME:-$HOME/.local/share}/OpenSCCT/content"
+export OPENSCCT_GODOT_OPTIONAL_MAPS="${HOST_XDG_DATA_HOME:-$HOME/.local/share}/OpenSCCT/packs/svmap"
+# All writable state stays inside Flatpak's per-app XDG directories.
+# /var/tmp maps to this app's cache/tmp and is shared by its sandbox instances.
+# .NET named pipes use TMPDIR; private /tmp would hide a running game's Join channel.
+export TMPDIR=/var/tmp
+export DOTNET_EnableDiagnostics=0
+cd /app/openscct || exit 1
+exec ./OpenSCCT.x86_64 "$@"

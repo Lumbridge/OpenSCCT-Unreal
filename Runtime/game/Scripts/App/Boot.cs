@@ -1,0 +1,67 @@
+using Godot;
+using OpenScctGame.Play;
+
+namespace OpenScctGame;
+
+/// <summary>
+/// First scene. Shows the build and engine versions; with <c>--svm-play=Name</c> it goes straight to offline play
+/// on that map through the listen server path (online with <c>--svm-lan-host</c>, or <c>--svm-join</c> to join one),
+/// with <c>--svm-map=Name</c> to a local match on that map, otherwise it opens the main menu.
+/// </summary>
+public partial class Boot : Node
+{
+    public bool IsReady { get; private set; }
+
+    public override void _Ready()
+    {
+        if (System.Array.IndexOf(OS.GetCmdlineUserArgs(), "--svm-animation-probe") >= 0) return;
+        var info = Engine.GetVersionInfo();
+        string text = $"OpenSCCT - Godot {info["string"]} - .NET {System.Environment.Version}";
+        GetNode<Label>("Status").Text = text;
+        IsReady = true;
+
+        App app = App.From(this);
+        string? animationPreview = System.Linq.Enumerable.FirstOrDefault(OS.GetCmdlineUserArgs(), a => a.StartsWith("--svm-animation-preview=", System.StringComparison.Ordinal));
+        if (animationPreview is not null)
+        {
+            string? profile = System.Linq.Enumerable.FirstOrDefault(OS.GetCmdlineUserArgs(), a => a.StartsWith("--svm-animation-fp=", System.StringComparison.Ordinal));
+            Callable.From(() => { GetTree().Root.AddChild(new AnimationStudio.AnimationPreview { Folder = animationPreview[24..], FirstPersonId = profile?[19..] }); QueueFree(); }).CallDeferred();
+            return;
+        }
+        OfflinePlayEntry.Register();
+        if (app.IsMapShotRun)
+        {
+            return;
+        }
+
+        if (!app.IsSmokeRun && !System.OperatingSystem.IsBrowser() && UI.LinuxSetupScreen.Needed)
+        {
+            Callable.From(() => UI.FrontEnd.Show(GetTree(), new UI.LinuxSetupScreen())).CallDeferred();
+            return;
+        }
+
+        if (!app.IsSmokeRun && DisplayServer.GetName() != "headless")
+            Callable.From(() => Online.ClientPresenceService.Get(GetTree())).CallDeferred();
+        if (!app.IsSmokeRun && app.Options.DemoFile is { } demo)
+        {
+            Callable.From(() => OpenScctGame.Play.Demo.DemoLibrary.Watch(GetTree(), demo)).CallDeferred();
+        }
+        else if (!app.IsSmokeRun && (app.Options.NetHostPort is not null || app.Options.NetJoin is not null))
+        {
+            // Kept on the root: the round outlives the scenes it travels through.
+            Callable.From(() => GetTree().Root.AddChild(new Online.CommandLineRound { Options = app.Options })).CallDeferred();
+        }
+        else if (!app.IsSmokeRun && app.Options.PlayMap is not null)
+        {
+            Callable.From(() => PlayRoot.Enter(GetTree(), PlayConfig.FromOptions(app.Options))).CallDeferred();
+        }
+        else if (!app.IsSmokeRun && app.Options.Map is { } map)
+        {
+            Callable.From(() => GameRoot.Enter(GetTree(), new GameConfig { Map = map, Bots = app.Options.Bots })).CallDeferred();
+        }
+        else if (!app.IsSmokeRun)
+        {
+            Callable.From(() => UI.FrontEnd.ShowMainMenu(GetTree())).CallDeferred();
+        }
+    }
+}

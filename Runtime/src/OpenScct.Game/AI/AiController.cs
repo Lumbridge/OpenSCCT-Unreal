@@ -1,0 +1,669 @@
+using System;
+using System.Collections.Generic;
+using OpenScct.Core;
+using OpenScct.Core.Engine;
+using OpenScct.Game.Movement;
+using OpenScct.Game.SBase;
+
+namespace OpenScct.Game.AI;
+
+/// <summary>What a brain wants this tick: the view to turn to, the keys, the stance.</summary>
+public struct AiPlan
+{
+    /// <summary>The view yaw and pitch (65536 a turn) to turn to, when set.</summary>
+    public int? Yaw;
+
+    public int? Pitch;
+
+    /// <summary>Largest view error (65536 a turn) at which the movement keys still apply; beyond it the bot turns first.</summary>
+    public int Tolerance;
+
+    /// <summary>
+    /// The direction to move in (yaw), when the view looks elsewhere (<see cref="Yaw"/>): the forward key becomes the
+    /// camera-relative keys for that direction, as a player strafes while watching a point.
+    /// </summary>
+    public int? MoveYaw;
+
+    public AiInput Keys;
+
+    /// <summary>The stance wanted (true crouched), or null to keep it.</summary>
+    public bool? Crouched;
+}
+
+/// <summary>
+/// One server-side bot: a player controller logged in like any player, whose input bytes, view and key presses are
+/// written by this class before each world tick. It perceives through <see cref="AiSight"/> and
+/// <see cref="AiNoiseBoard"/> into an <see cref="AiMemory"/>, lets its side's brain choose and act, and turns the view
+/// no faster than its difficulty's turn rate. Godot-free and deterministic: its random stream is seeded from the world's
+/// match seed and the bot's index.
+/// </summary>
+public sealed class AiController
+{
+    private readonly List<AiMessage> _messages = new();
+    private readonly List<Pawn> _enemies = new();
+    private float _nextSight;
+    private int _crouchFrames;
+    private float _crouchAt = -10f;
+    private float _lastTick = -1f;
+    private int _lastHealth;
+    private float _stillOnLedgeSince = -1f;
+    private FVector _ledgePosition;
+    private bool _attemptedLedgeExit;
+    private SBasePawn? _pawn;
+
+    public AiController(AiWorld world, SPlayerController controller, AiDifficulty difficulty, int index)
+    {
+        World = world ?? throw new ArgumentNullException(nameof(world));
+        Controller = controller ?? throw new ArgumentNullException(nameof(controller));
+        Difficulty = difficulty ?? throw new ArgumentNullException(nameof(difficulty));
+        Index = index;
+        Random = world.Level.World.CreateRandom(1000 + index, 77);
+        int styleOffset = world.Level.World.CreateRandom(1000, 79).Rand(4);
+        Personality = AiPersonality.Create((AiStyle)((styleOffset + index) % 4), world.Level.World.CreateRandom(1000 + index, 78));
+        TeamPlay = new TeamAi(this);
+        Evasion = new SpyEvasion(this);
+        Gadgets = new SpyGadgets(this);
+        _nextSight = index * 0.017f;
+        world.RegisterBot(this);
+    }
+
+    public AiWorld World { get; }
+
+    public SPlayerController Controller { get; }
+
+    public AiDifficulty Difficulty { get; set; }
+
+    /// <summary>A scripted route the bot walks instead of playing (<see cref="RouteAi"/>), or null.</summary>
+    public AiRoute? Route { get; init; }
+
+    public int Index { get; }
+
+    public SimRandom Random { get; }
+    public AiPersonality Personality { get; }
+    public float DecisionPeriod => Difficulty.DecisionPeriod * Personality.Tempo;
+    public float ReactionTime => Difficulty.ReactionTime * Personality.Reaction;
+    public float Utility => Difficulty.GadgetUse * Personality.Utility;
+
+    public AiMemory Memory { get; } = new();
+
+    /// <summary>The brain of the current pawn's side (made when the pawn arrives).</summary>
+    public AiBrain? Brain { get; private set; }
+
+    public SBasePawn? Pawn => _pawn;
+
+    /// <summary>The team index (0 spies, 1 mercs), from the PRI.</summary>
+    public int Team => Controller.PlayerReplicationInfo?.Team is TeamInfo t ? t.TeamIndex : (Controller.Pawn is SPAWNDEFENSE ? 1 : 0);
+
+    /// <summary>The input written last tick.</summary>
+    public AiInput LastInput { get; private set; }
+
+    /// <summary>Ticks the bot had a pawn.</summary>
+    public long ThinkTicks { get; private set; }
+
+    /// <summary>Last time the pawn lost health, and how much.</summary>
+    /// <summary>What the bot decided and ran into lately (<see cref="AiEventLog"/>).</summary>
+    public AiEventLog Events { get; } = new();
+
+    public float HurtAt { get; private set; } = -100f;
+
+    /// <summary>When a team mate last fired within earshot or went down (mercs), and where he was.</summary>
+    public float MateAlertAt { get; private set; } = -100f;
+
+    public FVector MateAlertPosition { get; private set; }
+
+    private float _mercAlertsAt = -100f;
+    private readonly HashSet<SBasePawn> _matesDown = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// What a merc's HUD and radar tell him twice a second: a presence detector that has caught a spy (the radar alarm
+    /// marks the detector, so the spy is believed there), and a team mate who has just gone down (the kill feed and
+    /// the radar).
+    /// </summary>
+    private void MercAlerts(SBasePawn pawn, float now)
+    {
+        if (now - _mercAlertsAt < 0.5f && now >= _mercAlertsAt)
+        {
+            return;
+        }
+
+        _mercAlertsAt = now;
+        foreach (SPresDetector detector in World.Level.AllActors<SPresDetector>())
+        {
+            if (detector.bDeleteMe || !detector.bDetected)
+            {
+                continue;
+            }
+
+            foreach (SBasePawn caught in detector.DetectedPawns)
+            {
+                if (caught is SPawnAttaque { Health: > 0, bDeleteMe: false })
+                {
+                    Memory.Report(caught, detector.Location, now, 0.6f, AiContactSource.Alert);
+                }
+            }
+        }
+
+        foreach (SPAWNDEFENSE mate in World.Level.DynamicActors<SPAWNDEFENSE>())
+        {
+            if (ReferenceEquals(mate, pawn) || mate.bDeleteMe)
+            {
+                continue;
+            }
+
+            bool down = mate.Health <= 0 || mate.bSleeping || mate.bLyingOnGround;
+            if (!down)
+            {
+                _matesDown.Remove(mate);
+            }
+            else if (_matesDown.Add(mate))
+            {
+                MateAlertAt = now;
+                MateAlertPosition = mate.Location;
+            }
+        }
+    }
+
+    public int HurtAmount { get; private set; }
+
+    /// <summary>HUD messages received since the brain last read them.</summary>
+    public List<AiMessage> Inbox => _messages;
+
+    /// <summary>
+    /// Held by a test: the bot writes idle input (no keys, the view kept) and neither perceives nor decides until
+    /// released.
+    /// </summary>
+    public bool Held { get; set; }
+
+    /// <summary>Practice stop: release actions, stand up where possible, and keep future pawns idle.</summary>
+    public bool Stopped { get; set; }
+
+    /// <summary>The bot's team play (revive, heal, unspy, co-op moves), asked before the brain.</summary>
+    public TeamAi TeamPlay { get; }
+
+    /// <summary>A spy bot's play around the merc's motion tracker (Evasion.cs), applied after the brain.</summary>
+    public SpyEvasion Evasion { get; }
+
+    /// <summary>A spy bot's gadgets: smoke, flash-bang, chaff, heartbeat, sticky cam (SpyGadgets.cs), after the brain.</summary>
+    public SpyGadgets Gadgets { get; }
+
+    /// <summary>A merc bot's motion tracking: what its goggle tracker shows (AiPerception.cs).</summary>
+    public AiMotionSense Motion { get; } = new();
+    public MercGasProtection GasProtection { get; } = new();
+
+    private bool _teamHeld;
+
+    /// <summary>A one-line state for diagnostics.</summary>
+    public string Status => Brain is null ? "no pawn" : $"{Personality.Style} | " + (TeamPlay.Goal == TeamGoal.None ? Brain.Status : TeamPlay.Status + " | " + Brain.Status);
+
+    /// <summary>The bot's part of a tick: perceive, decide, write the input. Call before the world steps.</summary>
+    public void Tick()
+    {
+        World.BeginTick();
+        float now = World.Now;
+        float dt = _lastTick < 0f ? Sim.DeltaTime : SvmMath.Clamp(now - _lastTick, 0f, 0.25f);
+        _lastTick = now;
+        World.Messages.Take(Controller, _messages);
+        if (Stopped)
+        {
+            TeamPlay.CancelOrder(now);
+            var idle = AiInput.Idle;
+            if (Controller.Pawn is SBasePawn { Health: > 0 } stoppedPawn)
+            {
+                Stance(stoppedPawn, ref idle, false, now);
+                stoppedPawn.Acceleration = default;
+                if (stoppedPawn.Physics == EPhysics.PHYS_Walking) stoppedPawn.Velocity = default;
+            }
+            Apply(idle);
+            return;
+        }
+        if (Held)
+        {
+            Apply(AiInput.Idle);
+            return;
+        }
+
+        if (Controller.bDeleteMe || Controller.Pawn is not SBasePawn { bDeleteMe: false } pawn || pawn.Health <= 0)
+        {
+            if (_pawn is not null)
+            {
+                Brain?.Reset();
+                Gadgets.Reset();
+                TeamPlay.CancelOrder(now);
+                World.Teams[Team & 1].Release(this);
+                _pawn = null;
+            }
+
+            Memory.Decay(dt, Difficulty);
+            Apply(AiInput.Idle);
+            return;
+        }
+
+        if (!ReferenceEquals(pawn, _pawn))
+        {
+            TeamPlay.CancelOrder(now);
+            _pawn = pawn;
+            _stillOnLedgeSince = -1f;
+            EnsureGoggle(pawn);
+            _lastHealth = pawn.Health;
+            Memory.Clear();
+            if (Route is { } route)
+            {
+                Brain ??= new RouteAi(this, route);
+            }
+            else if (Brain is null || (pawn is SPawnAttaque) != (Brain is SpyAi))
+            {
+                Brain = pawn is SPawnAttaque ? new SpyAi(this) : new MercAi(this);
+            }
+            else
+            {
+                Brain.Reset();
+            }
+        }
+
+        if (pawn.Health < _lastHealth)
+        {
+            HurtAt = now;
+            HurtAmount = _lastHealth - pawn.Health;
+        }
+
+        _lastHealth = pawn.Health;
+        ThinkTicks++;
+        Perceive(pawn, now, dt);
+        var plan = new AiPlan { Tolerance = 9000 };
+        // Team play first (TeamAi.cs): while it helps a mate the side's brain waits, and plans afresh after. A route
+        // walker only walks.
+        bool climbing = pawn.Physics is EPhysics.PHYS_OnPipe or EPhysics.PHYS_OnLadder;
+        if (Route is null && TeamPlay.Think(now, ref plan))
+        {
+            _teamHeld = true;
+        }
+        else
+        {
+            if (_teamHeld && !climbing)
+            {
+                _teamHeld = false;
+                Brain!.Reset();
+            }
+
+            Brain!.Think(now, ref plan);
+        }
+
+        if (Route is null && !climbing && pawn is SPawnAttaque && Brain is not SpyAi { Security.Handling: true })
+        {
+            if (TeamPlay.OrderRequester is null || Gadgets.Active != SpyGadgetAct.None)
+                Gadgets.Apply(ref plan, now);
+            Evasion.Apply(ref plan, now);
+            // Through a proximity mine's or a tracker's range at a creep, unless running from fire.
+            if (Brain is SpyAi spyBrain && plan.Keys.Moving && now - HurtAt > 2f && spyBrain.Security.MustCreep(this, plan))
+            {
+                plan.Keys.FastSpeed = false;
+                plan.Keys.bRoll = 0;
+                plan.Crouched = true;
+            }
+
+            // Let a run stand up after a vent or a sneak, once the tactical layers have had their say.
+            if (Brain is SpyAi && plan.Keys.Moving && plan.Keys.FastSpeed && plan.Crouched is null)
+                plan.Crouched = false;
+        }
+
+        if (Route is null && pawn is SPAWNDEFENSE)
+        {
+            GasProtection.Apply(this, now, ref plan);
+            ScopeKey(now, ref plan, !_teamHeld && Brain is MercAi merc && merc.WantsScope(now));
+        }
+
+        RecoverFromIdleHang(pawn, now, ref plan);
+        AiInput input = Turn(plan, dt);
+        Stance(pawn, ref input, plan.Crouched, now);
+        Apply(input);
+        GoggleClip(now);
+    }
+
+    private void RecoverFromIdleHang(SBasePawn pawn, float now, ref AiPlan plan)
+    {
+        // Combat and team orders can take over before the follower gets to steer an accidental grab.
+        if (pawn.Physics != EPhysics.PHYS_Ledge || !Controller.IsInState(MovementStateNames.OnLedge) ||
+            TeamPlay.Goal is TeamGoal.OfferBoost or TeamGoal.ClimbHoist or TeamGoal.ClimbBoost)
+        {
+            _stillOnLedgeSince = -1f;
+            return;
+        }
+        if (_stillOnLedgeSince < 0f || (pawn.Location - _ledgePosition).SizeSquared() > 20f * 20f)
+        {
+            _stillOnLedgeSince = now;
+            _ledgePosition = pawn.Location;
+            _attemptedLedgeExit = false;
+        }
+        if (now - _stillOnLedgeSince < 2.5f) return;
+
+        // Try the ordinary forward input once. If the top is blocked (or a prior order still failed), let go.
+        bool canClimb = !_attemptedLedgeExit && Controller.TestTopLedge(false) != 0;
+        _attemptedLedgeExit = true;
+        plan = new AiPlan { Tolerance = 65536 };
+        if (canClimb) plan.Keys.BT_Up = 1;
+        else plan.Keys.BT_Down = 1;
+    }
+
+    private float _scopeKeyAt = -10f;
+
+    /// <summary>
+    /// The scope key, pressed when the scope is not as the brain wants it this tick: up for a far shot or a watch, down
+    /// for everything else (a walk, a team goal, a traversal). The key only asks: the controller's own rules decide.
+    /// </summary>
+    private void ScopeKey(float now, ref AiPlan plan, bool wanted)
+    {
+        if (Controller.SBPawn?.MyWeapon is Svm.PrecisionRifle rifle)
+        {
+            if (rifle.AimRequested != wanted) rifle.SetAiming(Controller, wanted);
+            return;
+        }
+        if (Controller.bBinocularVision == wanted || now - _scopeKeyAt < 0.5f)
+        {
+            return;
+        }
+
+        _scopeKeyAt = now;
+        plan.Keys.Press(AiCommand.SwitchBinocularVision);
+    }
+
+    /// <summary>How much larger the screen shows the scene than the default view: 1, or the scope's magnification.</summary>
+    private float Zoom()
+    {
+        if (Controller.SBPawn?.MyWeapon is Svm.PrecisionRifle { AimRequested: true } rifle)
+            return Equipment.WeaponAttachments.OpticPower(rifle);
+        float fov = Controller.FovAngle;
+        float normal = Controller.DefaultFOV;
+        return fov > 1f && fov < normal - 1f
+            ? SvmMath.Clamp(SvmMath.Tan(normal * (MathF.PI / 360f)) / SvmMath.Tan(fov * (MathF.PI / 360f)), 1f, 8f)
+            : 1f;
+    }
+
+    private static readonly Name NameGoggleUp = new("GoggleUp");
+    private static readonly Name NameGoggleDown = new("GoggleDown");
+    private float _goggleWaitSince = -1f;
+
+    /// <summary>
+    /// The goggle clip's notify. A mode starts when the clip that lowers the goggles reaches its notify
+    /// (AnimEvent_GoggleSwitchDown) and ends at the raise clip's (AnimEvent_GoggleSwitchUp); the port raises no
+    /// animation notifies yet, so for a bot the notify comes <see cref="AiK.GoggleClipSeconds"/> after the switch.
+    /// </summary>
+    private void GoggleClip(float now)
+    {
+        if (Controller.Goggle is not { } goggle)
+        {
+            return;
+        }
+
+        bool waitDown = goggle.IsInState(NameGoggleUp) && goggle.CurrentMode != SGoggle.REN_DynLight && Controller.RendMap != goggle.CurrentMode;
+        bool waitUp = goggle.IsInState(NameGoggleDown) && goggle.CurrentMode == SGoggle.REN_DynLight && Controller.RendMap != SGoggle.REN_DynLight;
+        if (!waitDown && !waitUp)
+        {
+            _goggleWaitSince = -1f;
+            return;
+        }
+
+        if (_goggleWaitSince < 0f)
+        {
+            _goggleWaitSince = now;
+        }
+
+        if (now - _goggleWaitSince < AiK.GoggleClipSeconds)
+        {
+            return;
+        }
+
+        _goggleWaitSince = -1f;
+        if (waitDown)
+        {
+            goggle.eventDown();
+        }
+        else
+        {
+            goggle.eventUp();
+        }
+    }
+
+    /// <summary>
+    /// The goggles a player's own machine spawns for its controller (vision-goggles.md rule 1). A bot's machine is the
+    /// server, where the game spawns none on a dedicated host; without them the goggle keys do nothing, so the bot's
+    /// controller gets them here, as a listen host's own player has them.
+    /// </summary>
+    private void EnsureGoggle(SBasePawn pawn)
+    {
+        if (Controller.Goggle is { } own)
+        {
+            if (!ReferenceEquals(own.Base, pawn))
+            {
+                own.SetBase(pawn);
+            }
+
+            return;
+        }
+
+        if (Controller.XLevel is not { } level)
+        {
+            return;
+        }
+
+        if (level.SpawnActor(new SGoggle(), Controller.Location, Controller.Rotation, Controller) is SGoggle goggle)
+        {
+            goggle.SPC = Controller;
+            goggle.SetBase(pawn);
+            Controller.Goggle = goggle;
+        }
+    }
+
+    private void Apply(AiInput input)
+    {
+        input.ApplyTo(Controller);
+        LastInput = input;
+    }
+
+    // ---- perception ------------------------------------------------------------------------------------------
+
+    /// <summary>The living enemy pawns (their existence is public: the scoreboard lists the players).</summary>
+    public List<Pawn> Enemies
+    {
+        get
+        {
+            _enemies.Clear();
+            bool spy = _pawn is SPawnAttaque;
+            foreach (SBasePawn p in World.Level.DynamicActors<SBasePawn>())
+            {
+                if (!p.bDeleteMe && p.Health > 0 && !ReferenceEquals(p, _pawn) && (p is SPawnAttaque) != spy)
+                {
+                    _enemies.Add(p);
+                }
+            }
+
+            return _enemies;
+        }
+    }
+
+    private void Perceive(SBasePawn pawn, float now, float dt)
+    {
+        FVector eye = AiSight.Eye(pawn);
+        // A killed enemy is no longer hunted, searched for or shot at: the kill feed told everyone.
+        Memory.ForgetDead();
+        bool look = now >= _nextSight;
+        if (look)
+        {
+            _nextSight = now + AiK.SightSeconds;
+            AiVisionMode mode = AiSight.ModeOf(Controller);
+            if (mode == AiVisionMode.Motion)
+            {
+                Motion.Update(Controller, eye, Controller.Rotation, Controller.FovAngle, now);
+            }
+
+            // Through a sticky cam the screen shows the cam's picture: the spy sees from the cam, not its eye.
+            FVector sightEye = eye;
+            FRotator sightView = Controller.Rotation;
+            if (pawn is SPawnAttaque && Gadgets.CamView(out FVector camEye, out FRotator camView))
+            {
+                sightEye = camEye;
+                sightView = camView;
+            }
+
+            float zoom = pawn is SPAWNDEFENSE ? Zoom() : 1f;
+            foreach (Pawn enemy in Enemies)
+            {
+                AiSighting s = AiSight.Look(World, sightEye, sightView, Controller.FovAngle, mode, enemy, Difficulty, zoom);
+                bool bodyVisible = s.Visible;
+                if (mode == AiVisionMode.Motion)
+                {
+                    AiSighting tracked = Motion.Look(Controller, eye, Controller.Rotation, Controller.FovAngle, enemy);
+                    if (tracked.Strength > s.Strength)
+                    {
+                        s = tracked;
+                    }
+                }
+                AiContact c = Memory.Observe(enemy, s, now, AiK.SightSeconds, Difficulty, bodyVisible);
+                if (c.Visible && c.Confirmed)
+                {
+                    World.Teams[Team & 1].Call(enemy, c.Position, now, Difficulty.Teamwork, this);
+                    if (pawn is SPAWNDEFENSE && enemy is SPawnAttaque && bodyVisible && Difficulty.Teamwork > .3f)
+                        World.ObserveApproach(enemy, c.Position, now);
+                }
+            }
+
+            Memory.EndLook(now);
+        }
+
+        if (pawn is SPAWNDEFENSE)
+        {
+            MercAlerts(pawn, now);
+        }
+
+        // Hearing: every noise of the last tick that reaches this pawn and is not its own side's.
+        IReadOnlyList<AiNoise> noises = World.Noise.Noises;
+        for (int i = 0; i < noises.Count; i++)
+        {
+            AiNoise noise = noises[i];
+            // A team mate's rifle within earshot: something is going on there.
+            if (pawn is SPAWNDEFENSE && noise.Instigator is SPAWNDEFENSE { Health: > 0 } firing && !ReferenceEquals(firing, pawn) &&
+                !noise.FromMakeNoise && noise.Radius >= AiK.MateFireRadius && (noise.Location - eye).SizeSquared() < noise.Radius * noise.Radius)
+            {
+                MateAlertAt = now;
+                MateAlertPosition = firing.Location;
+            }
+
+            if (noise.Instigator is not { } who || ReferenceEquals(who, pawn) || who.Health <= 0 || (who is SPawnAttaque) == (pawn is SPawnAttaque))
+            {
+                continue;
+            }
+
+            float heard = AiNoiseBoard.Heard(World, in noise, eye, Difficulty);
+            if (heard > 0f)
+            {
+                // A heard noise gives a position as good as the ear: blurred with distance.
+                // The ear places a sound roughly, and more roughly the farther it is, however loud.
+                float distance = (noise.Location - eye).Size();
+                float blur = SvmMath.Max(SvmMath.Min(300f, distance * 0.15f) * (1f - heard), distance * AiK.HearingBlur);
+                FVector guess = noise.Location + new FVector(Random.RandRange(-blur, blur), Random.RandRange(-blur, blur), 0f);
+                Memory.Report(who, guess, now, SvmMath.Clamp(0.35f + 0.5f * heard, 0f, 0.85f), AiContactSource.Heard);
+            }
+        }
+
+        // Teammates' callouts arrive with the teamwork knob's weight.
+        if (Difficulty.Teamwork > 0f)
+        {
+            IReadOnlyList<AiTeamBoard.Callout> calls = World.Teams[Team & 1].Callouts;
+            for (int i = 0; i < calls.Count; i++)
+            {
+                AiTeamBoard.Callout call = calls[i];
+                if (!ReferenceEquals(call.From, this) && !AiMemory.IsDead(call.Enemy) && now - call.Time < 2f + 3f * Difficulty.Teamwork &&
+                    now - call.Time > SvmMath.Max(AiK.CalloutDelay, 0.6f * (1f - Difficulty.Teamwork)))
+                {
+                    Memory.Report(call.Enemy, call.Position, call.Time, 0.7f * Difficulty.Teamwork, AiContactSource.Told);
+                }
+            }
+        }
+
+        Memory.Decay(dt, Difficulty);
+    }
+
+    // ---- view and stance -------------------------------------------------------------------------------------
+
+    private AiInput Turn(AiPlan plan, float dt)
+    {
+        AiInput input = plan.Keys;
+        FRotator view = Controller.Rotation;
+        // The scoped aim is slow (merc-scope.md rule 6): the bot turns it no faster than a player's scope does.
+        float turnRate = Controller.bBinocularVision && _pawn is SPAWNDEFENSE
+            ? SvmMath.Min(Difficulty.TurnRateDegrees, AiK.ScopeTurnDegrees)
+            : Difficulty.TurnRateDegrees;
+        int maxStep = Math.Max(1, (int)(turnRate * (65536f / 360f) * SvmMath.Max(dt, Sim.DeltaTime)));
+        int yaw = view.Yaw & 0xFFFF;
+        int pitch = view.Pitch;
+        if (plan.Yaw is { } wantYaw)
+        {
+            int d = ((wantYaw - yaw + 32768) & 0xFFFF) - 32768;
+            yaw = (yaw + Math.Clamp(d, -maxStep, maxStep)) & 0xFFFF;
+        }
+
+        if (plan.Pitch is { } wantPitch)
+        {
+            int cur = ((pitch + 32768) & 0xFFFF) - 32768;
+            int want = ((wantPitch + 32768) & 0xFFFF) - 32768;
+            pitch = cur + Math.Clamp(want - cur, -maxStep, maxStep);
+        }
+        else
+        {
+            // Level the view back out while walking.
+            int cur = ((pitch + 32768) & 0xFFFF) - 32768;
+            pitch = cur + Math.Clamp(-cur, -maxStep / 2, maxStep / 2);
+        }
+
+        // The pitch is written signed, as a player's view has it: the rifle's recoil clamps the pitch to +-13000
+        // (ApplyWeaponJump), and a view looking 2 degrees down written as 65172 was thrown to 13000 (71 degrees up)
+        // by every shot.
+        var newView = new FRotator(pitch, yaw, 0);
+        input.View = newView;
+        input.Aim = newView;
+        if (plan.MoveYaw is { } move && input.BT_Up != 0)
+        {
+            // Eight-way keys for the move direction measured from the view.
+            int rel = ((move - yaw + 32768) & 0xFFFF) - 32768;
+            input.BT_Up = (byte)(Math.Abs(rel) < 12288 ? 1 : 0);
+            input.BT_Down = (byte)(Math.Abs(rel) > 20480 ? 1 : 0);
+            input.BT_Right = (byte)(rel > 4096 && rel < 28672 ? 1 : 0);
+            input.BT_Left = (byte)(rel < -4096 && rel > -28672 ? 1 : 0);
+            return input;
+        }
+        if (plan.Yaw is { } target && NavFollower.YawError(yaw, target) > plan.Tolerance)
+        {
+            // Turn before moving: the keys are relative to the view.
+            input.BT_Up = 0;
+            input.BT_Down = 0;
+            input.BT_Left = 0;
+            input.BT_Right = 0;
+        }
+
+        return input;
+    }
+
+    private void Stance(SBasePawn pawn, ref AiInput input, bool? crouched, float now)
+    {
+        if (_crouchFrames > 0)
+        {
+            input.bCrouch = 1;
+            _crouchFrames--;
+            return;
+        }
+
+        // The crouch key flips the controller's crouch latch (ComputeCrouchOrRoll) and the walking state turns the latch
+        // into the stance when it can (ProcessCrouch). The bot compares the latch, which it knows as a player knows
+        // what he pressed: pressing again because the body has not followed yet would flip the latch back, which left
+        // mercs standing up and crouching again around a mine placement.
+        if (crouched is not { } want || pawn.Physics != EPhysics.PHYS_Walking || Controller.bCrouchWithRoll == want ||
+            now - _crouchAt < 0.6f)
+        {
+            return;
+        }
+
+        // The crouch key toggles: hold it three ticks.
+        _crouchAt = now;
+        _crouchFrames = 2;
+        input.bCrouch = 1;
+    }
+}

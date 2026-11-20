@@ -1,0 +1,396 @@
+"""Skeletal meshes and their animation sets: GLB skins plus one animation file per MeshAnimation.
+
+The GLB is scctpkg's skeletal glTF export (scctpkg/export_skel_gltf.py: skeleton, inverse bind matrices, joints and
+weights, one primitive per material, a glTF animation per sequence of the mesh's default animation set), packed as
+one binary file; its textures sit next to it as PNG.
+
+The animation file (<Package>/<Animation>.anim.json, svm.anim/1) keeps what the simulation needs in UE2 terms:
+
+    {"format": "svm.anim/1", "animation": "SPerso.<Anim>", "bones": [...],
+     "sequences": {"<name>": {"startFrame", "frames", "rate", "groups", "lead",
+                              "length": seconds a one-shot plays ((frames - 1) / rate),
+                              "notifies": [{"time" (0..1), "seconds", "function", "object", "class", "props"}],
+                              "rootTrack": {"rot", "pos", "time"}      the chunk's RootTrack (often empty),
+                              "rootBone": {"bone", "rot", "pos", "time"} the track of the chunk's first bone}}}
+
+Positions are uu, quaternions (x, y, z, w) as stored, times in frames.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+from typing import Dict, Optional
+
+import numpy as np
+
+from . import canonical
+from .sources import animations as anim_reader
+from .sources.env import import_formats
+from .sources.typedprops import bag_to_json, default_resolver
+from .writers.glb import pack_glb
+
+# The skeletal meshes the maps place (SAnimatedMesh props and DT_Mesh fish): every Mesh a map actor of sim/gameplay.json
+# names in these packages, gathered over all the maps with placed_meshes (SteeE's crane and wall, Aqua's palms, air
+# traps, sharks, mantas and dolphins, FactD's grilles and generators, ClubD's ceilings and paper doors, fans, vents,
+# doors...). Meshes no map places are left out (AQU_anm.AQA_macrocystis_mesh, CLU_anims.clu_aquarium_mesh, TME/TSP
+# spares).
+MAP_PROP_SETS = (
+    ("AQU_anm", ("AQU_airtrap_mesh", "AQU_amphore_mesh", "AQU_manta_mesh", "Aqua_plant_mesh", "aqu_caisse_mesh",
+                 "aqu_dauphin_mesh", "aqu_shark_mesh", "aqua_ext_palmier_mesh")),
+    ("CLU_anims", ("CLU_bamboo_mesh", "CLU_chute_boitier_elec_mesh", "CLU_tree02_mesh", "CLU_vent_steam_mesh",
+                   "Clu_paperdoor_mesh", "Clu_zen_heater_mesh", "clu_zen_acces_mesh", "fakeceiling_mesh",
+                   "fakeceiling_s_mesh")),
+    ("FAC_anm", ("FAC_genelec_mesh", "chute_container_mesh", "fac_mur01_mesh", "fac_mur02_mesh", "fac_mur03_mesh",
+                 "fac_pelle_mesh", "ouverture_grilles_mesh")),
+    ("GAR_anm", ("GAR_gyrophare64_mesh", "GAR_pistons_mesh", "GAR_vitre_snipe_mesh", "gar_barreaux_mesh",
+                 "gar_train_mesh")),
+    ("MAL_anm", ("ventilateur_mesh",)),
+    ("map17_anm", ("pol_bigrad_mesh", "pol_manche_mesh", "pol_radar_mesh", "pol_ventometre_mesh")),
+    ("MIS_ANM", ("MIS_airtrap_mesh", "MIS_porte_silo_mesh", "mis_giro_mesh", "mis_porte_mesh", "ventilateur_mesh")),
+    ("orf_anm", ("ORF_mur_mesh", "orp_gene_mesh", "orp_plancher_mesh", "orp_verriere_mesh")),
+    ("sqt13_anm", ("sqt_grue_mesh", "sqt_mur_mesh")),   # SteeE crane and collapsing wall
+    ("TME01_anm", ("tme01_anmmesh01_mesh", "tme01_anmmesh02_mesh", "tme04_EMFanimmesh_mesh",
+                   "tme04_breakingwall_mesh", "tme04_gun_mesh")),
+    ("TSP01_anm", ("tsp01_anmmesh01_mesh", "tsp01_anmmesh02_mesh", "tsp02_anmmesh01_mesh", "tsp05_lightanm_mesh")),
+)
+
+# (package under Packages/Animations, mesh names; empty = every mesh except the PS2 variants)
+DEFAULT_SETS = (
+    ("SPerso", ("ATT_01", "DEF_01")),          # spy, merc
+    ("SWeaponFirst", ()),                      # first-person weapons
+    ("SGoggle", ("ATT01_beams", "DEF01_beams")),        # goggle glow (spec/equipment/goggle-glow.md)
+) + MAP_PROP_SETS
+
+# Sets of the maps' props: skipped when the install does not have the package (the retail Versus has no SteeE).
+OPTIONAL_SETS = frozenset(p for p, _ in MAP_PROP_SETS)
+
+
+def set_path(game: Path, package: str) -> Path:
+    return Path(game) / "Packages" / "Animations" / f"{package}.ukx"
+
+
+def placed_meshes(gameplay_files) -> dict:
+    """{package: sorted mesh names} of the Mesh every actor of the given sim/gameplay.json files names, to check or
+    rebuild MAP_PROP_SETS (the step does not read the maps, so the chars output stays one shared unit)."""
+    out: Dict[str, set] = {}
+    for f in gameplay_files:
+        doc = json.loads(Path(f).read_text(encoding="utf-8"))
+        for a in doc.get("actors", []):
+            mesh = a.get("props", {}).get("Mesh")
+            if isinstance(mesh, dict) and isinstance(mesh.get("$asset"), str) and "." in mesh["$asset"]:
+                pkg, name = mesh["$asset"].split(".", 1)
+                out.setdefault(pkg, set()).add(name)
+    return {k: sorted(v) for k, v in sorted(out.items())}
+
+
+def import_packages(game: Path, package: str) -> list:
+    """The top-level packages a set's .ukx imports (its skins' texture packages), for the step's input hashes."""
+    path = set_path(game, package)
+    if not path.is_file():
+        return []
+    import_formats()
+    from scctpkg.package import Package  # noqa: PLC0415
+
+    pkg = Package.load(path)
+    return sorted({i.name for i in pkg.imports if i.outer == 0 and i.class_name == "Package"})
+
+# Materials a class swaps into a mesh's Skins at run time, exported next to that package's meshes (textures/, named
+# as the mesh materials are): the merc rifle's rate-of-fire screen (SWeaponDefense Skins[3], SetMode swaps
+# SI_rof_single, SI_rof_burst and SI_rof_auto; spec/equipment/merc-rifle.md rule 16).
+SKIN_SWAPS = {
+    "SWeaponFirst": ("SWeaponTex.SI_rof_single", "SWeaponTex.SI_rof_burst", "SWeaponTex.SI_rof_auto"),
+    # SGoggleBeam.ChangeSkin's skins (spec/equipment/goggle-glow.md rule 5).
+    "SGoggle": ("SGoggleTextures.TRA_goggle_green", "SGoggleTextures.TRD_goggle_orange",
+                "SGoggleTextures.TRD_goggle_motion", "SGoggleTextures.TRD_goggle_EMF"),
+}
+
+
+def export_skin_swaps(pset, keys, tex_dir: Path) -> list:
+    """Writes the texture each material key draws (a Shader's resolved texture) as textures/<key>.png."""
+    from scctpkg.export_gltf import _safe  # noqa: PLC0415
+    from scctpkg.materials import MaterialResolver  # noqa: PLC0415
+
+    resolver = MaterialResolver(pset)
+    written = []
+    for key in keys:
+        pkg_name, name = key.split(".", 1)
+        owner = pset.get(pkg_name)
+        e = None
+        if owner is not None:
+            e = owner.find_export(name, "Shader") or owner.find_export(name, "Texture")
+        if e is None:
+            raise ValueError(f"skin swap material not found: {key}")
+        res = resolver.resolve(owner, e.index + 1)
+        if res.texture is None or res.texture.image is None:
+            raise ValueError(f"skin swap material has no texture: {key}")
+        tex_dir.mkdir(parents=True, exist_ok=True)
+        res.texture.image.save(tex_dir / (_safe(key) + ".png"))
+        written.append(key)
+    return written
+
+
+# The normal-vision wet skins of SBasePawn.BeginWetSkin (spec/equipment/rain.md rule 3), per mesh: LitSpecularMaterials
+# of SPersoTextures that add an env map (Specular, a TexEnvMap over SPersoTextures.wet_envmap) through a
+# SpecularityMask to the body. Their Diffuse is the dry skin's own texture, so only the other inputs are exported.
+WET_SKINS = {
+    "ATT_01": ("SPersoTextures.wet_lit_ATT_SI", "SPersoTextures.wet_lit_ATT", "SPersoTextures.wet_lit_ATT_2"),
+    "DEF_01": ("SPersoTextures.lit_def_fx",),
+}
+_WET_INPUTS = (("Specular", "env"), ("SpecularityMask", "specMask"), ("SelfIllumination", "selfIllum"),
+               ("SelfIlluminationMask", "selfIllumMask"))
+
+
+def export_wet_skins(pset, mesh_name: str, tex_dir: Path) -> dict:
+    """{wet material path: {"env", "envColor", "specMask", "selfIllum", "selfIllumMask"}} for one mesh, the textures
+    written to tex_dir as textures/<key>.png. envColor is the env map's mean colour (as scctpkg's Shader env maps)."""
+    from scctpkg.export_gltf import _safe  # noqa: PLC0415
+    from scctpkg.materials import MaterialResolver  # noqa: PLC0415
+    from scctpkg.properties import read_properties, skip_state_frame  # noqa: PLC0415
+
+    resolver = MaterialResolver(pset)
+    out: dict = {}
+    for key in WET_SKINS.get(mesh_name, ()):
+        pkg_name, name = key.split(".", 1)
+        owner = pset.get(pkg_name)
+        e = owner.find_export(name, "LitSpecularMaterial") if owner is not None else None
+        if e is None:
+            raise ValueError(f"wet skin material not found: {key}")
+        r = owner.export_reader(e)
+        skip_state_frame(r, e.flags)
+        props = read_properties(r)
+        entry: dict = {}
+        for field, label in _WET_INPUTS:
+            ref = props.get(field)
+            if not isinstance(ref, int) or ref == 0:
+                continue
+            res = resolver.resolve(owner, ref)
+            if res.texture is None or res.texture.image is None or not res.key:
+                continue
+            tex_dir.mkdir(parents=True, exist_ok=True)
+            fname = _safe(res.key) + ".png"
+            if not (tex_dir / fname).exists():
+                res.texture.image.save(tex_dir / fname)
+            entry[label] = f"textures/{fname}"
+            if field == "Specular":
+                px = np.asarray(res.texture.image.convert("RGB"), dtype=np.float32) / 255.0
+                entry["envColor"] = [round(float(c), 4) for c in px.reshape(-1, 3).mean(0)]
+        out[owner.full_name(e.index + 1)] = entry
+    return out
+
+
+def _notify(db, pkg, ref: int, notes) -> dict:
+    cd = db.cd
+    from scctpkg.properties import skip_state_frame  # noqa: PLC0415
+
+    if ref == 0:
+        return {}
+    if ref < 0:
+        return {"object": cd.object_path(pkg, ref)}
+    e = pkg.exports[ref - 1]
+    path = cd.export_path(pkg, e)
+    cls = db.find(f"{e.class_package}.{e.class_name}") or f"{e.class_package}.{e.class_name}"
+    rec = db.record(cls)
+    props = {}
+    if rec is not None and e.size > 0:
+        r = pkg.export_reader(e)
+        skip_state_frame(r, e.flags)
+        props = bag_to_json(db.decoder.tagged(r, pkg, rec["_field"]), default_resolver, notes, path)
+    return {"object": path, "class": cls, "props": props}
+
+
+def animation_document(db, pkg, export, notes) -> dict:
+    a = anim_reader.read_animation(pkg, export)
+    seqs = {}
+    for i, s in enumerate(a.sequences):
+        notifies = []
+        for n in s.notifies:
+            entry = {"time": float(n.time), "seconds": anim_reader.notify_seconds(n.time, s.num_frames, s.rate),
+                     "function": n.function}
+            entry.update(_notify(db, pkg, n.notify_ref, notes))
+            notifies.append(entry)
+        seq = {"startFrame": int(s.start_frame), "frames": int(s.num_frames), "rate": float(s.rate),
+               "groups": list(s.groups), "lead": float(s.lead),
+               "length": float(np.float32(np.float32(max(s.num_frames - 1, 0)) / np.float32(s.rate))) if s.rate > 0
+               else 0.0, "notifies": notifies}
+        if i < len(a.chunks):
+            ch = a.chunks[i]
+            seq["rootTrack"] = anim_reader.track_json(ch.root_track)
+            if ch.tracks:
+                k = ch.bone_indices.index(0) if 0 in ch.bone_indices else 0
+                bone = a.bones[ch.bone_indices[k]] if k < len(ch.bone_indices) and ch.bone_indices[k] < len(a.bones) \
+                    else None
+                rb = anim_reader.track_json(ch.tracks[k])
+                rb["bone"] = bone
+                seq["rootBone"] = rb
+            seq["chunkFrames"] = float(ch.track_time)
+        seqs[s.name] = seq
+    return {"format": "svm.anim/1", "animation": db.cd.export_path(pkg, export), "bones": list(a.bones),
+            "sequences": seqs}
+
+
+def export_material_layers(pkg, pset, mesh, gltf: dict, tex_dir: Path) -> None:
+    """Keep the resolved normal-vision shader layers behind skeletal heat/EMF wrappers.
+
+    The skeletal exporter retains a diffuse texture's name for runtime skin matching, but that name is not the
+    material definition: heat_m160 -> M160_EMF -> SFX_xbox.final_gundef carries the rifle's env map and mask.
+    Resolving the original mesh references preserves those inputs without changing the skin/slot names.
+    """
+    from scctpkg.export_gltf import _texture_png  # noqa: PLC0415
+    from scctpkg.export_skel_gltf import SKIN_MAP, _normal_vision_texture  # noqa: PLC0415
+    from scctpkg.materials import MaterialResolver  # noqa: PLC0415
+
+    # Pawn skins have explicit normal-vision overrides and their own LAYER_MAP, rather than the mesh defaults.
+    if mesh.name in SKIN_MAP:
+        return
+    resolver = MaterialResolver(pset)
+    textures: dict = {}
+    by_name = {m.get("name"): m for m in gltf.get("materials", [])}
+    for ref in mesh.material_refs:
+        if not ref:
+            continue
+        res = resolver.resolve(pkg, ref)
+        normal_texture, normal_key = _normal_vision_texture(pset, resolver, res.key or "")
+        key = normal_key if normal_texture is not None else res.key
+        mat = by_name.get(key)
+        if mat is None:
+            continue
+        extras = mat.setdefault("extras", {})
+        # The diffuse alias is kept for cosmetics, but vision lookup needs the original modifier chain.
+        extras["scct_vision_source"] = pset.object_path(pkg, ref)
+        for label, key, texture in (
+            ("self_illum", res.self_illum_key, res.self_illum),
+            ("self_illum_mask", res.self_illum_mask_key, res.self_illum_mask),
+            ("spec_mask", res.spec_mask_key, res.spec_mask),
+            ("env_texture", res.env_key, res.env_texture),
+        ):
+            if texture is not None and texture.image is not None:
+                tex_dir.mkdir(parents=True, exist_ok=True)
+                uri = _texture_png(key, texture, tex_dir, textures)
+                if uri:
+                    extras["scct_" + label] = uri
+        if res.env_color is not None:
+            extras["scct_env_color"] = [float(c) for c in res.env_color]
+            extras["scct_env_world"] = bool(res.env_world)
+        if not extras:
+            mat.pop("extras", None)
+
+
+def export_set(game: Path, package: str, meshes, out_dir: Path, db, notes, work: Path) -> dict:
+    import_formats()
+    from scctpkg.package import Package  # noqa: PLC0415
+    from scctpkg.packageset import PackageSet  # noqa: PLC0415
+
+    path = Path(game) / "Packages" / "Animations" / f"{package}.ukx"
+    pkg = Package.load(path)
+    pset = PackageSet([Path(game) / "Packages"])
+    pset.register(pkg)
+    return export_package(pkg, pset, meshes, out_dir / package, db, notes, work, package)
+
+
+def export_package(pkg, pset, meshes, dest: Path, db, notes, work: Path, package: Optional[str] = None) -> dict:
+    """Exports the named skeletal meshes of one loaded animation package (all but the PS2 ones when meshes is empty)
+    to dest: <Mesh>.glb, <Animation>.anim.json and textures/. pset resolves the skins' texture packages."""
+    from scctpkg.export_skel_gltf import export_skeletal  # noqa: PLC0415
+    from scctpkg.skeletalmesh import read_skeletal_mesh  # noqa: PLC0415
+
+    package = package or pkg.path.stem
+    wanted = [e for e in pkg.exports_of_class("SkeletalMesh") if e.size > 0 and
+              ((e.name in meshes) if meshes else not e.name.upper().endswith("_PS2"))]
+    dest.mkdir(parents=True, exist_ok=True)
+    stats: Dict[str, object] = {"meshes": [], "failed": [], "animations": []}
+    anims_used = set()
+    for e in wanted:
+        try:
+            mesh = read_skeletal_mesh(pkg, e, prefer_render_lod=package == "SWeaponFirst")
+            wdir = work / package
+            if wdir.exists():
+                shutil.rmtree(wdir)
+            gpath = export_skeletal(pkg, mesh, pset, wdir, wdir / "textures")
+            gltf = json.loads(gpath.read_text(encoding="utf-8"))
+            export_material_layers(pkg, pset, mesh, gltf, wdir / "textures")
+            binary = gpath.with_suffix(".bin").read_bytes()
+            gltf["asset"]["generator"] = "svmbuild (scctpkg export_skel_gltf)"
+            anim_name = None
+            if mesh.animation_ref > 0:
+                ae = pkg.exports[mesh.animation_ref - 1]
+                if ae.class_name == "MeshAnimation":
+                    anim_name = ae.name
+                    anims_used.add(ae.index)
+            gltf.setdefault("extras", {})["svmap"] = {
+                "mesh": db.cd.export_path(pkg, e), "bones": len(mesh.bones),
+                "animation": f"{anim_name}.anim.json" if anim_name else None,
+                "meshScale": list(mesh.mesh_scale), "meshOrigin": list(mesh.mesh_origin),
+                "rotOrigin": list(mesh.rot_origin)}
+            wet = export_wet_skins(pset, e.name, wdir / "textures")
+            if wet:
+                gltf["extras"]["svmap"]["wetSkins"] = wet
+            (dest / f"{e.name}.glb").write_bytes(pack_glb(gltf, binary))
+            tdir = wdir / "textures"
+            if tdir.is_dir():
+                (dest / "textures").mkdir(exist_ok=True)
+                for t in sorted(tdir.iterdir()):
+                    shutil.copyfile(t, dest / "textures" / t.name)
+            stats["meshes"].append({"mesh": e.name, "bones": len(mesh.bones), "vertices": int(len(mesh.wedges)),
+                                    "triangles": int(len(mesh.faces)),
+                                    "glAnimations": len(gltf.get("animations", []))})
+        except Exception as ex:  # noqa: BLE001 - one mesh must not stop the set
+            stats["failed"].append(f"{e.name}: {type(ex).__name__}: {ex}")
+    swaps = SKIN_SWAPS.get(package, ())
+    if swaps:
+        stats["skinSwaps"] = export_skin_swaps(pset, swaps, dest / "textures")
+    for idx in sorted(anims_used):
+        ae = pkg.exports[idx]
+        try:
+            doc = animation_document(db, pkg, ae, notes)
+            (dest / f"{ae.name}.anim.json").write_bytes(canonical.dump_file(doc))
+            n_notifies = sum(len(s["notifies"]) for s in doc["sequences"].values())
+            stats["animations"].append({"animation": ae.name, "sequences": len(doc["sequences"]),
+                                        "notifies": n_notifies})
+        except Exception as ex:  # noqa: BLE001
+            stats["failed"].append(f"{ae.name}: {type(ex).__name__}: {ex}")
+    if work.exists():
+        shutil.rmtree(work, ignore_errors=True)
+    return stats
+
+
+def _export_set_job(game: str, package: str, meshes, out_dir: str) -> tuple[str, dict, dict]:
+    """One set in a worker process: its own class database and notes, its own work folder."""
+    from .sources.classdb import class_db  # noqa: PLC0415
+    from .sources.typedprops import Notes  # noqa: PLC0415
+
+    notes = Notes()
+    out = Path(out_dir)
+    stats = export_set(Path(game), package, meshes, out, class_db(game), notes, out / f".work-{package}")
+    return package, stats, dict(notes.counts)
+
+
+def export_all(game: Path, out_dir: Path, db, sets=DEFAULT_SETS, jobs: int = 1) -> dict:
+    """Exports every set. With jobs > 1 the sets run in worker processes (each writes only its own <Package>/
+    folder); the result keeps the order of `sets`."""
+    from .sources.typedprops import Notes  # noqa: PLC0415
+
+    todo = [(p, m) for p, m in sets if not (p in OPTIONAL_SETS and not set_path(game, p).is_file())]
+    counts: Dict[str, int] = {}
+    done: Dict[str, dict] = {}
+    if jobs > 1 and len(todo) > 1:
+        import concurrent.futures as cf  # noqa: PLC0415
+        import multiprocessing as mp  # noqa: PLC0415
+
+        with cf.ProcessPoolExecutor(max_workers=min(jobs, len(todo)), mp_context=mp.get_context("spawn")) as pool:
+            # DEFAULT_SETS lists the big sets (characters, first-person weapons) first, so they start first.
+            futures = [pool.submit(_export_set_job, str(game), p, list(m), str(out_dir)) for p, m in todo]
+            for fut in futures:
+                package, stats, note_counts = fut.result()
+                done[package] = stats
+                for k, v in note_counts.items():
+                    counts[k] = counts.get(k, 0) + v
+    else:
+        notes = Notes()
+        for package, meshes in todo:
+            done[package] = export_set(game, package, meshes, out_dir, db, notes, out_dir / f".work-{package}")
+        counts = dict(notes.counts)
+    out = {p: done[p] for p, _ in todo}
+    out["_notes"] = dict(sorted(counts.items()))
+    return out

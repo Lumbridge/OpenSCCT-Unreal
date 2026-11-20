@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(RepoRoot)build/AllocationProbe.cs" Link="AllocationProbe.cs" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <PackageReference Include="CsCheck" />
+  </ItemGroup>
+</Project>

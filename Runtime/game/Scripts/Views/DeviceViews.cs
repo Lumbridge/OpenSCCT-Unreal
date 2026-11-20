@@ -1,0 +1,920 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Godot;
+using OpenScct.Content;
+using OpenScct.Content.Loading;
+using OpenScct.Core;
+using OpenScct.Core.Engine;
+using OpenScct.Game.Devices;
+using OpenScct.Game.SBase;
+using OpenScct.Provenance;
+using OpenScctGame.Render;
+using OpenScctGame.Render.Characters;
+using OpenScctGame.Render.Data;
+using OpenScctGame.Render.Materials;
+
+namespace OpenScctGame.Views;
+
+/// <summary>
+/// Draws the client world's devices over the built map: every gameplay mesh node of <see cref="RenderMap.Gameplay"/>
+/// follows its simulated actor (movers move, swimming fish swim, hidden actors hide, a changed StaticMesh swaps the
+/// node's mesh), and every SAnimatedMesh and skeletal fish is a skeletal model that shows and hides with the actor
+/// and plays its animation channel. Reads the simulation and never writes it.
+/// </summary>
+public sealed class DeviceViews
+{
+    private const float RelightSeconds = 0.1f;
+
+    private readonly RenderMap _map;
+    private readonly GlassBreakViews _glass;
+    private readonly WindowLightingView _windowLighting;
+    public int GlassFragmentCount => _glass.LiveFragments;
+    public int GlassBreakCount => _glass.Started;
+    public int WindowLightingUpdates => _windowLighting.Updates;
+    private readonly List<MeshFollower> _meshes = [];
+    private readonly List<AnimatedMeshView> _animated = [];
+    private readonly List<LightSwitch> _lights = [];
+    private readonly List<(SFlagDropZone Zone, GameplayMesh Mesh)> _covers = [];
+    private readonly Dictionary<string, Mesh?> _meshByAsset = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _missing = new(StringComparer.OrdinalIgnoreCase);
+    private float _relightClock;
+    private double _skinClock;
+
+    /// <summary>Read and draw map-owned skeletal props before the client world binds their actors.</summary>
+    internal static void PreloadSkeletalProps(RenderMap map, Node3D samples)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (GameplayActor actor in map.Actors.Actors)
+        {
+            if (actor.Asset("Mesh") is not { } asset ||
+                SkeletalModel.FindMapGlb(asset, map.Folder, map.SharedRoot) is not { } glb || !seen.Add(glb)) continue;
+            SkeletalModel model = SkeletalModel.Load(glb);
+            foreach (MeshInstance3D mesh in model.Meshes)
+            {
+                mesh.ExtraCullMargin = 100000;
+                mesh.IgnoreOcclusionCulling = true;
+            }
+            samples.AddChild(model.Root);
+        }
+    }
+
+    /// <summary>Draw the alternate LED skins during loading using the same surfaces as the live devices.</summary>
+    internal static void PreloadSecuritySkins(RenderMap map, Node3D samples)
+    {
+        var warmed = new HashSet<(Mesh, int, Material, GeometryInstance3D.ShadowCastingSetting)>();
+        foreach (GameplayActor actor in map.Actors.Actors)
+        {
+            if (actor.ShortClass is not (nameof(SCamera) or nameof(SVolumetricSensor)) ||
+                !map.Gameplay.TryGetValue(actor.Id, out GameplayMesh? entry) || entry.Node.Mesh is not { } mesh)
+            {
+                continue;
+            }
+
+            AddSkin(actor.Asset(nameof(SCamera.LightOff)));
+            AddSkin(actor.Asset(nameof(SCamera.LightGreen)));
+            AddSkin(actor.Asset(nameof(SCamera.LightRed)));
+
+            void AddSkin(string? skin)
+            {
+                if (skin is null || MeshFollower.ResolveSkin(map.Pack, map, skin, entry.Light) is not { } material)
+                {
+                    return;
+                }
+
+                var shadows = entry.Node.CastShadow;
+                for (int i = 0; i < mesh.GetSurfaceCount(); i++)
+                {
+                    if (GameplayObjects.SectionOf(mesh, i) != SensorK.SensorLedSkin || !warmed.Add((mesh, i, material, shadows)))
+                    {
+                        continue;
+                    }
+
+                    Aabb bounds = mesh.GetAabb();
+                    float scale = 1f / Math.Max(bounds.Size.Length(), 0.01f);
+                    var sample = new MeshInstance3D
+                    {
+                        Mesh = mesh,
+                        CastShadow = shadows,
+                        Scale = Vector3.One * scale,
+                        Position = -bounds.GetCenter() * scale,
+                    };
+                    sample.SetSurfaceOverrideMaterial(i, material);
+                    samples.AddChild(sample);
+                }
+            }
+        }
+    }
+
+    /// <summary>Binds the map's nodes to the actors <paramref name="loaded"/> created (the client's map load).</summary>
+    public DeviceViews(RenderMap map, MapLoadResult loaded, Node3D parent, string? sharedRoot = null)
+    {
+        _map = map ?? throw new ArgumentNullException(nameof(map));
+        ArgumentNullException.ThrowIfNull(loaded);
+        ArgumentNullException.ThrowIfNull(parent);
+        _glass = new GlassBreakViews(); parent.AddChild(_glass); _glass.Bind(map, loaded);
+        _windowLighting = new WindowLightingView(map, loaded);
+        Mounts = new CameraMountViews(map, parent, FindMesh);
+        foreach (ActorRecord record in loaded.Gameplay.Actors)
+        {
+            if (loaded.ActorOf(record) is not { } actor)
+            {
+                continue;
+            }
+
+            if (map.Gameplay.TryGetValue(record.Id, out GameplayMesh? entry))
+            {
+                // The map's bHidden, not the actor's now: replication may have shown it before this first bind.
+                GameplayActor? placed = map.Actors.Find(record.Id);
+                // A help path is hidden by its class default, which the map does not store (and the render pack
+                // builds its mesh hidden): it shows only once the actor is unhidden (the in-game help).
+                bool mapHidden = actor is OpenScct.Game.SBase.SHelpPath || (placed is not null ? placed.Bool("bHidden") : actor.bHidden);
+                (FVector, FRotator)? mapPlace = placed is not null && placed.TryGet("Location", out _)
+                    ? (placed.Vector("Location"), placed.Rotator("Rotation"))
+                    : null;
+                var follower = new MeshFollower(actor, entry, mapHidden, mapPlace);
+                _meshes.Add(follower);
+                if (follower.Asset is { } asset && entry.Node.Mesh is { } mesh)
+                {
+                    _meshByAsset.TryAdd(asset, mesh);
+                }
+            }
+
+            if (actor is STriggerLight light)
+            {
+                _lights.Add(new LightSwitch(record.Id, light));
+            }
+
+            if (actor is SFlagDropZone zone &&
+                map.Gameplay.TryGetValue(record.Id + "_Cover", out GameplayMesh? coverMesh))
+            {
+                _covers.Add((zone, coverMesh));
+            }
+
+            if (IsSkeletal(actor))
+            {
+                string asset = actor.Mesh.Path!;
+                string? glb = actor.XLevel.GetService<OpenScct.Server.AnimationWorld>()?.Model(asset)?.Model
+                    ?? SkeletalModel.FindMapGlb(asset, map.Folder, sharedRoot ?? map.SharedRoot);
+                if (glb is null)
+                {
+                    _missing.Add(asset);
+                    continue;
+                }
+
+                SkeletalModel model = SkeletalModel.Load(glb);
+                model.ApplyAnimations(actor.XLevel.GetService<OpenScct.Server.AnimationWorld>()?.Project, asset);
+                model.Root.Name = record.Id;
+                parent.AddChild(model.Root);
+                _animated.Add(new AnimatedMeshView(record.Id, actor, model, map));
+            }
+        }
+
+        Attached = new AttachedEffects(map, loaded, _animated);
+    }
+
+    /// <summary>The map's emitters and lights that ride a mover or hang on a bone.</summary>
+    public AttachedEffects Attached { get; }
+
+    /// <summary>
+    /// The skeletal mesh actors drawn as models: every SAnimatedMesh (the map props of the anim packages) and the fish
+    /// drawn with a mesh (DT_Mesh: sharks, mantas, dolphins). Fish drawn with a static mesh are gameplay nodes.
+    /// </summary>
+    private static bool IsSkeletal(Actor actor) =>
+        !actor.Mesh.IsNone &&
+        (actor is SAnimatedMesh ||
+         (actor is SFish or SFish_Follow or SComputerObjectiveTrigger { bPS2Objective: true } && actor.DrawType == EDrawType.DT_Mesh));
+
+    /// <summary>The followed gameplay mesh nodes.</summary>
+    public IReadOnlyList<MeshFollower> Meshes => _meshes;
+
+    /// <summary>The skeletal props.</summary>
+    public IReadOnlyList<AnimatedMeshView> Animated => _animated;
+
+    /// <summary>The security cameras' spawned wall mounts.</summary>
+    public CameraMountViews Mounts { get; }
+
+    /// <summary>Meshes the render content does not have (a swapped StaticMesh, a skeletal mesh): the node hides.</summary>
+    public IReadOnlyCollection<string> MissingMeshes => _missing;
+
+    /// <summary>A one-line count of what the views follow and what changed (for reports).</summary>
+    public string Summary()
+    {
+        int movers = 0;
+        int moved = 0;
+        int swapped = 0;
+        foreach (MeshFollower m in _meshes)
+        {
+            movers += m.Actor is Mover ? 1 : 0;
+            moved += m.Moved ? 1 : 0;
+            swapped += string.Equals(m.ShownAsset, m.Asset, StringComparison.OrdinalIgnoreCase) ? 0 : 1;
+        }
+
+        int playing = 0;
+        foreach (AnimatedMeshView a in _animated)
+        {
+            playing += a.Starts > 0 ? 1 : 0;
+        }
+
+        return $"devices={_meshes.Count} movers={movers} moved={moved} swapped={swapped} skeletal={_animated.Count} started={playing}";
+    }
+
+    /// <summary>
+    /// Takes the actors' state after a simulation tick. With the client world's <paramref name="level"/>, a node whose
+    /// map actor the client destroyed at load follows the server's copy once it arrives (<see cref="Rebind"/>).
+    /// </summary>
+    public void OnTick(Level? level = null)
+    {
+        if (level is not null)
+        {
+            BindCovers(level);
+            Rebind(level);
+            Mounts.OnTick(level);
+        }
+
+        foreach (MeshFollower m in _meshes)
+        {
+            m.OnTick();
+        }
+
+        foreach (AnimatedMeshView a in _animated)
+        {
+            a.OnTick();
+        }
+
+        Attached.OnTick();
+
+        // A trigger light switches the map's light of the same name (spec/devices/trigger-light.md, render).
+        for (int i = 0; i < _lights.Count; i++)
+        {
+            LightSwitch l = _lights[i];
+            bool on = !l.Light.bDeleteMe && l.Light.LightType != ELightType.LT_None;
+            if (l.Shown != on)
+            {
+                _lights[i] = l with { Shown = on };
+                _map.SetLightOn(l.Id, on);
+            }
+        }
+    }
+
+    private void BindCovers(Level level)
+    {
+        for (int i = _covers.Count - 1; i >= 0; i--)
+        {
+            (SFlagDropZone zone, GameplayMesh mesh) = _covers[i];
+            foreach (SBasicGamePlayObject cover in level.DynamicActors<SBasicGamePlayObject>())
+            {
+                bool belongs = ReferenceEquals(cover.Owner, zone) ||
+                    (cover.Owner is null && FVector.DistSquared(cover.Location, mesh.Location) <= 9f);
+                if (!cover.bDeleteMe && belongs && cover.StaticMesh == SFlagDropZone.LidMesh)
+                {
+                    // Cover is transient and Owner goes only to the owning connection. Other clients bind by placement.
+                    _meshes.Add(new MeshFollower(cover, mesh, false, (mesh.Location, zone.Rotation)));
+                    _covers.RemoveAt(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// UE2 client map setup destroys every map actor that is neither bStatic nor bNoDelete (SLaserTrigger,
+    /// SVolumetricSensor) and the server sends its own copy while it is relevant (spec/net/model.md rule 14,
+    /// spec/devices/laser-trigger.md rule 11). The map's node was bound to the destroyed copy and hid with it, so only
+    /// the beam (drawn from the live actors) showed. A node whose actor is gone follows the live, unbound actor of the
+    /// same class at its map placement; when that copy goes too (out of relevancy) the node hides until the next one.
+    /// </summary>
+    [Provenance(ProvenanceKind.Decoded, "NetDriver.PrepareClientMap destroys non-bNoDelete map actors; the server's copy keeps Location and Rotation (bNetInitialRotation)")]
+    private void Rebind(Level level)
+    {
+        bool orphans = false;
+        foreach (MeshFollower m in _meshes)
+        {
+            if (m.Actor.bDeleteMe && m.Replaceable)
+            {
+                orphans = true;
+                break;
+            }
+        }
+        orphans |= _animated.Any(v => v.Actor is SComputerObjectiveTrigger { bPS2Objective: true, bDeleteMe: true });
+
+        if (!orphans || (level.ActorCount == _rebindActorCount && level.TickCount % RebindRescanTicks != 0))
+        {
+            return;
+        }
+
+        _rebindActorCount = level.ActorCount;
+        _bound.Clear();
+        foreach (MeshFollower m in _meshes)
+        {
+            if (!m.Actor.bDeleteMe)
+            {
+                _bound.Add(m.Actor);
+            }
+        }
+        foreach (AnimatedMeshView view in _animated)
+            if (!view.Actor.bDeleteMe) _bound.Add(view.Actor);
+
+        foreach (Actor a in level.DynamicActors<Actor>())
+        {
+            if (a.bDeleteMe || a.bNoDelete || _bound.Contains(a))
+            {
+                continue;
+            }
+
+            foreach (MeshFollower m in _meshes)
+            {
+                bool atPlacement = m.IsAtPlacement(a.Location) ||
+                    a is SFlag { bPS2Objective: true, Ps2Computer: { } home } &&
+                    m.IsAtPlacement(home.Location + new FVector(0, 0, 25));
+                if (m.Actor.bDeleteMe && m.Replaceable && m.Actor.GetType() == a.GetType() && atPlacement)
+                {
+                    m.Rebind(a);
+                    _bound.Add(a);
+                    break;
+                }
+            }
+            if (a is SComputerObjectiveTrigger { bPS2Objective: true } && !_bound.Contains(a))
+                foreach (AnimatedMeshView view in _animated)
+                    if (view.Actor is SComputerObjectiveTrigger { bPS2Objective: true, bDeleteMe: true } &&
+                        FVector.Dist(view.Actor.Location, a.Location) < 1f && view.Actor.Mesh == a.Mesh)
+                    {
+                        view.Rebind(a);
+                        _bound.Add(a);
+                        break;
+                    }
+        }
+    }
+
+    private const int RebindRescanTicks = 30;
+
+    private readonly HashSet<Actor> _bound = new(ReferenceEqualityComparer.Instance);
+    private int _rebindActorCount = -1;
+
+    /// <summary>The trigger lights followed (map light name = actor id).</summary>
+    public int TriggerLights => _lights.Count;
+
+    private readonly record struct LightSwitch(string Id, STriggerLight Light, bool? Shown = null);
+
+    /// <summary>Places, shows and swaps for a frame <paramref name="alpha"/> of the way from the previous tick to the last.</summary>
+    public void Draw(float alpha, float dt, PawnViews? pawns = null)
+    {
+        _glass.Draw(dt);
+        _windowLighting.Update();
+        _relightClock -= dt;
+        bool relight = _relightClock <= 0f;
+        if (relight)
+        {
+            _relightClock = RelightSeconds;
+        }
+
+        _skinClock += dt;
+        foreach (MeshFollower m in _meshes)
+        {
+            if (m.WantsMeshChange)
+            {
+                string? wanted = m.Actor.StaticMesh.Path;
+                bool own = wanted is not null && string.Equals(wanted, m.Asset, StringComparison.OrdinalIgnoreCase);
+                m.ShowMesh(wanted, wanted is null || own ? null : FindMesh(wanted));
+                if (m.Entry.Light == LightSource.Actor && m.Entry.Node.Mesh is { } changedMesh)
+                {
+                    var sphere = ActorLighting.SphereOf(changedMesh, m.Entry.Node.GlobalTransform);
+                    ActorLighting.Apply(m.Entry.Node, _map.LightActor(sphere.Center, sphere.Radius, m.Entry.AmbientGlow, UeSpace.ToUe(m.Entry.Node.GlobalTransform.Origin)));
+                }
+            }
+
+            m.DrawSkin(_map.Pack, _skinClock, _map);
+            m.Draw(alpha, pawns);
+            if (relight && m.Moved && m.Entry.Light == LightSource.Actor && m.Entry.Node.Visible)
+            {
+                var sphere = ActorLighting.SphereOf(m.Entry.Node.Mesh, m.Entry.Node.GlobalTransform);
+                ActorLighting.Apply(m.Entry.Node, _map.LightActor(sphere.Center, sphere.Radius, m.Entry.AmbientGlow, UeSpace.ToUe(m.Entry.Node.GlobalTransform.Origin)));
+            }
+        }
+
+        foreach (AnimatedMeshView a in _animated)
+        {
+            a.Draw(alpha, dt);
+        }
+
+        // After the props' poses: what hangs on their bones follows this frame's pose.
+        Attached.Draw(alpha, dt, pawns);
+        Mounts.Draw();
+    }
+
+    private Mesh? FindMesh(string asset)
+    {
+        if (_meshByAsset.TryGetValue(asset, out Mesh? known))
+        {
+            return known;
+        }
+
+        Mesh? mesh = _map.SwapMeshes.TryGetValue(asset, out ArrayMesh? swap) ? swap : GameplayObjects.MeshFor(_map, asset, unlit: false);
+        _meshByAsset[asset] = mesh;
+        if (mesh is null && _missing.Add(asset))
+        {
+            GD.PushWarning($"{_map.MapId}: no render mesh for {asset}; the node is hidden while the actor uses it");
+        }
+
+        return mesh;
+    }
+}
+
+/// <summary>One gameplay mesh node following its actor.</summary>
+public sealed class MeshFollower
+{
+    private readonly Transform3D _node0;
+    private readonly Transform3D _placed0Inverse;
+    private readonly FVector _location0;
+    private readonly FRotator _rotation0;
+    private readonly bool _hidden0;
+    private readonly bool _visible0;
+    private readonly uint _layers0;
+    private FVector _prevLocation;
+    private FVector _location;
+    private FRotator _prevRotation;
+    private FRotator _rotation;
+    private bool _meshMissing;
+    private readonly Mesh? _mesh0;
+    private Material? _wholeSkin;
+    private Mesh? _drawMesh;
+    private bool _skinDirty = true;
+    private bool _drawnVisible;
+    private Vector4 _vision;
+
+    /// <summary>
+    /// Follows <paramref name="actor"/> from its node. <paramref name="mapPlace"/> is the map's Location and Rotation
+    /// the node was built at: an actor its own BeginPlay already moved (a camera set 24 uu off its wall,
+    /// spec/devices/security-camera.md rule 1) is drawn where it is, not where the map put it.
+    /// </summary>
+    internal MeshFollower(Actor actor, GameplayMesh entry, bool mapHidden, (FVector Location, FRotator Rotation)? mapPlace = null)
+    {
+        Actor = actor;
+        Entry = entry;
+        _node0 = entry.Node.Transform;
+        _location0 = actor.Location;
+        _rotation0 = actor.Rotation;
+        (FVector built, FRotator builtRotation) = mapPlace ?? (_location0, _rotation0);
+        _placed0Inverse = UeSpace.TransformToGodot(built, builtRotation).AffineInverse();
+        _hidden0 = mapHidden;
+        _visible0 = entry.Node.Visible;
+        _layers0 = entry.Node.Layers;
+        _prevLocation = _location = actor.Location;
+        _prevRotation = _rotation = actor.Rotation;
+        Asset = actor.StaticMesh.Path;
+        ShownAsset = Asset;
+        _mesh0 = entry.Node.Mesh;
+        _drawMesh = _mesh0;
+        _wholeSkin = entry.Node.MaterialOverride;
+        _drawnVisible = _visible0;
+        _vision = OpenScctGame.Render.InstanceParams.Get(entry.Node, GameplayObjects.VisionActorParameter).AsVector4();
+        Replaceable = !actor.bStatic && !actor.bNoDelete;
+        Moved = mapPlace is { } m && Away(_location0 - m.Location, _rotation0, m.Rotation);
+    }
+
+    public Actor Actor { get; private set; }
+
+    /// <summary>True for a map actor a client destroys at load and gets back from the server (neither bStatic nor bNoDelete).</summary>
+    internal bool Replaceable { get; }
+
+    /// <summary>True when <paramref name="location"/> is the map placement, within what replication rounds.</summary>
+    internal bool IsAtPlacement(FVector location)
+    {
+        FVector d = location - _location0;
+        return MathF.Abs(d.X) <= PlacementSlack && MathF.Abs(d.Y) <= PlacementSlack && MathF.Abs(d.Z) <= PlacementSlack;
+    }
+
+    /// <summary>Follows <paramref name="actor"/>, the server's copy of the destroyed map actor, from its current state.</summary>
+    internal void Rebind(Actor actor)
+    {
+        _skinDirty = true;
+        // _hidden0 stays the map's: a copy that arrives hidden hides the node.
+        Actor = actor;
+        _prevLocation = _location = actor.Location;
+        _prevRotation = _rotation = actor.Rotation;
+        Moved = LeftPlacement();
+    }
+
+    public GameplayMesh Entry { get; }
+
+    /// <summary>The StaticMesh the map gave the actor.</summary>
+    public string? Asset { get; }
+
+    /// <summary>The StaticMesh the node shows now (null when the actor has none).</summary>
+    public string? ShownAsset { get; private set; }
+
+    /// <summary>True once the actor left its map location or rotation.</summary>
+    public bool Moved { get; private set; }
+
+    /// <summary>
+    /// True when the actor's StaticMesh is not what the node shows, a change to None included (a broken pane hides;
+    /// only a change to another mesh used to count, so broken glass stayed drawn).
+    /// </summary>
+    internal bool WantsMeshChange => MeshSwap.Changed(Actor.StaticMesh.Path, ShownAsset);
+
+    internal void OnTick()
+    {
+        _skinDirty = true;
+        _prevLocation = _location;
+        _prevRotation = _rotation;
+        _location = Actor.Location;
+        _rotation = Actor.Rotation;
+        if (!Moved && LeftPlacement())
+        {
+            Moved = true;
+        }
+    }
+
+    /// <summary>
+    /// True when the actor is away from its map placement by more than what replication rounds (locations to whole
+    /// units, rotations to 256-unit steps): a replicated static prop keeps the map's exact transform.
+    /// </summary>
+    private bool LeftPlacement() => Away(_location - _location0, _rotation, _rotation0);
+
+    private static bool Away(FVector d, FRotator rotation, FRotator rotation0) =>
+        MathF.Abs(d.X) > PlacementSlack || MathF.Abs(d.Y) > PlacementSlack || MathF.Abs(d.Z) > PlacementSlack ||
+        Math.Abs(FRotator.NormalizeAxis(rotation.Pitch - rotation0.Pitch)) > RotationSlack ||
+        Math.Abs(FRotator.NormalizeAxis(rotation.Yaw - rotation0.Yaw)) > RotationSlack ||
+        Math.Abs(FRotator.NormalizeAxis(rotation.Roll - rotation0.Roll)) > RotationSlack;
+
+    private const float PlacementSlack = 1f;
+
+    private const int RotationSlack = 256;
+
+    /// <summary>Shows <paramref name="mesh"/> for <paramref name="asset"/>; no mesh (None, or one the render lacks) hides the node.</summary>
+    internal void ShowMesh(string? asset, Mesh? mesh)
+    {
+        // Back to the map's own mesh (a reset, a second toggle): the node's first mesh.
+        if (asset is not null && string.Equals(asset, Asset, StringComparison.OrdinalIgnoreCase) && _mesh0 is not null)
+        {
+            mesh = _mesh0;
+        }
+
+        ShownAsset = asset;
+        _meshMissing = mesh is null;
+        if (mesh is not null)
+        {
+            Entry.Node.Mesh = mesh;
+            _drawMesh = mesh;
+            _skinDirty = true;
+        }
+    }
+
+    /// <summary>
+    /// The actor's Skins over the mesh (UE2 Actor.GetSkin: Skins[i], when set, replaces section i's material). The
+    /// bomb spot's ghost (<see cref="GameplaySkins.For"/>) covers every surface, as the native tick sets it in every
+    /// slot; the pack's run-time skins (the camera and sensor LED in slot 1) replace their own surface. A skin the
+    /// render does not have keeps the mesh's own material.
+    /// </summary>
+    [Provenance(ProvenanceKind.Decoded, "ASBombTargetObjectiveTrigger::Tick: Skins[0..2] = AbsentSkin unarmed, None armed (one skin for every slot)")]
+    [Provenance(ProvenanceKind.Decoded, "ASCamera::Tick / SVolumetricSensor.LightStateChange: the LED is Skins[1] (security-camera.md rule 9, volumetric-sensor.md rule 7)")]
+    internal void DrawSkin(RenderPack? pack, double seconds, RenderMap? map = null)
+    {
+        MeshInstance3D node = Entry.Node;
+        if (!GodotObject.IsInstanceValid(node))
+        {
+            return;
+        }
+
+        string? skin0 = Actor.Skins.Count > 0 ? Actor.Skins[0].Path : null;
+        Material? whole = skin0 is null ? null : GameplaySkins.For(pack, skin0, seconds);
+        if (!_skinDirty && ReferenceEquals(_wholeSkin, whole))
+        {
+            return;
+        }
+
+        _skinDirty = false;
+        if (!ReferenceEquals(_wholeSkin, whole))
+        {
+            _wholeSkin = whole;
+            node.MaterialOverride = whole;
+        }
+
+        if (_drawMesh is not { } mesh)
+        {
+            return;
+        }
+
+        int surfaces = _surfaceSkins.Length;
+        if (!ReferenceEquals(_skinnedMesh, mesh))
+        {
+            // A swapped mesh: its surfaces start from their own materials.
+            _skinnedMesh = mesh;
+            surfaces = mesh.GetSurfaceCount();
+            _surfaceSkins = new string?[surfaces];
+            _skinSections = new int[surfaces];
+            for (int i = 0; i < surfaces; i++)
+            {
+                _skinSections[i] = GameplayObjects.SectionOf(mesh, i);
+                node.SetSurfaceOverrideMaterial(i, null);
+            }
+        }
+
+        int count = Actor.Skins.Count;
+        for (int i = 0; i < surfaces; i++)
+        {
+            int slot = _skinSections[i];
+            string? skin = whole is null && slot >= 0 && slot < count ? Actor.Skins[slot].Path : null;
+            if (!string.Equals(_surfaceSkins[i], skin, StringComparison.OrdinalIgnoreCase))
+            {
+                _surfaceSkins[i] = skin;
+                node.SetSurfaceOverrideMaterial(i, ResolveSkin(pack, map, skin, Entry.Light));
+            }
+        }
+    }
+
+    internal static Material? ResolveSkin(RenderPack? pack, RenderMap? map, string? skin, LightSource light) =>
+        map?.Materials.FindSource(skin) is { } name ? map.Compiler.Get(name, light) : GameplaySkins.Skin(pack, skin, light);
+
+    // The skin path each surface last drew (null: the mesh's own material).
+    private string?[] _surfaceSkins = [];
+    private Mesh? _skinnedMesh;
+    private int[] _skinSections = [];
+
+    [Provenance(ProvenanceKind.Estimated, "Movers drawn between the last two ticks (linear location, shortest-way rotation)")]
+    [Provenance(ProvenanceKind.Decoded, "SPlayerController.s_Pickup.EndState: SFlag attaches to B L Thigh with RelativeLocation (10,0,-10), RelativeRotation (0,0,32768); spec/objectives/disk-flag.md rule 14")]
+    internal void Draw(float alpha, PawnViews? pawns = null)
+    {
+        MeshInstance3D node = Entry.Node;
+        if (!GodotObject.IsInstanceValid(node))
+        {
+            return;
+        }
+
+        // The map's own visibility (mode-dependent props, hidden placements) until the actor changes bHidden.
+        bool visible = Actor.bHidden == _hidden0 ? _visible0 : !Actor.bHidden;
+        // A stage that removes the mesh (a broken window pane, spec/devices/vitre.md rule 2) hides the node.
+        bool meshGone = Asset is not null && Actor.StaticMesh.IsNone && Actor.DrawType == EDrawType.DT_StaticMesh;
+        bool shown = visible && !_meshMissing && !meshGone && !Actor.bDeleteMe && Actor.DrawType != EDrawType.DT_None;
+        bool attached = !Actor.AttachmentBone.IsNone && Actor.Base is SBasePawn;
+        Transform3D bone = default;
+        SimPawnView? carrier = attached ? pawns?.ViewOf((SBasePawn)Actor.Base!) : null;
+        bool boneDrawn = carrier is { Visible: true } && carrier.TryGetBone(Actor.AttachmentBone, out bone);
+        // An attached prop must never flash at its stale world location while the carrier's view loads.
+        shown &= !attached || boneDrawn;
+        if (shown != _drawnVisible)
+        {
+            _drawnVisible = shown;
+            node.Visible = shown;
+        }
+
+        // The live vision values (a switched-off device stops glowing in EMF); HeatOpacity, not replicated, stays the map's.
+        Vector4 vision = GameplayObjects.VisionOf(Actor) with { Y = _vision.Y };
+        if (vision != _vision)
+        {
+            _vision = vision;
+            OpenScctGame.Render.InstanceParams.Set(node, GameplayObjects.VisionActorParameter, vision);
+        }
+
+        node.Layers = attached && carrier is { ShadowOnly: true }
+            ? (_layers0 & ~RenderLayers.World) | RenderLayers.ShadowOnly
+            : _layers0;
+        if (attached && boneDrawn && shown)
+        {
+            // The simulation has no posed skeleton. Use this frame's drawn bone with the original relative
+            // attachment transform (the Story disk moves from B L Hand to B L Thigh after its pickup clip).
+            Basis boneBasis = bone.Basis.Orthonormalized();
+            FVector scale = Actor.DrawScale3D * Actor.DrawScale;
+            Basis basis = boneBasis * UeSpace.RotationToGodot(Actor.RelativeRotation) * Basis.FromScale(UeSpace.DirectionToGodot(scale));
+            Vector3 origin = bone.Origin + boneBasis * UeSpace.ToGodot(Actor.RelativeLocation) - basis * UeSpace.ToGodot(Actor.PrePivot);
+            node.GlobalTransform = new Transform3D(basis, origin);
+            Moved = true;
+            return;
+        }
+
+        if (!Moved || !shown)
+        {
+            return;
+        }
+
+        float a = Math.Clamp(alpha, 0f, 1f);
+        FVector location = _prevLocation + ((_location - _prevLocation) * a);
+        var rotation = new FRotator(
+            _prevRotation.Pitch + (int)(FRotator.NormalizeAxis(_rotation.Pitch - _prevRotation.Pitch) * a),
+            _prevRotation.Yaw + (int)(FRotator.NormalizeAxis(_rotation.Yaw - _prevRotation.Yaw) * a),
+            _prevRotation.Roll + (int)(FRotator.NormalizeAxis(_rotation.Roll - _prevRotation.Roll) * a));
+        node.Transform = UeSpace.TransformToGodot(location, rotation) * _placed0Inverse * _node0;
+    }
+}
+
+
+/// <summary>
+/// A skeletal mesh actor drawn as its skeletal model, shown while the actor is not hidden. An SAnimatedMesh shows its
+/// animation channel (the client's proxy plays what the server's SimAnim says, backwards and looping included), drawn
+/// ahead from the last tick at the channel's rate; a skeletal fish loops the sequence its script last chose
+/// (AnimsFish) and is drawn between its last two ticks as it swims.
+/// </summary>
+public sealed class AnimatedMeshView
+{
+    private Actor _actor;
+    private readonly SAnimatedMesh? _mesh;
+    private readonly RenderMap _map;
+    private MeshAnimSequence? _sequence;
+    private string _sequenceName = "";
+    private float _frame;
+    private float _frameRate;
+    private bool _loop;
+    private float _since;
+    private float _posedFrame = -1f;
+    private Name _looped;
+    private int _loopStarts;
+    private int _ps2Serial = -1;
+    private int _ps2Finished = -1;
+    private FVector _prevLocation;
+    private FVector _location;
+    private FRotator _prevRotation;
+    private FRotator _rotation;
+    private bool _lit;
+    private Vector4? _vision;
+
+    internal AnimatedMeshView(string id, Actor actor, SkeletalModel model, RenderMap map)
+    {
+        Id = id;
+        _actor = actor;
+        _mesh = actor as SAnimatedMesh;
+        Model = model;
+        _map = map;
+        _prevLocation = _location = actor.Location;
+        _prevRotation = _rotation = actor.Rotation;
+        Place(1f);
+        OnTick();
+    }
+
+    public string Id { get; }
+
+    public SkeletalModel Model { get; }
+
+    public Actor Actor => _actor;
+
+    internal void Rebind(Actor actor)
+    {
+        _actor = actor;
+        _prevLocation = _location = actor.Location;
+        _prevRotation = _rotation = actor.Rotation;
+        _ps2Serial = _ps2Finished = -1;
+        _lit = false;
+        OnTick();
+    }
+
+    /// <summary>Sequences the drawn channel started (an SAnimatedMesh's channel starts, a fish's loop changes).</summary>
+    public int Starts => _mesh?.AnimStarts ?? _loopStarts;
+
+    /// <summary>The sequence the model plays or holds, or null.</summary>
+    public string? Sequence => Model.Sampler.Current?.Name;
+
+    /// <summary>The model's normalised frame.</summary>
+    public float Frame => Model.Sampler.Frame;
+
+    public bool Visible => Model.Root.Visible;
+
+    internal void OnTick()
+    {
+        _prevLocation = _location;
+        _prevRotation = _rotation;
+        _location = _actor.Location;
+        _rotation = _actor.Rotation;
+        if (_actor is SComputerObjectiveTrigger { bPS2Objective: true } computer)
+        {
+            if (computer.Ps2AnimationSerial != _ps2Serial)
+            {
+                _ps2Serial = computer.Ps2AnimationSerial;
+                string sequence = computer.Ps2AnimationSequence.ToString();
+                float frame = computer.Ps2AnimationStartFrame;
+                Model.Sampler.Play(sequence, computer.Ps2AnimationRate * (computer.Ps2AnimationBackward ? -1f : 1f),
+                    loop: false, frame: frame);
+            }
+            return;
+        }
+        if (_mesh is not null)
+        {
+            _sequence = _mesh.AnimSequence;
+            _frame = _mesh.AnimFrame;
+            _frameRate = _mesh.AnimFrameRate;
+            _loop = _mesh.AnimLooping;
+            _since = 0f;
+            return;
+        }
+
+        Name looped = _actor switch
+        {
+            SFish fish => fish.LoopedAnim,
+            SFish_Follow follower => follower.LoopedAnim,
+            _ => default,
+        };
+        if (looped != _looped)
+        {
+            _looped = looped;
+            if (!looped.IsNone && Model.Sampler.Play(looped.ToString(), 1f, true))
+            {
+                _loopStarts++;
+            }
+        }
+    }
+
+    internal void Draw(float alpha, float dt)
+    {
+        bool visible = !_actor.bHidden && !_actor.bDeleteMe && _actor.DrawType == EDrawType.DT_Mesh;
+        Model.Root.Visible = visible;
+        if (!visible)
+        {
+            return;
+        }
+
+        Place(alpha);
+
+        if (_actor.XLevel.GetService<OpenScct.Server.AnimationWorld>() is { } studio)
+            foreach (OpenScct.Server.AnimationController controller in _actor.XLevel.AllActors<OpenScct.Server.AnimationController>())
+                if (controller.Pose("actor:" + Id, out string? skeleton) is { } pose)
+                {
+                    StudioPoseBridge.Apply(Model.Skeleton, studio.Project.Skeletons.Single(s => s.Id == skeleton), pose);
+                    return;
+                }
+
+        // The actor's vision values (HeatIntensity 0.1 to 0.15 on the sharks, mantas and dolphins), as gameplay meshes
+        // take theirs: without them a skeletal prop draws cold in thermal.
+        Vector4 vision = GameplayObjects.VisionOf(_actor);
+        if (vision != _vision)
+        {
+            _vision = vision;
+            Model.SetVision(vision);
+        }
+
+        if (_mesh is null)
+        {
+            Model.Sampler.Advance(dt);
+            if (_actor is SComputerObjectiveTrigger { bPS2Objective: true } computer)
+            {
+                if (_ps2Finished != _ps2Serial && Model.Sampler.Current is not null &&
+                    (Model.Sampler.Rate > 0f && Model.Sampler.Frame >= 1f ||
+                     Model.Sampler.Rate < 0f && Model.Sampler.Frame <= 0f))
+                {
+                    _ps2Finished = _ps2Serial;
+                    computer.Ps2AnimationFinished(_ps2Serial);
+                }
+                for (int slot = 0; slot < computer.Skins.Count; slot++)
+                    Model.SetSlotSkin(slot, computer.Skins[slot].Path);
+            }
+            Model.Pose();
+        }
+        else
+        {
+            DrawChannel(dt);
+        }
+
+        if (!_lit)
+        {
+            _lit = true;
+            (FVector center, float radius) = AnimatedProps.Bounds(Model);
+            Model.Light(_map.LightActor(center, radius, _actor.AmbientGlow));
+        }
+    }
+
+    /// <summary>
+    /// The channel's frame (normalised over the sequence's N frames, ending at (N - 1) / N) carried on from the last
+    /// tick, as the sampler's frame (normalised over the clip, which ends at the last frame). Posed only when it moved.
+    /// </summary>
+    private void DrawChannel(float dt)
+    {
+        if (_sequence is not { NumFrames: > 1 } sequence)
+        {
+            return;
+        }
+
+        _since += dt;
+        float end = (sequence.NumFrames - 1) / (float)sequence.NumFrames;
+        float frame = _frame + (_frameRate * _since);
+        if (_loop && frame > end)
+        {
+            frame %= end;
+        }
+
+        frame = Math.Clamp(frame, 0f, end) / end;
+        string name = sequence.Name.ToString();
+        bool changed = !string.Equals(name, _sequenceName, StringComparison.Ordinal);
+        if (!changed && frame == _posedFrame)
+        {
+            return;
+        }
+
+        if (!Model.Sampler.Play(name, 0f, false, frame))
+        {
+            return;
+        }
+
+        _sequenceName = name;
+        _posedFrame = frame;
+        Model.Pose();
+    }
+
+    [Provenance(ProvenanceKind.Estimated, "Skeletal props drawn between the last two ticks (linear location, shortest-way rotation)")]
+    private void Place(float alpha)
+    {
+        float a = Math.Clamp(alpha, 0f, 1f);
+        FVector location = _prevLocation + ((_location - _prevLocation) * a);
+        var rotation = new FRotator(
+            _prevRotation.Pitch + (int)(FRotator.NormalizeAxis(_rotation.Pitch - _prevRotation.Pitch) * a),
+            _prevRotation.Yaw + (int)(FRotator.NormalizeAxis(_rotation.Yaw - _prevRotation.Yaw) * a),
+            _prevRotation.Roll + (int)(FRotator.NormalizeAxis(_rotation.Roll - _prevRotation.Roll) * a));
+        Model.Place(location, rotation, _actor.PrePivot, _actor.DrawScale3D * _actor.DrawScale);
+    }
+}

@@ -1,0 +1,229 @@
+using Godot;
+using OpenScctGame.Smoke;
+
+namespace OpenScctGame;
+
+/// <summary>
+/// Autoload at /root/App. Reads the launch options and, when a smoke test is requested,
+/// starts the smoke runner instead of the normal flow.
+/// </summary>
+public partial class App : Node
+{
+    public const string NodePath = "/root/App";
+
+    public LaunchOptions Options { get; private set; } = LaunchOptions.Empty;
+
+    public bool IsSmokeRun => Options.SmokeTest is not null;
+
+    /// <summary>A run that renders map pictures and quits (<c>--svm-mapshot</c>): no menus, never in the person's way.</summary>
+    public bool IsMapShotRun => Options.MapShotRequest is not null;
+
+    /// <summary>
+    /// A test round for the map editor: one it marks as such (<c>--svm-test-round</c>), a route bot's walk, or an online
+    /// round with a client from the command line.
+    /// </summary>
+    public bool IsTestRound => Options.TestRound || Options.PlayRoute is not null || Options.NetHostPort is not null || Options.NetJoin is not null;
+
+    public static App From(Node node) => node.GetNode<App>(NodePath);
+
+    public override void _ExitTree()
+    {
+        // The skeletal models kept for reuse are not in the tree: free them while the servers still run.
+        Render.Characters.SkeletalModel.ReleaseTemplates();
+    }
+
+    /// <summary>
+    /// Direct3D 12 is no longer offered (0.8.126), but an older launcher still passes the driver a player chose there,
+    /// and a stored start override can name it. Started that way, the game starts itself again on Vulkan, once.
+    /// </summary>
+    private bool RestartedOnVulkan()
+    {
+        if (!System.OperatingSystem.IsWindows() || DisplayServer.GetName() == "headless" ||
+            RenderingServer.GetCurrentRenderingDriverName() != "d3d12")
+        {
+            return false;
+        }
+
+        // SVM_ALLOW_D3D12=1 (measurement): stays on Direct3D 12 when started on it.
+        if (System.Environment.GetEnvironmentVariable("SVM_ALLOW_D3D12") == "1") return false;
+
+        var arguments = new System.Collections.Generic.List<string>();
+        string[] given = OS.GetCmdlineArgs();
+        for (int i = 0; i < given.Length && given[i] != "--"; i++)
+        {
+            if (given[i] == "--rendering-driver")
+            {
+                // Asked for Vulkan and still on Direct3D 12: nothing more to try.
+                if (i + 1 < given.Length && given[i + 1] == "vulkan") return false;
+                i++;
+                continue;
+            }
+
+            arguments.Add(given[i]);
+        }
+
+        arguments.Add("--rendering-driver");
+        arguments.Add("vulkan");
+        if (!OS.HasFeature("template"))
+        {
+            // Run from the editor's binary: the engine does not hand the project path back.
+            arguments.Add("--path");
+            arguments.Add(ProjectSettings.GlobalizePath("res://"));
+        }
+
+        string[] user = OS.GetCmdlineUserArgs();
+        if (user.Length > 0)
+        {
+            arguments.Add("--");
+            arguments.AddRange(user);
+        }
+
+        GD.Print("Direct3D 12 is no longer supported: restarting on Vulkan.");
+        OS.SetRestartOnExit(true, [.. arguments]);
+        GetTree().Quit();
+        return true;
+    }
+
+    public override void _Ready()
+    {
+        if (System.OperatingSystem.IsBrowser())
+        {
+            Options = LaunchOptions.Parse(OS.GetCmdlineUserArgs());
+            BrowserPlatform.RestoreSettings?.Invoke();
+            GetViewport().UseHdr2D = true;
+            OpenScctGame.Options.SettingsApplier.ApplyAtStart(GetViewport());
+            OpenScct.Server.ContentPaths.Configure("/content", null, packs: "/content");
+            AddChild(new OpenScctGame.Controls.BindingInput { Name = "BindingInput" });
+            AddChild(new OpenScctGame.Options.PadMenus());
+            AddChild(new OpenScctGame.Audio.MenuFeedback { Name = "MenuFeedback" });
+            AddChild(new BrowserRuntime { Name = "BrowserRuntime" });
+            OpenScctGame.Play.Session.PlayMapLoader.AddLevelServices = OpenScctGame.Play.GearServices.Install;
+            GetTree().Root.CallDeferred(Node.MethodName.AddChild, new OpenScctGame.UI.DevConsole());
+            return;
+        }
+        if (RestartedOnVulkan()) return;
+        if (System.Array.IndexOf(OS.GetCmdlineUserArgs(), "--svm-animation-probe") >= 0)
+        { GD.Print("OPENSCCT_ANIMATION_RUNTIME=1"); GetTree().Quit(); return; }
+        Options = LaunchOptions.Parse(OS.GetCmdlineUserArgs());
+        string animationSelection = ProjectSettings.GlobalizePath(UI.ContentScreen.AnimationSelectionFile);
+        if (Options.SmokeTest is null && System.IO.File.Exists(animationSelection))
+        {
+            string selected = System.IO.File.ReadAllText(animationSelection).Trim();
+            if (System.IO.Directory.Exists(selected)) System.Environment.SetEnvironmentVariable("SVM_ANIMATION_PACK", selected);
+        }
+        foreach (string argument in OS.GetCmdlineUserArgs())
+            if (argument.StartsWith("--svm-animation-pack=", System.StringComparison.Ordinal))
+                System.Environment.SetEnvironmentVariable("SVM_ANIMATION_PACK", argument[21..]);
+        Render.ResponsiveSmokeRenderer.SceneShadows = Options.SmokeMode == "full";
+        Render.ResponsiveSmokeRenderer.LaunchQuality = Options.SmokeMode switch
+        {
+            "fast" => OpenScctGame.Options.ResponsiveSmokeQuality.Low,
+            "full" => OpenScctGame.Options.ResponsiveSmokeQuality.High,
+            _ => null,
+        };
+        AddChild(new OpenScctGame.Controls.BindingInput { Name = "BindingInput" });
+
+        // Crash reports next to the settings (rl:ac.crash), then the process options of the command line and the
+        // power throttling opt-out (rl:gfx.system).
+        CrashLog.Install(OS.GetUserDataDir());
+        ProcessTuning.Apply(Options.Priority, Options.Affinity);
+
+        // Where an installed build finds the content the launcher built and the maps shipped beside the exe.
+        string? checkoutContent = OS.HasFeature("template") ? null :
+            System.IO.Path.GetFullPath(System.IO.Path.Combine(ProjectSettings.GlobalizePath("res://"), "..", ".content"));
+        OpenScct.Server.ContentPaths.ConfigureDesktop(Options.ContentRoot, System.IO.Path.GetDirectoryName(OS.GetExecutablePath()), checkoutContent);
+        // Maps downloaded from SCCT-Maps: where they are, so lobbies can tell and fetch them.
+        OpenScctGame.Online.MapDownloads.Configure(Options);
+        foreach (string arg in Options.Unknown)
+        {
+            if (arg != BackgroundWindow.Flag && !arg.StartsWith("--svm-animation-", System.StringComparison.Ordinal) && !OpenScctGame.Controls.InputMirror.IsFlag(arg) &&
+                !(arg.StartsWith(Online.WebsiteJoinService.ArgumentPrefix, System.StringComparison.Ordinal) &&
+                    Online.WebsiteJoinService.IsServerId(arg[Online.WebsiteJoinService.ArgumentPrefix.Length..])))
+            {
+                GD.PushWarning($"Unknown argument '{arg}'.");
+            }
+        }
+
+        if (BackgroundWindow.Wanted(Options.SmokeTest is not null || IsMapShotRun || Diagnostics.FpsBenchmark.Wanted, OS.GetCmdlineUserArgs()))
+        {
+            // Test runs leave the person at the machine their focus and their mouse.
+            OpenScctGame.Controls.Pointer.Detached = true;
+            AddChild(new BackgroundWindow { Name = "BackgroundWindow" });
+        }
+        else if (OpenScctGame.Controls.InputMirror.Wanted(OS.GetCmdlineUserArgs()) is null && DisplayServer.GetName() != "headless")
+        {
+            // Local smoke-test override.cfg files can start every editor run with no_focus=true.
+            // A normal game must activate on click; mouse capture alone cannot override WS_EX_NOACTIVATE.
+            GetWindow().Unfocusable = false;
+            if (GetWindow().Mode == Window.ModeEnum.Minimized) GetWindow().Mode = Window.ModeEnum.Windowed;
+        }
+
+        // Input sent by a mirror tool (OpenSCCT-DevTools), to drive the original game and this one side by side.
+        if (OpenScctGame.Controls.InputMirror.Wanted(OS.GetCmdlineUserArgs()) is { } mirrorPort)
+        {
+            AddChild(new OpenScctGame.Controls.InputMirror(mirrorPort));
+        }
+
+        // Controller use of the menus (focus, B and Start back out).
+        AddChild(new OpenScctGame.Options.PadMenus());
+        // Drops Steam Input's keyboard and mouse copies of controller input in play. Last child of the root, so it
+        // sees every event first (the root is still adding its own children here, hence deferred).
+        GetTree().Root.CallDeferred(Node.MethodName.AddChild, new OpenScctGame.Options.PadMirror());
+        AddChild(new OpenScctGame.Audio.MenuFeedback { Name = "MenuFeedback" });
+
+        // The player's saved gear and the gear-change HUD line on every level the game loads (spec/additions/gear-change.md).
+        OpenScctGame.Play.Session.PlayMapLoader.AddLevelServices = OpenScctGame.Play.GearServices.Install;
+
+        if (Options.SmokeTest is { } smokeName)
+        {
+            // Smoke runs use the default settings and never write the player's files.
+            OpenScctGame.Options.SettingsStore.Isolated = true;
+            var runner = new SmokeRunner(smokeName, Options.SmokeTimeoutSeconds) { Name = "SmokeRunner" };
+            AddChild(runner);
+        }
+        else if (Options.MapShotRequest is { } request)
+        {
+            // Map pictures for the map editor: default settings, nothing of the player's written.
+            OpenScctGame.Options.SettingsStore.Isolated = true;
+            AddChild(new Render.Golden.MapShot(request));
+        }
+        else if (IsTestRound)
+        {
+            // The map editor's test rounds: default settings, signed out, nothing of the player's written or recorded.
+            OpenScctGame.Options.SettingsStore.Isolated = true;
+        }
+        else
+        {
+            // Settings saved before the rename to OpenSCCT, then the player's saved window, audio and frame-cap
+            // settings (user://settings.json).
+            if (Diagnostics.FpsBenchmark.Wanted)
+            {
+                Diagnostics.FpsBenchmark.Configure(GetViewport());
+                AddChild(new Diagnostics.FpsBenchmark());
+            }
+            else
+            {
+                OpenScctGame.Options.UserDataMigration.Run(OS.GetUserDataDir());
+                // An import of Enhanced settings queued in the launcher's settings.
+                OpenScctGame.Options.EnhancedImportStartup.RunPending(OS.GetUserDataDir());
+                OpenScctGame.Options.SettingsApplier.ApplyAtStart(GetViewport());
+            }
+            if (OpenScctGame.Options.SettingsStore.Current.ThrottleStop)
+            {
+                ProcessTuning.StopPowerThrottling();
+            }
+
+            // The developer console on the key left of 1 (rl:qol.console); it keeps itself last in the tree.
+            GetTree().Root.CallDeferred(Node.MethodName.AddChild, new OpenScctGame.UI.DevConsole());
+
+            // The player's Discord status and a friend's Join (docs/DISCORD.md).
+            if (OpenScctGame.Discord.DiscordPresence.Wanted(this))
+            {
+                AddChild(new OpenScctGame.Discord.DiscordPresence { Name = OpenScctGame.Discord.DiscordPresence.NodeName });
+            }
+            if (!Diagnostics.FpsBenchmark.Wanted && DisplayServer.GetName() != "headless" &&
+                !BackgroundWindow.Wanted(false, OS.GetCmdlineUserArgs()) && OpenScctGame.Controls.InputMirror.Wanted(OS.GetCmdlineUserArgs()) is null)
+                AddChild(new Online.WebsiteJoinService { Name = "WebsiteJoinService" });
+        }
+    }
+}

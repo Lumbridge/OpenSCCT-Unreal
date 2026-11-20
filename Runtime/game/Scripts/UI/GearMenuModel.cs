@@ -1,0 +1,420 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using OpenScct.Core.Engine;
+using OpenScct.Core.Uc;
+using OpenScct.Game.Equipment;
+using OpenScct.Game.SBase;
+using OpenScct.Provenance;
+using OpenScctGame.Options;
+
+namespace OpenScctGame.UI;
+
+/// <summary>
+/// The gear picker's rules (an OpenSCCT addition, spec/additions/gear-change.md, laid out as the original's
+/// <c>Edit_Profile</c> and <c>Edit_Gadgets</c> pages): the player's side's gadget slots, each set from the team's
+/// options the host allows (a gadget another slot holds swaps over), and the merc's weapon. Godot-free:
+/// <c>GearMenu</c> draws it. Saving writes the choice into <see cref="LoadoutSettings"/>; the server decides when it
+/// goes on.
+/// </summary>
+public sealed class GearMenuModel
+{
+    [Provenance(ProvenanceKind.Decoded, "GUI.Edit_Profile defaults TitlePage, ButtonA, ButtonB, ButtonY")]
+    public const string Title = "Equipment", Ok = "OK", Cancel = "Cancel", ResetCaption = "Reset";
+
+    [Provenance(ProvenanceKind.Decoded, "GUI.Edit_Gadgets defaults TitlePage")]
+    public const string GadgetsTitle = "Gadgets";
+
+    [Provenance(ProvenanceKind.Decoded, "GUI.Edit_Gadgets defaults Button1..8 Caption, QuickUse Caption")]
+    public const string Equipped = "Equipped", QuickUse = "Quick use";
+
+    [Provenance(ProvenanceKind.Decoded, "GUI.Edit_Profile defaults QuickUseR, QuickUseL Caption")]
+    public const string QuickUse1 = "Quick Use 1", QuickUse2 = "Quick Use 2";
+
+    public const string Empty = "Empty";
+
+    public static readonly string MatchRule =
+        $"New gear goes on now if you spawned less than {GearK.SwapWindowSeconds:0} s ago and have not used anything; " +
+        "otherwise it goes on at your next spawn.";
+
+    public const string HubRule = "New gear goes on now; you can change it every 10 s.";
+
+    /// <summary>A practice round's rule (an OpenSCCT addition): any change goes on at once.</summary>
+    public const string PracticeRule = "Practice: new gear goes on now.";
+
+    private readonly IReadOnlyList<string> _options;
+    private readonly int _allowed;
+    private string _preferredWeapon;
+
+    public GearMenuModel(bool spy, int slots, IReadOnlyList<string> options, int allowedMask, IReadOnlyList<string> weapons,
+        LoadoutSettings saved, bool hub, int currentLevel = 1, bool unrestricted = false, bool riflesEnabled = false)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(weapons);
+        ArgumentNullException.ThrowIfNull(saved);
+        Spy = spy;
+        Slots = Math.Clamp(slots, 0, LoadoutSettings.Slots);
+        _options = options.ToArray();
+        CurrentLevel = currentLevel;
+        Unrestricted = unrestricted;
+        _allowed = allowedMask;
+        RiflesEnabled = riflesEnabled;
+        Weapons = MercPrimarySelection.Catalogue(weapons, riflesEnabled);
+        Hub = hub;
+        Gadgets = (string[])saved.GadgetsOf(spy).Clone();
+        _preferredWeapon = spy ? "" : MercPrimarySelection.SavedPreference(saved.MercWeapon);
+        ChosenWeapon = _preferredWeapon;
+        ChosenSidearm = spy ? "" : saved.MercSidearm;
+        bool migrated = false;
+        for (int i = 0; !spy && i < Gadgets.Length; i++)
+        {
+            if (Sidearms.Find(Gadgets[i]) is not { } pistol) continue;
+            if (!migrated) ChosenSidearm = pistol.CarryId;
+            migrated = true;
+            Gadgets[i] = LoadoutSettings.DefaultMerc().FirstOrDefault(g => !Gadgets.Contains(g)) ?? "";
+        }
+        Normalize();
+    }
+
+    public bool Spy { get; }
+    public int CurrentLevel { get; }
+    public bool Unrestricted { get; }
+
+    public bool Hub { get; }
+
+    /// <summary>Gadget slots the host gives this side.</summary>
+    public int Slots { get; }
+
+    /// <summary>The chosen class path of each slot ("" for empty).</summary>
+    public string[] Gadgets { get; }
+
+    /// <summary>The side's weapons (empty for spies: they only have the Shocker).</summary>
+    public IReadOnlyList<string> Weapons { get; }
+
+    public string ChosenWeapon { get; private set; }
+    public bool SidearmsEnabled { get; init; } = true;
+    public bool RiflesEnabled { get; }
+    public string ChosenSidearm { get; private set; }
+    public IReadOnlyList<string> SidearmOptions => Spy || !SidearmsEnabled ? [] : Sidearms.All.OrderBy(p => p.Level).Select(p => p.CarryId).ToArray();
+
+    public void ChooseSidearm(string option)
+    {
+        if (!Spy && Sidearms.Find(option) is not null && IsAllowed(option)) ChosenSidearm = option;
+    }
+
+    public string Rule => (Spy ? "Cloak is standard spy equipment and uses no gadget slot. " : "") + (RuleText ?? (Hub ? HubRule : MatchRule));
+
+    /// <summary>The line about when new gear goes on, when it is neither the match's nor the hub's (the lobby's).</summary>
+    public string? RuleText { get; init; }
+
+    public const string LobbyRule = "Your gear goes on when the round starts; you can still change it in the round.";
+
+    /// <summary>The side's portrait (<c>STeamInfo.MaterialOfMesh[0]</c>, e.g. GUIContent.New_Menu.MN_ATTperso), or "".</summary>
+    public string Portrait { get; init; } = "";
+
+    /// <summary>The picker for the player's current side, or null before the player has a team.</summary>
+    public static GearMenuModel? For(SPlayerController? pc, LoadoutSettings saved, bool hub, int currentLevel = 1, bool unrestricted = false)
+    {
+        if (pc?.PlayerReplicationInfo?.Team is not STeamInfo team)
+        {
+            return null;
+        }
+
+        bool spy = team is STeamAttaquant;
+        var options = new List<string>();
+        for (int i = 0; i < Loadouts.GadgetOptionCount(team); i++)
+        {
+            options.Add(team.ClassInventory[i].Path ?? "");
+        }
+
+        var weapons = new List<string>();
+        if (!spy)
+        {
+            foreach (ClassRef w in team.ClassWeapon)
+            {
+                weapons.Add(w.Path ?? "");
+            }
+        }
+
+        return new GearMenuModel(spy, team.iNBGadgets, options, Loadouts.GadgetMask(team), weapons, saved, hub, (pc.PlayerReplicationInfo.SvmRank & 255),
+            pc.Level.NetMode == ENetMode.NM_Standalone || pc.PlayerReplicationInfo.SvmSidearmsUnrestricted ||
+            OpenScct.Game.Modes.PracticeRules.IsOn(pc), riflesEnabled: pc.GameReplicationInfo?.RiflesEnabled == true)
+        {
+            SidearmsEnabled = hub || pc.GameReplicationInfo?.SidearmsEnabled == true,
+            Portrait = team.MaterialOfMesh.Count > 0 ? team.MaterialOfMesh[0].Path ?? "" : "",
+            RuleText = !hub && OpenScct.Game.Modes.PracticeRules.IsOn(pc) ? PracticeRule : null,
+        };
+    }
+
+    /// <summary>
+    /// The picker of the Lobby Room's Equipment button (Lobby_Create opens Edit_Profile): the side's options, weapons
+    /// and portrait from the team class defaults, and the slots and allowed gadgets the session's setup will give
+    /// that side (its Alternate Mode values, or the stock ones with Deathmatch's rule), as the round's team info will
+    /// hold them. Null for a spectator.
+    /// </summary>
+    public static GearMenuModel? ForLobby(int team, OpenScct.Server.Online.LobbySetup setup, LoadoutSettings saved, int currentLevel = 1, bool unrestricted = false)
+    {
+        ArgumentNullException.ThrowIfNull(setup);
+        if (team is not (0 or 1))
+        {
+            return null;
+        }
+
+        var pd = new USPersistentData();
+        setup.Alternate.ApplyTo(pd, setup.Mode);
+        STeamInfo info = team == 0 ? new STeamAttaquant() : new STeamDefenseur();
+        info.iNBGadgets = team == 0 ? pd.b_SPY_NBGadget : pd.b_MERC_NBGadget;
+        info.bDisallowedInv = team == 0 ? pd.b_SPY_GadgetRestriction : pd.b_MERC_GadgetRestriction;
+        if (info is STeamAttaquant spies) spies.AdditionalGadgets = pd.AdditionalSpyGadgets;
+        var options = new List<string>();
+        for (int i = 0; i < Loadouts.GadgetOptionCount(info); i++)
+        {
+            options.Add(info.ClassInventory[i].Path ?? "");
+        }
+
+        var weapons = new List<string>();
+        if (team == 1)
+        {
+            foreach (ClassRef w in info.ClassWeapon)
+            {
+                weapons.Add(w.Path ?? "");
+            }
+        }
+
+        return new GearMenuModel(team == 0, info.iNBGadgets, options, Loadouts.GadgetMask(info), weapons, saved, hub: false, currentLevel,
+            unrestricted || setup.Practice, riflesEnabled: setup.Rifles)
+        {
+            Portrait = info.MaterialOfMesh.Count > 0 ? info.MaterialOfMesh[0].Path ?? "" : "",
+            RuleText = LobbyRule,
+            SidearmsEnabled = setup.Sidearms,
+        };
+    }
+
+    /// <summary>The name a class path shows (its localized ItemName), or "Empty".</summary>
+    public static string NameOf(string path)
+    {
+        if (MercRifles.Find(path) is { } rifle) return rifle.Name;
+        if (Sidearms.Find(path) is { } pistol) return pistol.Name;
+        if (string.IsNullOrEmpty(path))
+        {
+            return Empty;
+        }
+
+        if (path.StartsWith("Svm.", StringComparison.OrdinalIgnoreCase) &&
+            OpenScct.Game.Devices.DeviceClasses.Index.Find(path)?.Create() is Inventory gadget)
+            return gadget.ItemName;
+
+        int dot = path.LastIndexOf('.');
+        string fallback = dot >= 0 ? path[(dot + 1)..] : path;
+        return UcText.Get(path, "ItemName", fallback) is { Length: > 0 } name ? name : fallback;
+    }
+
+    /// <summary>The HUD line for the server's answer.</summary>
+    public static string ResultText(GearChangeResult result, float waitSeconds) => result switch
+    {
+        GearChangeResult.Now => "Gear changed.",
+        GearChangeResult.Cooldown => $"Wait {Math.Max(1, (int)Math.Ceiling(waitSeconds))} s before changing gear again.",
+        _ => "Gear will change on your next spawn.",
+    };
+
+    /// <summary>Whether the host allows the team option holding <paramref name="path"/>.</summary>
+    public bool IsAllowed(string path)
+    {
+        if (SpyCloak.IsLegacyGadget(path)) return false;
+        if (Sidearms.Find(path) is { } pistol) return !Spy && SidearmsEnabled && Sidearms.Available(pistol.Kind, CurrentLevel, Unrestricted);
+        if (MercRifles.Find(path) is not null) return !Spy && ContainsWeapon(path) &&
+            EquipmentUnlocks.LevelAllows(path, CurrentLevel, Unrestricted);
+        if (ContainsWeapon(path)) return !Spy;
+        int option = IndexOf(path);
+        return option >= 0 && ((_allowed >> option) & 1) != 0 && EquipmentUnlocks.LevelAllows(path, CurrentLevel, Unrestricted);
+    }
+
+    public int RequiredLevel(string path) => Sidearms.Find(path)?.Level ?? EquipmentUnlocks.RequiredLevel(path);
+
+    public string Restriction(string path) => !Unrestricted && Math.Max(1, CurrentLevel) < RequiredLevel(path)
+        ? "Requires level " + RequiredLevel(path) + "."
+        : "Disabled by the host's equipment rules.";
+
+    /// <summary>The team's options in order (the gadget grid).</summary>
+    public IReadOnlyList<string> Options => _options.Where(path => !SpyCloak.IsLegacyGadget(path)).OrderBy(RequiredLevel).ToArray();
+
+    /// <summary>Whether a slot holds <paramref name="option"/> (the grid's "Equipped").</summary>
+    public bool IsEquipped(string option)
+    {
+        if (!Spy && Same(ChosenSidearm, option)) return true;
+        for (int i = 0; i < Slots; i++)
+        {
+            if (option.Length > 0 && Same(Gadgets[i], option))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// <c>Edit_Gadgets.ButtonClick</c>: slot <paramref name="slot"/> takes <paramref name="option"/>; a slot that
+    /// held it takes the slot's old gadget (the two swap). Options the host bans cannot be picked.
+    /// </summary>
+    public void Choose(int slot, string option)
+    {
+        if (slot < 0 || slot >= Slots || Sidearms.Find(option) is not null || !IsAllowed(option))
+        {
+            return;
+        }
+
+        for (int i = 0; i < Slots; i++)
+        {
+            if (i != slot && (Same(Gadgets[i], option) || (Sidearms.Find(option) is not null && Sidearms.Find(Gadgets[i]) is not null)))
+            {
+                Gadgets[i] = Gadgets[slot];
+            }
+        }
+
+        Gadgets[slot] = option;
+    }
+
+    /// <summary><c>Edit_Profile</c>'s Reset: the side's default kit (DefaultProfile.ini), then the host's restrictions.</summary>
+    public void Reset()
+    {
+        string[] defaults = Spy ? LoadoutSettings.DefaultSpy() : LoadoutSettings.DefaultMerc();
+        Array.Copy(defaults, Gadgets, Math.Min(defaults.Length, Gadgets.Length));
+        if (!Spy)
+        {
+            _preferredWeapon = WeaponAttachments.M4;
+            ChosenSidearm = LoadoutSettings.DefaultSidearm;
+        }
+
+        Normalize();
+    }
+
+    public void ChooseWeapon(string option)
+    {
+        if (!Spy && ContainsWeapon(option) && IsAllowed(option)) _preferredWeapon = ChosenWeapon = option;
+    }
+
+    /// <summary>Moves the merc's weapon to the next (or previous) of the team's weapons.</summary>
+    public void CycleWeapon(int step)
+    {
+        var available = Weapons.Where(IsAllowed).ToArray();
+        if (available.Length == 0)
+        {
+            return;
+        }
+
+        int at = 0;
+        for (int i = 0; i < available.Length; i++)
+        {
+            if (Same(available[i], ChosenWeapon))
+            {
+                at = i;
+            }
+        }
+
+        ChooseWeapon(available[(((at + Math.Sign(step)) % available.Length) + available.Length) % available.Length]);
+    }
+
+    /// <summary>Writes the choice into <paramref name="target"/> (slots past the host's count keep what they held).</summary>
+    public void SaveTo(LoadoutSettings target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        string[] slots = target.GadgetsOf(Spy);
+        if (!Spy)
+            for (int i = Slots; i < slots.Length; i++)
+                if (Sidearms.Find(slots[i]) is not null) slots[i] = Gadgets[i];
+        for (int i = 0; i < Slots && i < slots.Length; i++)
+        {
+            slots[i] = Gadgets[i];
+        }
+
+        if (!Spy) target.MercSidearm = ChosenSidearm;
+        if (!Spy && _preferredWeapon.Length > 0)
+        {
+            target.MercWeapon = _preferredWeapon;
+        }
+    }
+
+    /// <summary>
+    /// What a spawn would give: a slot holding an option the host bans, or one an earlier slot holds, takes the first
+    /// allowed option no slot holds. A restricted primary takes the same legal replacement as it would on spawn.
+    /// </summary>
+    private void Normalize()
+    {
+        if (!Spy && SidearmsEnabled && (Sidearms.Find(ChosenSidearm) is null || !IsAllowed(ChosenSidearm)))
+            ChosenSidearm = LoadoutSettings.DefaultSidearm;
+        for (int s = 0; s < Slots; s++)
+        {
+            string g = Gadgets[s];
+            if (Sidearms.Find(g) is not null)
+            {
+                if (!IsAllowed(g) || Array.FindIndex(Gadgets, 0, s, x => Sidearms.Find(x) is not null) >= 0) Gadgets[s] = "";
+                continue;
+            }
+            bool duplicate = false;
+            for (int e = 0; e < s; e++)
+            {
+                duplicate |= g.Length > 0 && Same(Gadgets[e], g);
+            }
+
+            if (g.Length == 0 || (IsAllowed(g) && !duplicate))
+            {
+                continue;
+            }
+
+            Gadgets[s] = "";
+            foreach (string option in _options)
+            {
+                if (option.Length > 0 && IsAllowed(option) && !HeldElsewhere(option, s))
+                {
+                    Gadgets[s] = option;
+                    break;
+                }
+            }
+        }
+
+        // The host can restrict this match while the profile keeps its preferred primary for the next match.
+        if (!Spy) ChosenWeapon = MercPrimarySelection.Choose(_preferredWeapon, Weapons, IsAllowed);
+    }
+
+    private bool ContainsWeapon(string path)
+    {
+        foreach (string w in Weapons)
+        {
+            if (Same(w, path))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool HeldElsewhere(string option, int slot)
+    {
+        for (int i = 0; i < Slots; i++)
+        {
+            if (i != slot && (Same(Gadgets[i], option) || (Sidearms.Find(option) is not null && Sidearms.Find(Gadgets[i]) is not null)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private int IndexOf(string path)
+    {
+        for (int i = 0; i < _options.Count; i++)
+        {
+            if (Same(_options[i], path))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+}

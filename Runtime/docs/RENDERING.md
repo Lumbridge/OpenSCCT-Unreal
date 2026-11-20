@@ -1,0 +1,1483 @@
+# Rendering
+
+For project-authored and animated materials, see [Authored materials](AUTHORED-MATERIALS.md) for the shared path, bake data and supported limits.
+
+The Faithful renderer aims to reproduce the original game's appearance. This reference
+records its rules, evidence, tests and remaining gaps. It is not a claim of complete
+visual parity.
+
+Code lives in [game/Scripts/Render/](../game/Scripts/Render), [game/Scripts/Views/](../game/Scripts/Views), [game/Shaders/](../game/Shaders) and
+[tools/golden/](../tools/golden). Constants in `RenderK` carry provenance. Unless stated otherwise,
+addresses refer to the game DLL (`System/SCCT Versus`, base `0x10900000`).
+
+Rendering is client-only. It reads map rendering data, collision zones, gameplay actors
+and shared packs without writing simulation state. See the
+[SVMap 1.1 format](../spec/svmap/1.1/README.md) for the content layout.
+
+**On this page:** [Map builder](#map-builder) Â· [Materials](#materials) Â· [Vision modes](#vision-modes) Â· [Characters](#characters) Â· [Golden renders](#golden-renders) Â· [Open issues](#open-issues)
+
+## Render pack
+
+The content pipeline's `renderpack` step ([content/svmbuild/steps/renderpack.py](../content/svmbuild/steps/renderpack.py)) writes `.content/shared/render/`,
+read by `Data/RenderPack` once per folder:
+
+| File | Content |
+|---|---|
+| `textures/` | mip 0 of the textures the renderer draws with: the thermal table `Engine.heat_and_attenuation_2d` (32 x 32), the grain `Engine.Noise0_gauss` (128 x 128), the backdrop `Engine.sonar_background` (8 x 16), the EMF environment `Echelon.EMFInvDarkBlue`, the torch cookie `Echelon.flashlight`, `Echelon.spot_bw`, the attenuation ramps, the torch corona `sfx.def_flare`, plus every heat and EMF texture of the vision modifiers |
+| `vision.json` | every HeatTextureModifier, SpecialVisionTextureModifier and EMFTextureModifier of the texture packages (548), by object path, with its heat texture and type, EMF texture and invert flag after class defaults (SpecialVisionTextureModifier: bUseTextureAsHeat, HEATTEX_Heat, bInvertEMFTexture), chains merged; also by the base material under the chain, for character skins |
+| `mips.json` | the stored mip levels of every Texture of the texture, mesh and map packages (5075; 4289 store one level) |
+| `gameplay/` | `SGameplayObjects.usx` (class-default meshes of gameplay actors) as `gameplay.glb` with a map-style `materials.json` |
+| `render.json` | the texture table and the gameplay mesh table (object path to glTF node) |
+
+Without the pack the client still draws, with a seeded stand-in grain, no thermal table and no gameplay objects.
+
+## Map builder
+
+`MapBuilder.Build(folder)` returns a `RenderMap` (root node, statistics, warnings, gameplay meshes by actor id).
+
+- `world.glb` is read directly (`Gltf/GlbDocument`), not through Godot's importer, so nothing is converted twice.
+  Geometry stays in render space, which is Godot space; instance transforms are UE values and go through `UeSpace`
+  once: `world = ((local - PrePivot) x Scale) x Rotation + Location`.
+- glTF triangles are counter-clockwise, Godot front faces clockwise: each triangle's last two indices swap, unless the
+  instance transform mirrors. The handedness check compares the Godot winding of every BSP triangle with its stored
+  normal (SteeE: 3693 of 3706 agree; the rest are degenerate or two-sided slivers). The smoke test fails below 99 %.
+- Static geometry (BSP and every non-gameplay static mesh with baked colours) is merged per material and per square
+  cell of 4096 uu (`RenderOptions.CellSize`): one surface per material and light source, with each world bucket on
+  its own `MeshInstance3D` and its own bounds. Transparent buckets sort by those bounds, with a small offset to
+  resolve equal distances in surface order. Giving every transparent surface the whole cell's bounds made their
+  order depend on other objects entering or leaving the view; AquaE's tank changed brightness at the screen edge.
+  `camera-edge-map` checks a matching camera sweep, changes the culled draw list and repeats with 4x MSAA.
+  SteeE: 9 cells, 318 surfaces, 112,598 triangles. Merged surfaces carry each instance's vision values per
+  vertex (`CUSTOM0`, see [Vision modes](#vision-modes)).
+- Gameplay meshes (movers, SGamePlayObject, switches, help paths) and meshes without baked colours keep a node of
+  their own, named by actor id, so views can move, hide and relight them (`RenderMap.Gameplay`). Hidden ones are
+  built with `Visible = false`. Their vision values are instance uniforms.
+- Sky zone geometry goes on the sky layer, drawn as the sky camera sees it ([Sky zone](#sky-zone)): the BSP node with `sky: true` (every polygon
+  whose front zone, iZone[1], is the zone holding the SkyZoneInfo) and the instances flagged `skyZone` (actor location
+  in that zone, UModel::PointRegion). Nothing else is moved by position: the sky ZONE record's bounds are not a test,
+  since a zone number can also cover a stray corner of the play area (PanaS has 64 zones; four polygons of a 128 uu
+  niche at x 8416 share the sky zone's number 10, so its bounds spanned the map and the spawn office was drawn only
+  as sky, SSIM 0.34; per polygon it is 0.98, like PanaD).
+- Skeletal props (`SAnimatedMesh`, DrawType DT_Mesh with a mesh from the shared packs) are placed by
+  `AnimatedProps.Build` at the first frame of their first sequence and lit for their mesh's bounding sphere (the
+  crane, at DrawScale 10, reaches 2440 uu from its centre). Map props use conservative bounds over every linear-keyed
+  pose (`AnimatedCullBounds`: parent offsets/scales and inverse-bind influence radii), rather than extending every
+  rest box by 64 m. Characters and unsupported curves or morphs keep the 64 m margin. In play, `DeviceViews` draws every SAnimatedMesh (all 54 placed meshes of
+  the map anim packages are exported by the chars step, `charconv.MAP_PROP_SETS`; every converted map also carries
+  the ones it places in `render/chars/` (`mapconv/props.py`), which `SkeletalModel.FindMapGlb` reads first, so a
+  downloaded map whose anim package the player's install lacks, such as Polar Base's map17_anm, still draws them) and
+  the skeletal fish: a prop
+  shows its actor's animation channel (backwards and looping included, the client's proxy follows the server's
+  SimAnim), a fish loops the AnimsFish sequence its script chose and is drawn between ticks as it swims. Static-mesh
+  fish are gameplay nodes that follow their actor (spec/devices/fish.md).
+- `RenderMap.Actors` holds `sim/gameplay.json` over `sim/classes.json`; `MtvSlope` and `MtvOffset` come from its
+  LevelInfo.
+- `RenderMap.SwapMeshes`: the meshes gameplay objects change to at run time (SGamePlayObject `TriggeredMesh` and
+  `DamagedMeshes[].StaticMesh`: broken extinguishers, lamps switched off, the SteeE crane wall after the blast). The
+  converter adds them to `world.glb`'s library (`mapconv/render.py` `_swap_meshes`, scctpkg patch 0002); the builder
+  turns every library mesh no instance uses into an actor-lit mesh, and `DeviceViews` shows it when the actor's
+  `StaticMesh` changes (before, 683 of the 779 swap references had no render mesh and the node hid). Maps converted
+  before this change keep hiding the node until their render step is rebuilt.
+- Map emitters fire when the event graph triggers them: the simulation raises the `ReplicateTrigger` notify of the
+  Emitter actor (relayed to clients), and `PlayRoot` triggers the particle system of that map id
+  (`Emitters.TriggerActor`).
+
+### Gameplay objects
+
+Runtime damage and trigger skins are exported with each map, even when no placed surface uses them.
+`MeshFollower` resolves map materials before the shared gameplay pack, and each static-mesh primitive carries
+its original `scctSection` index so empty or skipped sections do not shift `Skins[]` slots. Client net receive
+copies changes to `RepSkin` into `Skins[0]`, including clearing the override on reset. Aquarius kiosk screens use
+this path: damage replaces section 0 with `aqua_bornescreen1` while preserving the cabinet mesh and collision.
+The [4 November destructible sweep](MAP-DESTRUCTIBLE-PARITY-2026-11-04.md) records coverage and remaining visual limits.
+
+`GameplayObjects.Build` draws gameplay actors with DT_StaticMesh and no mesh of their own in `world.glb` (the
+converter writes only meshes an actor stores) from the pack's gameplay meshes: SteeE's first-aid cabinets, window
+panes, extinguishers, ammo stocks, camera globes and objective props (67 actors). Placement is the actor's Location,
+Rotation, DrawScale x DrawScale3D and PrePivot; light is actor lighting with AmbientGlow, or none with bUnlit.
+Mode-dependent props (SDisk, SFlag, SFlagDropZone, SComputerObjectiveTrigger) are built hidden;
+`GameplayObjects.ShowMode(map, "Story")` shows what Story starts with (each SFlag as its disk HardDisk_T plus the rack
+it spawns, each SFlagDropZone as its case plus the lid it spawns at Location + (0, 0, 10) - 10 X,
+spec/objectives/disk-flag.md rules 1 and 4) and `"DiskHunt"` the dog tags. The golden captures are Story games.
+Skins a gameplay actor swaps in at run time that the gameplay meshes do not carry are built by `GameplaySkins` and
+put over the node by `MeshFollower.DrawSkin`: the unarmed bomb spot's ghost (Skins[0] over every slot,
+`SGameplayObjectsTex.Object.FX_pose_bomb_heat`, fullbright two-sided alpha blend, two frames at 3 fps,
+spec/objectives/bomb-target.md rule 14), and per surface the run-time skins the renderpack step exports with the
+gameplay meshes (`GAMEPLAY_SKINS`, materials.json `skins`: the camera and sensor LEDs green, blinking green, red, black
+and yellow in slot 1). A gameplay mesh's surface i is section i (surface name `section<i>`). Any other skin draws the
+mesh's own material. A node is drawn where its actor is after BeginPlay (a camera moves 24 uu off its wall), and
+`CameraMountViews` draws the wall mounts cameras spawn.
+
+### Conveyors
+
+`ConveyorViews` (game/Scripts/Views) draws the moving parts of `Svm.Conveyor` actors. The map builder bakes each
+look into `world.glb`; the belt, steps and rollers are gameplay instances named `<id>.Belt`, `<id>.Steps` and
+`<id>.Rollers`. Each such node, and each of the conveyor's scroll targets, gets its own copies of its materials and
+their later passes (a scroll target that names a `Material`, as a converted RE+ tread does, only that material's), and
+every frame their `svm_scroll` offset follows the belt's phase at the displayed server time.
+`svm_scroll` moves the surface UV before every layer reads it. An escalator's `<id>.Steps` mesh is rebuilt every frame
+where the phase puts the steps (`ConveyorSteps`), each vertex lit from a table read off the baked steps by place
+along the path, side and facing, keeping the baked zone in the vertex alpha and the Echelon stream, so dynamic,
+spot and zone lights still reach them. Walking pawns' meshes are raised or lowered so their feet rest on the tread under
+them (`ConveyorViews.FeetLift`, eased; their location is unchanged). Items come from `ConveyorItemFlow` (which hands
+them between linked conveyors, queues them and steps back for a belt change that arrives late), one actor-lit node each, tilted with the belt and resting on it by
+their mesh bounds. Item meshes are built actor-lit even when the map also places them (AeroD's bags stand on desks too). Rules: [conveyors](../spec/additions/conveyors.md#look).
+
+## Display space
+
+The original computes every colour in display (gamma) space and shows the framebuffer as it is: its D3D gamma ramp
+is the identity at the default settings. The Faithful pipeline does the same:
+
+1. Materials write display values (textures are sampled raw, no sRGB decode; lightmaps and vertex colours are
+   multiplied in display space). Registered scene cameras apply their own zone/volume fog at each surface's depth
+   before blending, including transparent materials and effects. Blending happens in display space too.
+2. `Post/DisplaySpaceEffect`, a `CompositorEffect` after the transparent pass, runs `svm_display_post.glsl` in three
+   stages: fallback distance fog for unregistered diagnostic cameras only; the glow composite of the normal view
+   (gate, plus the glow from `svm_glow.glsl` when the level's threshold is below 255); the vision pass of RendMap and
+   the exact sRGB decode. Registered cameras skip post fog to avoid applying it twice. Thermal, motion and EMF run
+   the blur pyramid (`svm_vision_blur.glsl`) before the vision pass.
+   The normal view's frame does not need that shader: its last pass is `svm_display_normal.glsl` (gate, glow add and
+   decode only) and its bright pass `svm_glow_bright.glsl` (the frame through a bilinear sampler), because on
+   integrated GPUs a shader costs by the code it holds. `SVM_POST_LEAN=0` runs everything through the full shaders.
+3. The environment passes colours through: Linear tonemapper, exposure 1, no glow, AO, SSR, SDFGI, fog, adjustments
+   or auto exposure; no TAA or debanding, and MSAA and SMAA only when the player turns them on (see
+   [Anti-aliasing](#anti-aliasing)). Godot's output encode is the exact sRGB curve, so the screen shows
+   the display value again. Godot linearizes the environment's background colour, so a clear colour is handed over
+   sRGB-encoded.
+
+`Post/DisplayCheck` draws 16 known values (0 to 255) through the whole chain and reads them back: every golden run
+starts with it, and it must be exact within one step. It reads back exact (maximum error 0).
+
+### Ambient occlusion
+
+Display's `ambient_occlusion` option adds subtle contact shading, off by default to preserve baked map lighting.
+`AmbientOcclusionEffect` reads resolved opaque depth and shades the opaque scene right after the opaque pass, before
+the sky and every blended surface: one full-screen draw that multiplies the frame's colour target (the multisampled
+one with MSAA, so the later resolve keeps it). Smoke, gas, glass and particles are drawn afterwards, over the shaded
+scene. Run after them, as it first was, it darkened them by the shapes behind them, so the outlines of walls and
+characters showed through a smoke cloud.
+It reconstructs view-space surfaces from reverse-Z depth, samples eight directions with three distances over a
+0.6-metre radius, and caps darkening at 45%. Surface-aware normals and distance weighting suppress edge halos;
+the near-camera exclusion avoids shading held weapons. Normal and night views support it; thermal, motion and
+EMF skip it. Sky pixels are not shaded. This is an independent implementation, not a claim of
+matching Reloaded's GTAO algorithm. `ambient-occlusion` verifies contact shading, unchanged flat regions, toggling,
+vision eligibility, viewport resizing and resolved MSAA off/4x with GPU pixel comparisons.
+
+### Anti-aliasing
+
+The stock Versus renderer draws without anti-aliasing; Reloaded adds MSAA and SMAA (rl:gfx.aa). Options, Display:
+`msaa` (on or off, first run off), `msaa_samples` (2, 4 or 8, first run 4) and `smaa` (first run off), saved in
+`settings.json`. `SettingsApplier.ApplyAntiAliasing` sets them on the viewport that draws the game when the options
+are saved, so they apply at once:
+
+- MSAA is the viewport's `Msaa3D`. The display-space and flash after-image effects request `AccessResolvedColor`
+  and explicitly call `GetColorLayer(view, false)`; depth samplers likewise request resolved depth and use
+  `GetDepthLayer(view, false)`. The legacy single-argument C# color binding returned a multisampled image in the
+  4.7.2 Vulkan check, causing the post passes to skip and leaving the output too bright. Godot's
+  [compatibility bindings](https://github.com/godotengine/godot/blob/4.7-stable/servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.compat.inc)
+  select the multisampled variant whenever viewport MSAA is enabled. The resolved buffer works
+  directly as a storage image on that renderer. `Post/StorageColor` retains a guarded fallback for a sampled,
+  single-sample RGBA16F buffer that permits copying back: compute copy into a storage texture, post passes, then
+  texture copy back before tonemapping. Unsupported usage/sample formats are rejected before binding an image.
+  `surface-fog` checks 36 pixels across two simultaneous views with MSAA off/4x, including transparent blends,
+  separate reflections and cloak; `remanence-render` checks capture, hold, partial fade and clear in both modes.
+- With MSAA on, masked (alpha-tested) world materials draw with alpha to coverage (`MaterialCompiler.AlphaToCoverage`,
+  `alpha_to_coverage` and `ALPHA_ANTIALIASING_EDGE` 0.3 in `svm_world.gdshaderinc`), so fences, grilles and foliage
+  edges are smoothed by the samples too. Shaders are made when a map is built, so this follows from the next map.
+- SMAA is the viewport's `ScreenSpaceAA`. Godot runs it after the tonemap, so it smooths the frame as shown, after
+  fog, glow and the vision passes (Reloaded applies SMAA last as well). It combines with MSAA.
+- The fogged sky zone, spot shadow, golden and display check viewports keep both off, so the golden captures and the
+  readback stay exact. The sky zone drawn in the main view takes the main view's MSAA like the world (it used to be
+  copied in without it). The armoury preview keeps its own FXAA.
+
+**Glow.** The normal composite (0x10966010, while PlayerController.DoGlow & 3, default 1) runs the glow driver
+0x10967740 in mode 0 and then writes `frame x saturate(16 (dot(frame, (0.311, 0.524, 0.165)) - 0.03)) + glow`
+(ps_1_1 0x10c4ea78). The gate crushes near-black and runs at every threshold. The glow, all in 8-bit targets:
+
+1. Bright pass (ps 0x10c4e898) of the whole frame into 512 x 512 (0x30e68): `L = dot(frame, (0.3, 0.59, 0.11))`,
+   `T = GlowThreshold / 255` (render/lighting.json `look.glow_threshold`, class default 224); where `L > T` it writes
+   rgb `saturate(8 L)` and alpha `saturate(8 (L - T))`, else 0 (c5 = (0, 0, 0, T), so the bright parts go white).
+2. Four runs of the vision blur (0x10967d70: a vertical then a horizontal 4-tap pass, each halving one side) give
+   256, 128, 64 and 32 texels square (targets 0x30e70, 0x30e78, 0x30e80, 0x30e88; sizes at the default detail).
+3. Composite (ps 0x10c4ed00) back into 0x30e68: `0.4 L1 + 0.6 L2 + 0.7 L3 + 0.9 L4`, bilinear.
+4. The final composite samples it bilinear over the whole screen.
+
+The options' Post-render quality Normal (`post_quality` 0, the original Video Options row whose native effect is
+not decoded) runs the view at threshold 255. At threshold 255 nothing passes (L is at most 1), so the passes are skipped (SteeE and four other maps). 79 maps glow
+(65 at 224; AquaE 250, PolaE 230, ClubD 227). Only the normal view (and binoculars over it) glows: the night pass
+(0x10963090) reads the scene before any composite and runs the driver in mode 1 with its own tint (not ported, see open
+issues); thermal, motion and EMF have their own passes. With FlashColor.A set the driver runs mode 2 (ps 0x10c4e920,
+the frame lerped to FlashColor first) and the composite adds the flash colour (ps 0x10c4eb10); no script sets it, so
+mode 2 is not ported. The original asks for texture filter 5 (gaussian cubic) for the bright pass's 2x reduction; we
+sample bilinear.
+
+**Distance fog.** The retail renderer uses linear table fog on view depth (D3D W fog: FOGTABLEMODE linear when the
+device has table and W fog, 0x1095d640). The rewrite's registered cameras use Enhanced B5 radial distance, BSP zone
+crossings and authored `SFogVolume` density, evaluated per fragment before blending. Main, sky and auxiliary views
+keep separate settings. Unregistered diagnostic cameras retain a compositor fallback based on opaque depth; that
+fallback cannot fog transparent layers at their own depths. See [Enhanced zone fog](../spec/native/enhanced-zone-fog.md)
+for the recovered equations, conversion rules and acceptance limits. The scene fog setup (0x10a15fb8) supplies the
+camera settings each frame:
+- Thermal: no fog. EMF: start 1500, end 2000 uu, colour 0xffffda85 (its clear colour).
+- Otherwise the camera zone's `bDistanceFog`, `DistanceFogColor`, `DistanceFogStart`, `DistanceFogEnd`, blended on a
+  zone change over the new zone's `DistanceFogBlendTime` (class default 1 s; 41 zones set 0) with PlayerController's
+  LastZone, LastViewOrigin, TimeSinceLastFogChange and LastDistanceFog*: a zone without fog blends towards start 32764,
+  end 32765 in the last colour; the first zone, a jump of more than 100 uu and a change between two fogless zones
+  take the new fog at once; a change while a blend runs starts from where it got to. Colours lerp as bytes, truncated.
+  Fog is on while the zone has it or a blend runs.
+- The sky zone's own scene takes its zone's fog unblended (AquaE's SkyZoneInfo fogs 0..16 uu, so its sky is the fog
+  colour).
+- `bClearToFogColor` with `bDistanceFog` (42 zones; 16 more set it without fog, which does nothing): the view clears to
+  the zone's `DistanceFogColor` (0x10a3e515; not in thermal or EMF). Both the main and the sky camera clear to it, so it
+  shows where neither drew.
+
+Zones store only fields that differ from the class defaults, so the converter writes colour (128, 128, 128), start
+3000, end 8000 and blend time 1 when a zone leaves them out (ClubD's ZoneInfo1141 fogs and clears to grey; MissD's
+outdoor zones end at 8000).
+
+## Materials
+
+`MaterialCompiler` builds one `ShaderMaterial` per (material, light source) from the template
+`svm_world.gdshaderinc`, with defines picked from `materials.json`:
+
+| Group | Values |
+|---|---|
+| light | `LIGHT_LIGHTMAP` (BSP, UV2), `LIGHT_VERTEX` (baked colours), `LIGHT_ACTOR` (actor lighting), none (fullbright) |
+| blend | opaque; masked (alpha test 0.5); translucent (SRCALPHA, INVSRCALPHA); additive (ONE, ONE, also standing in for the screen blend ONE, INVSRCCOLOR); modulate (dest x src x 2); darken (dest x (1 - src)) |
+| extras | `SELF_ILLUM` (+ `_MASK`): lit diffuse lerped to SelfIllumination by the mask alpha; `ENV_COLOR`: the env map x SpecularityMask alpha, added, or the whole env map when the Shader has no SpecularityMask and its env map is a 2D texture (146 map materials, StroD's chrome vases `crypt_txt.sphear`, AquaE's kiosk screen; they used to drop it; without the mask and without the texture nothing is added: the gameplay pack's materials.json has neither the env texture nor the OB_Brighten blend of PolaE's first-aid cabinet glass `fist_aid_glass`, and its mean colour over the whole pane drew it opaque white, PolaE spy-180 0.975 against 0.989) (`ENV_TEX`: the env map's own 2D texture looked up by the camera-space reflection R, u, v = R.xy wrapped, the fixed-function stage of game 0x1096d6f0: TexCoordSource 11 sets D3DTSS_TCI_CAMERASPACEREFLECTIONVECTOR through the TexEnvMap's identity matrix; the old `0.25 R.xy + 0.5` of the EMF scene sampled every env map's bright centre on surfaces facing the camera, so VertE/X's door frames and BankP's signs drew white; skeletal meshes use the same normal-view lookup; the EMF scene uses its separate decoded reflection matrix; a world-space TexEnvMap (TexCoordSource 10 TCS_WorldEnvMapCoords / EnvMapType EM_WorldSpace, `env_world` in materials.json, scctpkg patch 0008) turns R to world space first (0x1096d6f0 case 10: the view matrix as the texture transform) and takes its UE X and Y (ClubD/E/S/T's terrace glass `CLU_Glass_SH` over `CLU_envmap01`: the R.xy lookup read the map's black corner and the glass vanished, far-180 0.754 against 0.819 now); without it, cube maps, its mean colour); `UV_ANIM`: panner, friendly panner, oscillator (pan and stretch), constant rotator (maths under Layers); `OPACITY_LAYER`, `SPEC_LAYER`, `SI_LAYER`, `COMBINE`, `FLIPBOOK`: below |
+
+Translucent shaders with a Specular layer retain the native separate additive pass: diffuse contributes
+`diffuse * opacity`, the destination contributes `destination * (1 - opacity)`, and Specular contributes
+`specular * specularityMaskAlpha` independently of opacity. `ENV_SEPARATE` folds these into one premultiplied
+alpha draw. Native `FD3DRenderInterface::SetShaderMaterial` (game `0x1096eac0`, editor `0x10f36a30`,
+`LAB_10f380e7`) selects ONE/ONE without a mask and SRCALPHA/ONE with one. Multiplying the reflection by diffuse
+opacity again attenuated AquaE's tank-glass reflection (`aqua_degradevitre02`).
+Surface fog is applied before the blend: diffuse uses its fog colour, additive reflection only attenuates,
+and cloak mixes its fogged body with the already fogged scene sample. Modulate uses native fog override
+127/255 (decoded editor `SetShaderMaterial` `0x10f36a30`, FinalBlend helper `0x10f33c90`); the shader's folded
+2x multiply therefore approaches 254/255. Darkening approaches white after its inverse-source operation.
+The stacked `beam04` meshes using `MHOsfx_xbox.FX.rayonlum` draw at 0.1 additive gain, calibrated against the
+SOUTH shaft in MounE. MounS, MounU and ClarD share this material.
+Shader.Opacity always samples the source alpha, including a constant alpha. The native bitmap stage
+(editor `0x10f37a14`, game SetShaderMaterial `0x1096eac0`) selects TEXTURE alpha directly; it does not substitute
+luminance. AquaE's `aqua_newglass_01` stores constant DXT5 alpha 144/255. The old converter replaced it with
+RGB luminance because its alpha did not vary, baking coverage 7..129 instead. The resulting glass lost its
+uniform green haze. Original runtime material-isolation captures measured effective coverage about 0.57,
+matching 144/255. Both baked opacity and separately animated opacity layers now retain alpha (vendor patch
+0015); map/character cache versions invalidate the old results. AquaD/E/T's affected glass textures were
+regenerated. [tests/content/test_shader_opacity.py](../tests/content/test_shader_opacity.py) covers constant alpha, opaque RGB inputs and moving layers.
+
+Thermal and EMF retain their own alpha-weighted output. The `glass-blend` rendered smoke checks the two-pass
+equation at opacity 0, 0.25 and 1, and with a partial specularity mask, within three framebuffer byte steps.
+
+**Layers.** UE2 moves each input of a Shader or Combiner by its own modifier chain. The exporter writes an input
+apart when its modifiers differ from the Diffuse's, and the template evaluates it on its own, starting from the mesh's
+own UVs (`uv_matrix`, the transform baked into the UVs, is undone first): `OPACITY_LAYER` (an Opacity panning at its
+own rate, ClubD's `CLU_Water_01_SH`: alpha from that texture's alpha, or its luminance when the alpha is flat, as the
+old bake chose), `SPEC_LAYER` (the SpecularityMask), `SI_LAYER` (the SelfIllumination and its SelfIlluminationMask,
+each by its own chain). Otherwise Opacity stays baked into the diffuse's alpha. A modifier chain runs outermost first
+(UE2 multiplies each modifier's matrix onto the ones around it, Outer x Inner with row vectors [estimate: the
+accumulation in the D3D material code is not decoded]): a modifier around a Shader moves every stage of it, a Shader
+input's own modifiers move that input alone. The converter keeps each material's chain (scctpkg patch 0011,
+`materials.py` `chain` / `self_illum_chain` / `self_illum_mask_chain`) and writes `self_illum_layer` and
+`self_illum_mask_layer` (`{"anim", "matrix" before it, "post" after it}`) whenever anything in a masked
+self-illuminated material moves; without them the glow and its mask follow the Diffuse. So the tutorial's panned glows
+move over still diffuses and masks: TSP's door light lines (`TSP_door01_0N_SVTM`, `TSP_LightLineGreen_PAN` -0.5 a
+second under the door number in the diffuse alpha), the floor grating's lit band (`TSP_light02carp_SVTM`,
+`TSP_Light02carp_PAN` 0.8 a second under `Tsp_blackpanelSI`), the floor glass, TME's wall-trim ray
+(`TME_FXwallRay_SVTM` / `TME_FXwall_SHDR`: `FXwallRay` panned 0.5 a second as SelfIllumination, the same texture unpanned
+as the mask) and door strips; BankD's screens pan the mask over a still glow. The modifier maths (GetMatrix, slot 0x8c,
+at Level.TimeSeconds, which golden renders set to the capture's time): TexPanner (0x10997eb0) offsets by
+`frac(t x PanRate x PanDirection.Vector().xy)`; TexFriendlyPanner (0x10997fe0) `u x scaleU + frac(t x PanRate x PanU)`,
+same for v (no map scales, and the client leaves the scale out); TexOscillator (0x10998680) per axis with `p = frac(t x rate)`: OT_Pan offsets by
+`amp sin(2 pi (p + phase))`, OT_Stretch scales by `1 + amp sin(2 pi (p + phase))` and OT_StretchRepeat by
+`1 + amp sin(2 pi phase + p pi / 2)` about `(UOffset / USize, VOffset / VSize)` (was the texture's middle), OT_Jitter is
+random (no map uses it, drawn still); TexRotator (0x109981f0) TR_ConstantlyRotating turns by `Rotation x t` (rotator
+units a second, FRotationMatrix, about `UOffset / USize, VOffset / VSize`), TR_OscillatingRotation by
+`Rotation + OscillationAmplitude x sin(2 pi frac(OscillationRate x t / 65536))` (no map uses it); TexScaler and a
+TR_FixedRotation TexRotator are static (their cached `M`).
+`COMBINE` evaluates a Combiner whose inputs animate (AquaE's sea `Aquarium_TXT.osc`: two panners at different rates
+under an oscillator; 98 materials in all): Material1, Material2 and the Mask each through their own modifiers after
+the Combiner's own, then CombineOperation (Material1, Material2, multiply, add, subtract, `lerp(M1, M2, mask.a)`,
+`M1 + M2 x mask.a`, mask colour), x Modulate2X / 4X, and AlphaOperation (mask alpha, multiply, add, Material1's,
+Material2's); InvertMask inverts the mask alpha; no Mask means Material1. A Material2 that is a TexEnvMap (`env2`:
+ClarD's and Sche*'s puddles `SFX_SCH_xbox.FX.final_flaque_envmap`, the rain ripples `flaque_onde0000..` at 10 fps) is
+looked up by the camera-space reflection as `ENV_TEX` is (R.xy) and plays its AnimNext chain from an atlas (`flip2`); its
+static bake takes the env texture's mean colour (baked through the UVs it stretched one ripple frame over each puddle
+as a large bright blot). A bare Combiner under coordinate modifiers stays opaque: input alpha is used by the
+combination, not inherited as framebuffer blending. Shader / FinalBlend wrappers keep their explicit blend.
+The root Combiner path (game `0x10970ad0`) lights its first texture stage before the combination, leaving the
+later wave/foam input at its authored colour. `COMBINE_LIGHT_FIRST` preserves that order; a Shader containing a
+Combiner keeps its final diffuse lighting. `0x1096d9d0` case 5 sets the second input as D3DTA_TEXTURE (2), the
+first as D3DTA_CURRENT (1), and blends by the mask alpha. The previously reversed lerp and inherited alpha blend
+made Aquarium's ocean transparent and lost its bright waves. Existing packs are corrected from their material
+graph when loaded; the converter also writes the corrected blend flags and static bake. Static Combiners stay
+a bake. `FLIPBOOK`
+plays an animated texture (Texture.AnimNext chain: AquaE caustics `SC01` 16 frames, ClubD's pool caustic projectors,
+AquaE's rain projectors) from an atlas, one frame per 1 / MaxFrameRate s (MinFrameRate when unset, else 30 fps
+[estimate: the game then steps a frame per rendered frame]). MaterialSequence inputs retain authored Show/Fade
+durations, loop/pause and source identity. A Fade samples the preceding and current inputs with the native
+byte-quantized blend, including the last-to-first transition. Diffuse, glow and glow-mask inputs retain their own
+UV animation and flipbooks. Shared variants use the same sequence clock.
+
+A Show sequence whose frames change material state precompiles each complete frame and switches its shader and
+uniforms together. This preserves opacity, illumination, blend/depth/culling state and the owning surface's
+lightmap; the first frame's self-illumination does not make later frames permanently fullbright. Coordinate and
+FinalBlend wrappers remain attached, while a sequence used as a Shader's colour input does not replace the
+containing Shader's framebuffer state. The 17 unique sequences in the audited B5 map corpus include one such
+state change: the mine indicator's translucent/self-illuminated on frame and additive off frame. Incompatible
+full-state Fade combinations are not present in that corpus and are diagnosed during conversion, rather than
+silently freezing the first state. New sequence metadata requires reconversion of older content packs.
+
+Two-sided materials disable culling. Unlit materials without self-illumination draw fullbright. Shaders are shared
+per variant (SteeE: 20 variants, 196 materials). Animated UVs follow the global `svm_time` (Level.TimeSeconds),
+which golden renders set to the captured time. Every material also carries its vision modifier's heat and EMF textures
+(`heat_mode`, `emf_mode`; SteeE: 19 materials), found by its source path for map materials, by the material name
+for gameplay pack meshes and by the base under the modifier chain for character skins (`VisionLookup`).
+
+**Mip levels.** A texture the game stores with one level is drawn without mipmaps; the others keep a generated
+chain. Most world textures store one level (SQU13_txt: all of SteeE's walls), so the original samples them at full
+detail at any distance, which is why distant brick and tiles read sharp and grainy in the captures. The material
+graph (`materials.json` graph) leads from a material input (Diffuse, SelfIllumination, SelfIlluminationMask,
+SpecularityMask) to its texture, and `mips.json` gives the count; unknown textures (combined, derived) keep mipmaps.
+On the SteeE goldens this alone raised median SSIM from 0.970 to 0.991 and dark-room from 0.995 to 0.9999 (a
+-0.5 LOD bias with mipmaps reached 0.984, -1.5 0.980). Colour textures are filtered anisotropically at the
+settings' `filter_level` (rl:gfx.filtering: 0, 2, 4, 8 or 16, first run 4 as the sandbox's Reloaded config):
+`SettingsApplier.ApplyRendering` sets the root viewport's level and the project default for viewports made later.
+`--svm-mip-bias=` keeps a LOD bias switch for calibration.
+
+## Baked light
+
+- **BSP:** `display = min(1, tex x min(2, lightmap x 2 + dynamic))`. The lightmaps are stored at half intensity
+  and modulated 2x (decoded). A sweep of the factor on the twelve SteeE goldens: 2.0 gives median SSIM 0.966,
+  2.25 gives 0.952, 2.5 gives 0.928; the ~2.5 measured with the UE5 client does not hold here.
+- **Static meshes:** `display = min(1, tex x min(2, 2 x VC + glow + dynamic))`, VC the instance's baked colour and
+  glow `min(1, 2 x AmbientGlow / 255)` (measured on BankD). The vertex colour stores half the term so it stays exact
+  in 8 bits.
+- **Baked additive gameplay effects ignoring both Echelon light kinds:** preserve the saved colour intensity without
+  the extra ambient floor. Measured on AquaE's pump water Mover16072 (AmbientGlow 40): removing that floor restores
+  the ceiling visible through the volume. Applying this to matching effects is an inference; opaque movers retain
+  their ambient contribution. `pump-lighting` checks the built pump and opaque Mover362 against their source colours.
+- **UseVertexColor meshes:** the game modulates the actor's ambient by the mesh's own vertex colours, so the converter
+  folds the glow into the baked colours (`export_gltf._fold_vertex_color_glow`: `+ min(127.5, glow) / 2 x mesh colour`,
+  the mesh colours read as B, G, R, A) and writes no `ambientGlow`. Measured on Polar Base's mountains (AmbientGlow
+  150, navy mesh colours, baked light up to 23) against four night frames of the original: the plain glow drew them
+  flat white (mean error 6 to 46 per view), the fold 0.7 to 1.5. 32 meshes have UseVertexColor (skies, beams, mall
+  floors); maps converted before this change keep the white mountains until their render step is rebuilt.
+- **Sky zone meshes** take the sky zone's ambient (m_RefAmbientColor) as their AmbientGlow, like bSpecialLit meshes
+  (`level.py`, `max(AmbientGlow, zone ambient)`; the client adds no zone ambient in sky zones). ClubD's skyline towers
+  (CLU_warp_imm, baked colours 0, AmbientGlow 20, sky zone ambient 149) drew black facades with only the self-lit
+  windows; the original shows the facades and their full window grid (ClubD spy-180 SSIM 0.80 to 0.91). Sky zones
+  with ambient: Club* 149, PrisD 147, TermD 185.
+- `dynamic` is the sum of the dynamic world lights, the spot shadow light, the zone ambient and the night vision
+  boost.
+- **Zone ambient** (`m_RefAmbientColor`, `svm_zone_ambient`, one texel per zone): static meshes add
+  `2 x ambient / 255` of their zone (`RenderK.ZoneAmbientVertexGain`, the 2x stage on the colour stream), BSP
+  lightmaps nothing (`ZoneAmbientLightmapGain` 0: Build Lighting bakes it into the lightmaps). Measured: OrphD/E/T's
+  outdoor zone (ambient 21, its trees, fences and terrain meshes baked near black) spy views went from SSIM 0.19-0.35
+  (luma 0.07-0.24) to 0.76-0.93 (0.78-0.93); SancD's Church (11) merc views 0.87/0.92 to 0.99/1.00, MissD's spy spawn
+  (40) 0.78-0.83 to 0.97-0.99. Adding it to the lightmaps too overshot those (MissD spy luma 1.2-1.5, SancD merc-180
+  2.1). Sky zones are left out (their backdrops take it through bSpecialLit in the converter); only 12 maps have a
+  non-black zone ambient.
+- Additive meshes with painted vertex colours (`authoredColors`, e.g. AquaD's caustic quads: 40 inside, 0 on the rim)
+  draw `tex x 2 x VC` alone: no AmbientGlow, no dynamic or spot light, so the rim fades out as in the original (with
+  them the quads filled to bright squares). This also applies to bUnlit actors: skipping lighting must not discard
+  their painted colour stream (AquaE's StaticMeshActor14218 on the temple floor and StaticMeshActor12295 on its
+  wall otherwise draw fullbright rectangles). They carry zone 255 (`MapBuilder.AuthoredOverlayZone`). Estimated.
+
+## Dynamic lights
+
+Lights the original keeps out of the baked light (bDynamicLight, triggered STriggerLights, pulsing lights) still
+light the world (`WorldLights`): `bDynamicLight`, not LE_ESpotShadow, brightness above 0, whatever
+`bApplyToStaticLighting` says. The game keeps a light for run time when it is in-game or dynamic (cooked light
+references, editor 0x110cd700; in-game leaf light lists, UnVisi.cpp 0x1101dcb7); the static flag only decides what
+Build Lighting bakes. Until this was fixed, dynamic lights saved with bApplyToStaticLighting False lit nothing: MoonD's
+40 STriggerLights (its park floods and lamps, seen lighting walls in the real game), StroD's 21 `lightsoutall` lights,
+OrphD/E/S/T's 20 switchable room lights, and plain dynamic fill lights on MissD/E/P, OffsD, ScheE/U, GhosS, KrauE/U,
+FactD/E/P/T and SancD. Only the lights that give light in a frame take rows, so lights switched off cost the shader
+nothing. They live in a float texture (one row per light: position and radius, colour, spot cone, own zone), a global
+shader parameter, and are summed per pixel into the baked term.
+
+- Colour, gain and radius are the actor model's (below). On BSP a point light is the original's BSP light pass
+  (`svm_bsp_light`), decoded from the editor build: one additive pass per light whose vertex colour is
+  `Color x 2 sqrt(1 - h / R)` (`FBspLightVertexStream::GetStreamData`, 0x111b97a0; LE_QuadraticNonIncidence
+  `2 sqrt(1 - h^2 / R^2)`), `h` the light's distance from the surface's plane, times an attenuation texture laid over
+  the light's circle on that plane (radius `sqrt(R^2 - h^2)`, texture coordinates from the vertex writer 0x111b9a60)
+  whose texels hold `1 - d / 30.5` around the centre of 64 (`FBspLightAttenuationTexture::GetTextureData`,
+  0x111b9090): `1 - (32 / 30.5) rho / sqrt(R^2 - h^2)`, `rho` the distance along the plane. There is no N.L term, so
+  a light level with a wall lights it fully. Only the side the plane faces is lit (seen in play, not decoded: MoonD's
+  token kiosk has its wall facing PlazaFlood2 lit and the wall facing away black). Before this the BSP term was the
+  measured `(1 - (d / R)^2) N.L`, which gives nothing for a grazing light: PlazaFlood2 stands exactly in the plane of
+  that kiosk wall, which drew black here and plank texture x the flood's colour in the original (111, 35, 21 against
+  97, 45, 25 after). Checked on SteeE's twelve original frames: the shop view (the one lit mostly by dynamic lights)
+  goes from luma ratio 1.111 and mean luma error 0.043 to 1.067 and 0.023, the other eleven keep their error. The
+  stage scale of the texture (it is stored at half intensity) is not decoded; the gain is the one measured before.
+  Spots and suns keep `1 - (d / R)^2` with N.L (measured: the original's BSP pass leaves spot effects out).
+- Static meshes with baked vertex colours (and vertex-lit movers) take dynamic lights through the D3D vertex lights
+  like actors (`svm_mesh_light`), decoded from the editor build's per-actor light gathering (0x111a7300) and light
+  choice (0x111a6100):
+  - A static mesh with static lighting skips its leaves' baked lights and gathers their dynamic lights only (it needs
+    bUseDynamicLights, on by default). A light is a candidate while its centre is nearer the centre of the mesh's
+    bounding sphere than `R + r` (light radius plus sphere radius; a sun always), its bSpecialLit matches and, for a
+    bAffectOwnZoneOnly light, its zone is the actor's.
+  - At most `min(8, Actor.MaxLights)` lights are kept, 4 by default: the highest
+    `LightBrightness x (1 - d^2 / (R + r)^2)`, as for actors (the per-actor MaxLights is not exported; 4 is used).
+  - Each kept point or spot light is attenuated by the fit of "Actor lighting" below: `1 / (constant + linear x d)`
+    fitted to `2 S(d / R)` at the near and far side of the sphere. It is not cut off at R.
+  The sphere is the primitive's own (the cooked `scctSphere` of the export, moved with the actor, its radius scaled
+  by the largest axis). Merged map geometry has no values per instance, so `MeshLightSpheres` keeps one texel per
+  instance in `svm_mesh_spheres` (centre and radius in metres, in the mesh's own space) and each vertex names its
+  texel in UV2.x (texel + 1; vertex-lit surfaces have no lightmap coordinates). The template reads the sphere in its
+  vertex stage and, per pixel, ranks the rows by the score (row texel 3.y holds LightBrightness), keeps the four
+  highest and sums them. A surface without a sphere (sky zone backdrops, whose spheres span the sky box, and any
+  other vertex-lit mesh) keeps the light at the pixel alone with the falloff the fit approximates,
+  `1 - 3x^2 + 2x^3`, cut off at R, as do the calibration falloffs other than the default.
+  Before this every vertex-lit surface used that cut-off cubic per pixel. MoonD's Ferris wheel (mover `ParkWheel`,
+  sphere radius about 1100 uu, 2700 uu from `PlazaFlood1`, R 2500) got nothing from the flood; the fit gives
+  0.59 at its near side and 0.25 at its far side, times N.L, and the original shows the rim lit red (rim pixels of
+  the view from -1650,-2950,170: mean 10,10,17 before, 51,34,33 after). Checked on SteeE's twelve original frames
+  (mean luma error before to after): shop 0.0243 to 0.0230, yard-north 0.0155 to 0.0146, crane 0.0075 to 0.0074,
+  dark-room 0.0007 to 0.0008, yard-east 0.0112 to 0.0113, the other seven unchanged.
+  The light grid (`svm_dyn_cells`) bins every light 2 m wider (`WorldLights.MeshGridReach`): a mesh whose sphere is
+  no larger looks the grid up at its sphere's centre, a larger one walks every row.
+  Earlier check of the cubic against the BSP falloff on vertex-lit surfaces: KrauE's lab door at the merc start (two
+  own-zone STriggerLights, radius 18), merc-180 SSIM 0.815 to 0.844, luma 1.33 to 1.23.
+- Light types (FDynamicLight::Update, game 0x10a1de70, evaluated once a frame; `WorldLights.Modulation`, shared by
+  the world term, actor lighting and coronas): pulse `0.6 + 0.39 sin(a)`, subtle pulse `0.9 + 0.09 sin(a)` with
+  `a = t x 35 x 2 pi / max(1, LightPeriod) + (LightPhase << 8)` radians; blink off while the integer part of
+  `t x 35 x 65536 / (LightPeriod + 1) + (LightPhase << 8)` is odd (it reads as noise); flicker a fresh random value
+  each frame, 0 below 0.5; strobe one switch for all strobe lights, toggled whenever the scene time changes.
+- Animated lights that are baked (bApplyToStaticLighting without bDynamicLight: 13, pulse and subtle pulse, all also
+  in-game lights) stay steady on the world, as the baked light is; they animate on actors.
+- `bAffectOwnZoneOnly` lights light only surfaces of their zone. Each triangle carries its zone in the vertex colour
+  alpha. The light uses its authored `Region.ZoneNumber`, with the zone actor name as a fallback for packs without
+  that property. Several BSP zones can share `LevelInfo0`; resolving by actor name alone loses the restriction
+  on ShipD's elevator light (`Light17342`, zone 7) and lets its red flicker reach the overground yard.
+  BSP takes the zone of a point 2, 8 or 32 uu in front of the face through the collision BSP. Static meshes
+  take their actor's point region for every face, including zone 0 when the origin is inside solid (AquaE's temple
+  Techroom sign, StaticMeshActor3884) or on a surface: 59 of MoonD's 1422 mesh instances (the Ferris wheel frames
+  and columns at z 0, the carousel drum) read zone 0 and take no own-zone light. The point region walk
+  (`CollisionWorld.GetZoneIndex`, front when the plane distance is not negative) gives the zone the map stores for
+  579 of MoonD's 580 gameplay actors, 69 of the 70 that lie exactly on a node's plane (taking the back side on a tie
+  gives 521 and 11), and 58 of the 59 instances read zone 0 under either rule, so the tie rule is not what puts
+  them there. Their own stored `Region` is not exported, so it is not confirmed that the original has them in
+  zone 0 too. Sampling the room in front of a mesh instead lets room-restricted lights
+  brighten wall-mounted signs whose actor is outside that room. A vertex shared by BSP triangles of two zones is
+  written once per zone, so no triangle blends zones. Without the rule SteeE's storage view reads 3.4x too bright.
+- `WorldLights.SetTune` (`--svm-dyn-tune=gain,radius,falloff,ownzone`) overrides the calibration for sweeps.
+
+## Spot shadow lights
+
+`SpotShadowLight` draws an LE_ESpotShadow light (Echelon spot: the merc torch, searchlights, window and sun
+projectors) with its own shadow pass. The frustum is the decoded one (editor 0x111a5480): its apex sits
+`p x EchelonRange / (1 - p)` behind the light (p = NearPlaneRatio), the near plane at the light (2p x SpotWidth by
+2p x SpotHeight) and the far plane 2 SpotWidth x 2 SpotHeight, EchelonRange further on; geometry between the apex and
+the light never shadows. SpotWidth and SpotHeight are half extents: the light's projection scales x by
+`apex / (p x SpotWidth)` over the depth from the apex (parallel rays: `1 / SpotWidth`) and maps -1..1 onto the cookie.
+Until this was read the frustum was half as wide and high: MuseD/E/T's rooftop floodlight (Light16, SpotWidth 700)
+lit a narrow strip, spy-0 SSIM 0.45 (luma 0.25) against 0.91 (0.94) now. From p 0.999 the rays are taken as parallel
+(an orthographic box; FactD's Light17985 has 1.0).
+A camera at the apex uses the near-plane height directly (`Camera3D.SetFrustum`) so very wide or narrow lights,
+including MuseE's Light15, keep the same shadow and cookie projection beyond the camera FOV property's 1..179 degree
+limits. It renders the world into the light's tile of a shared 2048 x 2048 R32F atlas (tiles 1024 x 512,
+the map 512 high and as wide as SpotWidth / SpotHeight allows), kept as linear distance along the axis by
+`svm_spot_depth.glsl`. The template has `SpotShadowSlots` (8) slots, one float-texture row each (`svm_spots`); it adds,
+per pixel, to the light stage of every lit surface (lightmapped, vertex lit and actor lit) each light's colour x 2 x
+the cookie at the projected point x the attenuation ramp at d / EchelonRange (d from the light) x the shadow term,
+with N.L (towards the apex) weighted by the normal influence. Own-zone lights light only world surfaces of their zone.
+Fixed map lights keep merged static geometry in a second atlas. Their live pass draws moving geometry and combines
+the nearest static/live depth; a moved light invalidates its static tile. Animated masked surfaces stay in the live
+pass. A light volume wholly outside the main camera skips its shadow viewport and refreshes on return. Neither
+optimization removes the light or its beam slot. Colour-only effects have their own layer outside the depth cameras;
+opaque shadow fragments skip the colour stages, while masked fragments retain the alpha test. Parameter textures
+upload only when their packed values change. The shadow resolution and filtering settings are unchanged.
+Actors skip some of them (game 0x10a37310, asked by the actor light gathering for LE_ESpotShadow lights only): a
+static light when the actor has bIgnoreEchelonLighting, a bDynamicLight one when it has bIgnoreDynamicEchelonLighting,
+any light in its IgnoredEchelonLights, and every one when its GlassEffect is set. Mesh actors carry these widely
+(over the shipped maps: 17208 static mesh actors with bIgnoreEchelonLighting, 3713 with the dynamic flag, 761 with
+IgnoredEchelonLights, 106 with GlassEffect; on AquaE the kitchen's metal shutters and first-aid cabinets, which were
+washed out by the spots in front of them).
+
+- The converter writes each mesh instance's `echelonIgnore` (1 static, 2 dynamic, 3 both or GlassEffect) and
+  `ignoredEchelonLights` (light actor names) into world.glb (`scctpkg level.py`, patch 0005); gameplay actors are read
+  from gameplay.json (`ActorLighting.EchelonCode`). Maps converted before this have neither and take every light.
+- `RenderMap.EchelonCode` turns them into one code: the flags plus 4 x a group number, one per distinct
+  IgnoredEchelonLights list of the map. Merged surfaces carry it per vertex (CUSTOM1), actor-lit nodes in
+  `svm_ambient.w`.
+- The slot row says whether its light is dynamic (row 3 x: 1 static, 2 dynamic), and `svm_spot_ignore` (one texel
+  per slot, one row per group) says which slots each group skips; `SpotShadowLight` rebuilds it when a slot changes
+  hands, from its `LightName`.
+Cookies share a texture array (`svm_spot_cookies`, each resampled to 256 x 256; layer 0 white). Map and pack cookies
+come from retained CPU images. Each cookie is normalized once into a separate copy, leaving its source unchanged;
+adding another layer never reads earlier textures back from the GPU. The last light releases these copies, so map
+travel starts with a fresh cookie array.
+
+- Map LE_ESpotShadow lights (`MapSpotLights`, 364 over all maps) are not in the baked light: the bridge found FactD's
+  lightmap uniform under the window patches the game draws with bar shadows (fix_plan I8), so every one that is on
+  is eligible whatever its bApplyToStaticLighting. Six map slots (`SpotShadowMapLights`, estimated) prioritize light
+  volumes intersecting the camera frustum, then distance to that volume. Existing occupants retain a 96 uu distance
+  advantage so small movements do not churn slots; visible replacements fade out/in over 0.15 seconds each, including
+  their beams, before reusing a slot. Offscreen occupants yield immediately. Each follows its switch and light type.
+  Cookie: EchelonLightMaterial.ProjectedLightingTexture
+  (`echelon_texture_uri`), attenuation its AttenuationType (`echelon_attenuation`, written by the exporter since this
+  change; linear, the class default, until the map is converted again), normal influence EchelonNormalInfluence
+  (default 1). Lights without a material take the level's default Echelon light material: the soft round
+  `Echelon.spot_bw` cookie (the editor exe names `Lighting` `spot_bw` beside its built-in packages; AquaD's Seaside
+  spot was a hard-edged white rectangle without it) and linear attenuation (estimated).
+- Shadow lookups: one filtered lookup (four depth comparisons blended bilinearly, as hardware shadow filtering);
+  with `SpotShadowSoftRadius` > 0 (1.5 texels, estimated) eight such lookups on a disc, as the sandbox's Reloaded
+  `shadow_edge_smoothing` does. The stock game uses the single filtered lookup.
+
+- `SpotShadowShape.Torch` is SGadTorche's (spec/equipment/merc-flashlight.md): range 1500, SpotWidth and
+  SpotHeight 400 (half extents), near ratio 0.0025, brightness 304, hue 21, saturation 255 (white), cookie
+  `Echelon.flashlight` (Echelon.Torche's ProjectedLightingTexture), linear attenuation (`Engine.linear_attenuation`),
+  normal influence 0.
+- The 2x gain is estimated (the Echelon light pass is not decoded); colour is the light's FDynamicLight colour,
+  FGetHSV x brightness / 510 (FDynamicLight::Update, game 0x10a1de70: `x 0.0019607844 x light type x
+  LevelInfo.Brightness`; the LE_ESpotShadow light's FDynamicLight, made at 0x10992980, runs it too;
+  `ActorLightRules.SpotShadowColourScale`), scaled down so its brightest channel is at most 1
+  (`RenderK.SpotShadowColourCap`, estimated: colours reaching the fixed-function or ps_1_x stages are clamped, and the
+  bridge measured RiveD's brightness-3000 spot lifting the game's luma only from 20 to 35; the cap now sits at
+  brightness 620, the bridge's tuned projector cap). Taken as brightness / 255 before, every spot below the cap drew
+  twice as bright: the tutorials' brightness-150/200 spots (TSP20-29 luma 1.38-1.48, SSIM 0.81-0.83, now 0.97-1.01,
+  0.88-0.91), TermD merc-0/180 (1.39/1.26 to 0.98/0.99) and the merc torch (MuseD/E merc-0 1.28 to 1.00); lights above
+  it (FactD, MuseD's floodlight, AquaD's sun shafts) are unchanged. Uncapped, AquaD's sun shafts (500 to 650) clipped the Greek Temple
+  floor to white. The cap keeps the hue: capped per channel, FactD's orange window patches (hue 14 to 21, brightness
+  400 to 1200) were drawn white; scaled, the mean RGB error of FactD's spy views dropped (spy-0 6.5 to 5.6, spy-180
+  1.26 to 1.07) and SSIM rose slightly. `Place(location, rotation)` moves it; views put the torch on the merc's
+  `Laser` bone (NativeTickTorche is not decoded; the UE5 client found that bone). `On` follows LightType.
+- Shadow settings (rl:gfx.shadows): `shadow_quality` sets the map height of the spot shadow lights,
+  256 x the quality as a power of two from 128 to 2048 (`SpotShadowLight.MapSizeFor`: 2 is the old fixed 512, the
+  first run's 3 gives 1024, the sandbox's 8 gives 2048, an 8192 x 8192 R32F atlas of 256 MB); it is read when the
+  first light of a map makes the shared atlas, so a change applies from the next map. `shadow_edge_smoothing`
+  switches the eight-lookup disc (`SpotShadowSoftRadius`, 1.5 texels) on or off. Reloaded's `shadow_optimized`
+  (per-light resolution by screen size) is not done.
+
+### Shadow pass on the RenderingDevice
+
+With `SVM_RD_SHADOWS=1` (off by default) a light whose static world is cached does not redraw through its SubViewport:
+`Rd/RdShadowPass` copies the cached static tile into the light's tile where casters are or were, and draws the other
+casters in its frustum over it (rigid, skinned and cloth meshes with Faithful template materials), each writing its
+distance along the light's axis with minimum blending. A light with anything else in its frustum, or without a written
+static cache, keeps its viewport pass for the frame. A caster whose mesh never changes (`SpotShadowLight.MarkRigid`)
+forces no redraw at all while it keeps still, with or without this pass. `SVM_RD_SHADOWS=verify` compares both passes
+texel by texel. Measurements: docs/PERFORMANCE-LOWEND-2026-11.md.
+
+### Light reach
+
+`LightReach` (an OpenSCCT optimisation, same pixels) draws each merged cell mesh in one of three light states, each in
+one of two vision states, with a twin of every material for the reduced ones (`MaterialCompiler.GetUnreached`,
+`MaterialCompiler.GetNormalVision`):
+
+| State | When | Defines (baked: lightmap, vertex) | Defines (actor-lit) |
+|---|---|---|---|
+| full | a spot shadow light reaches the mesh | none | none |
+| no spot | no spot reaches, a dynamic world light does | SVM_NO_SPOT | SVM_NO_SPOT |
+| neither | neither reaches | SVM_NO_SPOT, SVM_NO_DYN | SVM_NO_SPOT (same material as no spot) |
+
+| Vision | When | Extra defines |
+|---|---|---|
+| thermal / EMF | `svm_vision` 36 or 38 | none: the bucket's own material (plain, cut or see-through) |
+| normal | every other mode | SVM_NORMAL_VISION (plain buckets keep SVM_PLAIN_DEPTH) |
+
+Without the thermal and EMF outputs nothing in the shader cuts a surface out. The normal vision twin keeps its bucket's
+vertex transform (plain buckets Godot's own, cut and see-through buckets the explicit POSITION write), so depth stays
+bit-identical, and has no see-through pass (it draws nothing outside thermal and EMF). See-through
+buckets keep their own material in all three light states in thermal and EMF. A missing twin falls back to the nearest
+one (no spot to full, neither to no spot); the sky zone keeps its materials.
+
+A light reaches a mesh when it is on and some point of the mesh's world box lies inside a slot's row 8 sphere, or
+within a dynamic light's radius x `svm_dyn_tune.y`; outside those the template adds exactly zero. For the dynamic
+lights the box is the mesh's own merged with the box around the light spheres of its static meshes, which are lit
+from as far as a light's radius from their sphere (`SurfaceBuilder.SphereBounds`). The spot code is the
+costly part to have in the shader (2.0 ms on SteeE on a UHD 770 just by being compiled in) and spot slots reach few
+meshes, while dynamic map lights have large radii and reach most of them, so most meshes draw in the no spot state. A
+sun reaches everything; a map light counts while it is switched on, whatever its light type does, so pulsing and
+flickering lights never swap materials. Each light keeps the meshes it reaches and works them out again only when it
+moves or switches; a mesh keeps separate counts of the spots and the dynamic lights that reach it and changes state
+only when one of them goes to or from zero, by setting the render instance's surface overrides on `FramePreDraw`.
+The vision is read there too (`MaterialCompiler.Vision`, set by `FaithfulView.ApplyVision` in the process step of the
+same frame), so the first frame drawn in thermal or EMF, or back out of them, already has its materials; a change
+touches only the surfaces whose material differs (a few hundred calls on a large map). Authored, fullbright and
+switching MaterialSequence materials have no light twins (state switches have no vision twin either); twins with the
+same code share one shader. The first six frames after a build (and after a late responsive smoke switch) draw every
+mesh in each state, full first, so all six pipelines are made while loading. Those frames draw wrong light where a
+reaching term is left out, so `PlayRoot` keeps a black cover under the "Preparing effects..." text until
+`GameplayFxWarmup` has seen `LightReach.Warming` end (a late smoke switch raises the same cover). `SVM_REACH_STATS=1`
+prints the meshes in each state, the vision state and the spot slots and dynamic lights on, at most once a second
+(`SVM_REACH ...`).
+
+### World pass on the RenderingDevice
+
+With `SVM_RD_WORLD=1` (off by default) the solid and masked surfaces of the merged cells and of the sky zone are drawn
+by `Rd/RdWorldRenderer` instead of Godot's renderer: from the main camera's compositor, between Godot's depth pre-pass
+and its opaque pass, into Godot's own colour and depth buffers, with this template translated to GLSL 450
+(`Rd/GdShaderTranslator`). Each draw is one material in an 8 m block and takes the smallest shader that draws the same
+pixels: without the spot code where no slot's frustum reaches the block, without the dynamic light code where no row
+does, without portal fog while the view has none. Their Godot meshes stay on the `StaticWorldRd` and `SkyRd` layers for
+the shadow cameras, and for the main view in thermal and EMF, with responsive smoke, and on maps with an outdoor sky.
+Global shader parameters are set through `ShaderGlobals`, which the pass reads back. A lit draw walks only the dynamic
+light rows that reach it (tested against the draw's box merged with the light spheres of its static meshes,
+`Batch.LightBounds`), and the Fast renderer leaves out the batches of zones the camera cannot see through the map's
+portals (`Rd/RdZoneVisibility`). Measurements and limits: docs/PERFORMANCE-LOWEND-2026-11.md.
+
+## Flare lights
+
+An OpenSCCT addition (`FlareLights`): the original lights a burning flare (SFlareEmitter) as an unshadowed point light
+kept to its own zone (`bAffectOwnZoneOnly`), so its light stops in a hard line at a zone portal (AquaD's Entrance and
+Blue Room) and shines through walls inside its zone. Here a flare lights what it can see, in every zone:
+- The flare's light leaves the spawned dynamic lights (`WorldLights`, `ActorLighting`) and goes to its own rows
+  (`svm_flares`, up to 8 flares, the nearest to the camera), with the same colour, brightness, radius and falloff: the
+  dynamic world lights' gain, radius scale and falloff on BSP and static meshes, the actor model on actors, per pixel.
+- The nearest 4 lit flares each get a depth cube: six 90-degree cameras (a little wider, so lookups at a face's edge
+  stay in its tile) render the world layer, pawns included, into a face of a shared R32F atlas (six faces across, one
+  cube per row; the face is a quarter of the spot shadow map, 128 to 256) through the spot lights' depth copy
+  (`ShadowDepthCapture`). The template picks the face by the major axis of the surface point less the light (+X, -X,
+  +Y, -Y, +Z, -Z; up +Y, except -Z for +Y and +Z for -Y) and compares on a nine-tap disc (1.5 texels), with a 3 uu
+  bias plus 1% of the depth after moving the point 3 uu along its normal. A cube that just changed flare renders all
+  six faces and waits a frame for its own depth before its flare lights.
+- Cost: a flare at rest refreshes two faces a frame (each face every third frame); one moving more than 1 uu a frame
+  (thrown, still flying) refreshes all six. The shadow cameras set the `ShadowPass` layer in their cull mask, and the
+  template skips its lighting when it sees it (`CAMERA_VISIBLE_LAYERS`): they keep only depth. The spot lights' shadow
+  cameras set it too.
+- The local pawn seen from its own eyes is hidden from the main view but drawn on the `ShadowOnly` layer, which only
+  the flares' cameras see, so the merc's whole body casts its shadow. The first-person arms and gun are on the
+  `FirstPerson` layer, drawn by the main view only: they float at the eye, so no shadow camera sees them.
+- The flare adds after the 2x cap of the baked and dynamic light (`t x (min(baked + dyn, 2) + flare)`, then the
+  usual cap at 1): the original caps the sum, so a surface already lit to the cap by its lightmap, baked colours or
+  actor light took no flare light at all.
+- A flare is `LE_PointAmbient`, which the actor model lights with its attenuated colour whatever the normal. On BSP
+  and static meshes its N.L wraps instead (`(N.L + 0.5) / 1.5`): a surface facing the flare is lit as with plain N.L,
+  one edge-on to it a third as much, so a flare stuck to a ceiling (the Pirates' Room ducts in AquaD) lights the
+  ceiling round it, which plain N.L met edge-on and left dark. The shadow keeps the wrapped light off the far side of
+  walls. The shadow's normal offset grows by 3 shadow texels of the distance (a texel spans 2 / face size of it), so a
+  surface nearly edge-on to the flare is not striped by its own depth.
+- The light source wavers up to 1.5 uu with the flame, so the shadows move a little, as a burning flare's do.
+- Flares past the 4 cubes light unshadowed; past 8 they are dark.
+
+## Actor lighting
+
+Pawns, skeletal props and meshes without baked colours (`ActorLighting`), decoded from the editor build's actor
+lighting:
+
+`display = tex x min(2, A + sum C attenuation(d) max(0, N.L))` over the four strongest lights.
+For ordinary point/spot lights, `RenderingModeNormal::SetLight` (game `0x10978cc0`) fits reciprocal-linear
+D3D attenuation to `2 S(d/R)`, where `S(x) = 1 - 3x^2 + 2x^3` and `R = 25 (LightRadius + 1)`.
+It samples at `near = clamp(distance - actorRadius, .1R, .95R)` and
+`far = clamp(distance + actorRadius, .05R, .9R)`. With `a = 1/(2S(near/R))` and
+`b = 1/(2S(far/R))`, it sets `constant = max(.01, a - (b-a)/(far-near) * near)` and
+`linear = max(0, (a-constant)/near)`, then evaluates `1/(constant + linear*d)`.
+Equal samples use constant attenuation. Its D3D range is `(256-constant)/max(.01,linear)`;
+the fitted light is not cut off at the nominal radius. Suns use `1.75` without distance attenuation.
+`C = FGetHSV(hue, saturation, 255) x brightness / 255` (0.8213 at V 255), and
+`A` is zone ambient plus AmbientGlow / 255.
+
+Directly evaluating the cubic at every vertex left Aquarius kiosk bases nearly black. The shared actor shader
+now evaluates the native fit for map props, moving/swapped devices, characters and weapons. Static mesh exports
+carry their cooked bounding sphere (`scctSphere`); its center transforms with the object and its radius scales
+by the largest axis, independent of rotation. Older content falls back to the local AABB sphere. Relighting
+and mesh swaps use that same sphere instead of reverting to the actor origin or an expanded world AABB.
+Original runtime captures of 24 point/spot light setups confirm the fit, including small props, a scaled Aquarius
+kiosk, large meshes and distant lights. Scalar regression tests retain representative native coefficients;
+local captures are under `local/cabinet-light-parity/`.
+
+Lights are ranked by `brightness x (1 - d^2 / (R + r)^2)`, suns first; spots score 0 outside their cone and use
+`phi = 1.15 acos((1 - LightCone / 256)^2)`, `theta = 0.05 phi`. Only lights kept for run time
+(`bApplyToInGameLighting` or `bDynamicLight`) that are on take part (dynamic ones without the in-game flag were left
+out until AquaE's kiosk beside STriggerLight303 drew black), and own-zone lights only for actors in their zone. A
+mesh actor's zone (its ambient too) is its point region, taken at the actor's location, while the lights are ranked
+and fitted over its bounding sphere (`RenderMap.LightActor` with the actor's location): the sphere centre of a large
+mesh can lie inside solid geometry, which reads as zone 0. MoonD's carousel mover (sphere centre inside the drum) lost
+the zone ambient and both own-zone plaza floods that way and drew its roof, tub and horses black. The
+light type scales each chosen light's colour (as for the world lights); ranking uses LightBrightness alone. LE_QuadraticNonIncidence (20) uses the D3D attenuation
+`1 / (8 d^2 / R^2)` instead of the ordinary fit; LE_PointAmbient (21) also
+adds its attenuated colour whatever the normal (its D3D ambient). LE_Cylinder and LE_NonIncidence stay plain points
+(not decoded). The set is chosen on the CPU and handed over as
+instance uniforms; the shader evaluates it per vertex. The spot shadow light and the night boost are added per pixel.
+The first-person arms and gun currently select ordinary lights at the eye (a 64 uu sphere, no own-zone
+filter). This remains an approximation: the original gathers from the weapon's BSP leaves and actual bounds,
+then filters using the weapon's zone. There is no added viewmodel ambient floor. At the measured AquaE Blue Room
+pose (eye `7152, 1036, 272.50626`, yaw 16384, FOV 95), the original selects zero ordinary lights and has zero
+actor/zone ambient. Its rifle highlights come from the original material chain through the heat/EMF modifiers:
+`SFX_xbox.final_gundef` supplies `envmap_gundef` and `M160_specular_mask`. Skeletal export and loading must preserve
+those normal-view reflection inputs instead of reducing the material to its diffuse texture.
+First-person meshes also retain the cooked LOD's normals and vertex splits (scctpkg patch 0014), including
+the float normals of rigid weapon sections. Rebuilding normals from UV wedges flattened the rifle's sight
+knob and receiver highlights. The rifle, shotgun and Uzi conversion tests compare every triangle's position,
+UV and material against the base mesh and check that exported normals match the cooked data.
+
+The merc's simulation `SquintingFactor` also reaches the renderer: in normal vision the original sets a light
+byte to `int(factor * 28)`, halves it for D3D ambient, then modulates 2x. The resulting additive scene-light term
+is `2 * (int(factor * 28) >> 1) / 255`, at most `10/255`; movement, torch and scope affect the simulation value.
+This is separate from the material reflection. Runtime probes at the Blue Room pose observed byte 11 and
+D3D ambient `0xff050505` during the weapon draw (game `0x10a0af70`, `0x10979380`, `0x109bf45f`).
+The three `SWeaponTex.SI_rof_*` screens retain their self-illumination, including skin swaps and older packs that
+only exported their diffuse images. `viewmodel-light` renders the Blue Room regression and all three screens at
+zero light; its captures and original runtime evidence are in `local/viewmodel-light/`.
+
+The rules (light choice, ranking, falloff, colour, light types, the spot shadow frustum and colour cap) live
+Godot-free in [src/OpenScct.Game/Lighting/ActorLightRules.cs](../src/OpenScct.Game/Lighting/ActorLightRules.cs); `ActorLighting`, `SpotShadowLight` and `WorldLights`
+call them, and so do the bots' light field (docs/AI.md, "Light"), so what a bot judges lit is what the screen draws.
+
+## Coronas
+
+Lights with `bCorona` draw `Skins[0]` as a camera-facing quad at the light (`Coronas`, `svm_corona.gdshader`):
+`s = clamp(0.001 x distance, 0.01, 10)`, half size `clamp(s x DrawScale x Fade x 512 x DrawScale3D, Min, Max)` uu,
+roll `s x CoronaRotation x 16384 + CoronaRotationOffset`, colour `corona colour x light type x 0.5 x Fade x 2`, no
+depth test. The light type factor (pulse, flicker...) is estimated: the corona is taken to follow the light's
+FDynamicLight colour.
+
+- The default native corona uses `FB_Translucent` (ONE, INVSRCCOLOR, game `0x10a1418b`). The shader adds
+  `source x (1 - opaque scene)` so the halo retains its intensity over dark areas while preserving detail
+  in bright lamp housings. The scene sample is captured before transparent surfaces.
+- The doubling (`CoronaStageGain`, measured): the halo of SteeE's crane lamp reads 1.9 to 2.1 times the undoubled
+  halo at every radius, as from a Modulate2X stage on the halved colour.
+- Visibility: in radius (`25 (LightRadius + 1)` when set) or the cone test for oriented coronas, a trace against the
+  world BSP only, stopping 16 uu short of the light, and a depth test at the light's centre that tolerates
+  `max(16 uu, 8 % of the distance)` so the lamp head around a light does not hide it (yard-north's crane lamp sits
+  100 uu behind its housing at 2398 uu; lounge's coronas behind floors stay hidden at 8 % and 15 %). A full collision
+  trace hides coronas the original shows (blocking volumes, cables); BSP alone lets a corona shine through mesh floors.
+- When the centre leaves the screen while the quad's rim remains visible, the depth sample clamps to the nearest
+  edge texel. This boundary approximation keeps the occlusion test active across the edge; previously the test
+  stopped entirely offscreen, revealing hidden glows. Depth samplers also clamp at exact edges rather than wrapping
+  to the opposite side. Standard's screen/copy shaders and Fast use the same rule; `camera-edge` checks all four
+  edges with clear and occluded centres, with and without 4x MSAA.
+- Fade moves at 6 x ScaleGlow per second; a camera cut settles it at once. Thermal and EMF draw no coronas.
+- Blended sky zone materials have the lowest render priority, so a corona or a particle over the sky is never
+  overdrawn by them (the crane lamp's corona was). Solid sky sits behind everything by depth.
+
+## Projectors
+
+Map texture projectors (`Projector`, `DynamicProjector` with a `ProjTexture`; 127 placed) are drawn as volumes
+(`Projectors/MapProjectors`, `svm_projector.gdshaderinc`) from `render/projectors.json`: the back faces of the
+frustum box draw with no depth test, rebuild each pixel's world point from the depth buffer and project the texture
+onto it, so BSP, static meshes and actors all receive it. The converter's `PROJ_` decal meshes (BSP only, blend
+ignored) are left out when the file is there.
+
+- Mapping: u = dot(P - L, Y) / (USize x DrawScale x DrawScale3D.Y) + 0.5 (signed), v = dot(P - L, -Z) / (VSize x
+  DrawScale x |DrawScale3D.Z|) + 0.5: texture row 0 towards +Z whatever DrawScale3D.Z's sign. The Mission bunker signs
+  (DrawScale3D.Z -1, pitch and roll 180) and the TME/GhosS ARGUS decals (DrawScale3D.Z +1) share the axes X -X, Y -Y,
+  Z up and both read upright in the original (empirical from the goldens, not decoded), depth
+  dot(P - L, X) in 0..MaxTraceDistance (live `Projector.Matrix`, bridge). With FOV > 0 the frustum holds that size at
+  the projector and widens from an apex behind it (estimate; FOV 1, ShadD's signs, stays the texture's size).
+- Frame buffer blend (`SetProjectorMaterial`, game 0x10972320): PB_AlphaBlend SRCALPHA, INVSRCALPHA; PB_Add ONE, ONE;
+  PB_None and PB_Modulate both DESTCOLOR, SRCCOLOR (frame x texture x 2). The texture is not lit.
+- Surfaces turned away from the projector are skipped unless `bProjectOnBackfaces` (the original fades them through a
+  generated attenuation texture, here a hard cut on the normal rebuilt from depth).
+- Animated textures: AnimNext flipbooks and TexPanner / TexOscillator, as in the world materials. A static TexScaler
+  or TexRotator over the texture (`uvMatrix`) transforms the projected coordinates: AquaE's rain (`Aquarium_TXT.Puie.Rain`,
+  UScale 0.1) tiles its drops 10 times over the projector; without it each drop was a blob 10 times too big.
+- Thermal and EMF draw no projections.
+- `bProjectStaticMesh` false (39 placed, the Mission bunker signs among them; `projectStaticMesh` in the file): solid
+  world surfaces write a stencil value by kind (`MaterialCompiler.StencilBsp` 1 lightmapped BSP,
+  `StencilStaticMesh` 2 vertex-lit static meshes, `StencilOther` 3 the rest) and such a projector draws only where the
+  stencil is not 2. MissE's "Bunker West" sign no longer lands on the railing in front of the wall. Actor-lit meshes
+  (no baked colours) still receive it (estimate).
+- Not reproduced: MaterialBlendingOp (the projected texture mixed with the surface's own material: PB_Modulate 2x,
+  PB_AlphaBlend by the projected alpha; PB_Add leaves it out), `bGradient` (no placed projector sets it), and
+  `bProjectActor` / `bProjectBSP` filtering (every placed projector keeps both on).
+- Most maps have no texture projector (`projectors.json` empty: VertE, FactD, RiveE, MounS, ScheU). Their window,
+  grate, ceiling-grid and caustic patterns are LE_ESpotShadow lights (shadow map and cookie, see
+  [Spot shadow lights](#spot-shadow-lights)), not projectors.
+
+A projector's box is two surfaces with the same triangles (svm_projector.gdshaderinc, `PROJ_SIDES`): for a camera inside
+the box, or within 1 m of it, the faces turned away draw with no depth test; for a camera outside, the faces turned
+towards it draw with the depth test on (the box 2% larger, so a surface lying in a face stays behind it), and a box
+hidden behind a wall costs nothing. The vertex shader picks the surface from the box's six planes, for each camera.
+
+A map with one static G16 modulating projector can draw a small mesh clipped to its opaque world receivers
+(`Projectors/SurfaceProjector`, `svm_projector_decal.gdshaderinc`). Clipping uses the current world geometry, including
+mesh replacements, without changing its positions, UVs, lightmaps or simulation. Both renderers draw the result
+before other transparency. This removes Standard's scene-depth read/copy and Fast's redraw of whole receiver
+batches. Ordinary world shaders keep their original code.
+
+The converter records `textureFormat` and an optional `luminanceTexture` in `projectors.json`. The latter is a `.g16`
+file: bytes `G16\0`, little-endian uint32 width and height, then width x height little-endian uint16 luminance samples.
+`TextureCache` uploads normalized float samples with a float mip chain; the existing PNG remains for older content
+and other material uses. This preserves the native near-neutral 32767/65535 background instead of reducing it to
+127/255. Both the volume and clipped paths use the same precise texture when available.
+
+For close views, disjoint texture rectangles omit only samples whose doubled luminance differs from one by at most
+0.000016. Each rectangle retains a two-texel filtering halo. The full clipped mesh is selected when any live camera
+requires minification, distance/portal fog, or active responsive smoke; those paths retain the fog's 127/255 modulation
+baseline. Thermal and EMF draw no map projection. Perspective UVs, geometric sidedness and receiver fog depth are
+preserved. The small depth bias moves along the eye ray, keeping screen XY fixed.
+
+Moving opaque and masked receivers use `MovingProjectorReceivers`: only affected Faithful materials acquire
+`SVM_G16_RECEIVER`, evaluated in their existing draw from the actual deformed/skinned world positions. The original
+material object retains its uniforms and animation clock. A material also used by fixed cells gets a receiver-local
+copy, with cached uniform names and only changed values copied; fixed geometry therefore is not modulated twice.
+Materials are restored on leaving the frustum, changing maps, or disabling projection. Fast uses the corresponding
+translated actor variant and now projects onto actors too (its legacy pass only projected onto world batches).
+
+Cloaks retain their screen-copy/refraction material, rather than receiving another multiplication over its sampled
+background. Thermal, EMF and shadow passes do not receive the marking. Moving a native player/object no longer
+activates the expensive full projector. Unknown opaque shaders still use the original path for compatibility;
+masked/animated/displaced fixed receivers, UV modifiers, multiple projectors and other blends retain their existing
+eligibility guards. Fixed merged cells have their own marker because some use the dynamic shadow layer when
+another material animates coverage. `SVM_PROJECTOR_GEOMETRY=0` selects the volume implementation for comparisons;
+`SVM_PROJECTOR_FALLBACK=1` forces that diagnostic path. Content without format metadata keeps the original path.
+See the [measured results](../tools/benchmark/RESULTS-2026-11-14-REPACK.md).
+
+### Own-spy projected shadow
+
+`SpyShadowLighting` supplies the native twelve-light cache's darkness and weighted light direction to
+`Projectors/SpyShadowProjector`. The original `SBasePawn.SetupOldSchoolShadow` uses a 128x128 posed silhouette,
+skeletal bone zero, a light distance and trace range of 300 uu, and a cull distance of 600 uu. Darkness zero at
+initialization is temporary: native actor lighting writes it again. The render path is separate from spot-light
+shadow filtering and ambient occlusion. The existing previous-sample sticky-camera timing stays in its logical
+update; rendering the silhouette does not invoke another camera solve.
+
+A private viewport draws copies of the spy's actual meshes, skin bindings and current bone poses into alpha.
+Only local opaque world receivers are copied, clipped to a padded projection volume and cached until its bounds
+or nearby rigid transforms change. Standard and Fast draw this small receiver mesh after opaque geometry and
+before transparency. No scene-depth copy, whole-map redraw or G16 fallback is needed. Cloak, zero darkness,
+hidden/dead pawns, thermal/EMF and distance culling disable capture. The current bitmap softening is a nine-sample
+tent; exact legacy bitmap-filter parity is not established. Masked/blended/displaced receiver coverage remains
+outside this opaque receiver path.
+
+## Light beams
+
+Lights with `UsesLightBeam` and a `LightBeamMesh` (200 placed, `TestMapStaticM.Accessories.LightBeam` and its copy
+`STM_INI.STM.INI_LightBeam`: 9 planes across Y and 9 across Z, X 0..1) draw the mesh stretched along the light
+(`LightBeams/MapLightBeams`, `svm_light_beam.gdshader`) from `render/lightbeams.json`:
+
+- Length EchelonRange x LightBeamFalloffScale; the section at distance t is the spot (SpotWidth x SpotHeight) x
+  (NearPlaneRatio + (1 - NearPlaneRatio) t / EchelonRange) (game 0x1097ba8a, bridge). NearPlaneRatio outside (0, 1]
+  is taken as 0.1 (estimate).
+- Each slice adds `BeamGain` (0.046) x LightBrightness / 255 x sqrt(LightBeamInitialAlpha) x light colour to the frame,
+  fading as 1 - x along the beam (the fade is an estimate). Additive: MissP's lamp beam (STriggerLight1096, brightness
+  100, alpha 5) shows over the black sky at 85 to 92 of 255 in the game, which a multiply cannot draw (0.046 gives 87
+  to 104). The sqrt(alpha) and linear brightness are the bridge's FactD sweeps.
+  The game's own rule is the same shape (beam setup 0x1097bb4d..0x1097bbb3 and the vertex program text at
+  0x10c4dd1c): the plane colour is FGetHSV(LightHue, LightSaturation, LightBeamInitialAlpha), the alpha standing in
+  for the value byte (0.7 b / (sqrt(b) + 0.01), b = alpha x 1.4 / 255, close to 0.046 x sqrt(alpha)), times the
+  light's brightness, times a constant less x along the beam. Original captures of BankD's vault lamp at brightness
+  100 to 1000 and alpha 1 to 20 follow it. All eighteen planes are drawn from both sides: drawn one-sided, MissP's,
+  RiveE's and FactD's beams disappear from views where the game shows them.
+- A map light that is not an LE_ESpotShadow light draws no beam (BankD's and BankP's red alarm lights,
+  STriggerLight10185 and 11326, LightType 2 with UsesLightBeam): the game after the vault opens, and an original
+  capture with both switched on, show none where ours filled the vault chamber with a pink fan.
+- A beam whose light projects a texture (EchelonLightMaterial, 66 of the 202) draws at `ProjectedBeamGain` (0.3) of
+  that. Measured on BankD's vault lamp (STriggerLight1680, switched on by the vault event) against the game: its beam
+  adds 60 to 77 of 255 seen from inside, where the rule above gave a solid white cone from every side. Which stage of
+  the game's beam draw takes the rest is not decoded.
+- A beam of an LE_ESpotShadow light (196 of the 202) is cut and tinted by that light: the game's beam setup
+  (0x1097b3d0..0x1097bc12) picks its stages from the light's shadow buffer and its EchelonLightMaterial textures and
+  hands the beam's vertex shader the light's projection. The shader projects each slice pixel through the light's spot
+  shadow slot (`SpotShadowLight.SlotOf`, the same frustum and filtered depth test as the world template) and
+  multiplies the slice by the slot's cookie there: sun beams draw as shafts between the window bars and stop at the
+  walls, RiveE's caustic light (`Mall_tibu.lightECHL`) throws teal shafts. A spot light without a slot this frame (not
+  selected by the visible-first `SpotShadowMapLights` budget) draws no beam (estimate); a selected beam follows its
+  slot's transition gain. `MapLightBeams.UpdateSlots` runs each frame after
+  the spot lights take their slots (PlayRoot after `FlashLightView.Draw`, golden renders after `MapSpotLights.Update`).
+- Golden (2026-10-29, with the spot lights drawn): RiveE spy-90 SSIM 0.693 to 0.952, spy-270 0.659 to 0.938; FactD
+  spy-0 0.766 to 0.886 (the uncut multiplied beam of Light274 had enclosed the camera and tinted the whole room red);
+  MissP far-180 0.706 to 0.875, far-0 0.723 to 0.871.
+- On while LightType != LT_None and UsesLightBeam: lights the simulation holds (STriggerLight, light movers such as
+  BankD's Mover3569) are read live after each tick, so `LightOff` (which clears UsesLightBeam) and alarm switches drop
+  the beam and a moving light carries it; other lights follow `RenderMap.IsLightOn`.
+- Thermal and EMF draw no beams. Searchlights (`SProjoFixe` / `SProjoLight`) have no beam: neither class sets one.
+- Not drawn: the merc torch's beam (SGadTorche sets UsesLightBeam while on; the torch is placed by `FlashLightView`).
+
+## Sky zone
+
+When `lighting.json` has a sky zone, the main camera draws it in the same frame, as UE2's sky pass does: the sky
+layer's materials (`MaterialCompiler.GetSky`, `SVM_SKY_ZONE` in `svm_world.gdshaderinc`) place each surface as the
+sky camera sees it (the main camera's rotation and projection, the eye at the SkyZoneInfo, `svm_sky_origin`) and
+shade it as that camera (its fog slot in `svm_sky_layers`, the eye as the camera position). Their depth is scaled
+by 2^-50 towards the far plane, so the whole world lies in front of the sky while the sky keeps its own depth order
+(`svm_sky_depth.gdshaderinc`); readers of the view's depth (the display-space fog stage, ambient occlusion, the
+responsive smoke background) treat depths up to 2^-40 as sky or nothing drawn, as depth 0 before. Solid sky surfaces
+write the 8-bit value the old sky picture had (`svm_sky_display`); blended ones blend over it, at most one level from
+the old composite. Transparent sky surfaces draw before every other transparent surface (lowest render priority) and
+in the sky camera's order: each sky node's `SortingOffset` turns the main camera's sort depth into the distance from
+the SkyZoneInfo to the node's box centre (Godot 4.7.2 `render_forward_clustered.cpp`). Each transparent surface of
+a sky cell is a node of its own that keeps the whole cell's box (MapBuilder) and sorts 1 mm nearer per place in the
+cell's surface order (`svm_sky_order`), the order the sky camera drew a cell's surfaces in at their shared distance;
+Godot's sort keeps equal depths in order only up to 16 transparent surfaces. Sky nodes get a cull margin
+of 16384 m, so their place in the world never culls them. Sky surfaces write no stencil marks.
+
+Known differences from the old SubViewport picture: transparent sky surfaces are drawn in the transparent pass, so
+the screen copies taken before it (the cloak's see-through, authored refraction, the coronas' scene colour) hold the
+sky without them; additive sky layers that push the sky above 1.0 are no longer clamped before main-world
+transparent surfaces blend over them; sky surfaces nearer than the near plane to the SkyZoneInfo are not clipped.
+
+A sky zone fogged solid (`FoggedSkyZone`) keeps the old way: a 16 x 16 SubViewport drawn once from the
+SkyZoneInfo's location through the same sky materials, and a full-screen quad on the far plane copies that picture
+(raw display values) wherever the world drew nothing. The sky camera draws only the sky layer; the backdrop quad is
+on a layer the sky camera leaves out.
+
+The sky zone's own walls are fake-backdrop surfaces (SteeE's star box: 8 polygons of `SQU13_txt.Tsky06`, plus the
+floor); the exporter now keeps fake-backdrop polygons of the sky zone (`scctpkg` `extract_polygons(...,
+include_fake_backdrop=True)` for the sky node only), while the fake-backdrop windows of other zones stay out. Thermal
+and EMF draw no sky zone: their frames keep the clear colour there (measured: the EMF sky reads exactly the clear
+colour through the EMF pass, the thermal sky the table's far, cold end).
+
+## View
+
+`FaithfulView.SetUeCamera(location, rotation, FovAngle)`:
+
+- The camera basis is UE right, up and backward through `UeSpace` (Godot cameras look down -Z).
+- FovAngle is horizontal over a 4:3 picture; wider pictures add width (Hor+), so the vertical angle is
+  `2 atan(tan(FovAngle / 2) x 3 / 4)` whatever the aspect (measured on the 1280x720 captures).
+- The projection is shifted half a pixel down and right: phase correlation of every capture against our renders gave
+  (0.5, 0.5) px, D3D's pixel centre convention. The shift alone raised SteeE's median SSIM from 0.922 to 0.966.
+- Near 2 uu, far 65536 uu.
+- `RendMap` picks the vision mode (below). `BinocularsOn` and `BinocularsOverlay` are the binocular hook: the HUD's
+  page texture drawn at 4:3 in the middle of the view (a CanvasLayer) while SBasePawn.bBinocularsOn is set; mode 50
+  only flags the overlay, the renderer keeps drawing the mode under it.
+
+## Drawing between ticks
+
+The simulation runs at 60 Hz; the screen runs at whatever rate the frame cap and vertical sync allow (144 Hz or more).
+The original ran its controller and its view once per rendered frame, so everything the player sees moves every frame
+and a mouse move is in the frame it arrives in. The rewrite matches that on the screen:
+
+| What | How it is drawn | Code |
+|---|---|---|
+| Camera location, rotation, FOV (all views: walking, scope, binoculars, sticky cam, camera network) | the calc views of the last two client ticks blended by the clock's fraction into the next tick (alpha); a move over 512 uu in a tick is a cut | `Cameras/PlayCamera.cs`, `Cameras/ViewBlend.cs` |
+| Mouse look | while the view is the pawn's own first-person view turned by the controller's plain mouse model (merc `UpdateRotationAttaquant_Mouse`, spy `UpdateCamRotation` without a target snap), the drawn rotation adds the rest of the last tick's input turn, `(1 - alpha) x turn`, and the turn of the counts not yet simulated, both from the decoded formulas. When the tick takes the counts the drawn rotation does not move. A tick whose turn differs from the prediction twice in a row, once on a state change, or not at all (the roll keeps its view), turns this off until a tick matches again. The Merc scope always disables this plain-model look-ahead: its camera chases the aim point, and a coincidental rounded match or a no-input scope entry must not inject a camera turn that snaps back on the next tick. The sticky cam and camera network views (`s_UseObject.UpdateRotation`: a tick turns only past the 150 dead zone, then the cam's limits clamp) get the same: their view is the cam actor, which takes the controller's angles a tick later while turning, so that whole tick is drawn ahead too, and during a steady turn the counts of the tick so far are drawn without waiting for the dead zone. Without it the drawn turn speed beat by 1.5x with two or three frames of mouse a tick (144 Hz) | `LookAhead` in `Cameras/ViewBlend.cs`, `PlayInput.PendingMouse` |
+| First-person arms and rifle | one-shot clips: the time left is sampled after every tick and blended by alpha (a clip that started at the last tick is drawn from its start); loops advance by the frame time | `Views/ViewModelPose.cs`, `Views/OneShotClock.cs` |
+| Scope sights | the aim point (1000 uu along MyDesiredRotation from the eye) is sampled after every tick and blended by alpha, then projected through the drawn camera | `HudBinocularAim` in `Hud/HudBinoculars.cs`, `HudLayer.DrawnAimLocation` |
+| Spy's following view (third person) | the same look-ahead while the camera is SPlayerCam `s_Following` and its rotation is the controller's (the spy's `UpdateCamRotation`); the solver puts the camera its distance behind the target along the controller's rotation (spec/native/camera.md rule 3.11), so the location turned ahead moves round the target by `m_prevDistance x (forward(blended) - forward(blended + look))` and the spy stays where the next tick puts him. Without it the spy's turn beat by 1.5x at 144 and 165 fps | `LookAhead.FollowView`, `OrbitDistance`; `PlayCamera.Apply` |
+| Local spy's arm aim | the AAFULL pair of the local spy is drawn toward the view drawn this frame (the controller's rotation plus the mouse turn not yet simulated, `LookAhead.Pending`) from the drawn facing, less the part of the last step's target the 8 rad/s IK speed has not reached: the simulation steps the pair once a tick on the request of the tick before and the body is drawn between ticks, which left the pistol and its laser two to three ticks behind the camera; the original builds each frame's pose from that frame's view, and in it the laser follows the mouse at once. Fast flicks past the IK speed still trail. Other pawns and the merc keep the tick's pair | `MeshAimIK.DrawnFullPair`, `SimPawnView.DrawnView`, `PawnViews.Draw` |
+| Scene time (animated materials, light types, map emitters, the HUD's screen effect fades and page time) | the level time of the last two ticks blended by alpha (`DrawnTime`), so it moves every frame as the original's per-frame level time; before, it moved only at the ticks and held still in 58 % of the frames at 144 fps and 75 % at 240 | `Play/DrawnTime.cs`, `RenderMap.SetTime`, `HudLayer.DrawnTime` |
+| Map emitters | each frame steps every system by the frame's own time (the engine ticks emitters once per rendered frame); a stretch over 1/60 s runs in 60 Hz steps and then the rest | `Particles/Emitters.SetTime` |
+| Pawns, devices, effects | see docs/ANIMATION.md (SimPawnView interpolates location and channels) | |
+
+The zoom curves stay the original's: the scope's 0.4 s step (FOV held 0.25 s, then `target + (previous - target) x
+time x 5`, merc-scope.md rule 4) and its kick run per tick in the simulation, and the blend draws them between ticks.
+The scope's view chases the aim point at rate 5 per second (rule 6): that lag is the original's and is kept.
+
+`--svm-smoke=smooth` checks it through the player's path (KeyPilot mouse and keys, the launchers' threads) at each
+frame cap of `SVM_SMOOTH_CAPS` (default `0,144,60`, 0 uncapped with vertical sync off): a steady turn moves the
+camera every frame, a steady turn of a network camera (zoomed, turned to one end of its yaw window first) moves at
+an even speed (90th over 10th percentile of the per-frame speed at most 1.3), a single mouse move is drawn in full in
+the frame it reaches the game, a zoom's FOV and the scope
+clip move every frame, and the sights have no tick-rate saw tooth. It lists frames over 20 ms with the simulation and
+view costs and the garbage collections in them; `SVM_SMOOTH_CSV` writes the per-frame curves. The logic tests
+`SmoothViewTests` run the same rules against the play session.
+
+Measured on SteeE at 1280 x 720 before the change: a mouse move reached the screen 17 to 28 ms (2 to 6 frames)
+after it arrived at 144 fps and uncapped, 16.7 ms at 60; the scope clip held still in 60 to 75 percent of the frames
+at 144 fps and above; the sights jumped by up to 5 canvas units a frame. After: 0 frames, no still frames, under 1.5.
+Frame pacing: every frame over 20 ms in play was a generation 1 garbage collection (10 to 20 ms pauses, about one
+every 1 to 3 s at 144 fps); the process allocates about 20 MB/s at 144 fps, most of it in the client tick, then the
+views and the HUD.
+
+## Frame pacing
+
+[tools/benchmark](../tools/benchmark) records FPS, slowest-1% frame times,
+allocations and GC pauses through the normal play path against recorded original-game cameras. GPU timing is opt-in
+because timestamp queries/readbacks can affect throughput. Raw captures stay in `local/fps`; see the benchmark README.
+
+**Options â†’ Performance â†’ Max FPS** sets a single cap for menus, the lobby and matches (`max_fps` in `settings.json`).
+The slider covers 30 to 700 FPS and has notches at common refresh rates. **Match refresh rate** (-1, the default)
+follows the screen the window is on. **Unlimited** (0) removes the engine's cap. Legacy profiles carry forward
+`fps_merc`, which previously applied in menus and the lobby, or `fps_spy` if only that cap is present. Version 1
+profiles with the old first-run value of 120 for both roles follow the monitor. Vertical sync (`vsync`) is off by default.
+
+| Setting | `Engine.max_fps` | Vertical sync |
+|---|---|---|
+| Match refresh rate, vsync off | the screen's rate, rounded (59.94 Hz gives 60) | off |
+| a rate, vsync off | that rate | off |
+| Unlimited, vsync off | 0 | off |
+| vsync on, cap at or above the screen's rate (or Match refresh rate, Unlimited) | 0: the swap paces the frames (a sleep limiter at the swap's own rate misses a refresh now and then) | on |
+| vsync on, cap under the screen's rate | the cap | on |
+
+`Options/DisplayFrameCap.cs` holds the rules. `SettingsApplier.ApplyPacing` sets vsync and the cap when settings are
+applied and at startup. `DisplayFramePacer` (under the root window) follows the window. Every frame it
+checks the window's screen, every second it reads that screen's refresh rate again, and on a change it applies the cap
+again (`SVM_DISPLAY screen N at R Hz`). Options previews an unapplied monitor selection's own refresh rate and
+refreshes the displayed rate once per second when the window moves or the display mode changes. Applying display
+settings reasserts the selected screen after changing window mode: leaving fullscreen can otherwise restore an old
+window rectangle on a different monitor, even when the resolution is Desktop.
+Godot's own limiter holds a cap to a frame time standard
+deviation of 0.01 to 0.07 ms (measured below), so Reloaded's limiter (absolute deadlines, then sleep and spin: rules
+16 and 17) is not ported. The FPS readout includes 1% lows and highs from its recent frame history.
+
+**Input latency** (rl:gfx.pacing, `low_latency_mode` Off or On; Off by default). The swap chain and the frame
+queue are read only at start, so Save writes `user://render_override.cfg`, which project.godot names as its
+`application/config/project_settings_override`: On asks for 2 swap chain images (Godot's lowest; its default
+is 3). Legacy Ultra values migrate to On because they used the same override. Godot's frame queue remains at two.
+Double buffering can reduce latency, but with V-Sync it can lower frame rate when a refresh is missed. Off removes
+the latency override. End-to-end input latency has not been measured.
+
+**Process options** (rl:gfx.system): `--priority=` (idle, low, below, normal, medium, above, high) and
+`--affinity=` (a mask such as `0xF`, or CPUs such as `0,2-3`) after `--` on the client's command line
+(`ProcessTuning`, `SVM_SYSTEM` lines in the log); with `throttle_stop` on, the Windows client opts out of power
+throttling at start (SetProcessInformation, execution speed). The dedicated server (`svm-server`) takes the same
+two switches, as `--priority <p>` or `--priority=<p>` and the same for `--affinity`, in every mode; both read them
+through `OpenScct.Server.ProcessOptions` (affinity on Windows and Linux).
+
+**Crash reports** (rl:ac.crash): an exception nothing catches (any thread, or a faulted task nobody awaited) writes
+`crash-<utc>.log` into the user data folder, next to `settings.json`, with the build, the OS, the map and mode being
+played and the managed stack (`CrashLog`). Exceptions inside Godot's callbacks are caught and printed by Godot;
+native crashes keep Godot's handler.
+
+`--svm-smoke=frame-rate` (`Smoke/FrameRateSmoke.cs`) checks it through the player's path: the spy plays SteeE as the
+launchers run it, and for each case of `SVM_FRAMERATE_CASES` (default `monitor,60,144,165,240,unlimited,monitor-vsync,
+monitor-move,monitor-mode-change`) the settings are saved and applied as the options screen does, KeyPilot walks the spy and then turns
+the mouse steadily, and every frame the drawn camera, the spy's drawn pawn, the map's scene time, its emitters' time
+and the HUD's effect time are read after every view has drawn (`FrameStartProbe` notes when each frame began). It
+fails when a cap is not met (unless the machine draws fewer frames uncapped, or vsync runs faster than the screen),
+when one of those holds still between moving frames, when the steady turn's per-frame speed spreads over 1.3x on
+evenly paced frames (else its step jitter is checked), or when a time's step jitter
+(`Smoke/FrameMotion.cs`: each frame's step against the step its length asks for, as a share of the mean step) is
+over 0.35. `monitor-move` moves the window to the next screen and expects the cap to follow (with one screen it is
+only noted). A hitch (over three median frames) and the two frames after it are left out of the motion checks, as is
+the screenshot read back after each case. `SVM_FRAMERATE_CSV` writes the per-frame values. The logic tests `FramePacingTests` check the rules, the
+drawn time and the spy's following view at 60, 144, 165 and 240 fps.
+
+Measured (October 2026, 1280 x 720 window on a 480 Hz screen, and moved to a 144 Hz one; before -> after this change;
+frame time median and standard deviation from the walks; the spy's steady turn: per-frame speed p90/p10; the scene
+time: frames it held still and its step jitter):
+
+| Case | fps | frame | spy turn spread | scene time still | scene time jitter |
+|---|---|---|---|---|---|
+| 60 | 60.0 | 16.67 ms, sd 0.01 | 1.00 -> 1.00 | 0 / 133 -> 0 / 143 | 0.36 -> 0.001 |
+| 144 | 144.0 | 6.94 ms, sd 0.04 | 1.51 -> 1.02 | 199 / 340 -> 0 / 345 | 1.17 -> 0.001 |
+| 165 | 165.0 | 6.06 ms, sd 0.04 | 1.51 -> 1.02 | 247 / 389 -> 0 / 396 | 1.30 -> 0.002 |
+| 240 | 240.0 | 4.17 ms, sd 0.03 | 1.01 -> 1.03 | 426 / 567 -> 0 / 576 | 1.72 -> 0.002 |
+| monitor (480 Hz) | 440 to 480 | 2.1 to 2.3 ms, sd 0.6 | 1.33 -> 1.28 | 845 / 988 -> 0 / 1068 | 2.41 -> 0.006 |
+| unlimited | 450 to 540 | 1.9 to 2.2 ms, sd 0.25 | 1.27 -> 1.37 | 1094 / 1238 -> 0 / 1042 | 2.77 -> 0.003 |
+| monitor, vsync | 370 to 490 | 2.1 to 2.7 ms, sd 0.3 | 1.12 -> 1.22 | 967 / 1109 -> 0 / 870 | 2.58 -> 0.002 |
+| monitor, moved to the 144 Hz screen | 144.0 | 6.94 ms, sd 0.05 | 1.02 | 0 / 346 | 0.001 |
+
+The spy's drawn pawn moved every frame at every rate before and after (step jitter 0.001 to 0.01 on a straight walk at
+a cap). Above about 300 fps the frame times themselves spread by 1.25 to 1.35x (no cap paces them), so the turn's
+speed spreads with them; its step jitter stays near 0.1 there. Godot's limiter holds a cap to within 0.1 ms. This
+machine draws SteeE at 350 to 540 fps uncapped, so a 480 Hz monitor cap is not always reached there.
+
+## Vision modes
+
+`FaithfulView.RendMap` (PlayerController.RendMap: 5 normal, 34 night, 36 thermal, 37 motion, 38 EMF) sets the global
+`svm_vision` every Faithful material reads, the clear colour, coronas, the sky and the vision-only nodes, and the
+post pass draws the mode. All four modes use the grain: `Engine.Noise0_gauss` tiled one texel a pixel, turned by a
+random angle in [0, 1) radian and moved by a random offset in [0, 1) each frame (thermal post 0x10965191: rand() /
+32768 for each), bilinear. The random sequence is seeded, so renders repeat.
+
+**Blur pyramid** (thermal, motion and EMF; their post passes 0x10964d30, 0x10963dc0 and 0x10965680 each run blur
+run 0x10967d70 twice and thermal and EMF composite 0x10967e30). One pass draws its source into a smaller target with
+a 4-tap filter along one axis, taps at +-1 and +-3 source texels from the target texel's centre, bilinear, weights
+0.332 and 0.168 (ps_1_1 0x34e9b8). Run 1 draws the frame into 512 x 256 (vertical taps) then 256 x 256 (horizontal);
+run 2 draws that into 256 x 128 then 128 x 128 (render targets 0x30e6c..0x30e78, default sizes from 0x1090ab98). The
+render device's high-detail switch (0x10c78b98, taken as on) doubles the widths of every post target (this pyramid,
+the glow's runs and its bright target) above 640 pixels of frame width and the heights above 800
+(`RenderK.PostDetailScale`); at the default sizes a 2000-pixel frame blurred the heat four times too wide (the spy's
+hot spots stopped at yellow, his head read cold, a wide halo ringed him). The composite (fixed function: texture factor
+0x80 blends the levels, vertex alpha 0xC8 blends them over the frame): `h = lerp(frame, lerp(blur1, blur2, 128/255),
+200/255)`.
+
+**High resolution vision effects** (`high_quality_vision`, off by default) adapts SCCT-Repack's `[Pyramid] Size=512`:
+the two coarse vision levels double in each dimension, retaining the taps, level mixture, colours, grain and
+gain. At 1920x1080 this changes 512/256-square levels to 1024/512. Thermal, motion and EMF use these levels;
+EMF's corresponding coarse halo levels grow too, with the fine levels unchanged. Normal-view bloom and the
+existing night-vision path are unchanged by this option. Targets rebuild when the option changes in either
+renderer. `SVM_VISION_PYRAMID=1|2` overrides the option for diagnostics. Standard samples the high-resolution
+frame blur through the GPU's bilinear sampler when the colour buffer permits it, retaining the manual image
+filter as compatibility fallback (`SVM_VISION_FRAME_FILTER=manual` forces that reference).
+
+| Mode | Scene | Post |
+|---|---|---|
+| 34 night | normal scene with a light boost: the pre-render step sets the render interface's byte +0xC to 30; EnableLighting puts it halved into the texture factor added to the lightmap stage, so the light term grows by `2 x 15 / 255`; actors and vertex-lit meshes take the same (measured); no glow gate | `saturate(4 n (L x (0.718, 1, 0.667) + glow))` (ps_1_1: `mad_x2` then `mul_x2` by the grain), L the display luminance (0.3, 0.59, 0.11); the glow term is not fed in yet |
+| 36 thermal | the Z pass: `(0, heat, 1 - viewZ / 5000)`; heat is HeatIntensity, or `4 lum(heat texture) x HeatIntensity` (HEATTEX_Cool), or `lum + HeatIntensity` (HEATTEX_Heat) with a heat modifier; translucent surfaces blend `(0, 0, fade)` by alpha x HeatOpacity; HeatOpacity 0 leaves the actor out; additive, modulating and darkening surfaces are left out; clear black | `2 x table(h.g, h.b) x n` (ps_1_1 0x34e11c, texreg2gb), table `Engine.heat_and_attenuation_2d` (u heat, v fade), bilinear, clamped |
+| 37 motion | normal scene | `lum = 2 s L(blur2 x n) + MTVOffset / 255`, `s = 1 + 3 MTVSlope / 255`; below 0.5765 a ramp from (0, 20, 40) to (180, 10, 10) by `1.7347 lum`, above it `(0.9, 0.05, 0.05) x (1 - lum)`; x sonar (constants 0x10963f9f..0x10964127, ps_1_1 0x34e278); blur2 is read while PlayerController.SoundWaveDistanceToCamera is 0 |
+| 38 EMF | `EMFInvDarkBlue(0.25 (R.x + R.y) + 0.5, 0.5 R.y + 0.5) x (1 - EMF glow)` with R the camera-space reflection, x the EMF texture (inverted with bInvertEMFTexture); EMF glow is EMFIntensity while bEMFIsOn; EMFOpacity 0 hides the actor, below 0.99 draws a 4 x 4 screen door; additive surfaces left out; clear 0xffffda85 | `2 x (1 - h) x n x sonar` (ps_1_1 0x34efe0) |
+
+- Motion vision's clean view rectangles: each held lock box of the tracker (HudMotionTracking.CleanRects, the list
+  ASMotionTrackingVision::Tick fills at 0x10ac0e30) is redrawn after the motion pass by ps_1_1 0x10c4e328 (loop at
+  0x10964996..0x10964c7b over the viewport's list): `2 x (2 x (L(scene) (0.675, 0.75, 0.675) + (0.09, 0.1, 0.09))) x n
+  x sonar`, each stage saturated, L of the sharp scene copy (RenderDevice +0x30e24, not the blurred level), the grain
+  and the sonar of the motion pass at the same place. `FaithfulView.MotionCleanRects` hands at most eight to the post
+  pass as parts of the picture; the box lies under the HUD's corner brackets, as in the captures.
+- The sonar backdrop `Engine.sonar_background` (8 x 16) is tiled 80 x 60 times over the frame, bilinear (motion
+  pass stage 2 coordinates 80.0 and 60.0; the EMF pass is taken to tile it the same).
+- Per-actor values: merged geometry reads HeatIntensity, HeatOpacity, EMF glow and EMFOpacity per vertex
+  (`CUSTOM0`, w + 2 marks it present) from the instance table's `vision` (SteeE: 742 instances, mostly HeatIntensity
+  0.03 to 0.06 and EMFIntensity 0.07; 94 store HeatOpacity 0 and EMFOpacity 0); actors read the instance uniform
+  `svm_vision_actor` (gameplay meshes from `sim/gameplay.json`; pawns HeatIntensity 1 by default; a spy without a
+  drawn weapon has EMFOpacity 0, spec/equipment/vision-goggles.md rule 12, read live as 0 in the captures).
+  `SimPawnView` writes the pawn's live values (`GameplayObjects.VisionOf`: HeatIntensity, HeatOpacity, EMFIntensity
+  while bEMFIsOn, EMFOpacity; replicated on every change) when they change, so a spy shows in EMF only while EMF
+  visible; `PawnAttachments` does the same for the spy's pistol from its own actor (1 while the spy is EMF visible,
+  0.3 screen door otherwise) and for the merc's rifle dummy (Actor defaults: drawn, no glow).
+- First-person models now apply the weapon's live vision values too. Converted skeletal materials retain their
+  original modifier in `scct_vision_source`: the rifle's diffuse alias `SWeaponTex.M160` otherwise loses
+  `SWeaponTex.Armes.heat_m160` and its EMF mask. Cosmetic materials preserve that source. The material's diffuse
+  alias still supplies stored mip counts, so adding the vision source does not soften its normal-view texture.
+- OpenSCCT's pistols (materials `OpenScctSidearms.*`, in no texture package) have no vision modifier, so
+  `SkeletalModel.SidearmVision` gives them a flat black EMF texture and a heat texture that keeps the actor's flat
+  heat: in EMF a pistol is white like the rifle, whose EMF texture is black under its faces, instead of the bare
+  environment a wall draws. Their arms are named `SWeaponTex.1DEF_01` and take the stock arms' textures. The pawn's
+  EMF state follows the gun in hand (`SidearmEquipment.CarryEmf`): SetEMF reaches only MyWeapon, so a pistol drawn
+  later stayed at an undrawn weapon's EMFOpacity 0.3 and its view model was a sparse screen door.
+- The EMF reflection matrix is decoded from game `0x1097766d..0x109776e5`, replacing the earlier uniform-scale
+  estimate. Its row-major rows are `(.25,0,0,0),(.25,.5,0,0),(0,0,1,0),(.5,.5,0,1)`.
+- Laser beams (`Lasers`: SLaserBeam's LasDetectBeam stretched from start to end; the tripwires' and the mines'
+  SLaserBeam_MineLaser, length fTailleFaisceau) are vision-only nodes: drawn only in 36 and 38 (bHideInNormalVision),
+  with their own material: the beam's HeatIntensity in thermal (tripwire 1, mine beam 0.4). In EMF the connecting
+  beam remains visible in dark grey, as observed in the original game. It uses the ordinary EMF environment
+  reflection with zero EMF intensity and depth fog; the emitter keeps its own EMF response. The rendered
+  `detector-laser` smoke checks that the beam stays visible without turning bright white, and retains thermal heat.
+- Weapon lasers (the spy pistol's beam, the merc laser sight; both SLaserBeam, HeatIntensity 1) draw their additive
+  red look in every mode, which adds only red, a channel the thermal post does not read. Their material carries a
+  thermal pass (`SpyLaserView.ThermalBeamPass`, svm_laser.gdshader with thermal_only) that draws heat 1 with the
+  depth fade where the beam texture is lit (its core), so they show hot in thermal. The merc sight also enables
+  the non-glowing EMF pass used by detector beams, with the same animated texture mask and first-person weapon
+  stencil as its thermal pass. This covers the beam body, muzzle fin and fallback mesh. The spy pistol keeps its
+  additive EMF look.
+- The Fast renderer draws `EffectMaterial` surfaces itself (`RdObjects.GatherEffect`: the weapon beams, the merc
+  sight's muzzle glow, impact marks, tracers and flashes; texture times colour, unlit, alpha or additive blend, with
+  the material's UV offset read each frame). Multiplied, subtracted and no-depth-test effects are left out. The spy
+  pistol's dot is a projector pass over the world surfaces its box reaches (`RdProjectors`, group
+  `svm_spy_laser_dot`). It also redraws solid or masked rigid mesh receivers, including movers, with their current
+  model matrices at equal depth, so the dot follows their surfaces and stays hidden behind foreground geometry.
+  Blended surfaces and skinned characters do not receive the Fast projector pass. The merc beam's first-person weapon
+  stencil is not applied: the depth test alone hides the stretch inside the rifle.
+- Marks left on surfaces (bullet holes, burns, abandoned projections, footprints) are not drawn in thermal or EMF
+  (`EffectMaterial.HiddenInVision`, and the tinted projection shader): those modes read the frame's colours as heat
+  and field strength, so a mark's own colours showed as a glow on whatever it was stuck to.
+- Spawned gadget meshes (`EffectViews`) and the map's device nodes (`DeviceViews`) write their actor's live values
+  (`GameplayObjects.VisionOf`) when they change, so a device whose bEMFIsOn goes off stops glowing; a map node keeps
+  the map's HeatOpacity (not replicated).
+- Partly see-through actors: a solid or masked surface whose actor has HeatOpacity or EMFOpacity between 0 and 1
+  (about 5,000 placed actors over the maps: glass, crates, fake ceilings, partitions, hedges, wooden walls) draws in
+  thermal and EMF as a blended layer over what lies behind it, by that opacity: in thermal `(0, heat, fade)`, in EMF
+  its EMF colour; it writes no depth, so hot pawns and glowing devices behind it show through. The map's merged
+  geometry puts such instances in their own buckets and gameplay meshes (movers, actor-lit props) their own shared
+  mesh, each with `MaterialCompiler.GetSeeThrough`: the solid pass leaves the surface out in 36 and 38 (uniform
+  `vision_see_through`) and a next pass (`VISION_SEE_THROUGH`, blend_mix, depth_draw_never) draws it; every other
+  mode draws the solid pass alone. Live value changes of a device follow, since both passes test the value per
+  pixel. Estimated: the original is known to draw an actor below opacity 1 translucent (bridge docs/VISION_MODES.md),
+  the exact blend of a solid surface's heat is not decoded. Actors built outside the map (pawn weapons, gadgets)
+  keep the EMF screen door; soft bodies draw solid.
+- EMF runs its own halo driver before the final two-level blur and inversion (`0x109678b0`). Pixel shader
+  `0x10c4f020` thresholds scene red <= 228/255 to white; four blur levels are summed with the normal glow weights
+  (0.4, 0.6, 0.7, 0.9). `0x109684f0` with its final flag set blends that sum with SRCALPHASAT/ZERO against the
+  original mask: `sum.rgb * min(sum.a, 1 - mask.a)`. This removes the interior, retaining the exterior halo.
+  ZERO/INVSRCCOLOR then multiplies the scene by `1 - halo`, making white outlines after the EMF inversion.
+  The shared glow targets are rebuilt each EMF frame, before the ordinary vision pyramid overwrites its levels.
+  A rendered AquaE kiosk regression checks the border against the interior and the EMF-to-normal transition.
+- Particles draw the translucent thermal rule for alpha styles and nothing in EMF.
+- Merged map cells draw twins without the thermal and EMF code (`SVM_NORMAL_VISION`) in every other mode, swapped in
+  the same frame as the vision changes ([light reach](#light-reach)); the pixels are the same.
+- Not yet: the night glow term and its pre-draws, the heat-source pass (HeatRadius actors; SteeE has none), the
+  the remanence overlay (PlayerController.RemanenceBlendFactor).
+
+## Cloak
+
+The spy's camo suit is `Actor.GlassEffect` (0 opaque, 255 full glass), ramped and flickered on every machine by
+`SPawnAttaque.TickNative` (spec/equipment/spy-energy.md rules 7 and 7a). The original draws an actor with GlassEffect
+set in a deferred glass list, only in normal vision (RendMap 5; scene traversal 0x10a395d2, 0x10a39c3a, 0x10a3f1ff):
+the pawn shaded normally into its own target, then textured with the frame drawn so far at its screen position plus a
+refraction shift, blended by TFactor alpha = GlassEffect, then copied back where it passes the depth test (game
+0x10a3bd47..0x10a3be15). Per pixel: `lerp(shaded, behind(uv + shift), GlassEffect / 255)`, no tint or texture. The
+shift is `(-k Nx / 640, k Ny / 480)` with `k = 10 (1 - d / 1500)` (0 from 1500 uu), d the camera distance (glass
+policy 0x109771f0); that it follows the vertex normal is inferred (the vertex shader is built at run time).
+
+`SimPawnView` hands GlassEffect / 255 to `SkeletalModel.SetGlass` for the body and the attachments (the gun) while the
+view's vision is normal (5) or night (34). Keeping the cloak in night vision is a port addition: toggling the spy's
+own goggles preserves the suit's fade and refraction on its body and gun. `CloakMaterials` makes a per-model
+variant of each Faithful material (`SVM_CLOAK` in
+`svm_world.gdshaderinc`), retaining its textures, actor lighting, tint and masked cutouts. It mixes the shaded
+surface with the shifted screen copy in one transparent draw, writing nearest depth and replacing the resulting
+pixel. There is no separate opaque body pass or overlay to interleave with the head, limbs or split cosmetic meshes.
+The fade uses a material uniform because actor lighting already occupies all 16 instance-uniform slots. Skin and
+cosmetic changes while cloaked receive the same variant; uncloaking restores their original materials and vision
+passes. `svm_cloak.gdshader` supplies the fallback for imported materials without Faithful metadata.
+In thermal, motion and EMF vision the spy uses its uncloaked materials, as in the
+original; the cloak also makes the spy EMF visible (TestAndSetEMFVisible) and hides it from motion tracking
+(DesiredGlassEffect 255). With the suit fully on (GlassEffect 255) the spy's body is not drawn at all in motion
+vision (Reloaded's scene traversal hook, spec/native/reloaded-hooks.md rule 33; `SimPawnView.DrawMotionCloak`); his
+gun and goggle glow still draw. The goggle glow is its own actor and is not glassed. The spy's own view has no screen effect
+(the HUD energy gauge and the suit messages only).
+
+Thermal and EMF reveal the cloaked spy with their usual materials. As a port addition, EMF visibility stays on
+through the entire fade-out (`GlassEffect > 0`), then returns to the normal equipment-based rule once the fade
+finishes. Cloaking does not reduce heat intensity or heat opacity.
+
+Known difference: other translucent surfaces behind the spy are missing from the screen copy.
+The `cloak-render` windowed smoke checks the real spy from eight angles and the shocker from two: the partial
+fade, complete silhouette coverage at full cloak, a cosmetic split during cloaking and live cosmetic restoration.
+It also switches a real `SimPawnView` through normal, night, thermal and EMF. Night captures check activation,
+partial fade, full cloak and restoration using mean red contrast across the silhouette to average out the moving
+grain. Thermal and EMF reveal the cloak, including EMF fade-out, and returning to night or normal vision restores
+the cloak. Patterned-background captures show the refraction separately.
+
+## Emitters
+
+`Particles/Emitters` draws the map's placed Emitter actors (`render/fx.json`, each sub-emitter's values over the shared
+class defaults) with the same particle code as the gameplay effects: `ParticleSystemSim` (AEmitter::Tick) over
+`ParticleEmitterSim` (UParticleEmitter's spawning and update) and `ParticleSystemView` (sprite quads facing the
+viewport's camera, spark lines, beam strips, `svm_particle.gdshaderinc`). The rules are decoded from the engine:
+[spec/native/emitters.md](../spec/native/emitters.md); the gameplay effects and their converted assets: [docs/EFFECTS.md](EFFECTS.md). `Trigger(tag)` is
+Emitter.Trigger; `RenderMap.SetTime` steps every system at 60 Hz up to the scene time (going back restarts them).
+SteeE: 57 sprite emitters (flames, flares and smoke always on; explosions, sparks and debris wait for their events).
+Authored particle collision uses the live client's collision world, so can fragments and other colliding particles
+bounce against the current floors and props. Render-only previews use the map's initial collision geometry.
+The view rejects sprite layers against conservative live-particle bounds before building their quads, and checks
+exact generated bounds before uploading sprite/beam layers. Simulation continues off screen; a returning layer
+uploads the current particles immediately. Colour-only effects stay out of custom shadow-depth cameras.
+Mesh emitters (Fact parts, ORP lamps and mannequins, Aquarium vase shards and fish, Missile bricks, Stee debris)
+draw their static mesh from the map library: the converter adds each MeshEmitter's StaticMesh as a library node
+flagged `particle` (render.py `_particle_meshes`), MapBuilder builds it actor-lit into `RenderMap.ParticleMeshes`,
+and the view draws one MultiMesh per sub-emitter with the mesh's own materials (UseMeshBlendMode), lit once per
+emitter by the actor lighting at the emitter (bUnlit off; an Emitter is bUnlit by class default and then draws at
+full brightness). Maps converted before this have no such nodes and their mesh emitters still draw nothing (rerun
+`maps`).
+
+An emitter or light whose simulated actor rides a mover (AttachTag: ShadD spot1/spot2, ShadP DynamicSpotlights) or
+hangs on an SAnimatedMesh bone (ActorsToAttach: Club, Orph, Miss, Stat) follows it (`Views/AttachedEffects`, from
+`DeviceViews`): emitters through `Emitters.SetPlace`, lights through `RenderMap.MoveLight` (world term, actor lighting,
+corona). A bHardAttach rider keeps its frame in its base's (HardRelMatrix, pitch and roll included); a soft rider is
+where the simulation put it; a bone rider sits on the drawn bone (RelativeLocation and RelativeRotation, zero on these
+maps). The render-only Engine.Light actors with AttachTag (PanaD/PanaS `elevator`) are bStatic and not bMovable by
+class default and baked into the lightmaps: they stay put. The places are taken after the frame's emitters are
+simulated, so a moving emitter is one frame behind.
+
+## Rain volumes
+
+Rain geometry is retained while the camera position is unchanged. Its material panner still reads scene time every
+frame; moving the camera rebuilds the same sheets and vertex alpha as before.
+
+The simulation knows the same boxes (sim/rain.json, or render/fx.json rain for older conversions): pawns standing in
+one are wet (spec/equipment/rain.md). `RainVolumes` draws the map's ERainVolumes (`render/fx.json` rain; ClarD, Orph*, Skys*, Stat*, Aqua*) as
+AERainVolume::RenderRain does each frame (game 0x10a04d70; the volume's fields sit at 0x304..0x328 in reverse
+declaration order: Falloff, FadeScale, DistanceToCamera, maxDistFromCamera, then m_weatherProperties). The world box is
+(-X, -Y, 0)..(X, Y, Z) of m_RainSize x DrawScale x DrawScale3D from the volume's Location. Along X and along Y the
+camera coordinate is clamped to [min - D/2, max + D/2] (D = m_DistanceToCamera); vertical sheets stand at D/2, D/2 + T,
+... either side of it (T = m_RainThickness, 80 when 0), each spanning the box's other horizontal axis and its full
+height, with grey vertex colour `round(255 x clamp((Falloff - d) / Falloff x FadeScale, 0, 1))` at distance d. A sheet
+is drawn while it lies in [min, max) of its axis, its grey is not 0 and it is within m_maxDistFromCamera of the camera;
+the walk stops at the first step that draws neither sheet. So only the nearest sheets show (OrphD: two each way at
+75 uu, grey 0.125) and a negative FadeScale (Stat*) draws nothing. Texture coordinates repeat once per m_RainMatScale
+uu from a per-sheet offset; the material (StandardRainMaterial: FB_Translucent, drawn additive) pans them.
+
+Estimates: the per-sheet offsets (the game fills its 16-float table at run time), the TexFriendlyPanner as
+`scaleU x u + PanU x PanRate x t` (GetMatrix is not decoded), the floor origin of the box (from OrphD's BSP), the
+volume's rotation (left out; the shipped volumes turn at most a few degrees), the top-to-bottom tilt RenderRain gives
+the sheets from a camera term (not decoded; sheets are vertical). Thermal and EMF leave the rain out (the volume's
+HeatOpacity and EMFOpacity are 0), as they do additive surfaces.
+
+## Soft bodies
+
+`Render/SoftBodies` simulates and draws the map's ESBPatchActor cloth (awnings, flags, AquaE's sea and kelp) and
+ESBStripDoorActor plastic strip curtains (210 placed on 43 maps). The converter reads each body's saved simulation
+object (ESBPatch / ESBStripDoor: particles with fixed flags, local positions and u, v; links with rest lengths) and
+its settings over the class defaults (`scctpkg level.softbody_record`; maps store nbU / nbV only when they differ from
+the default 3, which once dropped ClarD's and MuseD's flags). A patch is a (nU + 1) x (nV + 1) grid linked to its right
+and lower neighbours; a strip door is nU strips, each two edges of nV + 1 particles linked down and across, each strip
+showing its own slice of the texture. The world.glb instance carries the `softBody` block and its library mesh is the
+body at rest.
+
+The step is UESoftBody::Update (0x1099a6f0, UESBPatch vtable; the strip door uses the same code): step clamped to
+0.005..0.05 s and smoothed (5 % new), wind per free particle from the level's 2D Perlin noise at its u, v plus two
+timers advancing by windUPan / windVPan (between windMin and windMax per axis), acceleration = Gravity (local space) +
+(wind + pushes) x nbU x nbV / Mass, Verlet with EnergyFactor taking that share of the speed, then nbIter passes of
+pawn collision and nbNormalizeIter passes over the links; positions held within 1000 uu of the actor. The client uses
+fixed 60 Hz cosmetic physics steps, independently of render FPS, and only steps bodies seen in the last 5 s. A frame
+banks its elapsed time, consumes whole steps and retains the remainder; slow frames take several steps and upload
+the mesh once. The reference is the original at 60 FPS (Aquarium's native smoothed step measured 0.01665 s). The
+earlier render-driven cap of 120 steps/s changed the number of distance-constraint passes as FPS increased, making
+the optimized build's sea heave faster. The diagnostic kept 60 solver steps/s at both 240 and 30 render FPS; texture
+panners and oscillators keep their original rates. Pawns (collActor) are upright cylinders at
+Location + Velocity x 0.08: a particle inside leaves by the nearest of top, bottom or side and takes the pawn's velocity
+over the step as a push; a moving pawn plays collSound (once per 0.5 s). Soft bodies never block movement (the
+primitive's point check always passes). Rifle tracers crossing a body push the four corners of the crossed cell by
+BulletHitFactor x 100 in the shot's direction and play shotSound.
+
+Soft bodies are lit as actors (decoded). FDynamicActor::Render (0x10a14fe0) hands DrawType 13 to the body's vtable
+slot 0x78. For the patch, strip door and rope classes that slot calls slot 0x80, the draw at 0x10999f90. (The base
+slot 0x78 at 0x10999ce0, which an earlier note took for the draw, only batches the actor's projectors, Actor+0x21c, for
+the projector flush 0x10a3b900 / 0x10a4a9c0.) The draw, through RenderingModeNormal (vtable 0x10c0be78:
++0xc SetLight 0x10978cc0, +0x10 SetAmbientLight, +0x14 EnableLighting, +0x24 SetMaterial), does this:
+- PushState, then cull mode 2 (none).
+- `EnableLighting(UseDynamic 1, UseStatic 0, Modulate2X 0, no lightmap, LitSphere = the FDynamicActor's bounding
+  sphere)`.
+- SetLight for each light in the actor's list, then `SetAmbientLight(FDynamicActor+0xb8)`. Lights are skipped only in
+  RendMap 0x23.
+- SetMaterial(Skins[0], else Texture), then one DrawIndexedPrimitive.
+- The actor's projectors drawn unlit on top. Lights off, `EnableLighting(0, 1)`, PopState.
+
+So a body takes the same light set and ambient as any actor (the actor lighting model above: zone ambient plus
+AmbientGlow, the four strongest lights, D3D vertex lighting). It has no baked light, and a bUnlit one draws
+fullbright. The patch's vertex stream (0x10afef20) is position, normal, UV (32 bytes). It has one face of
+`(c, c + nU + 1, c + 1), (c + 1, c + nU + 1, c + nU + 2)` per cell. Each normal is the average of the four neighbour
+cross products, `du x dv`. With culling off, D3D lights the back the same as the front, so the client's back face keeps
+the front normal. The converter writes no vertex colours for soft bodies, only `unlit` (Actor.bUnlit: 5 of AquaD's
+14 bodies, ClubD's ESBPatchActor7813) and `ambientGlow`. `SoftBodyViews.Relight` applies the light set from the rest
+bounds at build time and whenever the gameplay meshes are relit.
+The mesh topology, material and UVs stay on the GPU. Simulation steps update positions, packed octahedral normals
+and bounds in place; unfamiliar vertex layouts fall back to rebuilding the surface. This avoids making a new mesh
+surface and finalizable array wrappers at every cloth step.
+
+Before this change every body drew fullbright. Golden survey before and after:
+- DeftS merc-180, the plastic curtain ESBPatchActor2857 in a doorway that the original draws black: SSIM 0.740 to
+  1.000, luma ratio 911 to 1.07.
+- ScheE merc-0, the overhead cloth ESBPatchActor243: SSIM 0.837 to 0.881, luma 1.67 to 0.88.
+- AquaD/E/T, ClubD and MuseD: unchanged within 0.001.
+
+AquaD/E/T's sea (ESBPatchActor370, AmbientGlow 30, opaque combiner `Aquarium_TXT.osc`, not bUnlit) uses the root
+Combiner's lighting order above. The 2026-10-31 Seaside diagnostic and original sandbox capture confirmed its
+dark water and bright waves. GPU positions matched all 242 simulated front/back vertices exactly; the opacity
+problem was material state, not the in-place cloth uploads.
+
+Explosions do not push soft bodies, as in the original: `SBExplosionHit` (native 1153, exec 0x109e2030, UESBPatch
+vtable slot 0xcc at 0x1099d5b0: the centre taken into local space, every particle pushed straight away from it by
+`500 x (1 + FRand)` uu with no falloff, the Momentum argument unused) has no caller in the script packages or the
+binary. Shots: the original's SBBulletHit pushes the up to four particles the last line check through the body stored
+(UESBPatch + 0x15c, cleared after the push); a server trace that passes through (bBulletGoTru, BulletWentTru) sends
+SBBulletHitClient(Momentum), which on another machine pushes only what that machine's own last trace through the
+body stored, so the push of another player's shot shows mainly where the trace ran.
+
+Soft bodies are not in the simulation, so the server's pass-through trace and SBBulletHitClient are stood in for on
+each machine: the local merc's own rounds (each one leaving his clip, tracer or not) push along his aim, from the
+gun's fire start to the first world hit within ShootingRange, without spread. Every other shot comes from the
+replicated muzzle counts every machine already gets (SWeaponDefenseDummy for another merc's rifle, SWeaponAttaque for
+every spy's pistol, the local spy's too): each step of the count is a line from the shooter's eye along his
+replicated aim (a merc's iDesiredYawPitch, a spy's iYawPitchFromView, the local spy's own view) to the first world
+hit within the gun's range (15000 for another merc, whose third-person gun does not say which rifle he holds). The
+players' tracers are then skipped so a round pushes once. In the original the shooter's machine pushes the cell under
+his aim and another machine only what its own last trace through the body stored, so other players' shots push more
+here than there.
+
+Not done: collision planes, spheres,
+boxes and Attach (no placed body uses them); dragForce (only applies when the actor moves); the noise tables are seeded
+here, random per level in the original; the colliders are pawns only.
+
+## Characters
+
+`SkeletalModel` loads a shared-pack skeletal mesh (spy `SPerso.ATT_01`, merc `SPerso.DEF_01`, props) with Godot's glTF
+importer for the skin and skeleton, then frees the AnimationPlayer: `AnimSampler` plays one sequence by name at a
+rate (looping or once, UE2 normalized frame) and `Ue2PoseApplier` writes the sampled bone positions, rotations and
+scales into the `Skeleton3D`. Placement is UE2's: `Location + PrePivot`, the actor's yaw, then the mesh's RotOrigin
+and scale. Materials are the actor-lit template, with the spy's masked self-illumination and the skins' heat and EMF
+textures (`SPersoTextures` modifiers: Shadw_agent_Heat, DEF_01_Body_Heat... HEATTEX_Cool). `SetVision` writes a
+pawn's vision values. `Views/PawnView` wraps one pawn for views. The core animation channels will replace the sampler.
+OpenSCCT's cosmetics (`svm_tint`, `svm_glow_hue`, the camo finish mask and sheen) are compiled only into materials of
+compilers with `MaterialCompiler.Cosmetics` (`SVM_COSMETIC`): the model's own, and the sticky, wet and goggle skins put
+over its surfaces. Map and gameplay materials draw as if those held their defaults, with less code; the instance
+uniforms stay declared in every variant, so materials of both kinds on one instance index them alike.
+
+`PawnOutfits.Prepare` loads both stock character rigs, map outfits, third-person primary weapons and goggle meshes
+before the client reports its scene ready. Their first replicated appearance reuses those templates instead of
+blocking the render thread after the round has begun. `PawnOutfits.Warmup` draws the dressed bodies, carried weapons
+and goggle glow in the private loading viewport so their skinned draw pipelines are prepared too.
+`gameplay-fx-warmup` checks that spawning the first pawn does
+not read additional skeletal-model files; the network lab records `modelFilesRead` alongside readiness and spawn times.
+
+`SetSlotSkin(slot, material)` puts a material over one material slot, as UE2's `Skins[slot]`: the mesh's materials
+are its slots in order, and the skin's texture is the chars step's `textures/Package_Name.png` next to the model,
+built on the slot's own material. The first-person view applies its weapon's Skins every frame: the merc rifle's
+rate-of-fire screen is `Skins[3]`, which `SWeaponDefense.SetMode` swaps between SI_rof_single (the mesh's own),
+SI_rof_burst and SI_rof_auto (the default), so the rifle reads AUTO, BURST or SINGLE as the HUD does. The chars step
+exports those three (`SKIN_SWAPS` in [content/svmbuild/charconv.py](../content/svmbuild/charconv.py)); `play-merc` checks the screen at each switch.
+
+## Golden renders
+
+| Step | Tool | Output (local only) |
+|---|---|---|
+| capture the original | `python -I -B tools/golden/capture_game.py [--rendmap 34\|36\|37\|38]` | `local/golden/game/<Map>/` or `local/golden/game-vision/<mode>/<Map>/`: `<pose>.png`, `cameras.json` |
+| render the same views | `python -I -B tools/golden/render_svm.py golden [-- --svm-golden-in=... --svm-rendmap=36]` | `local/golden/svm/<Map>/<pose>.png`, `render.json` |
+| score | `python -I -B tools/golden/score.py [--sbs] [--bin 4]` | `local/golden/score/<Map>/score.json`, side by sides |
+
+- Poses are tracked in `tools/golden/poses/<Map>.json`. The capture runs one headless Play Level in the project
+  sandbox under the play lock (the difftest recorder's `sandbox.py`), teleports the pawn and writes the controller
+  view per pose (memory writes on the local player only, never Physics), hides the HUD with `HUD.bHideHUD`, waits
+  until pawn and camera are still for 30 frames and saves the next presented frame (the RE+ headless frame share). It
+  records `vCamLocation`, `rCamRotation`, `FovAngle`, `bBehindView`, the pawn's placement, zone, animation channels
+  and vision values (HeatIntensity, HeatOpacity, EMFIntensity, EMFOpacity), and `TimeSeconds`.
+- `--rendmap` puts the local view in a vision mode before every grab the way the goggles leave it
+  (SGoggle.CurrentMode and PlayerController.RendMap set, bGogglesUp cleared) and plays the mode's side (spy for 34
+  and 36, merc for 37 and 38). Without a goggle key press the motion tracker actor does not exist (no lock brackets;
+  the HUD is hidden anyway). The merc plays in first person: golden renders hide the pawn when `behindView` is 0.
+- `render_svm.py` passes `--svm-content=<repo>/.content` (or `SVM_CONTENT`) unless given one: without a content folder
+  the client looks in the downloaded packs (`%LOCALAPPDATA%\OpenSCCT\packs\svmap`) before the checkout, and a map
+  downloaded once (PolaE, AquaE, MoonD, ShipD here) rendered from that stale copy, not from the map just rebuilt.
+- `render_svm.py` runs the client with a GPU renderer on a desktop of its own (CreateDesktop, never shown), so no
+  window appears. `--svm-smoke=golden` renders every recorded camera at the capture's size, with the recorded side's
+  pawn at the recorded placement playing the recorded sequence and frame, and the Story objective props
+  (`--svm-golden-mode=`). The map's LE_ESpotShadow lights are drawn as in play (`MapSpotLights`, nearest the camera,
+  updated each frame, then the light beams' slots); before 2026-10-29 golden renders left them out, so window, grate
+  and caustic patterns and beam cuts were missing from every golden. Calibration switches: `--svm-lightmap-scale=`, `--svm-glow-gate=0|1`, `--svm-dyn-tune=`,
+  `--svm-mip-drop=`, `--svm-mip-bias=`, `--svm-rendmap=`, `--svm-night-boost=`, `--svm-pawn-heat=`,
+  `--svm-golden-only=`, `--svm-golden-debug=coronas`.
+- `score.py` reports per pose SSIM on display luma (Gaussian window, sigma 1.5), the luma ratio and the dark-corner
+  difference, plus the plan's Faithful gates. `--bin 4` takes SSIM on 4 x 4 block means: vision frames carry a grain
+  that changes every frame, which per-pixel SSIM would score as structure.
+
+SteeE, twelve poses at 1280x720 (2026-10-23), before (the renderer at f970fed) and after this work:
+
+| pose | SSIM before | luma before | SSIM after | luma after |
+|---|---|---|---|---|
+| spy-spawn | 0.9974 | 0.883 | 0.9998 | 0.997 |
+| merc-spawn | 0.9768 | 1.023 | 0.9876 | 1.022 |
+| basement | 0.9420 | 0.957 | 0.9952 | 1.037 |
+| kitchen | 0.9813 | 0.979 | 0.9817 | 0.992 |
+| lounge | 0.9739 | 0.983 | 0.9970 | 1.006 |
+| shop | 0.8760 | 0.981 | 0.9079 | 0.983 |
+| storage | 0.9991 | 0.998 | 0.9995 | 1.003 |
+| dark-room | 0.9944 | 0.919 | 0.9999 | 0.994 |
+| yard-east | 0.9401 | 0.979 | 0.9958 | 1.000 |
+| courtyard | 0.9536 | 0.987 | 0.9876 | 1.003 |
+| yard-north | 0.9586 | 0.935 | 0.9828 | 0.983 |
+| crane | 0.9212 | 0.791 | 0.9793 | 0.933 |
+
+Median SSIM 0.966 to 0.991, minimum 0.876 to 0.908. Luma failures (gate 0.95 to 1.05) went from four to one. The
+causes found, in order of effect: spy-spawn's bright marks are the Story drop zone's suitcase screen (an objective
+prop the converter did not export, now drawn from the pack); the crane view lacked the star sky (the converter dropped
+the sky zone's fake-backdrop walls) and the crane lamp's corona (overdrawn by the sky backdrop, then too faint by half);
+yard-north's corona sat 4.2 % behind its lamp housing (tolerance 4 % to 8 %); dark-room's deficit was texture
+sharpness under the glow gate (single-level textures drawn with mipmaps). Lightmap gain, vertex colour scale and fog
+were not the cause (unchanged). Remaining: crane 0.933, the crane prop (SAnimatedMesh at DrawScale 10) is dark here
+and lit in the original (drawn fullbright it reads 1.17, with light radii scaled by DrawScale 1.12; the original's
+rule for lighting scaled skeletal props is not decoded).
+
+Vision modes, the same twelve views captured in each mode (SSIM on 4 x 4 block means):
+
+| mode | median SSIM | min | median luma ratio | notes |
+|---|---|---|---|---|
+| 34 night | 0.948 | 0.871 | 1.01 | every gate passes (before: 0.818, 0.692; the gate crushed the pawns black and the boost was a fitted 1.4 x 30 / 255); no glow term |
+| 36 thermal | 0.945 | 0.805 | 1.05 | the pawn reads hotter than the original (best fit at HeatIntensity 0.65 although it reads 1.0 live); crane 0.805 |
+| 37 motion | 0.985 | 0.946 | 0.99 | every gate passes |
+| 38 EMF | 0.873 | 0.810 | 0.98 | historical baseline before the EMF halo fix; see vision modes |
+
+## Smoke tests
+
+- `--svm-smoke=steee-render` (`--svm-render-map=` for another map): builds the map, checks triangles and the
+  handedness test, poses the spy and the merc through the sampler (their thighs must move), and with a renderer draws
+  the map from every player start and golden camera (draw calls must stay at most 600: SteeE max 436, median 384),
+  checks the night vision pass tints the frame, then runs `Golden/RenderChecks` on the first camera: thermal leads in
+  blue over green, EMF is blue, motion draws, the torch lights the frame, a laser beam shows in thermal and not in
+  the normal view, and the always-on emitters have live particles. Headless it checks the build only.
+- `--svm-smoke=golden`: the golden renders above, after the display-space readback check.
+
+Both need `.content/` (converted content and the render pack), so CI's default set stays `boot` and `testbox`.
+
+## Open issues
+
+- The crane prop's lighting (above). The pawn's heat in thermal. The night glow
+  term: the night pass runs the glow driver 0x10967740 in mode 1, whose bright pass (ps 0x10c4e830) writes the night
+  tint (0.718, 1, 0.667) where `dot(scene, (0.2, 0.393, 0.0733)) > 0.5` (c5 = 0), blurs it through the four-level
+  pyramid and composites it (ps 0x10c4ed00); the night pass blurs that once more (0x10967d70) and adds it as `glow`.
+  Without DoGlow & 3 it adds a blurred copy of the scene instead. The three full-screen pre-draws of the night pass
+  (texture factors 0x7f7f7f7f and 0 at depths 0.9974 and 0.9979) are not decoded.
+- Projectors: MaterialBlendingOp and per-type filtering (above). Light beams: the shadow buffer cut (window bars) and
+  the torch beam.
+- Mirrors: none to draw. Every PF_Mirrored BSP surface of the shipped maps (MuseD/E/T 86, OffsD 11, ScheU 16,
+  SteeD/P 25, SteeE/T 4, TermD 17 surfaces) is also PF_Invisible (flags 0x8000009 or 0x8000109), and UE2 leaves
+  invisible surfaces out of drawing, so the original shows no mirror; the exporter drops them with the other invisible
+  surfaces. The maps' "mirror" textures (DTK_mirroir on ClarD, CpusS) are ordinary meshes and draw as such. Counted by
+  reading every map's world Model (2026-10-28).
+- Beam emitters: drawn as straight strips; the noise and branches are not decoded. No map places a BeamEmitter and
+  the one effect class with a beam (SElectricArcEmitter) is spawned by no script, so nothing shows the difference.
+  Spark emitters are drawn (spec/native/emitters.md rule 22); the one map spark emitter (PanaD and PanaS Emitter241,
+  under a disabled sprite burst) starts when its `Sprite` event triggers it.
+- Spot shadow lights: the Echelon light pass's gain (2), shadow buffer sizes (ShadowZBufferWidthType /
+  HeightType), EchelonBias and the original's limit on lights drawn at once are not decoded; bDirectional and
+  bIsPerspective are read nowhere yet.
+- Some self-lit signs read darker than the original; the crane SAnimatedMesh is posed at its first frame only in the
+  render-only views (AnimatedProps.Build; play animates it).
+- The pawn's pose uses the base channel only (blend channels are not mixed), so pawns differ slightly in the goldens.

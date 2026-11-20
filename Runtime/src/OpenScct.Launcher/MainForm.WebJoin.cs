@@ -1,0 +1,90 @@
+using System;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using OpenScct.Launcher.Launch;
+using OpenScct.Launcher.Versioning;
+
+namespace OpenScct.Launcher.App;
+
+internal sealed partial class MainForm
+{
+    private string? _pendingWebJoin;
+    private readonly string? _protocolProblem;
+    private bool _webJoinReady;
+    private bool _handlingWebJoin;
+
+    public void QueueWebJoin(string serverId)
+    {
+        if (!WebJoinRequest.IsValidServerId(serverId) || IsDisposed || Disposing) return;
+        if (InvokeRequired)
+        {
+            try { BeginInvoke(() => QueueWebJoin(serverId)); }
+            catch (InvalidOperationException) { /* The window closed during the handoff. */ }
+            return;
+        }
+        _pendingWebJoin = serverId;
+        SelectProduct(false);
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Activate();
+        RefreshLocal();
+        if (_work is not null) SetStatus("Your Join request is waiting. Finish the current operation, then continue in the game.", Theme.Muted);
+        else if (_webJoinReady) _ = TryWebJoinAsync();
+    }
+
+    private async Task TryWebJoinAsync()
+    {
+        if (_handlingWebJoin || !_webJoinReady || _work is not null || _pendingWebJoin is not { } serverId || IsDisposed) return;
+        SelectProduct(false);
+        _handlingWebJoin = true;
+        bool updated = false;
+        try
+        {
+            if (await WebJoinPipe.SendAsync(WebJoinPipe.GameName, serverId))
+            {
+                if (_pendingWebJoin == serverId) _pendingWebJoin = null;
+                if (IsDisposed) return;
+                SetStatus("Join request sent to OpenSCCT. Continue in the game; an active match will not be interrupted.", Theme.Accent);
+                WindowState = FormWindowState.Minimized;
+                return;
+            }
+            if (IsDisposed || _work is not null) return;
+            if (_games.Running().Count > 0)
+            {
+                SetStatus("The running game could not receive your Join request. Close it and update OpenSCCT, then choose JOIN SESSION here.", Theme.Warning);
+                return;
+            }
+            SemVersion? current = _store.Current();
+            if (current is null)
+            {
+                SetStatus("Your Join request is saved for this launcher session. Set up Godot from your Steam installation.", Theme.Warning);
+                return;
+            }
+            if (current < WebJoinRequest.MinimumGameVersion)
+            {
+                SetStatus($"Website Join needs OpenSCCT {WebJoinRequest.MinimumGameVersion} or later. Check for updates and update the game; your Join request will wait here.", Theme.Warning);
+                return;
+            }
+            if (!Content.GodotSteamContent.SupportsClient(current))
+            {
+                SetStatus("Update the Godot client to play from Steam. Your Join request will continue when setup is complete.", Theme.Warning);
+                return;
+            }
+            if (_steamContent.ActiveRoot() is null)
+            {
+                SetStatus("Build the Godot game files from your Steam installation. Your Join request will continue when they are ready.", Theme.Warning);
+                return;
+            }
+            if (_pendingWebJoin != serverId) return;
+            await RunAsync(async cancel => updated = await PlayWithUpdateCheckAsync(cancel, serverId));
+        }
+        finally
+        {
+            _handlingWebJoin = false;
+            if (!IsDisposed)
+            {
+                RefreshLocal();
+                if (_pendingWebJoin is not null && (_pendingWebJoin != serverId || updated)) _ = TryWebJoinAsync();
+            }
+        }
+    }
+}

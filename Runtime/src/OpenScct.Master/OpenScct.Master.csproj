@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>svm-master</AssemblyName>
+    <RootNamespace>OpenScct.Master</RootNamespace>
+    <!--
+      The master's own version (MasterBuildInfo, the status answer's masterVersion, shown in the game under its own
+      version). Bump it when the master changes; it is apart from the game's VersionPrefix and a release's -p:Version.
+    -->
+    <MasterVersion>1.1.35</MasterVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>MasterVersion</_Parameter1>
+      <_Parameter2>$(MasterVersion)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OpenScct.Net\OpenScct.Net.csproj" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="AWSSDK.S3" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpenScct.Integration.Tests" />
+    <InternalsVisibleTo Include="OpenScct.BrowserLab" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\..\shared\ProjectLinks.cs" Link="Project\ProjectLinks.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="svm-master.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="Admin/assets/*" LogicalName="admin/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Web/assets/*.css;Web/assets/site.js;Web/assets/mark*.svg" LogicalName="web/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../../decomp/reports/progress.json" LogicalName="project-progress.json" />
+    <!-- Screenshots stay in the approved documentation media folder; public asset names remain unchanged. -->
+    <EmbeddedResource Include="../../docs/images/website/showcase-*" LogicalName="web/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

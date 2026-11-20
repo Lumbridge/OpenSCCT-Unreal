@@ -1,0 +1,127 @@
+"""One original map to a complete SVMap 1.1 folder."""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+from typing import Optional
+
+from .. import canonical
+from ..svmap import LATEST_VERSION, write_svmap
+from ..writers.collision import KINDS, read_collision
+from .collision import CollisionBuilder
+from .conveyors import build_conveyors
+from .gameplay import build_class_table, build_gameplay
+from .mapclasses import build_match, build_outfits, map_script_actors
+from .props import build_skeletal_props
+from .rain import build_rain
+from .render import RenderBuilder
+from .source import MapSource
+from .strategicmap import build_strategic_map
+from .traversal import build_traversal
+
+GENERATOR = "svmbuild.maps"
+# A map with sim/match.json, render/outfits.json or conveyors is SVMap 1.2 (spec/svmap/1.2); every other map stays 1.1.
+MATCH_OUTFITS_VERSION = "1.2.0"
+GENERATOR_VERSION = 1
+
+
+def build_map(game: Path, name: str, out_dir: Path, db, *, map_sha256: str, classes_pack: Optional[str] = None,
+              render: bool = True, hasher=None, ctx=None) -> dict:
+    """Write out_dir (the SVMap folder of `name`) and return the build stats (with 'discovered' for the cache)."""
+    timings = {}
+    t0 = time.perf_counter()
+    src = MapSource(Path(game), name, db)
+    timings["open"] = time.perf_counter() - t0
+
+    t = time.perf_counter()
+    # The RE+ classes lifted into native data are taken out of the actors first (mapclasses.py).
+    match, mstats = build_match(src)
+    outfit_files, ostats = build_outfits(src, db, Path(out_dir).parent / ".work" / f"{name}-outfits", write=render)
+    conveyors = build_conveyors(src)
+    gameplay, ui, gstats = build_gameplay(src, conveyors.actors)
+    class_table = build_class_table(src)
+    timings["gameplay"] = time.perf_counter() - t
+
+    t = time.perf_counter()
+    cb = CollisionBuilder(src)
+    collision = cb.build()
+    timings["collision"] = time.perf_counter() - t
+
+    t = time.perf_counter()
+    traversal, tstats = build_traversal(src, gameplay["levelInfo"]["props"]["GEActivationMask"])
+    timings["traversal"] = time.perf_counter() - t
+
+    render_files = {}
+    rstats = {}
+    if render:
+        t = time.perf_counter()
+        zone_index = {}
+        for i, z in enumerate(cb.d.zones):
+            nm = cb.d.name_of(z.actor)
+            if nm:
+                zone_index[nm] = i
+        # The meshes converted conveyors scroll are gameplay instances (the client moves their materials); their
+        # items are library meshes the client builds lit as actors.
+        rb = RenderBuilder(src, Path(out_dir).parent / ".work" / name, {a["id"] for a in gameplay["actors"]} |
+                           {gameplay["levelInfo"]["id"]} | conveyors.scroll_targets, conveyors.item_meshes)
+        render_files = rb.build(zone_index, ui)
+        rstats = rb.stats
+        # The skeletal props the map places travel with it (render/chars/): a downloaded map's anim package is often
+        # not in the player's install, so the shared chars lack them.
+        render_files.update(build_skeletal_props(src, db, Path(out_dir).parent / ".work" / f"{name}-props", rstats))
+        render_files.update(outfit_files)
+        timings["render"] = time.perf_counter() - t
+
+    version = MATCH_OUTFITS_VERSION if match is not None or ostats or conveyors.actors else LATEST_VERSION
+    gameplay["formatVersion"] = traversal["formatVersion"] = version
+    title = str(src.level_info.props.get("Title") or ui.get("MapName") or name)
+    source = {"kind": "converted", "generator": GENERATOR, "generatorVersion": GENERATOR_VERSION,
+              "original": {"file": f"Packages/Maps/{src.path.name}", "sha256": map_sha256}}
+    requires = [{"pack": "classes", "sha256": classes_pack}] if classes_pack else []
+    files = {"sim/classes.json": canonical.dump_file(class_table)}
+    if match is not None:
+        files["sim/match.json"] = canonical.dump_file(match)
+    rain = build_rain(src)
+    if rain["volumes"]:
+        files["sim/rain.json"] = canonical.dump_file(rain)
+    if ui:
+        files["ui/mapinfo.json"] = canonical.dump_file(ui, ascii_keys=False)
+    files.update(build_strategic_map(src))
+    t = time.perf_counter()
+    manifest = write_svmap(out_dir, map_id=name, title=title, source=source, gameplay=gameplay, traversal=traversal,
+                           collision=collision, render=render_files, requires=requires, files=files,
+                           format_version=version)
+    timings["write"] = time.perf_counter() - t
+    timings["total"] = time.perf_counter() - t0
+
+    d = read_collision(collision)
+    by_kind: dict = {}
+    for c in d.colliders:
+        by_kind[KINDS[c.kind]] = by_kind.get(KINDS[c.kind], 0) + 1
+    sizes = {}
+    for rel, meta in manifest["files"].items():
+        group = rel.split("/", 1)[0]
+        sizes[group] = sizes.get(group, 0) + meta["size"]
+    stats = {
+        "map": name,
+        "title": title,
+        "actors": gstats,
+        "collision": {"bytes": len(collision), "colliders": len(d.colliders), "byKind": by_kind,
+                      "triangles": len(d.tris), "vertices": len(d.verts), "bspNodes": len(d.bsp),
+                      "hulls": len(d.hulls), "cylinders": len(d.cylinders), "zones": len(d.zones),
+                      "materials": len(d.materials), "detail": cb.stats},
+        "traversal": tstats,
+        "mapClasses": {"defined": list(src.map_classes), "scripts": sorted({a.cls for a in map_script_actors(src)}),
+                       "match": mstats, "outfits": ostats, "conveyors": conveyors.stats},
+        "render": rstats,
+        "sizes": sizes,
+        "files": len(manifest["files"]),
+        "simHash": manifest["hashes"]["sim"],
+        "notes": dict(sorted(src.notes.counts.items())),
+        "noteSamples": src.notes.items[:40],
+        "timings": {k: round(v, 3) for k, v in timings.items()},
+    }
+    if ctx is not None:
+        stats["discovered"] = src.discovered(ctx)
+    return stats

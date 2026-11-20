@@ -1,0 +1,262 @@
+using System;
+using System.Collections.Generic;
+using OpenScct.Core;
+using OpenScct.Core.Engine;
+using OpenScct.Game.SBase;
+using OpenScct.Game.Svm;
+using OpenScct.Physics.Collision;
+
+namespace OpenScctGame.Audio;
+
+/// <summary>
+/// An actor's ambient loop as the sound system sees it this frame (spec/native/audio.md rule 19). A source that does
+/// not <paramref name="Follow"/> its actor sits where <paramref name="Location"/> says each frame (a conveyor's sound
+/// comes from the point of its path nearest the listener).
+/// </summary>
+public readonly record struct AmbientSource(
+    int ActorId,
+    string Id,
+    FVector Location,
+    string Sound,
+    byte SoundVolume,
+    float SoundRadius,
+    byte SoundPitch,
+    bool IsZone,
+    int LightType,
+    float LightBrightness,
+    byte SoundOcclusion = 0,
+    bool Follow = true,
+    bool Loop = true,
+    float RepeatInterval = 0);
+
+/// <summary>
+/// What lies between the listener and a source (rule 18): the first surface seen from each end, its location, its
+/// material's OcclusionType and the zone number at that point.
+/// </summary>
+public readonly record struct OcclusionHits(FVector NearListener, FVector NearSource, int TypeNearListener, int TypeNearSource,
+    int ZoneNearListener, int ZoneNearSource, FVector NormalNearListener = default, FVector NormalNearSource = default);
+
+/// <summary>What the sound system reads from the client's simulation. It never writes to it.</summary>
+public interface IAudioWorld
+{
+    bool SupportsReverbGeometry=>false;
+    AcousticRayHit TraceReverb(FVector origin,FVector direction,float range)=>default;
+    /// <summary>Static topology changes, including broken glass. Moving blockers are also refreshed at 10 Hz.</summary>
+    uint AcousticRevision => 0;
+    /// <summary>The current location of an actor the simulation knows, for sources that follow their actor.</summary>
+    bool TryGetActorLocation(int actorId, out FVector location);
+
+    /// <summary>
+    /// The current location of one bone of an actor's drawn mesh, for sources started on a bone (rule 17). False when
+    /// the actor or the bone is not drawn; the source then follows the actor.
+    /// </summary>
+    bool TryGetBoneLocation(int actorId, Name bone, out FVector location)
+    {
+        location = default;
+        return false;
+    }
+
+    /// <summary>Every actor whose AmbientSound plays now, for a listener at <paramref name="listener"/>.</summary>
+    void CollectAmbient(List<AmbientSource> into, FVector listener);
+
+    /// <summary>The map id of the ZoneInfo whose zone holds the point, or null.</summary>
+    string? ZoneIdAt(FVector location);
+
+    /// <summary>The surface type of what a line from <paramref name="start"/> to <paramref name="end"/> hits first, or -1.</summary>
+    int SurfaceOf(FVector start, FVector end);
+
+    /// <summary>The zone number of a point (0: the default zone, or no collision).</summary>
+    int ZoneIndexAt(FVector location);
+
+    /// <summary>The actor's SoundOcclusion (ESoundOcclusion; 0, OCCLUSION_Default, for an unknown actor).</summary>
+    byte SoundOcclusionOf(int actorId);
+
+    /// <summary>
+    /// GetOcclusion's two line checks (game 0x10b07100, trace flags 0x1286): from the listener to the source and back.
+    /// False when the line from the listener is clear.
+    /// </summary>
+    bool OcclusionBetween(FVector listener, FVector source, out OcclusionHits hits);
+}
+
+/// <summary>
+/// <see cref="IAudioWorld"/> over a <see cref="Level"/> (the client's world) and its collision. Actor ids for zones
+/// come from <paramref name="mapIdOf"/> (MapLoadResult.RecordOf(actor).Id); actors the map did not place have none.
+/// </summary>
+public sealed class LevelAudioWorld(Level level, ICollisionWorld? collision, Func<Actor, string?>? mapIdOf = null,
+    IReadOnlyList<MapSoundActor>? placed = null) : IAudioWorld
+{
+    public bool SupportsReverbGeometry=>collision is not null;
+    public AcousticRayHit TraceReverb(FVector origin,FVector direction,float range)=>
+        collision is null?default:TraceReverbGeometry(collision,origin,direction,range);
+
+    public static AcousticRayHit TraceReverbGeometry(ICollisionWorld collision,FVector origin,FVector direction,float range)
+    {
+        // A nearest-hit query must compare live movers with the BSP behind
+        // them. The legacy occlusion early-out returns BSP before nearer doors.
+        if (!collision.LineCheck(out FCheckResult hit,null,origin+direction*range,origin,default,
+                OcclusionTrace&~ETraceFlags.TRACE_StopAtFirstHit) ||
+            !hit.bHit || (hit.PolyFlags&0x80u)!=0) return new(false,range,default);
+        return new(true,FVector.Dist(origin,hit.Location),hit.Normal,hit.SurfaceType,
+            (collision as CollisionWorld)?.OcclusionTypeOf(hit.Material)??0);
+    }
+    public uint AcousticRevision => (collision as CollisionWorld)?.GeometryRevision ?? 0;
+    public Level Level { get; } = level ?? throw new ArgumentNullException(nameof(level));
+
+    // The map's SAmbientSoundTriggers by where they stand (whole units, as an actor's location is sent).
+    private Dictionary<(int, int, int), MapSoundActor>? _placedTriggers;
+
+    /// <summary>
+    /// The map's own row of a sound trigger the server sent. Its channel carries AmbientSound and nothing else
+    /// (ASAmbientSoundTrigger::GetOptimizedRepList has no parent list), so the client's copy has the class's
+    /// SoundVolume, SoundRadius and SoundPitch, not the ones the map gives it: a 2D loop placed with a radius of 500
+    /// (a community map's music) faded out at the default 64. The map's table has the placed values.
+    /// </summary>
+    private MapSoundActor? PlacedTrigger(Actor a)
+    {
+        if (placed is null || a is not SAmbientSoundTrigger)
+        {
+            return null;
+        }
+
+        if (_placedTriggers is null)
+        {
+            _placedTriggers = new Dictionary<(int, int, int), MapSoundActor>();
+            foreach (MapSoundActor row in placed)
+            {
+                if (row.AmbientSound is not null && row.Class.EndsWith(".SAmbientSoundTrigger", StringComparison.Ordinal))
+                {
+                    _placedTriggers.TryAdd(Whole(row.Location), row);
+                }
+            }
+        }
+
+        return _placedTriggers.TryGetValue(Whole(a.Location), out MapSoundActor? found) ? found : null;
+    }
+
+    private static (int, int, int) Whole(FVector p) =>
+        ((int)MathF.Floor(p.X + 0.5f), (int)MathF.Floor(p.Y + 0.5f), (int)MathF.Floor(p.Z + 0.5f));
+
+    public bool TryGetActorLocation(int actorId, out FVector location)
+    {
+        Actor? a = Level.FindActor(actorId);
+        location = a?.Location ?? default;
+        return a is not null && !a.bDeleteMe;
+    }
+
+    /// <summary>The bone as the pawn views last drew it (the level's camera bone service).</summary>
+    public bool TryGetBoneLocation(int actorId, Name bone, out FVector location)
+    {
+        location = default;
+        return Level.FindActor(actorId) is Pawn { bDeleteMe: false } pawn &&
+            Level.GetService<OpenScct.Game.Camera.ICameraBones>() is { } bones &&
+            bones.TryGetBone(pawn, bone, out location, out _);
+    }
+
+    public void CollectAmbient(List<AmbientSource> into, FVector listener)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+        // Indexed, not foreach over the interface (a boxed enumerator every frame).
+        IReadOnlyList<Actor> actors = Level.Actors;
+        for (int i = 0; i < actors.Count; i++)
+        {
+            Actor a = actors[i];
+            if (a is null || a.bDeleteMe || a.AmbientSound.IsNone)
+            {
+                continue;
+            }
+
+            if (a is Conveyor conveyor)
+            {
+                // A belt hums while it runs, from the point of its path nearest the listener.
+                if (conveyor.SurfaceSpeed != 0f && conveyor.Hums)
+                {
+                    into.Add(new AmbientSource(a.ActorId, mapIdOf?.Invoke(a) ?? SpawnedId(a), conveyor.NearestOnPath(listener),
+                        a.AmbientSound.Path!, a.SoundVolume, a.SoundRadius, a.SoundPitch, false, 0, 0f, (byte)a.SoundOcclusion, Follow: false));
+                }
+
+                continue;
+            }
+
+            if (PlacedTrigger(a) is { } row)
+            {
+                into.Add(new AmbientSource(a.ActorId, row.Id, a.Location,
+                    a.AmbientSound.Path!, row.SoundVolume, row.SoundRadius, row.SoundPitch, false, (int)a.LightType,
+                    a.LightBrightness, row.SoundOcclusion, Loop: row.Loop, RepeatInterval: row.RepeatInterval));
+                continue;
+            }
+
+            byte pitch = a is SMines mine ? (byte)MathF.Round(a.SoundPitch * mine.MineSoundPitch) : a.SoundPitch;
+            into.Add(new AmbientSource(a.ActorId, mapIdOf?.Invoke(a) ?? SpawnedId(a), a.Location,
+                a.AmbientSound.Path!, a.SoundVolume, a.SoundRadius, pitch, a is ZoneInfo, (int)a.LightType,
+                a.LightBrightness, (byte)a.SoundOcclusion));
+        }
+    }
+
+    private readonly Dictionary<int, string> _spawnedIds = [];
+
+    /// <summary>The id of an ambient actor the map did not place (class name and actor id), made once per actor.</summary>
+    private string SpawnedId(Actor a)
+    {
+        if (!_spawnedIds.TryGetValue(a.ActorId, out string? id))
+        {
+            id = a.ClassName.ToString() + a.ActorId;
+            _spawnedIds[a.ActorId] = id;
+        }
+
+        return id;
+    }
+
+    public string? ZoneIdAt(FVector location)
+    {
+        ZoneInfo? z = collision?.GetZoneInfo(location);
+        return z is null ? null : mapIdOf?.Invoke(z);
+    }
+
+    public int SurfaceOf(FVector start, FVector end)
+    {
+        if (collision is null)
+        {
+            return -1;
+        }
+
+        return collision.LineCheck(out FCheckResult hit, null, end, start, default, ETraceFlags.TRACE_World)
+            ? hit.SurfaceType
+            : -1;
+    }
+
+    public int ZoneIndexAt(FVector location) => collision?.GetZoneIndex(location) ?? 0;
+
+    public byte SoundOcclusionOf(int actorId) => Level.FindActor(actorId) is { } a ? (byte)a.SoundOcclusion : (byte)0;
+
+    /// <summary>Movers, the level and its geometry, with the hit material (UE2 0x1286 less the single-result bit).</summary>
+    private const ETraceFlags OcclusionTrace = ETraceFlags.TRACE_Material | ETraceFlags.TRACE_StopAtFirstHit |
+        ETraceFlags.TRACE_LevelGeometry | ETraceFlags.TRACE_Level | ETraceFlags.TRACE_Movers;
+
+    public bool OcclusionBetween(FVector listener, FVector source, out OcclusionHits hits)
+    {
+        hits = default;
+        return collision is not null && TraceOcclusion(collision, listener, source, out hits);
+    }
+
+    public static bool TraceOcclusion(ICollisionWorld collision, FVector listener, FVector source, out OcclusionHits hits)
+    {
+        hits = default;
+        if (
+            !collision.LineCheck(out FCheckResult near, null, source, listener, default, OcclusionTrace) || !near.bHit)
+        {
+            return false;
+        }
+
+        // The way back from the source: the far side of what is in between (the source itself when it is inside).
+        FCheckResult far = collision.LineCheck(out FCheckResult back, null, listener, source, default, OcclusionTrace) && back.bHit
+            ? back
+            : FCheckResult.NoHit(source);
+        var world = collision as CollisionWorld;
+        // The zones are looked up just off each surface, on the side the line came from (the engine's hit points sit
+        // there; a point on the surface itself can fall in solid space, zone 0).
+        hits = new OcclusionHits(near.Location, far.Location, world?.OcclusionTypeOf(near.Material) ?? 0,
+            far.bHit ? world?.OcclusionTypeOf(far.Material) ?? 0 : 0, collision.GetZoneIndex(near.Location + near.Normal),
+            collision.GetZoneIndex(far.bHit ? far.Location + far.Normal : far.Location),near.Normal,far.Normal);
+        return true;
+    }
+}

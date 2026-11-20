@@ -1,0 +1,337 @@
+using OpenScct.Core;
+using OpenScct.Core.Engine;
+using OpenScct.Game.Combat;
+using OpenScct.Game.GameFlow;
+using OpenScct.Game.Movement;
+using OpenScct.Provenance;
+using K = OpenScct.Game.GameFlow.K;
+
+namespace OpenScct.Game.SBase;
+
+// SBase.SPlayerController state changes across machines: the server mirrors a state to the owning client, the
+// owning client asks the server to follow. Written from spec/game/netmode-branches.md (rules 1 to 4).
+public partial class SPlayerController
+{
+    private static readonly Name NAME_s_UseObject_StickyCam_SmoothToPosition = new("s_UseObject_StickyCam_SmoothToPosition");
+    private static readonly Name NAME_ClientChargeKnockback = new("ClientChargeKnockback");
+    private static readonly Name NAME_ClientChargeLanding = new("ClientChargeLanding");
+    private float _lastSentMirrorStateTime = -1f;
+    private SBasePawn? _chargeLandingPawn;
+    private float _chargeKnockbackTime;
+    private CombatCall? _pendingChargeLanding;
+
+    // Reliable state order must not use the input clock temporarily installed by command simulation. A late
+    // client's physics can otherwise emit a newer catch/landing state with an older timestamp than its setup.
+    // Strict increase also prevents a prediction frame captured earlier in this world tick restoring old state.
+    private float NextMirrorStateTime()
+    {
+        float now = XLevel.WorldTimeSeconds;
+        if (now - MirrorStateAcknowledgementTime > K.MirrorStateAckRefresh)
+            MirrorStateAcknowledgementTime = now;
+        _lastSentMirrorStateTime = System.MathF.Max(now, System.MathF.BitIncrement(_lastSentMirrorStateTime));
+        return _lastSentMirrorStateTime;
+    }
+
+    /// <summary>Reject queued owner states when an authoritative interaction correction supersedes them.</summary>
+    internal void InvalidateOwnerStateAcknowledgement()
+    {
+        MirrorStateAcknowledgementTime = System.MathF.Max(XLevel.WorldTimeSeconds,
+            System.MathF.BitIncrement(MirrorStateAcknowledgementTime + K.ServerStateTolerance));
+    }
+
+    /// <summary>A state version of the controller's GotoState (states that ignore it implement it empty).</summary>
+    public interface IGotoState
+    {
+        EGotoState GotoState(SPlayerController self, Name NewState, Name Label, bool bDontSaveCurrentState);
+    }
+
+    /// <summary>A state version of MirrorState (states that ignore it implement it empty).</summary>
+    public interface IMirrorState
+    {
+        void MirrorState(SPlayerController self, Name nomdustate, Name nomduLabel, bool bDontSaveCurrentState, Actor? AddActor);
+    }
+
+    /// <summary>A state version of ChangeState (states that ignore it implement it empty).</summary>
+    public interface IChangeState
+    {
+        void ChangeState(SPlayerController self, Name nomdustate, Name nomduLabel, bool bDontSaveCurrentState);
+    }
+
+    /// <summary>Script GotoState of a controller: through the state (so it can be ignored), saving the previous state.</summary>
+    public override EGotoState GotoState(Name NewState = default, Name Label = default) => GotoState(NewState, Label, false);
+
+    /// <summary>
+    /// The controller's GotoState (native 1175, hooked by Reloaded): remembers the current state in PreviousState
+    /// unless <paramref name="bDontSaveCurrentState"/>, then changes state. Goes through the current state first.
+    /// </summary>
+    [UcNative("AController::execGotoState")]
+    [Provenance(ProvenanceKind.Estimated, "Controller.GotoState native 1175 (hooked by Reloaded): PreviousState is the state left")]
+    public EGotoState GotoState(Name NewState, Name Label, bool bDontSaveCurrentState)
+    {
+        if (StateNode is IGotoState s)
+        {
+            return s.GotoState(this, NewState, Label, bDontSaveCurrentState);
+        }
+
+        return GlobalGotoState(NewState, Label, bDontSaveCurrentState);
+    }
+
+    /// <summary>The class-level GotoState (UnrealScript Global.GotoState).</summary>
+    public EGotoState GlobalGotoState(Name NewState, Name Label, bool bDontSaveCurrentState)
+    {
+        if (!bDontSaveCurrentState)
+        {
+            PreviousState = StateNode.Name;
+        }
+
+        bool leavingLadder = StateNode is s_LadderBase;
+        EGotoState result = base.GotoState(NewState, Label);
+        if (result == EGotoState.GOTOSTATE_Success)
+        {
+            if (leavingLadder && StateNode is (s_PlayerWalkingSt2H or s_PlayerWalkingCr2H or s_PlayerJump) &&
+                SBPawn is SPAWNDEFENSE { MyWeapon: SWeaponDefense rifle } merc)
+            {
+                // A mirrored dismount or a clip without a draw notify can leave the equipped rifle holstered.
+                if (bBehindView || bFirstPersonWithPawn) MercLadderCameraOff();
+                if (merc.WeaponLoaded == 0 || !rifle.bDrawWeapon) rifle.RestoreAfterBodyMove(merc);
+            }
+            ResetGasActivityAfterStateChange(NewState);
+            ReloadedStateEntered(NewState);
+        }
+
+        return result;
+    }
+
+    /// <summary>True for the player this machine controls (the host's own player, or a client's own copy).</summary>
+    [Uc("SBase.SPlayerController.IAmOnClient", Sha1 = "af1606566197d38b667e906f88c547599158aa86")]
+    [PortOf("uc:SBase.SPlayerController:IAmOnClient", Spec = "spec/game/netmode-branches.md#data")]
+    public bool IAmOnClient() => RemoteRole != ENetRole.ROLE_AutonomousProxy;
+
+    /// <summary>MirrorState through the current state.</summary>
+    public void eventMirrorState(Name nomdustate, Name nomduLabel = default, bool bDontSaveCurrentState = false, Actor? AddActor = null)
+    {
+        if (StateNode is IMirrorState s)
+        {
+            s.MirrorState(this, nomdustate, nomduLabel, bDontSaveCurrentState, AddActor);
+        }
+        else
+        {
+            MirrorState(nomdustate, nomduLabel, bDontSaveCurrentState, AddActor);
+        }
+    }
+
+    /// <summary>
+    /// The server changes state here and, for a player without a local viewport, tells the owning client
+    /// (PCChangeClientState) with an acknowledgement time refreshed when older than 1 s.
+    /// </summary>
+    [Uc("SBase.SPlayerController.MirrorState", Sha1 = "8619ddcddb5ca685e3eaf6ffd1ce8e6c69824c57")]
+    [PortOf("uc:SBase.SPlayerController:MirrorState", Spec = "spec/game/netmode-branches.md#rules")]
+    protected virtual void MirrorState(Name nomdustate, Name nomduLabel, bool bDontSaveCurrentState, Actor? AddActor)
+    {
+        GotoState(nomdustate, nomduLabel, bDontSaveCurrentState);
+        if (Player is UViewport)
+        {
+            return;
+        }
+
+        bool remoteCharge = nomdustate == CNAME_s_Charge_GoBackward && IsRemotePlayer;
+        if (remoteCharge) InvalidateOwnerStateAcknowledgement();
+        float stateTime = NextMirrorStateTime();
+        if (remoteCharge && SBPawn is { } victim)
+        {
+            _chargeLandingPawn = victim;
+            _chargeKnockbackTime = stateTime;
+            FVector location = ChargePosition(victim, out Actor? basis);
+            CombatNet.ClientCall(this, new CombatCall(NAME_ClientChargeKnockback)
+            {
+                Target = victim,
+                Actor1 = AddActor,
+                Actor2 = basis,
+                Bool1 = basis is not null,
+                Vector1 = location,
+                Vector2 = new FVector(MirrorStateAcknowledgementTime, stateTime, 0f),
+            });
+        }
+
+        // Older owners still use the ordinary state message.
+        GameFlowServices.Host(this).ClientCall(this, new GameCall("PCChangeClientState")
+        {
+            Float1 = MirrorStateAcknowledgementTime,
+            Float2 = stateTime,
+            Name1 = nomdustate,
+            Name2 = nomduLabel,
+            Bool = bDontSaveCurrentState,
+            Actor = AddActor,
+        });
+    }
+
+    private void ClientChargeKnockback(in CombatCall call)
+    {
+        if (SBPawn is not { } victim || !ReferenceEquals(victim, call.Target) || MirrorStateLastTime >= call.Vector2.Y)
+        {
+            return;
+        }
+
+        // Use the impact position, before the owner starts playing the knockback from its predicted position.
+        _pendingChargeLanding = null;
+        PlaceChargeVictim(victim, call);
+        PCChangeClientState(call.Vector2.X, call.Vector2.Y, CNAME_s_Charge_GoBackward, AddActor: call.Actor1);
+    }
+
+    private void SyncChargeLanding(SBasePawn pawn)
+    {
+        if (_chargeLandingPawn is null) return;
+        if (!ReferenceEquals(_chargeLandingPawn, pawn))
+        {
+            _chargeLandingPawn = null;
+            return;
+        }
+        if (StateNode is s_Charge_GoBackward or PlayerFallingKO) return;
+
+        if (StateNode is s_LyingOnGround && pawn.Health > 0)
+        {
+            // Wait for the authority's root motion or fall to finish. Its final collision result can
+            // differ from the owner's, and ordinary movement corrections are disabled while prone.
+            if (!ChargeKnockbackPlaying || pawn.Physics != EPhysics.PHYS_Walking) return;
+            FVector location = ChargePosition(pawn, out Actor? basis);
+            CombatNet.ClientCall(this, new CombatCall(NAME_ClientChargeLanding)
+            {
+                Target = pawn,
+                Actor2 = basis,
+                Bool1 = basis is not null,
+                Vector1 = location,
+                Float1 = _chargeKnockbackTime,
+            });
+        }
+        _chargeLandingPawn = null;
+    }
+
+    private void ClientChargeLanding(in CombatCall call)
+    {
+        if (SBPawn is not { } pawn || !ReferenceEquals(pawn, call.Target) || MirrorStateLastTime != call.Float1) return;
+        if (StateNode is s_Charge_GoBackward or PlayerFallingKO)
+        {
+            _pendingChargeLanding = call;
+        }
+        else if (StateNode is s_LyingOnGround)
+        {
+            PlaceChargeVictim(pawn, call);
+            pawn.Velocity = default;
+        }
+    }
+
+    private static void PlaceChargeVictim(SBasePawn pawn, in CombatCall call)
+    {
+        Actor? basis = call.Actor2 is { bDeleteMe: false } actor ? actor : null;
+        if (call.Bool1 && basis is null) return;
+        FVector position = basis is null ? call.Vector1 : MovementMath.ToWorld(basis.Location, basis.Rotation, call.Vector1);
+        MovementNatives.FarMoveActor(pawn, position);
+        if (basis is not null || pawn.Base is { bWorldGeometry: false, bStatic: false })
+            pawn.SetBase(basis, bNotifyActor: false);
+    }
+
+    private static FVector ChargePosition(SBasePawn pawn, out Actor? basis)
+    {
+        basis = pawn.Base is { bWorldGeometry: false, bStatic: false, bDeleteMe: false } mover ? mover : null;
+        if (basis is null) return pawn.Location;
+        basis.Rotation.GetAxes(out FVector x, out FVector y, out FVector z);
+        FVector offset = pawn.Location - basis.Location;
+        return new FVector(offset | x, offset | y, offset | z);
+    }
+
+    /// <summary>
+    /// Server to client: follow the server's state unless the order is older than the last one applied (one sticky
+    /// camera case is skipped).
+    /// </summary>
+    [Uc("SBase.SPlayerController.PCChangeClientState", Sha1 = "6acb8bdc3eb9d42e71760a5d163a4f9372c621d8")]
+    [PortOf("uc:SBase.SPlayerController:PCChangeClientState", Spec = "spec/game/netmode-branches.md#rules")]
+    public void PCChangeClientState(float MSATime, float fNewTime, Name nomdustate, Name nomduLabel = default,
+        bool bDontSaveCurrentState = false, Actor? AddActor = null)
+    {
+        if (MirrorStateLastTime > fNewTime ||
+            (nomdustate == CNAME_s_Charge_GoBackward && MirrorStateLastTime == fNewTime && StateNode is s_Charge_GoBackward))
+        {
+            return;
+        }
+
+        MirrorStateLastTime = fNewTime;
+        ActorPassedByMirrorState = AddActor;
+        MirrorStateAcknowledgementTime = MSATime;
+        if (nomdustate == NAME_s_UseObject_StickyCam_SmoothToPosition && Level.TimeSeconds < PredictedStickyCamDeadline)
+        {
+            return;
+        }
+
+        GotoState(nomdustate, nomduLabel, bDontSaveCurrentState);
+    }
+
+    /// <summary>ChangeState through the current state.</summary>
+    public void eventChangeState(Name nomdustate, Name nomduLabel = default, bool bDontSaveCurrentState = false)
+    {
+        if (StateNode is IChangeState s)
+        {
+            s.ChangeState(this, nomdustate, nomduLabel, bDontSaveCurrentState);
+        }
+        else
+        {
+            ChangeState(nomdustate, nomduLabel, bDontSaveCurrentState);
+        }
+    }
+
+    /// <summary>The owning machine changes state; a client also asks the server to follow (PCChangeServerState).</summary>
+    [Uc("SBase.SPlayerController.ChangeState", Sha1 = "4ccd2cbe61e3153a31fb67699605e8db5248b5ad")]
+    [PortOf("uc:SBase.SPlayerController:ChangeState", Spec = "spec/game/netmode-branches.md#rules")]
+    protected virtual void ChangeState(Name nomdustate, Name nomduLabel, bool bDontSaveCurrentState)
+    {
+        GotoState(nomdustate, nomduLabel, bDontSaveCurrentState);
+        if (Level.NetMode is ENetMode.NM_Standalone or ENetMode.NM_ListenServer)
+        {
+            return;
+        }
+
+        GameFlowServices.Host(this).ServerCall(this, new GameCall("PCChangeServerState")
+        {
+            Float1 = MirrorStateAcknowledgementTime,
+            Name1 = nomdustate,
+            Name2 = nomduLabel,
+            Bool = bDontSaveCurrentState,
+        });
+    }
+
+    /// <summary>
+    /// Client to server: follow the client only when its acknowledgement time matches within 0.01 s. A gas
+    /// fall is announced only after independently observed exposure and a successful state change.
+    /// </summary>
+    [Uc("SBase.SPlayerController.PCChangeServerState", Sha1 = "cc31e893422013af3f50a4f84f08b33c96e05059")]
+    [PortOf("uc:SBase.SPlayerController:PCChangeServerState", Spec = "spec/game/netmode-branches.md#rules")]
+    public void PCChangeServerState(float CodeTime, Name nomdustate, Name nomduLabel = default, bool bDontSaveCurrentState = false)
+    {
+        if (SvmMath.Abs(CodeTime - MirrorStateAcknowledgementTime) < K.ServerStateTolerance)
+        {
+            // The authority owns the wake-up decision, including the transition after a teammate revives us.
+            if (StateNode is s_LyingOnGround || nomdustate == CNAME_s_StandUp || nomdustate == CNAME_s_Reanimating ||
+                (nomdustate == WNAME_s_PlayerCharging && ChargeShockFrozen))
+            {
+                return;
+            }
+
+            if (nomdustate == CNAME_s_LyingOnGround)
+            {
+                fLyingOnGroundDuration = StateNode switch
+                {
+                    s_Charge_GoBackward or PlayerFallingKO => fKOAfterBerserkOrCharge,
+                    s_GrabRelease_Counter => OpenScct.Game.Combat.K.CounterGrabLyingTime,
+                    s_TerminatedPawn_Released => OpenScct.Game.Combat.K.TerminateReleasedLyingTime,
+                    _ => fLyingOnGroundDuration,
+                };
+            }
+
+            GasSleepNotice? sleep = IsGasFallTransition(nomdustate, nomduLabel) ? TakeGasSleepNotice() : null;
+            if (GotoState(nomdustate, nomduLabel, bDontSaveCurrentState) == EGotoState.GOTOSTATE_Success && sleep is not null)
+            {
+                CountGasKO();
+                PublishGasSleepNotice(sleep);
+            }
+        }
+    }
+}

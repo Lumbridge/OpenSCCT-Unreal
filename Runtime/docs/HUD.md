@@ -1,0 +1,718 @@
+# HUD, chat and options
+
+The in-game HUD plays converted Magma pages for spies, mercs, spectators, binoculars,
+interaction menus and the end banner. Canvas overlays add objective markers, screen
+effects and messages. The front end uses Godot UI styled with the HUD's fonts and colors.
+
+This guide covers content conversion, page playback, data binding, chat, settings and
+extension points. See [menus](MENUS.md) for the front-end flow and
+[HUD specifications](../spec/hud/INDEX.md) for the original rules.
+
+**On this page:** [Page player](#page-player) · [Data binding](#data-binding) · [Text chat](#text-chat) · [Options and settings](#options-and-settings) · [Smoke test](#smoke-test) · [Slice additions and gaps](#slice-additions-and-gaps)
+
+| Path | What it holds |
+|---|---|
+| [content/svmbuild/uiconv/](../content/svmbuild/uiconv), [content/svmbuild/steps/ui.py](../content/svmbuild/steps/ui.py) | the `ui` step: Magma packages, atlases, fonts and strings to `.content/shared/ui/` |
+| [game/Scripts/Hud/Magma/](../game/Scripts/Hud/Magma) | the page player: package model, instances and clocks, keyframes, renderer, Godot canvas, bitmap fonts |
+| [game/Scripts/Hud/](../game/Scripts/Hud) | the HUD: snapshot and sim reader, page drivers, effects, messages, console, radar, markers, binoculars, status page, `HudLayer`, `PlayHud`, the `hud` smoke test (`Hud/Gadgets/` belongs to the gadget overlays) |
+| [game/Scripts/Chat/](../game/Scripts/Chat) | shared native chat panel, editor and retained transcript |
+| [game/Scripts/Options/](../game/Scripts/Options) | the settings file, the options screen, applying settings, the controller |
+| [src/OpenScct.Net/Channels/ChatLine.cs](../src/OpenScct.Net/Channels/ChatLine.cs), `ControlMessage.cs` | the chat message on the control channel |
+| [src/OpenScct.Server/ChatRelay.cs](../src/OpenScct.Server/ChatRelay.cs) | the server's chat rules |
+| [spec/hud/](../spec/hud) | the decoded HUD rules (index in [spec/hud/INDEX.md](../spec/hud/INDEX.md)) |
+| [game/Scripts/UI/](../game/Scripts/UI), [game/Scenes/UI/](../game/Scenes/UI) | front end: main menu, lobby, results, the play entry and lobby interfaces |
+
+Evidence comes from our own decodes (specs in [spec/hud/](../spec/hud), the natives in a local Ghidra copy) and from the HUD
+research of the SCCT Versus UE5 Bridge project (its [docs/HUD.md](HUD.md), `docs/OVERLAYS.md`, `docs/overlays/*.md`).
+Constants live in `HudK` (and the classes that use them) with their `[Provenance]`.
+
+## Content: the ui step
+
+`python -m svmbuild ui` (from `content/`) reads the install and writes `.content/shared/ui/` in about a second:
+
+| Output | From | Format |
+|---|---|---|
+| `manifest.json` | | `svm.ui/1`: packages, fonts, textures with their sizes, what was missing |
+| `magma/<Package>.json` | `Menus/Hud.mgm`, `Options.mgm`, `common.mgm` | `svm.magma/1` (below) |
+| `textures/<Package>/<Tex>.png` | `Packages/Textures/<Package>_mgm.utx` | the atlases the package's materials use, as stored (top-down) |
+| `textures/SHudTextures/*.png` | `SHudTextures.utx` | `MN_boutons` (markers), `Icones_Gadgets`, `Icones_Weapons` (respawn weapon), `Att_Arrow` and `BinocularA_all` (binocular markers) |
+| `fonts/<Font>.json`, `<Font>_<n>.png` | `Menus/Fonts/*.mft` and the font pages in the Magma texture packages | `svm.font/1` (below) |
+| `strings.json` | `System/_PC_/Magma.int`, `MagmaDynamic.int`, `Engine.int` | `{file: {section: {key: text}}}`; Engine.int gives the key names (`LocalizedKeyName`) |
+
+A missing `Hud.mgm` fails the step; other gaps are listed in the manifest. Tests: `tests/content/test_ui_*.py`.
+
+**svm.magma/1.** A Magma package is Latin-1 text in an XML dialect. The JSON keeps it as found with references
+resolved: `materials` (texture base name and texel region), `fonts`, `areas` (pages, areas and buttons in document
+order, each with `frameRate` and `widgets`) and `pages` (name to area index). A widget is `image`, `text`, `inst`
+(linked area, synchronized with the parent or its own clock) or `list`. Keys: `f` frame, `interp`, `rect` or `pos`,
+`rot`, `colors` (0xAABBGGRR), `state`, `color`, `shadow`, `shadowOffset`, `height`, `tracking`, `tiling`, `offset`,
+`actions` (goto area frame, stop area).
+
+**svm.font/1.** The `.mft` glyph table: char, width, height, signed x offset, signed baseline, advance, and UVs whose
+integer part is the page. Glyph cells are written with 2 texels of padding (`Padding` in the font file) so scaled
+text samples no neighbour: keep it when changing the step, the smoke test fails without it.
+
+## Page player
+
+`MagmaNode` is one instance of an area; a page is the root. `MagmaRenderer` turns the tree into a `MagmaDrawList`
+(screen polygons and text runs, each with the instance path and widget name), and `MagmaCanvas` draws the list with
+Godot canvas items. The draw list is what the smoke test checks, so headless runs test everything but pixels.
+
+- **Clocks.** Each instance runs at its area's frame rate unless synchronized with its parent. Integer frames fire
+  keyframe actions (GotoFrame, Stop). A hidden instance does not advance. Drivers use SetFrame, Playing and Restart
+  (show, frame 0, play), as the native SetTime / Play.
+- **Keyframes.** A widget is not drawn before its first key and holds its last; segments use the destination key's
+  interpolation (None, Linear, Circle, Square, Root) at the continuous frame.
+- **Colours and blends.** COLORn is 0xAABBGGRR. A widget's colour is its corner colours times the state colours of
+  the instance chain. Normal is `tex x C` alpha blended; Dodge reads the back buffer (`dst x (1 + S)`).
+- **Masks.** SETMASK groups cut later USEMASK widgets (convex quads); the per-pixel noise dissolves are not reproduced.
+- **Screen.** The page is 640 x 480 units with `s = H / 480`. A top-level instance is anchored left, right or centre
+  by where its contents sit. `StretchAll` maps x over the full width: the binocular pages use it (the game stretches
+  them, texts included).
+- **Text.** HandelGothic (Bios Three when asked), top-aligned; tracking after each glyph; heights rounded to whole
+  pixels so the bitmap glyphs keep a steady scale; lines 1.45 heights apart. A text with the AUTOSIZED flag (only
+  the timer, A_Chrono/Chrono) takes the width of its text from its rect's left edge, so its centre alignment does
+  not apply: the spy page places the timer at x 568 with a 135 unit box, and centred in it the text would cross the
+  page's right edge; from the left edge it sits under the objective counter (estimated: Magma's AUTOSIZED is not
+  decoded).
+- **Driver overrides.** A driver writes `MagmaOverride` fields on a widget (`node.Widget(name)`): Hidden, Text,
+  Color, Rotation, Pos, Top, MoveTop, Region, KeepInside. `PositionOverride` and `StateOverride` move or tint an
+  instance.
+
+## Data binding
+
+The pages never touch simulation objects. Each frame `HudLayer` runs the effects and the message driver, clears a
+`HudSnapshot`, an `IHudSource` fills it, area drivers read what they need, and the page drivers read only the
+snapshot. `HudSimReader` is the source over the local `SPlayerController`:
+
+| Snapshot | Read from |
+|---|---|
+| side, health, poison, location, speed, yaw | pawn `SPawnType` (else the controller's), `Health`, `bPoisonned`, `Location`, `Velocity`, controller yaw |
+| energy | `SPawnAttaque.EnergyLevel` / `EnergyLevelMax` |
+| weapon | `SWeaponDefense` clip, ammo, `ROFMode`, the weapon class (rifle, UZI, shotgun reticle), `WeaponLoaded`, `bNoReticule`, accuracy, laser on, `fDateLastShootedPawn` |
+| gadget, vision | `SelectedGadget`; `STeamInfo.iNBGadgets`; `RendMap` |
+| timer, objectives, counter | GRI time and mode; `MissionRules.GetObjectivesLeft`; deathmatch team lives (`TotalTeamLives`, 1000 = "Inf.") |
+| countdowns, alarm | `SHud.ActorToDraw` (hack, two objectives); the alarm box from `SHud.AlarmsList` (priority above 4) |
+| markers | every SObjective's triggers; `MalfunctionGamePlayObjects` (GPO diamonds) |
+| messages | the four SHud stacks and the game queue head; `ReticuleMessage`; the tutorial line `sTutoMap` |
+| radar, arrows | other pawns by side, spy bullets, alarms, `SHud.ObjectivesList`; the six sound arrow times, set by `SHud.NotifyHotSound` from `SPlayerController.ClientNotifyNoise` (frags, chaff, landings, extinguishers; never the merc rifle) |
+| interaction list, prompts | `IManager` entries, Speak / Hack, the coop icons (decoded driver, `InteractionPrompts`), the respawn weapon |
+| players, score, status | `GRI.PRIArray` (name, team, objectives or kills, deaths, lives, ping), the mission objectives |
+| effects | `HudEffects` (below): washes, perturbation, shutdown, foam, flashes, sleep; pawn sticky shock and rain |
+| spectator | `IsSpectating` states, `bGameEnded`, the watched pawn, respawn date, team tips |
+| binoculars | state `s_Binoculars_Att` / `s_Binoculars_Def`, `fBinocularVisionFOV`, breath, hit time, voice target, the range finder line, the spy's objective triggers and lock |
+| HUD switches | `bHideHUD`, `bLifeOff`, `bGadgetOff`, `bTimeOff`, `bAMMOOff`, `BallisticValue`, `EnhancedRealityLevel`, `bShowConnectedPlayers` |
+
+The reader is read only, with two HUD-local exceptions: `HudMessages.Tick` prunes the SHud stacks (the original HUD
+does it in its draw) and `HudLayer` runs `SHud.PostNetBeginPlay`'s HUD part on a new SHud (Enhanced Reality 1,
+metric units). The full scoreboard has independent, initially closed local input state.
+
+## Page manager and drivers
+
+Each frame `HudLayer` picks one page: a registered `IHudPageOverride` that is active (the binocular pages come
+first, then any added by other modules), else `P_SpectatorMode` while spectating, else the side's page. Every
+top-level area of a page starts hidden and stopped at frame 0; each driver shows what it draws.
+
+| Area | Rule (spec) |
+|---|---|
+| Vie, Energie | fill top `min(133, 137 - v x 1.33)`, triangles 3 units above; both show the current health at once (the native 0x10b30090 curve blend truncates to 0); poison frame and animated screen overlay |
+| Objectif | the Story count restarting on change; in a deathmatch the DeathMatch counter "own/other" lives (counters-and-prompts.md) |
+| Chrono | `rem:ss` of the time limit; kept inside the right screen edge |
+| ChronoHack, ChronoObjectif(2), ChronoAlarm | countdown boxes; the alarm box while an alarm of priority above 4 runs |
+| Gadget, Ammo | gadget charge, name and icon; `ClipAmmo/Ammo` |
+| System, State, Zone, Game messages | the decoded message driver (messages.md): stacked lines, restart only when shown, the queue head for 5 s, waits while the tutorial line shows |
+| Tutorial | `A_TutoMessage` with `sTutoMap` |
+| Spy_Speed, Speak, Coop1..4 (spy) | walk indicator; "Speak"/"Hack"; the coop icons |
+| Reticule, ReticuleMessage, Pos_Merc, AlertMessage (merc) | reticle per weapon kind with spread and hit colour, laser gate, sound arrows, reticle message at the aim point, posture icon, alert box (merc-reticle.md) |
+| merc effects | perturbation, shutdown and reboot, foam, droplets, sticky shock, flash white-out (screen-effects.md) |
+| Ballistic | the charge gauge |
+| PCConnectedPlayers | Retained as original-content provenance; the compact list is no longer drawn. F10 opens the native role-specific scoreboard described in [Scoreboards](SCOREBOARD.md). |
+| Radar | dish, blips, edge arrows (spy teammates and enemies, merc alarms and hacked terminals) |
+| P_SpectatorMode | objectives, time, lives, watched player, respawn countdown, tip (spectator-page.md); the connected-player panels are centred together below the spectator controls and fit between them and the tip, including large split or unsplit rosters |
+| P_BinocularsATT / DEF | zoom label and marker, scope ring animations, sights and axes at the aim point, breath gauge, range finder, key help, Hack prompt, reticle message (binoculars.md) |
+
+The spy's existing energy gauge remains visible below full charge and while cloak is engaged, including a
+full-charge activation. At 20% energy or less it turns amber without adding a status label. The gauge follows
+the HUD editor's energy-group visibility and opacity settings.
+
+Poison uses the original `jauge_poison` animation, starting at frame 1 and looping every 0.9 seconds; frame 0
+contains a stop action. Its two textured screen layers retain their Normal and Dodge blends, and stretch across
+the viewport independently of the health gauge's anchor and HUD-editor settings. Curing poison hides them
+immediately; a later infection restarts the animation. See [the poison spec](../spec/hud/poison.md).
+The `poison-hud` smoke checks the animation, gauge placement, layout edits and cure at 30/60/144 fps and three
+aspect ratios; with a renderer it also checks and captures the visible pulse and complete removal on cure.
+
+Countdown text uses `m:ss` with carried minutes. Alarm text reads the precise match clock used to start its
+countdown. Knockout text reads the local lying-state deadline that controls waking; both show `1` during their
+final positive fraction of a second and expire at zero. These timing corrections replace the original truncated
+display values, without shortening or extending the gameplay timers. The gas-mask and scoped-breath gauges still
+read their owner-side air/breath budgets; EMP, flash and grenade effects have no numeric time-left label.
+
+**When a page shows.** `SPlayerController.SpawnMagmaHud` opens the side's page once the player is ready
+(`PlayerAreReady`): the PRI has a team, or it only spectates (`HudLayer.MagmaHudOpen`); before that no page is drawn.
+
+**End banner.** `GameEnded.BeginState` opens `P_EndGame` on the player's machine as the round ends
+(spec/game/end-of-round.md rule 17), over the frozen world: `HudLayer.EndGame` (`EndGamePage`). Its update
+(0x10b26ce0) leaves the page empty until `GRI.WinningTeam` replicates, then shows You Win when `PRI.Team.TeamIndex` is
+the winner and You Lose otherwise (Chapter Completed on a tutorial), restarting an area only when it was hidden; the
+area plays once and loops its end. It is a full-screen page, stretched over the screen like the binocular pages. The
+end menu opens over it 10 s after the winner is known (rule 18), so online the results page opens on the table; the
+banner of `ResultsScreen` plays only offline. The results' "You Win" side is the local player's row of the round's
+results (`OnlineLobby.ToMatchResult`, `RoundResultSide`): the lobby keeps the lobby side, which a Revenge pair swaps
+for its second game. The `net-lobby` smoke checks the banner and its side in both games of the pair on both players.
+
+**Canvas parts.** Over the page, in this order: the spy's interaction list and Enhanced Reality markers (`HudMarkers`,
+player pages only), the merc's motion tracking brackets (`HudMotionTracking`: the goggles' tracker's screen boxes
+from the drawn camera and its decoded DrawHUD, in the 640 x 480 frame scaled by height and centred, also on the
+camera network page; spec/equipment/motion-tracking.md; and the HUD's own tracker with the laser sight's target, its
+typed name and the friend mark, SHud.DrawTargetName, spec/hud/merc-reticle.md rule 3e), the binocular markers (`HudBinocularMarkers`, the spy's binocular page only), the deathmatch
+respawn weapon, the console lines, the screen-effect washes and the knock-out text (`HudSfx`), overlays (the chat
+line), the frame rate readout. The SHud canvas doubles its colours (screen-effects.md rule 0, `HudK.CanvasColour`).
+
+The optional network readout (`show_net`) is a compact translucent panel below the FPS counter, with smaller text
+and separate link, traffic, buffer, synchronization, replay and reset rows. Packet loss (`show_net_loss`) and the
+host's client ping range add their own rows. Values update once a second; loss, underruns, gaps and resets highlight
+in amber when nonzero. The panel measures the HUD font and wraps within the screen width. Its layout and draw
+commands are reused between samples, and rebuilt for a resize or FPS visibility change. `network-overlay` checks
+normal and large-counter layouts from 320×240 through 3440×1440 and that unchanged frames allocate nothing.
+
+**Performance telemetry controls.** Options → HUD has independent **FPS & frame timing** and **Network information**
+sections. Each display offers Never, Always, or Only during issues, scale (50–200%) and opacity (0–100%).
+Position is controlled in **HUD editor**, with separate Spy/Merc layouts; saved legacy percentage positions remain
+the baseline for existing profiles. Appearance affects the entire element, including text, shadow, background and
+graphs. Untouched network information stacks below the FPS panel's visible bounds. Edited telemetry uses fixed
+reference bounds so changing counters, warning rows or FPS visibility cannot move its anchor. Preferences are stored in
+`fps_telemetry` and `network_telemetry`; existing `show_fps`/`show_net` preferences retain their enabled state.
+The stock activity feed uses free space above or below moved panels within its usual lane. If tall FPS/network graphs
+leave too little room there, it uses space to their left, staying above the crosshair and clear of gameplay notices.
+Placing telemetry near the bottom does not hide otherwise unobstructed activity.
+
+FPS options include frame time in milliseconds, 1% low/high FPS, average FPS and peak frame time. The statistics
+retain the previous five-second / 2,048-frame window. An optional line or bar graph shows 2–30 seconds of frame
+times, retaining bucket peaks so a brief hitch is visible. Its labelled vertical scale expands to include spikes;
+an amber line marks the configured frame-time warning. Text and graphs refresh at most four times per second.
+Frame time measures the interval between rendered frames, including any frame cap, rather than GPU execution time.
+
+Network options include compact or detailed rows, traffic rates, packet-loss percentages, and separate ping,
+jitter and loss graphs (line or bars, 2–30 seconds). Loss graphs show the worse direction's measured one-second
+percentage; graph labels identify units and scale. Network history is sampled at 10 Hz while text rates update
+once per second. Histories clear on disconnect or counter reset. Issue detection does not depend on which metrics
+or graphs are enabled: it covers high ping/jitter, interval packet loss, stale snapshots, buffer underruns,
+prediction resets and state gaps. Listen hosts also detect a client's high ping. Warning thresholds are adjustable
+(defaults: 33.3 ms frame time, 150 ms ping, 30 ms jitter and 2% loss). Both displays keep an issue visible for a
+configurable 0–10 seconds after recovery (three seconds by default), with sampling continuing while hidden.
+
+The `telemetry` smoke checks graph geometry and viewport bounds from 320×240 to 4K, all positions and scale
+extremes, opacity, metric toggles, issue visibility/hold/recovery and reconnect behavior. `options` exercises the
+actual selectors and sliders through draft, Apply and Defaults. Settings tests cover older profiles, independent
+round trips/deep clones, invalid values and missing groups.
+
+**Merc shock immunity (OpenSCCT addition).** A compact amber crossed-lightning icon, `SHOCK IMMUNE` countdown
+and draining bar sit beside the health/status area. Seconds round upward to one decimal. The readout uses the
+same authoritative timed status as the draining body-edge effect (docs/EFFECTS.md), with current synchronized
+server time for the owner. It does not infer immunity from the local shock animation or restart its own timer.
+When an action or state blocks shocks without a fixed end time, the label reads `STATE PROTECTED` and the bar
+stays full. After that state ends, any remaining timed cooldown appears. An active `0.0s` readout remains until
+the server clears protection. Timer resets and extensions update immediately.
+
+This is a canvas element, so scope and camera-network pages retain it. It follows HUD hiding and screen-effect
+washes, and is absent for dead players, spectators, end-game screens and social hubs. No floating world label
+is added; other players read the remaining proportion from the merc's body effect. Spies have no immunity
+countdown or body effect; their combat immunity still applies. Headshot shutdown hides the merc's own
+readout while the authoritative immunity countdown continues. Original headshots add HUD disruption, not extra
+movement-freeze time: dry merc head/body hits both freeze for 3.5 seconds, remain electric for 4.5 seconds, and
+protect from another shock for 12.5 seconds; dry spies freeze for 3 seconds and are protected for 11 seconds.
+
+**Effects.** `HudEffects` turns the simulation's CombatFx notifications into what the SHud natives do on the hit
+player's machine: `ClientDamageHudEffect` (red wash for spies, perturbation for mercs, flash-bang after-image and
+white-out, extinguisher foam), `HudShutDown`, `SetBallisticValue`, the goggle messages. `HudEventTap` chains the
+world's event sink so nothing else changes.
+
+Merc headshot shutdown plays the original `Armes_impacts.Gadgets.Hud_shutDown` cue on the owning client,
+alongside the ordinary shock impact and grunt. The stock reticle follows its authored shutdown fade; the custom
+crosshair, added weapon readouts, motion/teammate labels, activity feed and location readout hide until reboot
+finishes. Reboot returns every top-level HUD area to its normal stopped frame, and Magma frame jumps execute
+the destination's actions so restored areas cannot drift back into shutdown keys. The `hud` smoke checks the
+shutdown, reboot and continued recovery at 30, 60 and 144 FPS.
+The radar is suppressed until reboot finishes: its authored disruption uses per-pixel noise masks that the
+Magma renderer does not yet reproduce, so showing it would leave the radar information readable during shutdown.
+
+**Activity feed and contextual messages.** `HudReceiver` routes localized match events into the `HudLayer`'s
+activity feed: kills, deaths, suicides, resignations, sleeps, knockouts, joins/leaves, match notices and last-life notices.
+Five newest events appear immediately, newest first, for six seconds each; entrance takes 150 ms and the final
+400 ms fades out. Overflow removes the oldest row without a backlog. Captured player names and team colours,
+action labels and known causes replace rank-prefixed sentences. Dark translucent cards use bundled Inter and sit
+in the upper-right region, to the left of the page's radar/objective column and clear of performance readouts.
+Combat cards show team-coloured `attacker → victim` names above an explicit outcome and method, such as
+`Eliminated · Headshot` or `Put to sleep · Camera gas`. Single-player deaths use the whole name line;
+join/leave/last-life notices place the player name above the event, without repeating the name in the detail.
+Feed dimensions use 65% of the base HUD scale, with minimum text sizes of 12 px for names and 10 px for labels.
+Each card shares the same width; names receive space in proportion to their measured widths, with bounded
+shares and grapheme-safe ellipses for long names. A larger icon sits beside both lines (at least 24 px).
+Detailed SVG silhouettes from Game-icons.net replace the hand-drawn symbols. They are embedded in the
+game assembly and decoded once into shared textures, independent of editor import caches. The CC BY 3.0 author
+credits, upstream URLs and modification records are in [game/branding/icons/event-feed/README.md](../game/branding/icons/event-feed/README.md) and
+`packaging/licenses/GameIcons-LICENSE.txt`; releases include the latter under `licenses/`.
+Narrow layouts show fewer rows without shrinking text. Flash and sleep effects draw above the feed.
+
+Detailed kill causes are captured on the authority at the damage source. Proximity, laser and poison mines,
+frag grenades, barrels, Molotov blasts and delayed fire, gas cylinders, explosive extinguishers, soda cans,
+weapons, melee moves and mover crushes keep distinct text and icons. Unknown damaging props use `Prop damage`;
+unnamed hazards retain the known legacy cause where possible rather than guessing a weapon or fire source.
+Weapon headshots retain their headshot marker. Drop attacks, charge, elbow strikes, grabs, chokes, neck breaks
+and ledge pulls each have a separate icon. A shot-triggered device uses a bullet-badged version of its icon.
+The internal sticky-shocker damage bucket distinguishes lethal `Taser` hits from electrical charge collisions;
+ordinary spy shocker shots still do zero pawn damage and do not create kill events. The legacy sticky-blast
+reaction uses electrical rather than bomb imagery. Both contact deaths name the victim first: `Sentinel died` /
+`Charged into electrified Raven`, or `Raven died` / `Contact with electrified Sentinel`. The other player's name
+wraps on narrow screens, and `died` stays visible even when a long victim name is shortened. Special exploding
+extinguisher-shaped map props use `Explosive canister`; normal spraying extinguishers remain nonlethal.
+
+Mine ownership and the triggering player are separate: the first line retains the credited killer and victim,
+and an additional line says `Shot by Raven`, `Chain reaction · Raven` or `Ignited by Raven`. Names are captured
+when received; missing trigger identities leave the method visible without inventing a player. Rows grow only
+when an extra attribution line or wrapped cause is needed, and the safe-area layout counts their actual heights.
+Delayed poison stores its source on the affected pawn; queued map relays retain a source per activation and pass
+it into damage volumes, so a later explosion cannot change the cause of an earlier Molotov fire.
+
+`CombatActivityDeath` encodes this presentation metadata in the existing death-message integer while retaining
+the legacy damage switch. The optional object carries a stable player replication identity, not the destroyed
+explosive. Damage amounts, kill ownership and death sounds keep their existing rules. The network bridge gives
+an explicit localized-message payload precedence over its sender; alarm/objective payloads use the same path.
+
+`HudMessages` preserves message sounds and the server's original recipient scope. Combat and activity events
+bypass the legacy queue; objective/data/access/bomb notices, mission guidance, interaction prompts, alarms and
+warnings stay in their contextual HUD areas and do not enter the activity feed.
+Chat uses the separate `ChatTranscript`/`ChatPanel`. Feed entries survive pawn respawn and spectator target changes, but clear on
+session/controller replacement, match restart or backwards time, and expire while the HUD is hidden.
+Smoke and sticky-camera sleeps use additive `SGameMessages` switches 62/63 with attacker/victim PRIs and are
+published once by the authority for a valid gas-exposure episode; the RPC format is unchanged.
+
+**Console and chat.** Live matches and the hub use the shared native `ChatPanel`, with structured sender/channel
+information and 64-message `ChatTranscript` history. The original `HudConsole` drawing remains a fallback for
+legacy callers; ordinary system messages join the modern transcript without replacing objective or kill notifications.
+
+**Scoreboard and status.** F10 (`ShowConnectedPlayers`) toggles the full role-specific scoreboard, initially closed.
+A separate unbound `HoldScoreboard` action supports holding a chosen keyboard/mouse/controller binding. Combat
+statistics are delayed 30 seconds by the server, with final totals at round end. The former compact roster and
+its `show_scoreboard`/split preferences are obsolete; see [Scoreboards](SCOREBOARD.md).
+F8 (`DisplaySessionStatus`) opens `GameStatusPage`, the mission
+status: both teams with objectives or kills, and the objective list; F9 toggles Enhanced Reality
+(`SwitchEnhancedReality`). `HudCommands` runs these execs from the player's layout (scoreboard.md).
+
+## In-match menu
+
+Escape (`ShowMenu` in both stock layouts) opens the original's In-Game Menu (`SSMenu_LANMainPage`, spec/hud/in-game-menu.md):
+Back, Strategic Map (the map's floors with the player and his team mates, spec/hud/strategic-map.md; F7 opens it
+directly), Options (the options screen over the game), Return to Lobby (only the
+host of a network game) and Quit Session (End session, Cancel, Quit Game). The match is not paused, as in the original;
+the player's controls stop and the pointer is freed while the menu is open, and keys are ignored for its first half
+second. `InGameMenuModel` (Godot-free, unit tested) holds the rules, `UI/InGameMenu` draws them in the front end's style
+(the original's GUI pages are not Magma pages) and `Play/PlayMenu` opens it and carries out leaving, the lobby and
+quitting. Smoke test: `play-menu` (real key and mouse events through the play scene).
+
+## Text chat
+
+The shared modern tactical chat sits on the lower left above match instruments. Closed, it displays up to six
+wrapped lines, with eight seconds of visibility followed by a one-second fade. Opening it reveals the latest 64
+messages; incoming messages preserve a scrolled-up reader's position and expose a New messages action. History
+survives respawns but is not persisted across connections.
+
+Talk (F5 by default) opens All chat, TeamTalk (F6) opens Team chat, and an unassigned Enter also opens All chat.
+Tab cycles the send channel while preserving the draft; Enter sends and closes, Escape discards and closes.
+Matches offer All/Team and the hub also offers Nearby. The native editor supports normal selection, caret
+movement and copy/paste, with a 100-character message-body limit. Opening it releases the pointer and clears and
+blocks gameplay input; closing restores the prior input/capture state without overriding another menu.
+
+**Quick chat** is an optional, initially unbound action under Communication in each role's keyboard/mouse and
+controller bindings. Open it, choose Attack, Defend, Information or Responses, then a phrase. Number keys 1–4
+and D-pad Up/Right/Down/Left make both choices; the visible buttons also work with a mouse. Escape or B returns
+to the categories, then closes. It sends preset text through the existing Team channel, including its server
+rules and chat history. It clears held gameplay inputs during selection, restores controls on send/cancel,
+expires after eight seconds without a choice, and allows one completed message every 1.5 seconds. The
+`controller-ui` smoke checks keyboard/controller selection, team scope, cancellation and input restoration.
+
+The client sends `ControlMessage.Chat(scope, text)` on the control channel; the server's `ChatRelay` applies the
+original's rules (spectators may not chat unless dead and the voice mode allows it, a shared budget of 260
+characters a second, team lines to the sender's team) and sends each recipient a chat message with the sender's id,
+name and team. The display preserves that metadata for channel labels and team-coloured names and renders user
+text literally. The hub retains `/l`, emotes, chat muting and overhead bubbles. No optimistic local echoes are
+added. Spec: [spec/hud/chat.md](../spec/hud/chat.md); UI smoke: `modern-chat` (captures via `SVM_PLAY_SHOTS`).
+
+Admin announcements, moderation notices and command replies also appear as System entries. `OnlineService`
+forwards the session's separate system-message stream and buffers notices received while the match loads;
+ordinary player messages retain their existing receive path. Server announcements preserve the admin portal's
+150-character text, and legacy servers' duplicate announcement copies are combined into one complete row.
+Targeted replies remain private. Hub admin notices continue through `HubClient.ChatAdded`.
+
+## Developer console
+
+`UI/DevConsole` (rl:qol.console, rl:input.console) opens and closes on the key left of 1 (backtick or tilde, by
+its place on the keyboard, so any layout), or on Chaos Theory's own console key, the apostrophe key, with
+`override_console_key` off. It works in the menus and in play, but not over an open chat line or a focused text box.
+It is a band over the top of the screen in a monospaced system font (Consolas, then other mono fonts). While it is
+open it takes every key press, click and mouse movement, so nothing reaches the game or the menus; releases still
+pass so no key stays held. Escape or the console key closes it; Up and Down walk the typed history.
+
+Commands (`UI/ConsoleCommands`, Godot-free; settings through `Options/SettingsConsole`):
+
+| Command | What |
+|---|---|
+| `help` | the list |
+| `whereami`, `whereami copy` | reports the local player's map, exact pawn-centre coordinates in UE units, pawn and view rotations, view direction, movement state, physics and crouch state; `copy` copies these details to the clipboard |
+| `grabarea`, `grabarea on`, `grabarea off` | practice and Visit Map only: draws on the floor around every living mercenary where a spy can stand to grab him, as this machine's grab test sees him. Bright sector: a spy facing straight at him; faint sector: with the body turned. Green: Use grabs now; yellow: not in position; red: he cannot be grabbed (just got up, shocked, or in a state that refuses it). Shows through walls; the colour also checks ground, headroom and the path used by the local grab |
+| `current` | every settings.json key and value |
+| `get <key>`, `set <key> <value>` | a settings.json key; a group member with a dot (`controls_spy_kbm.look`); switches take on/off; the settings' limits apply; saved and applied at once |
+| `<key> [value]` | a settings key alone shows it, with a value sets it (`max_fps`, `ws_fov`, `widescreen`). `fps_spy` and `fps_merc` are aliases for `max_fps`. |
+| `login <password>` | the server's admin login (`!login`) |
+| `cmd <command>` | a server console command (docs/ONLINE.md), for the host and admins |
+| `practice on`, `practice off` | the server's practice mode (host and admins; `practice` alone says what it does) |
+| `resign`, `pings`, `practice`, `heal`, `regen`, `tank`, `kill`, `ammo`, `rmap_next`, `rmap_prev`, `map <name> [mode]` | sent as the chat command (`!resign`, `!next`, `!prev`...) |
+| `say <text>` | a chat line |
+| `quit` | closes the game |
+
+The server's system lines (answers to `cmd`, `!pings` and the others) are shown in it as they arrive. Not in smoke
+runs (it is added by `App` outside them).
+
+For a troublesome ledge or pipe, stand at the spot and face it, open the console, run `whereami copy`, then paste
+the report with the action that failed. It works in offline and online play without admin access. Coordinates
+preserve their full float precision; rotations are original UE units (65536 is one turn), with pitch/yaw/roll
+labelled separately for the pawn and the player's view. The clipboard changes only with the explicit `copy` form.
+
+## Options and settings
+
+The settings live in `user://settings.json`, JSON with comments and trailing commas allowed, keys named as
+Reloaded's `settings.json` with its first-run defaults. A broken file is kept as `settings.json.bak` and the defaults
+are used. `GameSettings` (Godot-free, unit tested) holds them; `SettingsStore` loads and saves; `SettingsApplier`
+applies them at start and on save.
+
+| Group | Keys |
+|---|---|
+| player | `player_name`, `invert_y`, `invert_x_spy` (profile InvertX), `mouse_wheel` (Gadget, Speed: profile SelectedMouse 0 and 1), `clutch_one_key`, `clutch_two_key`, `use_split_spy_merc_keyboard` (on: separate layouts) |
+| look per team | `controls_spy_kbm`, `controls_merc_kbm` (`look`, `free_look`, `scope`, `scope_vertical`, `vertical`, `cam`, `look_response`, `clutch_one`, `clutch_one_enabled`, `clutch_two`, `clutch_two_enabled`), and the same for `controls_spy_pad`, `controls_merc_pad` |
+| controller | `controller`: `enabled`, `deadzone_left` 0.25, `deadzone_right` 0.15, `vertical_scale` 0.75, `run_threshold` 0.95, `slow_walk` (on), `prompted`, `rumble` (off), `rumble_strength` 1.0, 8-way move per side, `look_scale` (1 = Enhanced's stick speed), the pad layouts (`Clutch1`, `Clutch2` hold the clutches) |
+| display | `display_mode` (Windowed, Fullscreen, BorderlessFullscreen), `display_monitor`, `resolution`, `window_position` (Default, Centered, Stretched), `vsync`, `widescreen`, `widescreen_hud`, `ws_er_small`, `ws_fov` (95..112, default 112), `max_fps` (Match refresh rate by default, Unlimited or 30 to 700), `resolution_scale`, `auto_scale_fps` (0 off, or the frame rate the automatic render scale holds: 30, 45, 60, 75, 90, 120, 144), `filter_level`, `msaa`, `msaa_samples`, `smaa`, `shadow_quality`, `shadow_edge_smoothing`, `post_quality` (0 Normal: no glow, 1 High), `low_latency_mode`, `throttle_stop` (docs/RENDERING.md) |
+| audio | `master_volume`, `sound_volume`, `objective_volume` (the objective jingles; 0 is profile bObjectiveSounds off; replaces the old `objective_sounds` switch), `music_volume` (a round's music), `menu_music_volume`, `menu_sound_volume`, `voice_output_volume` (Godot buses Master, SvmWorld and the effect buses, SvmObjective, SvmMusic, SvmMenuMusic, SvmMenuSound, SvmVoice). A file without the three new volumes takes `sound_volume` for the objective and menu sounds (0 for the objective when `objective_sounds` was off) and `music_volume` for the menu music |
+| HUD | `show_fps`, `show_net`, `show_net_loss` (off), `show_location`, `hack_alpha` (0..255, 178), `hud_feet` (profile bInFeet), `fire_prediction` (on; docs/NETCODE.md "Lag compensation and fire prediction"); old compact-scoreboard preferences are ignored |
+| console | `override_console_key` (true: the key left of 1; false: the apostrophe key) |
+
+`OptionsMenu` is the screen from the main menu or the in-game F12 overlay. Spy and Mercenary each contain
+Bindings, Mouse & Aim and Controller sections; Mercenary also has Crosshair. Display, Performance, Audio, Voice,
+HUD and HUD editor follow, then Controller (Shared) holds shared controller settings in the far-right tab
+(docs/MENUS.md). Performance sits beside Display and contains shared and per-team frame caps, vertical sync,
+and latency/power settings. Settings browsers open on All, with grouped headings and the binding editor's sidebar
+divider. Settings and bindings are staged until Apply or
+Save & Close; Back confirms discarding edits. `OptionsRuntime` applies role sensitivity, HUD switches, frame caps,
+FOV and controller settings. `GamepadInput` retains keyboard-linked assignments and supports independent action
+bindings, alongside radial dead zones, response curves and the spy's run threshold.
+
+**Keyboard defaults:** both roles use the built-in SCCT Enhanced keyboard layout. This is independent of
+the original install or downloaded content: older public content packs contain vanilla SCCT's arrow/numpad
+merc preset. First load and Reset now use the same Enhanced defaults (WASD, Space jump, C crouch,
+Shift use, E flashlight, Q laser, F rate of fire, R reload). Exact untouched old merc-default snapshots
+upgrade automatically; customized bindings and edited input orders remain authoritative. New snapshots
+carry a defaults-version marker so subsequent intentional arrow/numpad layouts are preserved.
+`DefaultKeyLayoutTests` compares every binding against installed Enhanced Beta 3 and Beta 5 presets,
+and tests migration using the old public pack's actual merc INI.
+
+**First-time controller layout** (Reloaded, `controller.layout_version` 1): controller support starts off and
+the first connected pad prompts to enable it. Bindings call independent actions, so changing or removing keyboard
+bindings does not change controller behavior. Existing unversioned settings retain their earlier controls and aim;
+"Reset controller for this role" opts that role into the new layout.
+
+| Control | Spy | Mercenary |
+|---|---|---|
+| A / B / Y | Use or grab / crouch (tap) / jump | Use or melee / crouch / jump |
+| X | Draw or holster | Reload |
+| LT / RT | Use gadget / fire; short taps quick-use slots 2 / 1 while unarmed | Use gadget (hold breath while scoped) / fire |
+| LB / RB | Co-op (release) / roll | 0.5× sensitivity while held / scope |
+| Right stick click | 2× sensitivity while held | 2× sensitivity while held |
+| D-pad up / down | Last sticky camera / back to wall, or weapon laser with gun drawn | Flashlight / laser |
+| D-pad left / right | Night / thermal vision | Motion / EMF vision |
+| Back / Start | Hack communications / menu | Hack communications / menu |
+| Left stick click + Y / X / B / A | Select gadget slot 1 / 2 / 3 / 4 | Select gadget slot 1 / 2 / 3 / 4 |
+| LB + Y / X / B / A | Select and fire gadget slot 1 / 2 / 3 / 4 (gun drawn) | Unassigned in Reloaded's native bindings |
+| LB + D-pad down | Binoculars | Rate of fire |
+| LB + Back | Session status | Session status |
+| Hold B (200 ms) | Long roll | Unassigned |
+
+Combinations consume their standalone actions; releasing a modifier cannot trigger the face button still held.
+Every spy has cloak as a built-in ability, independent of gadget selection and using no gadget slot. Its dedicated
+binding defaults to **K** on keyboard and **LB + RB** on controller; gadget triggers no longer operate cloak.
+Saved cloak loadout slots migrate to an unused standard gadget. **Spy → Bindings →
+Cloak** offers Toggle (default; press again to deactivate) or Hold (release to deactivate), shared by all devices.
+Wheel bindings always toggle. Cloak has no input hold threshold or toggle/refire delay;
+any positive energy permits activation, while rain, speed and weapon/state restrictions still apply, as does its
+visual fade. Cloak drains the shared Shocker energy pool continuously at 8/s while switched on, including
+fade-in and active flicker. Switching it off stops drain immediately and holds the battery steady through
+the remaining fade-out and flicker; it then refills at 7/s up to its maximum. Shocker shots still cost
+15 energy. See [spy energy](../spec/equipment/spy-energy.md#current-openscct-behavior) for the current rules and
+the decoded original behavior. In camera
+views, RT releases sticky-camera gas and B leaves the view. Long roll pulses crouch when needed to stand first.
+Triggers press above 7680/32767 (about 23.4%). Spy free look uses Aggressive and gun look uses Soft response.
+These are the defaults with analog slow walk enabled and stick/bumper swaps disabled. The built-in keyboard
+layout contains the same resolved actions as the Enhanced INIs; additions and wheel preferences are
+applied before the first saved snapshot, so first launch and later launches agree without original key files.
+The `controller-defaults` smoke exercises both roles with the fallback and with an empty keyboard layout;
+logic tests cover contextual trigger timing and execute gadget, cloak, camera and long-roll commands.
+
+**Analog movement** (rl:input.pad): the left stick reaches the sim as a stick, not as keys. `GamepadInput` puts it in
+`LocalInput.PadForward`/`PadStrafe` (after the deadzone and the optional eight-way snap; with `slow_walk` off only its
+direction), `LocalInput.ApplyButtons` copies it onto the controller (`SPlayerController.PadStickForward`,
+`PadStickStrafe`, `bPadStickMove`), and `ControlInput.Compute` (the NativeComputeControlVariables port) uses it in
+place of the direction keys: `aForward`/`aStrafe` = stick x 6000 x speed mode, so any direction and a part push walks
+slower; `fNormePadMove` is the stick's length x speed mode, and Reloaded's key diagonal fix does not apply. The keys
+bound to BT_Up/Down/Left/Right are still held past 0.38 for everything that reads the key bytes. Moves carry the
+acceleration, so online play needs nothing more. **Hot plug**: `PadMenus` shows "Gamepad connected: name" or
+"Gamepad disconnected" for three seconds at the bottom of the screen, and asks once "Would you like to enable native
+controller support?" when a controller is connected while controller support is off (`controller.prompted`; setting
+the option on the Controller page counts as the answer).
+
+**Look multipliers** (rl:input.sens, `MouseLook.Multipliers`): the view picks the group's field. A sticky camera or
+the camera network takes `cam`; the binoculars and the merc's sniper scope take `scope`, the merc's vertical also
+`scope_vertical` (2.45 turns the scope up and down as fast as sideways, 1 is the stock 40.8 %, Reloaded's legacy
+sniper mode); otherwise the side's look (the spy's `free_look` holstered, `look` with the gun drawn) with `vertical`
+scaling the up and down look relative to the side's default (3.5 spy, 1.0 merc: the meaning of `vertical` is not
+decoded, so its defaults keep the stock ratio). They scale the mouse counts before the input mapping; the controller's
+counts are scaled so they end up with the controller groups' fields instead (`GamepadInput.PadMultipliers`).
+**Clutches** (rl:input.clutch): while `clutch_one_key` (or `clutch_two_key`, the merc's) is held, or a pad control
+bound to `Clutch1` or `Clutch2`, the group's enabled clutch multiplies the look (before the response curve on a pad).
+The Mouse page sets the keys (click, press the key; Escape clears it).
+
+**Profile options.** The original reads InvertX, bInFeet, bObjectiveSounds and SelectedMouse from the player's
+profile, which the rewrite does not have (`IDeviceHooks.GetPlayerProfile` stays empty: a profile there would also set
+the kit). They live in the settings file instead: `MouseLook.Apply` puts `invert_x_spy` on the controller
+(bInvertHorizontalAxisCamSpy), `HudLayer.DistanceInFeet` calls `SHud.HudUnit`, and the level service
+`IProfileOptions` (`SettingsProfileOptions`, installed with the gear services) answers ClientSetMusic's objective
+jingle check and the wheel (WheelUp, WheelDown) for the machine's own controller only. `mouse_wheel` defaults to
+Gadget, as the rewrite always played; the original's default profile has Speed.
+
+**Rumble** (rl:input.rumble, spec/combat/rumble.md): `PadRumble` hears the local player's `Vibration_*`
+notifications through `HudEffects.Applied`, keeps the script's priority rule and plays the script's motor strengths
+on the controller in use, scaled by `rumble_strength`. The Controller page's Test plays the blast's rumble.
+
+**HUD extras.** `HudLocation` writes the name of the place the viewed pawn is in (the highest-priority named volume it
+touches, else its zone's name: the map data's LocationName) at the top centre (`show_location`; Enhanced's position
+is not decoded). `HudMarkers.HackAlpha` draws the icon of an objective being hacked at `hack_alpha` / 255.
+`classic_crosshair` (Options, HUD page, off by default) moves the merc reticle to Reloaded's classic spot, 3 page
+units left and 3 down of the centred one (`MercHudPage.ReticlePosition`, spec/hud/merc-reticle.md rule 3).
+The stock reticle is centred using the loaded artwork's dot and inner instance origins, so content packs with
+different authored offsets keep the same aim point.
+
+**Field of view.** `ViewFov` (Godot-free, unit tested) is Reloaded's rule 20 as its code does it (Reloaded.Core
+0x100a7080, 0x100a4ac0): with `widescreen` on the camera's FovAngle (horizontal over 4:3) keeps its 4:3 vertical angle
+and wider screens add width, `2 atan(tan(fov / 2) x 3/4 x aspect)`, with the aspect capped at 16:9; the result is
+capped at `ws_fov` in every view but the spy's sticky camera and the merc's camera network (Reloaded's GotoState hook
+sets its exempt flag for `s_UseObject_StickyCam` and `s_UseObject_CamNetwork` only). The merc's FovAngle is 95 (read
+live), 111 degrees at 16:9. With `widescreen` off the 4:3 horizontal angle is stretched over the screen. The HUD
+follows its own key, `widescreen_hud` (rl:gfx.hud, on): off, every HUD page is stretched (`HudOptions.StretchHud`), as
+the unpatched game. `ws_er_small` (on) keeps the Enhanced Reality icons at their 4:3 size on a wide screen; off they
+grow with the width (`HudLayout.HudScreen`: either `widescreen` or `widescreen_hud` gives the wide ER canvas).
+`OptionsRuntime` installs the view policy as
+`FaithfulView.VerticalFovPolicy`.
+
+**Widescreen layout** (`Hud/HudLayout`, Godot-free, unit tested in [tests/OpenScctGame.Logic.Tests/LayoutTests.cs](../tests/OpenScctGame.Logic.Tests/LayoutTests.cs)):
+
+| Window | Laid out at | On screen | HUD page | ER extents (ws_er_small on / off) |
+|---|---|---|---|---|
+| 4:3 (1024 x 768) | 4:3 | as drawn | 640 x 480 at H / 480 | 640 x 480 |
+| 16:10 (1152 x 720) | 16:10 | as drawn | edges out by 64 page units | 704 x 480 / 640 x 440 |
+| 16:9 (1280 x 720) | 16:9 | as drawn | edges out by 107 page units | 746.7 x 480 / 640 x 420 |
+| 21:9 (1680 x 720) | 16:9 | stretched by 21/16 | as at 16:9, stretched | as at 16:9 |
+
+- Reloaded lays the picture out over `min(W, 16/9 H)` (0x100a4ac0) and builds every projection for that width
+  (0x100a6260), so a window wider than 16:9 shows the 16:9 picture, 3D and HUD, stretched across it: its options
+  call those modes "(21:9 stretched)". `FaithfulView` does the same on the main window (content scale mode
+  viewport, aspect ignore, size `round(16/9 H) x H`) while `widescreen` is on, and puts the window's scaling back
+  when the view goes.
+- The HUD keeps the 4:3 scale (H / 480); an area is anchored left, right or centre by where its contents sit, so
+  left-hand areas keep their distance from the left edge and right-hand ones from the right edge. Reloaded moves its
+  virtual edges out by `ceil((aspect / (4/3) - 1) x 320)` page units on each side. Checked against the original's
+  HUD captured in the sandbox: the spy's gadget box spans x 742 to 939 at 1024 x 768 and 1015 to 1200 at 1280 x 720
+  (ours 1015.6 to 1200.3), the merc's left column starts at x 82 and 78.
+- Enhanced Reality icons (`HudMarkers`) draw on a canvas of HudScreenRight x HudScreenBottom (0x10079880): with
+  `ws_er_small` (Reloaded's first-run default) the icons keep the 4:3 size, without it the 640 wide canvas is kept
+  and they grow with the width (`HudMarkers.ErSmall`, `WidescreenHud`; the settings file has no keys for them yet).
+- Full-frame overlays: P_StickyCam, P_CamNetWork and the binocular pages are stretched over the picture
+  (`StretchAll`; centred at 4:3 the sticky cam's scope effect left bare bands at the sides of a 16:9 screen); the
+  merc's gas mask (`MaskGas` on P_HudDEF) covers the picture: in a centre-anchored area an unrotated image edge
+  within 2 page units of the 4:3 border is pulled out to the screen border (the mask's tint starts at x 1).
+- Texture addressing: an image whose texture coordinates stay inside 0..1 (give or take 0.05) samples clamped; tiled
+  or scrolled ones (shock edges, the end-of-round noise) repeat. The gas mask's quarters are offset 0.01, and
+  repeating wrapped their outer edge round to the clear lens centre, a light strip at each side of a wide screen.
+- Near-black art: a texture whose every visible texel is RGB 12 or less loads as pure black (`HudAssets`), its alpha
+  untouched. Only `maskgaz` qualifies: its DXT black is flat 4 x 4 patches of RGB 0 to 10, magnified to visible blocks.
+
+`--svm-smoke=aspect` plays SteeE as the spy and as the merc at 1024 x 768, 1152 x 720, 1280 x 720 and 1680 x 720 and
+checks each: the window is stretched only at 21:9 and the play view is then 1280 x 720; the camera's vertical angle
+is the 4:3 one (59.84 degrees for the spy's FovAngle 75, 78.60 for the merc's 95) at every size; every unrotated image
+of a side area lies inside its page rect as HudLayout maps it and on the picture; the sticky cam, camera network and
+binocular frames cover the picture from edge to edge; the gas mask is drawn. With a window and `SVM_PLAY_SHOTS` it saves
+each view (`aspect-<side>-<ratio>-<view>.png`, the 21:9 ones stretched to the window). The overlays are forced over the
+player page for the check, so every key help line of a page shows at once.
+
+## Extension points
+
+| API | For |
+|---|---|
+| `IHudAreaDriver` + `HudLayer.AddDriver` | drive areas of `P_HudATT` / `P_HudDEF` another module owns (gadget menus, gas mask, heart sensor); the page stops hiding the areas named in `Areas` |
+| `IHudPageOverride` + `HudLayer.AddPageOverride` | replace the player page while a view is active (sticky cam, camera network); returns the `HudPage` to draw or null |
+| `IHudOverlay` + `HudLayer.AddOverlay` | draw over the HUD in its font and atlas |
+| `HudPage.Area`, `Show`, `Hide`, `SetShown`, `SetText`, `DrawCanvas` | driver helpers; `DrawCanvas` adds SHud canvas items over a page |
+| `HudLayer.Connect(ClientSession)` | the server's HUD calls and chat lines |
+| `PlayHud.Attach(scene, session, input, hud)` | the play client's wiring: settings, chat line, status page, HUD keys, key names for page texts |
+| `ClientSession.SendChat`, `ChatReceived`, `TakeChat`; `ServerHost.Chat` | chat for other front ends (lobby) |
+
+## Using it from the play client
+
+```csharp
+Hud = HudLayer.Attach(this, () => Session?.LocalController, out string? error);
+if (Hud is not null) Hud.Projector = WorldToScreen;   // FVector (uu) -> screen pixels, null behind the camera
+PlayHud.Attach(this, Session, Controls, Hud);           // messages, chat, options, status page, HUD keys
+FrontEnd.ShowResults(GetTree(), result);                // at the end of a round
+```
+
+`HudLayer.Attach` returns null (with the reason) when `.content/shared/ui` is missing; the game then runs without a
+HUD. `HudOptions` holds the slice switches.
+
+## Front end
+
+`Boot` opens the main menu unless a smoke test or `--svm-map` runs. Screens are built in code and switched with
+`FrontEnd`: main menu, options (`FrontEnd.ShowOptions` opens `OptionsMenu`), lobby (`LocalLobby` fills the 2v2 with
+bots), results (`P_EndGame`'s banner, then the scores, Rematch and Main menu). The old `UI/OptionsScreen` is no
+longer opened.
+
+## Smoke test
+
+`--svm-smoke=hud` builds a small offline scene with real SBase actors (spy, mate and merc with pawns and HUDs, a
+rifle, a sticky camera, a mission, a terminal being hacked, an alarm, a drop zone, players with pings, messages) and
+checks what reaches the widgets, phase by phase:
+
+| Phase | Checks |
+|---|---|
+| spy | timer, objectives, countdowns, alarm box 0:25, gauges, gadget, messages, immediate activity feed and lifecycle, coop icon, pings, GPO marker, the red terminal marker, console line "Ghost: on my way", the red damage wash above activity, frame rate readout; at 1920 x 1080, 2560 x 1080, 1024 x 768 and 1280 x 720 every text's drawn glyphs end inside the screen, and the timer is centred under the objective counter (before the AUTOSIZED fix: 1251 against 1195, now 1201) |
+| spy extras | interaction list, native Team chat editor and its send, activity stays independent of the mission queue, Enhanced Reality toggle |
+| merc | rifle reticle, the left sound arrow from a real noise (none from a weapon dummy), alert box, posture icon, reticle message "Reloading", ammo, radar alarm, the stretched page with widescreen off |
+| merc effects | sticky shock, droplets, flash white-out, foam, perturbation, shutdown and reboot |
+| binoculars | spy: page swap, "x2"/"x6" and the marker's x, key help "Mouse Wheel Up / Mouse Wheel Down" and "B", hidden console texts, Hack prompt, lock panel on the drop zone with its hint, terminal icon, edge arrow; merc: page swap, zoom-out then zoom-in ring keys, breath gauge frame, red then orange sights, sights centred while holding breath, range text, reticle message |
+| counters, spectator | deathmatch "7/Inf.", respawn weapon icon; spectator page texts (1/4, 8:44, lives, watched player, respawn 7, tip) |
+| status, menus | mission status lists, main menu, lobby (2v2, ready, start), options (six tabs, key rows, the ws_fov slider 95..112, the settings JSON round trip), results banner and table |
+
+Every drawn texture and font must exist and the font pages must be padded. It needs the converted UI content, so
+CI's default set stays `boot` and `testbox`. With a renderer, `--svm-hud-capture=<dir>` saves each screen as a PNG
+(keep them under `local/`). Unit tests: [tests/OpenScctGame.Logic.Tests](../tests/OpenScctGame.Logic.Tests) (settings file, message routing, field of view),
+[tests/OpenScct.Game.Tests/Hud/SoundArrowTests.cs](../tests/OpenScct.Game.Tests/Hud/SoundArrowTests.cs),
+[tests/OpenScct.Net.Tests/ChatMessageTests.cs](../tests/OpenScct.Net.Tests/ChatMessageTests.cs), [tests/OpenScct.Integration.Tests/ChatRelayTests.cs](../tests/OpenScct.Integration.Tests/ChatRelayTests.cs).
+
+`--svm-smoke=hud-activity-feed` checks all seven HUD pages at 640x480, 1280x720, 1920x1080 and 3440x1440,
+including measured long-name truncation, enlarged/moved telemetry graphs in Always and Issues modes, stretched
+HUD, timing and visibility. With a renderer it
+saves native-font pixel captures under `SVM_PLAY_SHOTS` (default `local/test-results/hud-activity-feed`).
+`HudActivityFeedTests`, `CombatActivityTests` and `CombatActivityNetworkTests` cover typed routing, producer
+attribution, bounded lifecycle and gas notification delivery across latency.
+
+## Cinematic camera (Free Camera, Hide HUD)
+
+The Enhanced 4.0 binds `FreeCam` and `HideHud` (Options, Spy or Mercenary, Bindings, Interface rows) work when the host turned
+on Alternate Mode and its "Cinematic Camera" switch (offline they always work). Rules: spec/hud/cinematic-camera.md.
+
+- **Who:** a living player, at any time in the round. Without the switch the console says "Free look is not enabled
+  on this server." or "Hiding the hud is not enabled on this server."
+- **How:** the key runs `SPlayerController.FreeCam` / `HideHud` (`PlayerCommands`, `LocalInput.cs`), which asks the
+  server (`ServerRequestFreeCam` / `ServerRequestHideHud`); the server checks its GRI and answers
+  (`ClientStartFreeCam` / `ClientToggleHideHud`), and the player's machine starts the camera or flips the switch
+  (`SPlayerController.CinematicCamera.cs`). FreeCam again stops the camera at once, without asking.
+- **Free camera:** it starts where the view is. Mouse turns it; the movement keys fly it along the view; Jump goes
+  up and Crouch down; the wheel steps the speed (600 uu/s to start); Shift is fast, Alt slow. No collision. The pawn
+  stands where it was and takes no input; its body is drawn and the first-person weapon is not. The camera stops by
+  itself when the pawn dies. Other players only see the pawn standing still.
+- **Hide HUD:** `bCinematicHideHud` on the controller; `HudSimReader` adds it to the snapshot's `HideHud`, so the
+  pages hide as for `HUD.bHideHUD`, and the merc's aim point hides too.
+- **Not done:** pad controls for the free camera (triggers, shoulders); the server's relevancy still sees from the
+  pawn, so things far from it may be missing when the camera flies far away.
+
+## Slice additions and gaps
+
+- `HudOptions.SliceExtras` writes the merc's fire mode and the vision mode as small lines (the original shows them on
+  the rifle's sight screen and as the picture). `HudOptions.EnhancedReality` turns the markers on until profiles are
+  ported.
+- The simulation's damage notifications only notify: `SetHudPerturbationLength(1.5)` and `HudShutDown`'s bShutDown
+  are applied by the HUD on the hit player's machine; `OverlayFade` has no SFX type, so its type is inferred.
+- Key tokens: every text a page or the canvas draws goes through `KeyTokens.Expand` when it holds a backslash
+  (`MagmaRenderer.ExpandText`; the native pass 0x10a02900): `\SECONDARYFIRE` becomes the name of the key whose whole
+  binding is `AltFire | GadgetQuickChoice 1 | HoldBreath` (Right Mouse on both stock layouts), and so on for the 34
+  tokens of spec/hud/counters-and-prompts.md rule 11. A token whose binding no key has stays as it is, as in the
+  original. `HudOptions.KeyBoundTo` gives the key of a binding string from the player's layout.
+- The motion tracking lock boxes are drawn (brackets on the HUD, the clean view rectangles in the post pass,
+  docs/RENDERING.md).
+- The merc's aim point is `SHud.SpotReticule` (spec/hud/merc-reticle.md rules 3 to 3d): HudMercAim runs PostRender's
+  part and HudDef's aim point helper before each snapshot, projecting the eye plus 15000 along MyDesiredRotation
+  through the last tick's calc view. The reticle itself sits at Reloaded's fixed spot (centred, or classic with
+  `classic_crosshair`; rl:fix.crosshair_shift), not on the aim point, so an aim kick does not move it; the reticle
+  message and the binocular sights still follow the aim point. Smoke
+  `play-reticle` (game/Scripts/Smoke/PlayReticleSmoke.cs) checks shots and a frag against the drawn dot. A noise from
+  an actor the client does not have gives no sound arrow.
+- The original has no hit direction marker: damage feedback is the undirected wash or perturbation, the flash-bang
+  only whites out a player facing it (the simulation's ClientDamage cone and trace), and the merc's directional cue
+  is the sound arrows.
+- The Reloaded scoreboard look is not decoded; OpenSCCT uses its own role-specific scoreboard and retains the original mission-status page. (The coop icons follow
+  the decoded spy driver: `InteractionPrompts.cs`, spec/objectives/team-interactions.md.)
+- Binoculars: the range finder traces from the rifle's FX bone (the original's bone is unidentified); markers behind
+  the view get no edge arrow (the projector gives no point); only objective triggers are listed (not secondary
+  objective props).
+- Reloaded's second FOV path (CL = 0 in 0x100a7080: another runtime factor and 4/3) is used by a few draw paths not
+  identified yet.
+- The merc's HUD in the original also shows Enhanced Reality markers (terminals with their distances, seen in the
+  sandbox captures); `HudMarkers` draws them for the spy only.
+- Map-specific HUD (per-map tutorial chains, set pieces, map-placed devices) is not covered in this wave.
+- To check against captures of the original: the console text height, the canvas colour doubling, the lock panel's
+  colour, the list row pitch, and the overlays (sticky cam, camera network, binoculars, gas mask) at 16:9: they need
+  key presses in the sandbox game, which the memory-only tools cannot make.
+- The full scoreboard starts closed each round. F10 toggles it; the optional hold action is initially unbound.
+# Optional teammate names
+
+Each role's settings page has **Show teammate names through walls**, saved independently as
+`teammate_names_spy` and `teammate_names_merc` (both default off). Living teammates' replicated player names
+draw above their collision bounds as HUD text without a depth test. Labels exclude the local player, enemies,
+dead pawns and spectators, and hide outside the view or when the player HUD is hidden. They smoothly shrink
+from 9 to 5 HUD pixels and fade from 85% to 15% opacity between 3 and 60 metres, retaining that minimum
+beyond 60 metres. **Toggle teammate names** in Interface controls changes the current role's visibility during
+play. New/legacy layouts receive N when free; complete saved layouts retain their bindings and can assign the
+action manually. Role reset restores the setting to off; Apply uses the new setting immediately.
+The shared HUD option **Show HP beside teammate names** (`teammate_health`, default off)
+appends the teammate's current replicated health, for example `Echo (63 HP)`. It uses the
+same role visibility, distance fade and nametag opacity as the name.
+
+### HUD editor
+
+Options > HUD editor edits independent Spy and Merc layouts in the options draft.
+Drag a group, select it from the list, or use the X/Y offset fields. Arrow keys nudge
+by 0.1% of the screen; Shift+arrow nudges by 1%. Grid snapping rounds drag endpoints
+to 1%. Each group has size (25–300%), opacity (10–100%) and visibility controls.
+The preview uses converted HUD artwork and sample gameplay at 4:3, 16:9 or 21:9.
+Hidden groups retain selectable outlines. Edited groups are kept within the screen
+where their size permits. Stock layouts preserve their original positioning.
+
+Compact/large presets change group sizes. Undo/redo, reset element, reset role,
+and copy role to other are local to the draft. Copy/Paste layout shares both roles
+as JSON. Apply or Save & Close persists `hud_layout` in the existing settings file;
+Back follows the existing discard flow. Old settings retain the stock HUD.
+
+Editable groups include health, energy, radar, match and objective timers, gadget,
+ammo, interaction/co-op prompts, movement/posture, throw charge, page messages,
+chat, the event feed, the zone name above the radar,
+FPS and network readouts. FPS/network positions are edited here for each role;
+the HUD tab retains their display modes, metrics, graphs and appearance settings.
+Previously saved telemetry positions remain the baseline for existing profiles.
+Crosshair retains its dedicated editor. World-space markers,
+damage washes and gameplay vision effects are outside this editor.
+Passive chat follows the role layout in matches and the hub; deliberately opening
+the composer still shows it even if passive chat is hidden. The native composer
+uses the edited position and size, fitted to the available screen.
+The preview expands into available space; on narrow screens Layout tools collapses
+the presets/history/sharing controls. Open it when needed. Preview animation is
+frozen so the radar and selection outlines remain steady while editing.
+Gameplay radar placement uses its fixed artwork frame, so rotating rings do not
+change the editor's scale pivot or screen-edge clamp. An edited event feed uses a
+fixed top anchor; automatic prompt/telemetry avoidance only applies to stock placement.
+The preview is sample gameplay rather than the current match.

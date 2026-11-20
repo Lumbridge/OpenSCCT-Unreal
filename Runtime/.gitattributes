@@ -1,0 +1,12 @@
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.png binary
+*.dds binary
+*.glb binary
+*.gltf binary
+*.blend binary
+*.bin binary
+*.r8 binary
+*.osdiff binary

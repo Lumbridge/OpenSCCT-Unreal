@@ -1,0 +1,539 @@
+# Audio
+
+The content pipeline converts the original sound assets; simulation events and client
+code decide when and how to play them. The original playback system is UNIAudio,
+which differs from stock UE2 audio.
+
+See the [audio specification](../spec/native/audio.md) for playback rules and formats,
+and [sound devices](../spec/devices/sound-music.md) for map actors that call them.
+
+The [4 November full parity sweep](../spec/native/audio-parity-2026-11-04.md) records current content comparisons,
+confirmed playback/voice gaps, fresh mixer checks and remaining listening-validation work.
+Its [implementation follow-up](../spec/native/audio-parity-fixes-2026-11-04.md) records the repairs and remaining
+I3DL2/EAX acoustic limitations.
+
+**On this page:** [Content](#content) · [Client](#client) · [Findings](#findings) · [Not done yet](#not-done-yet)
+
+| Part | Where |
+|---|---|
+| decoders and writers | [content/svmbuild/audio/](../content/svmbuild/audio) (`sound.py`, `uas.py`, `ogg.py`, `mux.py`, `refs.py`, `build.py`) |
+| pipeline steps | [content/svmbuild/steps/audio.py](../content/svmbuild/steps/audio.py) (`audio`), [content/svmbuild/steps/audio_map.py](../content/svmbuild/steps/audio_map.py) (`audio-map`) |
+| client | [game/Scripts/Audio/](../game/Scripts/Audio) |
+| simulation calls | `Actor.PlaySound`, `PlayOwnedSound`, `StopSound`, `SetSwitch`, `PlayMusic`, `StopMusic` (`OpenScct.Core`), raised as `SimEvent`s; footsteps in `SBase/SBasePawn.Footsteps.cs` |
+| events | `SimEventKind.PlaySound` (with `NoOverride`, `NoAttenuate`, `Bone`, `Owned` for PlayOwnedSound, `Heard` for the server's calls, `Flat` for 2D), `StopSound`, `PlayMusic`, `StopMusic`, `SetSwitch` (surface in `Slot`) |
+| network | `OpenScct.Server/Net/NetHearSound.cs` (server: ClientHearSound to the players in reach), `PlayerController.Sound.cs` (`ClientHearSound`, `ClientPlaySound`, `ClientSetMusic`) |
+| play scene | [game/Scripts/Play/PlayAudio.cs](../game/Scripts/Play/PlayAudio.cs) (the sound of a match), `PlayAudioRouter.cs` (the client's own and the server's copy of one call play once) |
+| tests | [tests/content/test_audio_formats.py](../tests/content/test_audio_formats.py), [tests/content/test_audio_steps.py](../tests/content/test_audio_steps.py), [tests/OpenScct.Core.Tests/SimEventsLateTests.cs](../tests/OpenScct.Core.Tests/SimEventsLateTests.cs), [tests/OpenScctGame.Logic.Tests/AudioRouterTests.cs](../tests/OpenScctGame.Logic.Tests/AudioRouterTests.cs), `AudioCallsTests.cs` and `AudioSessionTests.cs`, smokes `--svm-smoke=audio`, `play-audio`, `play-audio-merc` |
+
+## Content
+
+```
+python -m svmbuild audio                          # shared/audio (about 2 s)
+python -m svmbuild audio-map --maps SteeE         # svmap/SteeE/audio (needs maps, which it runs first)
+python -m svmbuild audio audio-map --maps all --jobs 6
+```
+
+### shared/audio (`audio` step)
+
+- `audio.json`, format `svm.audio/1`:
+  - `packages`: every `Packages/Sounds/*.uax` with its version and sound count.
+  - `sounds`: every Sound by object path (`Package.Group.Name`, the path the simulation's `AssetRef`s carry), with
+    `kind` (wave, stream, multichannel, random, switch, sequence), `flags`, `volume` (the Sound's Gain, linear),
+    `radius` (0: none), `pitch` (always 1: Sounds have none), `loop`, `positional` (false for 2D sounds); waves add
+    `file`, format, channels, rate, frames, `duration` and the `smpl` loop points; streams their bank entry name
+    (`stream`); lists their `entries` (`sound` resolved to a path, null for the 57 `Remove` entries, and `value`);
+    multichannel sounds the speakers and the `.mux` `channelMap`.
+  - `mux`: the 18 channel maps.
+  - `classes`: class path -> property -> sound, from the effective class defaults (84 classes: weapons, gadgets,
+    cameras, mines, the GUI...).
+  - `unresolved`, `duplicates` (identical second exports in `Armes_impacts`), `problems` (must be empty).
+- `wav/<Package>/<Group>/<Name>.wav`: the 1,078 RIFF WAVE blobs as stored (16-bit PCM).
+
+### svmap/&lt;Map&gt;/audio (`audio-map` step)
+
+- `audio.json`, format `svm.mapaudio/1`:
+  - `bank`: the `.uas` index (packages and offsets, unused byte ranges, problems).
+  - `streams`: every bank entry with its file, offset, length, duration, channels, rate, samples, page count, serial
+    and the number of pages whose CRC failed (all 0).
+  - `sounds`: every sound the map can play, `sound id -> {file, root, volume, radius, pitch, loop, positional,
+    kind, duration}`: what its actors name, every streamed sound of its bank's packages, and what list sounds reach
+    from those. `root` is `map` (a stream in this folder) or `shared` (a wave in shared/audio); a streamed sound the
+    bank lacks has `missing: true`. Other sounds (weapons, footsteps) are looked up in the shared library.
+  - `actors`: every actor with a sound reference, also the client-only actors that `sim/gameplay.json` leaves out
+    (AmbientSound actors, lights and static meshes with an ambient sound): id, class, category, location, the sound
+    properties it stores, and for an ambient loop the effective `ambientSound`, `soundVolume`, `soundRadius`,
+    `soundPitch` and light values.
+  - `zones`: every ZoneInfo with its ambience and its reverb (`effect`: the `ZoneEffect` object, its EFFECT_* class
+    and the effective I3DL2 parameters, class defaults with the map's overrides).
+  - `zoneDist`: the portal distance between every two zones, rows and columns by zone number (the collision ZONE
+    records): the engine's ZoneDist table (game 0x109ea770), made from the world model's zone Connectivity masks.
+    Occlusion and the 3D ambient range scale with it (rules 18 and 20).
+  - `missing`: references that do not resolve.
+- `streams/<Package>/<Name>.ogg`: the bank's Ogg Vorbis streams as stored.
+- The step puts its files into the map's `manifest.json` (`files`, the `audio` group hash, and
+  `{"pack": "audio", "sha256": <shared/audio/audio.json>}` in `requires`). The maps step owns the folder: when it
+  rebuilds or restores a map it removes `audio/` and writes its own manifest, and the next `audio-map` run (built or
+  from the cache) puts both back. The maps step names `audio-map` as a follower (`Step.followers`), so any plan that
+  runs `maps` with dependencies on (`python -m svmbuild maps --maps X`) runs `audio-map` after it; only `--no-deps`
+  leaves a map without audio. The client warns (`SVM_AUDIO the map has no audio table ...`) when a map folder has no
+  `audio/audio.json`: its ambience, reverb and streamed sounds are then silent.
+
+### Numbers (reference install, 2026-10-23)
+
+| | |
+|---|---|
+| Sound packages | 29 `.uax`, 1,513 sounds (+7 duplicate exports): 1,078 waves, 131 streamed, 18 multichannel, 231 random, 43 sequence, 12 switch |
+| Map banks | 83 `.uas`, 1,101 streams, 422 MB, every page CRC good; 21 banks hold 1,020 stale bytes each |
+| Map tables | 3,936 sounds, 8,883 sound actors, 2,143 zones, 1,292 with reverb (all 83 maps built, 0 failures) |
+| SteeE | 22 streams (8.3 MB), 71 sounds, 162 sound actors (26 AmbientSound), 32 sound zones, 29 with reverb |
+| Missing streams | 14 references in 8 maps (CineS, ClarD, MounS, OffsD, PyroD, VertE, VertU, VertX): the map uses a streamed sound of a package its bank does not hold; silent in the original as well (spec open question 5) |
+| Times | `audio` 1.5 s; `audio-map` 0.4 to 1.2 s a map, all 83 in 21 s with 6 jobs |
+
+Original rifle, Uzi and shotgun sound paths retain the extracted recordings and list definitions;
+`weapons.json` must not alias them to authored replacements. Primary reloads use the original animation
+tracks and `ReloadSound` cues. Authored sidearm assets remain separate.
+
+Footstep, running gear and breath notifies use owner-predicted playback: the local client plays them
+at its animation notify, and the server relays them only to other listeners. This avoids a second
+owner playback delayed by the remote-pawn presentation timeline beyond the router's duplicate window.
+
+Primary reload recordings start locally with the first-person animation. Their `ServerSound` relay marks
+that playback as predicted (`CombatCall.Bool1`), so remote listeners hear it without an owner echo.
+Weapon-handling sound notifies from the body's `Relo*` clips are third-person cues: they do not play
+over the local first-person recording. Their owner-aware relay preserves them for remote listeners.
+`play-audio-merc` now reloads after firing and checks for exactly one full recording and no delayed
+`Reload_Def_court` body cue on the owner.
+
+## Client
+
+`SoundSystem` (a `Node3D`) is the client world's `ISimEventSink` and plays the events of each tick:
+
+| Event | Effect |
+|---|---|
+| `PlaySound` (also PlayOwnedSound: `Owned` set) | rules 9 to 17: sound id from the actor and slot, voice allocation over 32 voices (free, then same slot unless bNoOverride, then lowest priority), random / switch / sequence resolution, volume = call volume x the gains on the way, clamped to [1e-5, 1], radius = the Sound's radius when set, pitch clamped to [0.5, 2] |
+| `StopSound` | stops the actor's sources of that sound |
+| `PlayMusic`, `StopMusic` | one music voice, 2D, no Gain, fade in; the previous track fades out over at least 2 s |
+| `SetSwitch` | the surface the next switch sound plays; without one, the system traces 15 uu above to 150 uu below the sound (`IAudioWorld.SurfaceOf`) |
+
+Every update it moves sources with their actors (a source started on a bone, as AnimNotify_Sound and the footsteps
+start theirs, follows that bone of the drawn mesh: `IAudioWorld.TryGetBoneLocation` over the level's camera bone
+service), shifts the pitch of 3D sources for Doppler (rule 17: `SoundRules.DopplerPitch`, the listener's and the
+source's movement over the update along the line between them, `(c - 0.5 vl) / (c - 0.5 vs)` with c = 343 m/s over
+the DirectSound distance factor 0.0127 m per uu, about 27,000 uu/s; a source faster than 300 uu/s or of the viewed
+actor counts as still; at most a percent or two at running speeds), computes the gain itself (Godot's attenuation is off on every
+`AudioStreamPlayer3D`, which only pans; its attenuation filter is also disabled with 0 dB and a 20500 Hz cutoff):
+`volume x fade x R / (R + 0.5 (d - R))` beyond the radius for 3D sources,
+plain volume for 2D ones. Occlusion (rule 18) shrinks R for a 3D source whose actor's SoundOcclusion is not
+OCCLUSION_None: two line checks (listener to source and back, movers and level geometry) give the thickness between
+the first surfaces seen from each end and their materials' OcclusionType (collision TFLX); the factor
+`min(1, 0.95^(ZoneDist^2) x 1.5 x (2 - thickness / 700) x m)`, pulled halfway to 1 when both surfaces are in one
+zone, with m the EAX material preset of the type (Generic 0.32, Full 0, SingleWindow 0.2, DoubleWindow 0.056, ThinDoor
+0.35, ThickDoor 0.079, WoodWall 0.1, BrickWall 0.056, StoneWall 0.032, Curtain 0.5), multiplies R (at least 0.1 uu); R
+eases to a new value over at most 1 s. This is the subsystem's DirectSound path; with EAX on the original applies
+the same factor as EAX occlusion (direct path -2000 log10 f mB at high frequencies, the preset's LF and room ratios),
+which Godot cannot do per voice. A second hit in zone 0 leaves the sound unoccluded, as in the original. Ambient loops (rules 19 to 22) come from two places: the simulation's actors whose
+`AmbientSound` is set (zones, SAmbientSoundTrigger, movers, and running conveyors, which sound from the point of
+their path nearest the listener; a driver conveyor plays only a sound its map names), read through `IAudioWorld.CollectAmbient`, and the client-only actors of the map's
+`audio.json`. 3D loops play within 100 x their radius x 0.8^(ZoneDist^2) between the
+actor's zone and the listener's; a zone's 2D ambience plays while the listener is in that zone; other 2D loops fall off with distance beyond their radius; an actor whose loop does not play yet takes over a playing loop of the same sound when it is louder than that loop's actor, and actors that become audible in the same update each start their own (MoonD's seven park speakers all play, as in the original, and add up). When the loudest changes (or the listener walks into another zone with the same ambience) the playing loop is handed to the new actor and carries on, as in the original; it used to stop and start again from the beginning (MoonD's park organ, seven 2D speakers, restarted each time the player walked past one).
+A loop keeps its voice while it plays; when more loops are in range than there are voices (the KrauE merc spawn hears
+about 40), the lowest priority ones lose theirs to rule 15 and start again only when they win a voice back. The
+sound system remembers which voice each actor's loop started on and only treats it as that loop while the voice
+still carries the loop's sound id: a voice another call took over belongs to that call, so a loop never stops or
+restarts another actor's loop (it did, every update, at 1,000 to 6,000 starts a second on KrauE and MounE).
+`--svm-smoke=play-audio-krau` (KrauE, merc) fails when one actor's loop starts more than 20 times in a run.
+
+Reverb: `ReverbBuses` owns one native EAX environment per listener. Positional voices have separate dry and
+unpanned room sends, with independent source filters and distance gains. Flat sounds and music bypass the room.
+The native mixer effect uses the MIT-licensed reAL HRvb reconstruction of the supplied Creative ALchemy renderer,
+with its original first-apply LF shelf and late-pan routing quirks. It replaces the Freeverb approximation and
+consumes the complete 112-byte EAX 3 block: independent early/late delays and pans, RoomHF/RoomLF, diffusion,
+frequency-dependent decay, echo, modulation, reference frequencies, room rolloff and flags.
+
+Zone changes update the same effect instance and retain its delay state. A zone without an effect gets
+the native NULL fallback, at the start of a map too. (The original keeps the driver's Generic default until the first
+effect; ours departs from that since 2026-11-12, because in that room every 3D source feeds the reverb at full level
+whatever its distance, and a map with no zone effects, MoonD, stays in it for good.) All 232 distinct
+converted map blocks were tested against the original provider: 218 are accepted; 14 are rejected as whole
+updates, retaining the previous environment. The rewrite preserves those rejections. The original's malformed
+four-byte EAX 3 source-occlusion call is also rejected by this provider; the selected EAX path preserves its observed
+unoccluded filter state while retaining occlusion priority/range behavior.
+
+Build the native extension with `tools/audio/Build-NativeAudio.ps1` on Windows or
+`tools/audio/build-native-audio.sh` on Linux before importing/exporting the game. Build/release pipelines include
+this step and package the dependency licenses. The extension runs on the audio thread with no managed capture or
+generator queue. See [native implementation](../src/OpenScct.Audio.Native/README.md) and
+[reverb parity evidence](../spec/native/reverb-parity-2026-11-04.md). `--svm-smoke=reverb` captures real mixer PCM
+and verifies room-send normalization, wet-only output, zone state, flat/music isolation and bus cleanup.
+
+Music at map load: the engine plays the LevelInfo's Song with no fade when a map loads (game 0x109e82c4,
+`Audio->PlayMusic(Level->Song, 0)`); `SoundSystem.Bind` does the same from the map table (TermD's `DAPlayerStart`,
+the menu levels' music). MusicTrigger's SoundVolume plays no part: the subsystem's PlayMusic plays at the music
+volume setting only (game 0x10b04920). AquaE and the other Aqua maps' `aqua_musicA` is a zone ambience (ZoneInfo
+AmbientSound), so it plays as the zone's 2D bed by rule 21, as in the original.
+
+### In a match
+
+`PlayRoot` adds a `PlayAudio` (before the HUD): it loads the map's audio, puts a `PlayAudioRouter` in front of the
+`SoundSystem` as the client world's event sink (the HUD's tap wraps it), binds the sound system to the client's
+world once the map is loaded (actor locations, ambient loops, zones, surfaces) and listens every frame where the
+original does (rule 23): UNIAudio's Update takes the viewport player controller's Location (game 0x10b05260), which
+the following camera's solver moves to the camera spot, so that is the drawn camera; in the object views (sticky
+camera, camera network, Mirador and the move to a sticky camera) the controller stays by the pawn and the player
+keeps hearing from there. First person keeps the camera (where the original's controller sits then is not decoded). Where the sounds come from:
+
+- The client's own simulation: the local pawn's and the proxies' footsteps and gear (walk-cycle notifies), the
+  landing, gadgets and projectiles the client simulates, the goggles' mode sounds (`SGoggle.Sound.cs`), the HUD
+  messages' jingles (`SHud.MessageSounds.cs`), ambient loops of replicated actors.
+- The server (spec/native/audio.md rules 4 and 5): `NetHearSound`, the server world's event sink, sends each
+  PlaySound of the server's world to every remote player in reach as `ClientHearSound`; the client's
+  `PlayerController.ClientHearSound` raises it in the client's world, marked `Heard`. This is how the shots, the
+  impacts and everything else only the server runs are heard. The device relay (`NetDeviceEvents`) keeps its own
+  events.
+- Calls to the player: `ClientPlaySound` (the spawn sound, shock sounds) and `ClientSetMusic` (objective jingles,
+  victory and defeat music) are ported on PlayerController and SPlayerController.
+- Events raised between two ticks (a call received before the step, an input command) are not in any tick's
+  events; `NetHearSound.RelayLate` (server, before each step) and the router (`ClientSession.BeforeWorldTick`) take
+  them from `SimEvents.Late`, so none of the sounds is lost.
+- Scripts that run on both machines give the client two copies of one call; the router plays the first copy of a
+  sound on an actor and drops the other when it comes within 0.2 s.
+- Rule 5: an unattenuated call of the actor the local player views (the controller itself before it has a view
+  target) plays 2D (`SimEvent.Flat`, decided where the call is made).
+
+`SVM_AUDIO_MUTE=1` mutes the Master bus (the sound buses still mix and are metered) and `SVM_AUDIO_LOG=1` prints the
+voices, the router's counts and every bus's peak every 10 s (`SVM_AUDIO ...` lines).
+
+Wiring in another host (tools, smokes):
+
+```csharp
+var sound = new SoundSystem();
+AddChild(sound);
+string shared = AudioLibrary.SharedDirFor(mapFolder);
+sound.Bind(AudioLibrary.Load(shared, mapFolder), new LevelAudioWorld(world.Level, collision, a => loaded.RecordOf(a)?.Id));
+world.EventSink = sound;                 // SimEvents of every tick
+sound.SetListener(cameraLocation, cameraRotation);   // every frame, UE space
+```
+
+### Front end
+
+The original's menus live on two menu levels, and each plays its LevelInfo Song when it loads: `Entry` (the main
+menu and the pages under it) has `Interface.Menu.Menu_music1` (63 s, looping) and `Lobby` has
+`Interface.Menu.Menu_music2` (188 s, Enhanced's longer lobby music, enh:audio.lobby_music). Both streams are in the
+two maps' banks, converted by the maps step (`svmap/Entry/audio`, `svmap/Lobby/audio`). The rewrite's menus are Godot
+pages, so `FrontEndAudio` (a node under the root, made by the first menu page) plays the Song of the level the page
+belongs to: the Lobby's for the Lobby Room and the offline lobby, the Entry's for the other menu pages, none for the
+loading pages, the results and the round's scene (its map plays its own Song). A change of track fades the old one
+out over 2 s (PlayMusic's minimum) and starts the new one at once, on `SvmMenuMusic` at the menu music volume, without the
+Sound's own gain (as the map music). It also plays the lobby's join sound (rl:qol.lobby, rl:audio.join: which sound
+Reloaded plays is not decoded; ours is `Interface.Menu.bip_message` at its own gain, on `SvmMenuSound`). Headless
+runs and `SVM_AUDIO_MUTE=1` play nothing.
+
+Volume sliders (Options, Audio) each drive a bus under Master: sound effects (`SvmWorld`, `SvmFlat`, the reverb
+buses), objective sounds (`SvmObjective`: a 2D sound that `SoundRules.IsObjectiveJingle` names, the Jingl sounds of
+`Interface.Objectifs`; at 0 the script also drops the ClientSetMusic jingles, as bObjectiveSounds off does), in-game
+music (`SvmMusic`: a map's Song and the end of round music), menu music (`SvmMenuMusic`, also the hub's jukebox) and
+menu sounds (`SvmMenuSound`: button feedback, the join sound, the random map draw).
+
+`MenuFeedback`, installed by `App`, adds quiet button hover/focus and click sounds across menu pages and in-game
+overlays. These are original, short synthesized tones with softened attacks and decays, so they need no converted
+content: hover is 38 ms at -23 dB, click is 70 ms at -18 dB. They use `SvmMenuSound`, respecting the Overall and Menu sounds volumes.
+Hover/focus shares a 65 ms cooldown; programmatic focus and stationary-pointer page changes are silent. Clicks
+interrupt hover but use a separate player from lobby notifications and music. Headless and `SVM_AUDIO_MUTE` runs
+remain silent.
+
+### Smoke test
+
+`--svm-smoke=audio` loads SteeE's audio and simulation (a merc `PawnRig`), binds the sound system to the rig's
+world, and plays through SimEvents a footstep (the `PlayFootStepRight` port at running speed: `SW_FootRun` resolved
+on the floor's surface, concrete `pasBet_course*` at the merc spawn, plus the gear sound), the merc rifle's shot
+(`RA_GunDef_1shot`, a sequence of the shot and the shell on the floor) and a hack beep (`Hack_try1`); then it runs
+90 frames at the merc spawn and checks the listener's zone and its reverb bus. It needs the converted SteeE audio
+(`--svm-maps=` finds maps outside the repository's `.content`). Headless, Godot uses its dummy audio driver.
+Result (2026-10-23): pass; 1,513 sounds, 32 zones, 27 reverb buses, load with the map 0.8 s.
+
+`--svm-smoke=play-audio` (spy) and `play-audio-merc` play SteeE as the launcher does (Play Level, three bots at
+normal, the listen server on its own thread, the wall clock), with the keys sent as Godot input events
+(`Input.ParseInputEvent` of the bound keys; without a window the pointer cannot be captured and the keys go to
+`PlayInput.Key`): the mouse turns the view around, the wheel raises the speed, C stands the spy up, W runs, Space
+jumps, the left button fires. Master is muted; the test reads the sound system's calls and starts per kind and the
+peak meters of the sound buses and of Master. Master is turned 80 dB down for the run (`AudioPeaks.Quiet`), so the
+output is metered without being heard. It needs the voices (own landing, other pawns, zone ambience, the spawn
+sound; for the merc also his own run steps and his rifle; the spy's steps at a walk or a crouch only as calls,
+their sounds do not exist), a sound bus above -90 dB and a Master peak. Results (2026-10-25, headless, Godot's
+dummy driver mixes): spy 106 voices (ambient 20, other pawns 67, gadgets 11, impacts 5, the spawn sound, the
+landing), SvmWorld -11.0 dB, SvmFlat -5.9 dB; merc 84 voices with his own run steps and 4 rifle shots, SvmReverb0
+-4.9 dB. With a window (WASAPI, 48 kHz) the merc run passed with Master at -81.9 dB (80 dB down), and the game
+itself (`--svm-play=SteeE --side=spy --rules=playlevel --bots=3`, `SVM_AUDIO_MUTE=1 SVM_AUDIO_LOG=1`) logged
+15 to 21 voices, Master -83.4 dB, SvmFlat -3.4 dB, SvmWorld -21.6 dB.
+
+The ambient check: every start of a loop after its first needs a stop the rules explain, counted by the sound
+system (`SoundSystem.AmbientStops`): its voice taken by another call (rule 15) or the loop leaving its range or zone
+(rules 20 to 22). More than two unexplained restarts of a loop fail the run (the old bug restarted loops every
+update). On Krauser's courtyard the far `Krau_airCourt` loop loses its voice to the player's footsteps and wins it
+back, 11 to 15 starts a run, each one after a rule-15 loss; a bare count of 20 failed about one run in two.
+
+## Findings
+
+- `SBase.u` imports `Sound_Persos.FootSteps.SW_FootCrouch` and `SW_FootWalk`, which `Sound_Persos.uax` does not
+  have: the original plays nothing for crouched and walking steps (only `SW_FootRun` exists). The rewrite keeps the
+  calls; the library has no such sounds, so they are silent too.
+- Random lists often leave part of the 10,000 roll empty (Ra_Chien 70 %, RA_matos_Run_Def has `Remove` entries):
+  those triggers play nothing, as in the original.
+- More sounds the ports call that no package of the reference install has, so silent in the original too:
+  `Sound_Persos.vetements_materiel.RA_matos_Run` (the spy's running gear), `AbaisseGoggles`, `CSGEAR_1`,
+  `SCGEAR_1`, `Frottement_tissus_Faible`, `RA_Frottement_Fort`, `Sound_Persos.divers.SW_saisir`. Every entry of the
+  merc's running gear (`RA_matos_Run_Def` and its `RA_matos_runDef_*` lists) is `Remove`: it never plays either.
+  The sound system lists them under `Unknown`.
+- The server animates every pawn and fires its footstep notifies, so footsteps are heard both from the client's
+  own animation and from the server; the router keeps one of each.
+- Four of the original's waves end with a sampler chunk (`smpl`) that lists no loop: `Interface/Objectifs` and
+  `Interface_PT/Objectifs` Jingl_AttacB, `Interface_PT/Objectifs` Jingl_DefB and `Amb_Krauser` krau_blup1. Godot's
+  wave loader reads a loop entry past the end of such a chunk ("Reading less data than requested", four times a
+  match) and makes the jingle a forward loop from 0 to 0. `AudioLibrary` drops an empty sampler chunk before
+  loading (`WavChunks`, tests in [tests/OpenScctGame.Logic.Tests/WavChunksTests.cs](../tests/OpenScctGame.Logic.Tests/WavChunksTests.cs)) and sets a one-shot's loop mode to
+  none, so the jingles play once and the warning is gone (play-aim log: 4 before, 0 after). The sound data were
+  never short.
+
+## Footprints
+
+`SBasePawn.FootPrint` (the walk-cycle notifies and the landing, through `IMovementHooks.FootPrint`) traces 100 uu
+down from the foot bone, sends the floor's SurfaceType to the sound system (SetSwitch, the next step's switch sound),
+spawns SFootPrintEffect on sand, SWaterFootStepEffect on medium water, SSparkWater on deep water and SDustEmitter on
+a fake ceiling above 200 uu/s, and while the feet are dirty (sand, snow, water: FootDirtyness falls by 1, 1 or
+0.05 / 0.02 a step) leaves an SFootPrint projection for 20 s. The print draws what SFootPrint's run-time material
+draws (its PostBeginPlay builds a Combiner and a TexScaler): the sand, water (water and snow) or phosphor texture
+(all `sfx.FootPrints.step01`) as a mask, in the step's colour (StepColor: sand grey 140, snow (20, 25, 40), water
+black) at an opacity of the texture's alpha times `1 + StepColor.A x FootDirtyness` / 255, the right foot's print
+mirrored (V flipped). `CombatFxView.Decals.cs` draws it as a quad of the texture's size x DrawScale (25.6 uu, an
+orthographic projector's frustum) on the floor, its length along the walk. It is cast straight down under the pawn's
+yaw instead of along the foot bone, and the texture's axes on the floor are estimated.
+
+## Not done yet
+
+- Doppler (rule 17) is our pitch change on the Godot voice: DirectSound's own arithmetic and its speed of sound are
+  not read (343 m/s taken). The distance factor is decoded (UUNIAudioSubsystem::SetViewport and ReinitDirectSound set
+  the listener's SetDistanceFactor to 0.0127, then SetRolloffFactor(RollOff) and SetDopplerFactor(DopplerFactor)).
+- Bone sources heard from the server: `ClientHearSound` sends BoneIdx 0 (the server has no skeleton to number the
+  bones), so such a copy follows its actor; the client's own simulated call of the sound names its bone and follows it.
+- The switch fallback trace (rule 13) uses the hit material's own SurfaceType, not the innermost material's (the
+  collision data keeps the wrapper's). FootPrint's SetSwitch, which precedes every step sound, uses the hit
+  material's own value in the original too.
+- The reach test of the server's hearing is an estimate (100 x the radius; spec open question 4).
+- Script sounds not ported yet (no call site in the ports): SFlashGen's SND_Tonnerre (the class is not ported: its
+  lightning flicker belongs to the lights). The noise event NativeHitWall raises after a bounce sound is not ported.
+- Ported since: the SHud binocular sounds (Snd_BinocularNoise, Snd_BinocularAnalyzeLoop, Snd_BinocularAttLoop,
+  Snd_BinocularAnalyzeDetect; SHud.Binoculars.cs), Snd_HudShutdown (SPlayerController.CombatShock.cs),
+  Hud_viseProgress (SHud.Ballistic.cs), the cape sounds of SBasePawn (Cape_InOut from SetDesiredGlassValueOnClients,
+  RA_Cape_damage from SetPerturbationGlassOnClients, radius 300; PawnVision.cs), SShotGunProjector's SW_Impact_Shot
+  (chance 0.3, volume 0.8, radius 100; SShotGunProjector.cs), the ESoftBodyActor shotSound and collSound (radius 128;
+  Render/SoftBodies/SoftBodyViews.cs, docs/RENDERING.md "Soft bodies"), SCamera's CamDzzz (SCamera.cs), STriggerLight's sound (STriggerLight.cs), the camera, laser and
+  sensor chaff explosions (RA_camSurveil_EXPLO), SNoiseEmitter's steps and breaths, SMuzzleSticky's GzitSound (at
+  the pistol, SWeaponAttaque.TickSWeaponAttaque) and SGamePlayObject's BounceSound (NativeHitWall: half the mirrored
+  velocity; a bounce that carries on faster than 40 uu/s on an object with a static mesh, volume 1, radius 100).
+  Decoration's PushSound and EndPushSound need no port: no SCCT class extends Decoration and no map places one.
+- Map loops over the network (read through, not run): SAmbientSoundTrigger.PreBeginPlay runs in every world, so a
+  client starts with the server's on/off state; AmbientSound is replicated (Actor group 5 in the first bunch,
+  SAmbientSoundTrigger and Mover on every change) against class-default shadows, so an initially-on trigger, a
+  trigger switched later and a mover's loop reach the client. A trigger's channel carries AmbientSound and nothing
+  else (its replication list has no parent list), and the client's copy is spawned from the class, so it has the
+  class's SoundVolume 190, SoundRadius 64 and SoundPitch 64. The sound system takes those three and SoundOcclusion
+  from the trigger's row in the map's audio.json instead, found by its location (`LevelAudioWorld`): without that a
+  2D loop placed with radius 500 (MoonD's park music) faded out at 64 and was silent across the map. This is what
+  the original's host hears; a joined client of the original plays the class defaults.
+- Spy walk/run branches now call ClientNotifyNoise with original loudness. Authority delivers the cue once to
+  remote listeners, with prediction/replay suppression. Default PlaySound/PlayOwnedSound slots are SLOT_Misc,
+  while explicit SLOT_None keeps independent overlap. StopSound(None) stops the actor's sources and is retained
+  by reliable network delivery; unresolved actor references cannot turn into global stops.
+- Simulated devices such as network and sticky cameras stop their rotation/zoom sounds locally. Their repeated
+  idle cleanup is not relayed, so loading clients cannot overflow the reliable channel with redundant stops.
+  Server-only device stops and controller-wide cleanup still reach clients; pawn stops use their ordered stream.
+
+### Predicted action sounds
+
+Weapon handling through `ServerSound` (empty clicks, fire-mode changes, grenade handling and reloads)
+plays on the owner immediately and marks the reliable relay as already predicted. Authority-only
+calls retain normal playback for the owner. Shocker shots and pawn animation sound notifies likewise
+use owner-aware playback; replayed movement does not emit sound or resend landing requests.
+Landings use one client request and the normal sound relay: the server's simulation of a remote
+player does not add another landing sound, and the legacy client landing callback is inert.
+Other players keep timestamped sound delivery. A one-shot that arrives after its presentation
+window is still discarded rather than played late.
+
+### Local movement sounds and output evidence
+
+Native `PlaySound` puts a locally controlled pawn's sounds at the viewport listener and clears
+their bone attachment. `SoundSystem` captures that ownership when a voice starts and follows the
+listener for the voice's lifetime. Surface selection still occurs at the pawn first. A remote
+pawn, including one being spectated, retains positional attenuation and occlusion. This matters
+for the spy's trailing camera: the leaf samples override the animation's radius (concrete run
+steps use 36 uu; RollGearShort uses 22 uu; RollGeneric2 uses 28 uu).
+
+The opt-in `audio-listener` smoke plays the converted RollGeneric2 sample through the real mixer
+with near/far listeners for both local and remote sources. It checks the source coordinates and
+gain, then captures the stereo PCM before the muted Master bus and compares amplitude ratios.
+`SVM_AUDIO_CAPTURE_DIR` selects the WAV/JSON evidence folder. Use a windowed, background smoke
+run; a silent/dummy mixer does not count as an output pass. Network lab status also includes
+`audio.voices` with source/leaf identity, source and listener positions, source volume, applied
+gain and the `AtListener` ownership decision.
+
+[tools/benchmark/capture_original_audio.py](../tools/benchmark/capture_original_audio.py) reads native sources in an already-owned, muted
+sandbox session. It validates the retail voice table and requires movement sounds to be seen;
+it neither launches a process nor changes volume. Its observations establish native routing
+and sample identity, not original device-output loudness. Independent vendor impulse captures and the native
+reverb comparison are covered by the reverb parity evidence linked above; they remain separate from this routing
+regression.
+
+## Modern client rendering
+
+Audio options now include **Speakers** (the existing-config default),
+**Headphones (binaural)** and a named output device with system-default fallback.
+The saved keys are `audio_output_mode` (`Speakers`/`Headphones`) and
+`audio_output_device` (empty follows the system). An unavailable named device
+falls back to the default and is retried every two seconds. These settings do
+not change network sound delivery, sound arrows, authored noise or bot hearing.
+
+Headphones sends individual positional sources through Steam Audio before the
+world mix. Music, UI, listener-owned cues and authored stereo beds retain their
+routes. The native EAX room renderer and environment packets are unchanged.
+Material transmission uses existing collision/material categories, including
+thickness, with separate dry/room spectral levels and a 60 ms transition. It
+refreshes at approximately 10 Hz, sooner for movement/topology changes, with an
+eight-query per-update budget and rotating voice traversal to prevent starvation.
+The presets are presentation estimates. `SoundSystem.MaterialTransmission=false`
+supports source-filter reference captures.
+
+Maps with converted portal polygons now also use a listener-centric room graph.
+It reuses `render/lighting.json`'s zone numbers and opening polygons; no map
+format change or rebuild is required. Sources obscured by a wall can arrive
+from the first opening along a bounded path, with path-length attenuation,
+transmission and the source room's original EAX reflected/diffuse response.
+Four aperture probes per update (capped at 60 probe batches per second) check
+live door/mover/glass collision, and routes refresh at approximately 10 Hz.
+Paths are bounded to four openings and 6000 units. This is portal-based room
+coupling with parametric reflections, not a wave solver or a baked ray tracer.
+The reverb parameters now also adapt to live collision geometry. Each active
+listener/source room uses 26 directional probes plus up to six opening targets,
+weighted by projected aperture area. These estimate visible volume, surface area,
+enclosure and broad surface absorption. A diffuse-field decay estimate drives
+decay/HF/LF times, early/late reflection delays, room size, diffusion and wet level;
+the original EAX renderer and part of the authored tonal balance remain in use.
+The mean-free-path/decay relationship follows statistical room acoustics;
+see [Rindel, Acta Acustica 102 (2016)](https://odeon.dk/pdf/A26-ActaAcustica_102_2016_Rindel.pdf).
+The sampled volume and absorption coefficients are estimates, not surveyed room
+dimensions or measured material spectra. Discrete reflections are not ray-traced.
+
+Probes query the live collision world, including movers. Periodic full sweeps
+detect doors opening/closing even without a geometry-revision signal. They use
+a nearest-hit trace that compares movers with farther BSP geometry; the
+legacy occlusion early-out cannot hide a nearer door from these measurements.
+An opening to outside lets energy escape; one into a larger enclosed space can increase the
+measured volume. Listener and emitting-room profiles update independently. Input
+anchors stay fixed within a sweep to avoid mixing positions; invalid solid-space
+measurements retain the last safe response. Missing probe support retains authored
+reverb. `SoundSystem.AdaptiveReverb=false` selects an authored reference before
+playback begins.
+
+There are at most five probe states (listener plus four source-room networks),
+twelve ray queries per batch and sixty batches per second. A cooperative 0.75 ms
+batch budget yields after the current query; a single cold/expensive query can
+exceed that target. Geometry and allocation run on the scene thread. Native EAX
+packets update at most ten times per second, with a 0.5 s smoothing constant and
+integer millibel quantization. Native coefficient/tap transitions keep existing
+tails while doors move; geometry changes do not reset room networks. Diagnostics
+report probe count, worst batch time, rejected packets and measured/applied profiles.
+When an obstructing wall and both endpoints lie in one zone, a local corner
+search checks candidate paths around the hit surfaces. Every segment must pass
+collision testing before its route is used. The search is cached per voice,
+bounded to ten candidates (offsets up to 1024 units), and staggered across voices
+with at most twelve segment queries per batch and sixty batches per second.
+Unresolved or enclosed geometry retains wall transmission; a zone match alone
+does not invent a clear path. Complex multi-bend geometry can still exceed this
+bounded approximation.
+
+Zone ambience is a continuous field rather than an on/off zone membership
+test. Outdoor weather can reach an interior through connected openings, lose
+high frequencies, and feed its room reverb. Shared weather recordings across
+zones/area actors retain one loop and select the strongest contribution instead
+of duplicating/restarting the recording at every zone boundary. Targets and
+source-level changes ease over 350 ms and reverse smoothly when crossing back.
+Point-ambient ranges taper over their outer 20%; 2D area cutoffs also feather.
+Point ambience no longer shrinks its range by the legacy zone-hop table: a
+camera crossing a BSP boundary cannot remove an otherwise in-range emitter.
+Up to four preallocated EAX networks retain the emitting rooms' reflected
+audio, including remote footsteps, gunshots, impacts, gadgets and positional
+ambience. Their wet output spills through the portal graph with smoothed gain
+and HF transmission, while the direct source retains its distance model. For
+example, Aquarius's bubbling retains the tunnel's Sewerpipe response when the
+spy camera moves outside its mouth, instead of replacing it with the corridor's
+room response. Existing wet players feed these networks; no extra decoders or
+physical voices are created. One network is reserved for gameplay cues so
+ambience cannot occupy all four. Saturation uses the existing listener-room route.
+Room fields reset on map/seek teardown and preserve their tails during ordinary
+camera transitions and after a short source stops. One-shot input and a new
+room's coupling are initialized immediately so short attacks excite the room
+from their first block. Local owner sounds retain their listener binding; music,
+UI and deliberately flat sounds retain their authored routes. These presentation
+paths operate on events the client receives and do not enlarge server hearing
+admission or bot/noise-cue rules. Maps without portal data retain the fades and
+local corner checks while omitting inter-zone room coupling.
+
+The physical pool remains 32 voices. Ambient rendering is capped at 24 to leave
+room for immediate cues; short cues can reclaim ambient channels. Displaced
+ordinary loops retain logical state, resolved leaf, pitch-adjusted playback
+cursor and attachment. They resume with a short fade, allocation hysteresis and
+priority ahead of equally loud new ambience. Inaudible ambient emitters can also
+retain phase. Logical loops are bounded at 512; sequences keep their existing
+entry/expiry semantics. Stops, map teardown and demo seeking include virtual
+emitters. Diagnostics distinguish resumed playback from fresh starts.
+
+Session loading preloads every possible movement/weapon/gadget/interface leaf,
+map ambience and the map song, including timed sequence loop variants, without
+consuming random or surface-switch choices. The 128 MiB cache budget counts file
+payloads, not total decoder/native memory. Session dependencies are pinned;
+inactive unpinned entries use LRU eviction and active player resources survive
+eviction. Oversize/over-budget resources can play without entering the cache;
+diagnostics expose any subsequent playback file read. A real-map check exposed
+a small sum above full scale, so game/menu categories reserve 3 dB of fixed
+summing headroom. Voice gain and its echo-reference path are unchanged; there
+is no new master compressor or limiter.
+
+`SVM_AUDIO_LOG=1` adds virtual/steal/promotion counts, transmission queries,
+scene-update/queue maxima, preload/cache/late-load information and native HRTF
+timing. Output latency in that log is an estimate from Godot's driver plus the
+adapter, not a physical end-to-end measurement. `AudioMixCapture` exposes
+discarded capture frames; that is distinct from an output-driver underrun.
+
+`--svm-smoke=audio-modernization` uses generated audio and the real Godot mixer
+to test speaker/headphone routing, material transmission, cue protection, virtual
+loop phase, demo lifecycle, cache eviction and missing-device fallback.
+`audio-propagation` additionally checks carried weather, actual interior wet PCM,
+door closure and opening-directed point sound; `audio-aquarius` uses Aquarius's
+original weather stream, actual collision and 72 converted portals, checking
+continued indoor rain, room response, loop phase and repeated boundary reversals.
+`audio-aquarius-tunnel` reconstructs the reported stationary spy at
+`(3042.6035,2304.6663,-38.995003)` with both supplied view rotations, actual
+following-camera solves and live map collision/actors. It captures the bubbling
+dry output and persistent tunnel reflections separately in speaker/headphone
+modes, verifies no source/room restart across the mouth, and checks teardown.
+`audio-gameplay-propagation` sends actual original footstep and rifle sequence
+events as server-delivered positional cues through an opening, a closed door,
+and around a collision-tested wall within one zone. In both output modes it
+checks apparent arrival, immediate source-room excitation, actual output PCM,
+post-source reflection tails and absence of runtime file reads.
+`audio-adaptive-reverb` captures native impulse responses for small/large rooms,
+open air, and repeated door closure/opening/reopening in both output modes. All
+stages retain the same zone/room identity and authored settings; collision
+geometry alone changes, using a live moving door collider, and the revision
+counter deliberately stays zero. A separate regression puts that door in front
+of a farther BSP wall and verifies nearest-hit selection after movement. It
+checks derived/applied decay, longer measured PCM tails in the large room,
+outside damping, native parameter acceptance and uninterrupted emitter ownership.
+`SVM_AUDIO_CAPTURE_DIR` selects the WAV/JSON evidence directory. A dummy audio
+driver fails the PCM checks. On Windows a headless run with
+`--audio-driver WASAPI` exercises the physical output mixer with Master muted.
+Keep the existing `reverb`, `audio-listener`, `audio` and `play-audio-*` checks.
+Actual headphone listening, low-end reference hardware, output-device hotplug
+and Linux device output remain release gates beyond automated DSP/PCM tests.
+`tools/audio/Test-AudioModernization.ps1 -WithContent` builds and runs the focused
+regressions and real mixer checks, writing logs and PCM/JSON evidence under
+`local/audio-modernization/validation` by default. It fails on dummy/silent output.

@@ -1,0 +1,803 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using OpenScct.Bots;
+using OpenScct.Content;
+using OpenScct.Content.Loading;
+using OpenScct.Core;
+using OpenScct.Core.Engine;
+using OpenScct.Game.AI;
+using OpenScct.Game.Camera;
+using OpenScct.Game.SBase;
+using OpenScct.Net;
+using OpenScct.Physics.Collision;
+using OpenScct.Server;
+
+namespace OpenScctGame.Play.Session;
+
+/// <summary>A camera result of one client tick: the view the calc view produced and the FOV.</summary>
+public readonly record struct ViewSample(long Tick, FVector Location, FRotator Rotation, float Fov, bool Valid,
+    bool SpyFirstPerson = false);
+
+/// <summary>
+/// An offline match through the online path: a listen <see cref="ServerHost"/> with the map (loaded by
+/// <see cref="PlayMapLoader"/> through a <see cref="MapCatalog"/>) and the SBase game rules, and the local player as a
+/// <see cref="ClientSession"/> over loopback. The server logs the player in through the ported game flow (Login,
+/// team, spawn selection) when the connection joins, and a network match is started by its host as the lobby
+/// does. The client runs the local controller with the input of each tick and the calc view after it.
+/// <para>Godot-free: the game's play scene, the smoke tests and tools drive it the same way.</para>
+/// </summary>
+public sealed class PlaySession : IDisposable
+{
+    public const string HostAddress = ListenServer.HostAddress;
+
+    /// <summary>When the caller falls further behind than this (a stall), the backlog is dropped.</summary>
+    public const int MaxCatchUpTicks = 5;
+
+    private readonly ListenServer? _listen;
+    private readonly LoopbackNetwork? _network;
+    private readonly bool _remote;
+    private readonly Action<long>? _stepPeers;
+    private readonly long _start;
+    private readonly List<string> _log = new();
+    private readonly object _logGate = new();
+    private long _ticks;
+    private ViewSample _view;
+    private ViewSample _previousView;
+    private SBasePawn? _viewPawn;
+    private uint _viewReset;
+    private Pawn? _possessed;
+    private double _alpha;
+    private bool _disposed;
+    private NetCombatBridge? _clientCombat;
+    private static int s_offlineSessions;
+    private int _requestedPracticeTeam = -1;
+    private bool _practiceTeamRespawn;
+    private Pawn? _previousTeamPawn;
+    private float _practiceTeamSince;
+
+    /// <summary>An offline session (one with its own host, not a round on a remote server) runs on this machine.</summary>
+    public static bool OfflineSessionRunning => System.Threading.Volatile.Read(ref s_offlineSessions) > 0;
+
+    public PlaySession(PlaySettings settings, IClock clock, Action<string>? loadProgress = null)
+    {
+        Settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        Clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        var roots = new List<string>(settings.MapRoots);
+        roots.AddRange(MapCatalog.CreateDefault().Roots);
+        Catalog = new MapCatalog(roots.ToArray());
+        string folder = Catalog.FindFolder(settings.Map)
+            ?? throw new FileNotFoundException($"Map '{settings.Map}' not found in: {string.Join("; ", roots)}");
+        MapFolder = folder;
+        ClientSession.LoadPhase?.Invoke("session.catalog");
+        SvMap map = SvMap.Load(folder);
+        ClientSession.LoadPhase?.Invoke("session.svmap");
+        Loader = new PlayMapLoader(map, settings.GameOptions(map.Gameplay), PlayMapLoader.FindCharsDir(folder),
+            settings.HostSettings(map.Gameplay), unlimitedGear: settings.UnlimitedGear);
+        Loader.Register(Catalog);
+        ClientSession.LoadPhase?.Invoke("session.loader");
+
+        var server = new ServerSettings
+        {
+            Map = map.Id,
+            MaxPlayers = settings.UnlimitedGear ? 24 : 16,
+            NetRate = settings.NetRate,
+            Profile = settings.NetworkProfile,
+            MatchSeed = settings.MatchSeed,
+            NetMode = ENetMode.NM_ListenServer,
+            Maps = Catalog,
+            SpawnWalkers = false,
+        };
+        // The client's gameplay calls as online (other players' pawns, device events, objectives); the map loader
+        // installs the gameplay services itself.
+        var client = new ClientSettings { PlayerName = settings.PlayerName, Maps = Catalog, Gameplay = true, InstallGameplayServices = false };
+
+        // The bots' navigation is built (or loaded from its cache) before the host starts ticking. The loader's map is
+        // what the catalog loads for map.Id, so its manifest finds the stored graphs without a scratch world.
+        AiNavCache? nav = null;
+        if (settings.Bots > 0 || settings.Route is not null || settings.UnlimitedGear && !OperatingSystem.IsBrowser())
+        {
+            nav = new AiNavCache();
+            nav.Prepare(Catalog, map.Id, loadProgress, content: map);
+            ClientSession.LoadPhase?.Invoke("session.nav");
+        }
+
+        _start = clock.NowMicroseconds;
+        if (settings.HostMode == PlayHostMode.Thread)
+        {
+            _listen = new ListenServer(clock, server);
+            Host = _listen.Host;
+            ClientSession.LoadPhase?.Invoke("session.host");
+            AddBots(nav);
+            Host.PlayerJoined += OnPlayerJoined;
+            Client = _listen.ConnectLocalPlayer(_start, client);
+        }
+        else if (settings.SimLink is { } link)
+        {
+            SimLink = new SimLinkNetwork(clock, settings.MatchSeed, link);
+            Host = new ServerHost(SimLink.Bind(HostAddress), server);
+            ClientSession.LoadPhase?.Invoke("session.host");
+            AddBots(nav);
+            Host.PlayerJoined += OnPlayerJoined;
+            Client = new ClientSession(SimLink.Bind("local-player-1"), HostAddress, _start, client, ownsTransport: true);
+        }
+        else
+        {
+            _network = new LoopbackNetwork();
+            Host = new ServerHost(_network.Bind(HostAddress), server);
+            ClientSession.LoadPhase?.Invoke("session.host");
+            AddBots(nav);
+            Host.PlayerJoined += OnPlayerJoined;
+            Client = new ClientSession(_network.Bind("local-player-1"), HostAddress, _start, client, ownsTransport: true);
+        }
+
+        Host.ChatFilter = OnPracticeBotChat;
+        Host.BeforeWorldTick += TickPracticeTeamSwap;
+        Client.World.Level.Info.m_dT = Sim.DeltaTime;
+        Client.BeforeWorldTick += ApplyClientInput;
+        InstallCombatNet();
+        if (settings.DemoFolder is { Length: > 0 } demos)
+        {
+            RecordDemo(demos, map.Id);
+        }
+
+        // The zone hints (SZoneTips) show for the local player, as in the original's standalone game.
+        System.Threading.Interlocked.Increment(ref s_offlineSessions);
+        ClientSession.LoadPhase?.Invoke("session.client");
+    }
+
+    /// <summary>The demo file this match records into (<see cref="PlaySettings.DemoFolder"/>), or null.</summary>
+    public string? DemoPath { get; private set; }
+
+    /// <summary>
+    /// Records the match as a demo (docs/DEMOS.md) from the host's first tick that has the game rules, on the host's
+    /// thread; the host finishes the file when it is disposed.
+    /// </summary>
+    private void RecordDemo(string folder, string mapId)
+    {
+        DateTimeOffset start = DateTimeOffset.UtcNow;
+        string path = Path.Combine(folder, DemoFileName.Personal(start, mapId, (int)Settings.Side, Guid.NewGuid().ToString("N")));
+        DemoPath = path;
+        bool started = false;
+        Host.BeforeWorldTick += host =>
+        {
+            if (started || Loader.Game is not { } game)
+            {
+                return;
+            }
+
+            started = true;
+            DemoWriter? writer = null;
+            try
+            {
+                writer = new DemoWriter(path, new DemoHeader
+                {
+                    RoundId = host.Scoreboards.RoundId,
+                    GameVersion = OpenScct.Net.Discovery.BuildInfo.Version,
+                    ProtocolHash = host.Driver.ProtocolHash,
+                    ContentHash = host.Map.ContentHash,
+                    Map = mapId,
+                    GameOptions = Loader.GameOptions,
+                    ServerName = "Offline",
+                    StartUnixMs = start.ToUnixTimeMilliseconds(),
+                    TickRate = Sim.Hz,
+                    NetRate = host.NetRate,
+                });
+                host.StartRecording(writer, host.Driver.Time, game);
+                AddLog("recording demo " + path);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                writer?.Dispose();
+                DemoPath = null;
+                AddLog("demo not recorded: " + e.Message);
+            }
+        };
+    }
+
+    /// <summary>
+    /// The combat and equipment calls between the host and the local player (inventory, gadgets, damage). The host's
+    /// game rules come from the map loader rather than the server's own options, so neither session installed the
+    /// bridge: it is added on both machines here and pumped once a tick. The server's is installed on its own first
+    /// tick (a listen server thread is already running), before any player can log in.
+    /// </summary>
+    private void InstallCombatNet()
+    {
+        NetCombatBridge? server = null;
+        Host.BeforeWorldTick += host =>
+        {
+            if (server is null && host.Combat is null && host.World.Level.GetService<NetCombatBridge>() is null)
+            {
+                server = NetCombatBridge.Install(host.World.Level, host.Driver);
+            }
+
+            server?.Pump();
+
+            // The server's sounds to the players who hear them (ClientHearSound), as the game rules' host would install.
+            NetHearSound.InstallServer(host.World, host.Driver).RelayLate();
+        };
+
+        _clientCombat = Client.World.Level.GetService<NetCombatBridge>() ?? NetCombatBridge.Install(Client.World.Level, Client.Driver);
+        InstallClientCalls(Client);
+    }
+
+    /// <summary>
+    /// The server's calls to the local controller that the play client runs itself: ClientSetHUD gives the player
+    /// its SHud (the gadget views, HUD messages and perturbation live on it). Other calls go on to the fallback.
+    /// </summary>
+    private static void InstallClientCalls(ClientSession client)
+    {
+        NetFunctionHandler? previous = client.Driver.Functions.Fallback;
+        client.Driver.Functions.Fallback = (self, function, args, from) =>
+        {
+            if (!client.Driver.IsServer && self is SPlayerController pc && function.Name == "ClientSetHUD")
+            {
+                GameCall call = NetGameHost.ToGameCall(function, args);
+                pc.ClientSetHUD(call.Class, call.Class2);
+                return;
+            }
+
+            previous?.Invoke(self, function, args, from);
+        };
+    }
+
+    /// <summary>
+    /// A round on a remote server (online play): <paramref name="client"/> is the online visit's session of the map in
+    /// <paramref name="mapFolder"/>, loaded through <paramref name="catalog"/>. This session ticks it with the local
+    /// input and the calc view as for an offline match, has no host of its own, and leaves the client session to the
+    /// visit when disposed.
+    /// </summary>
+    public PlaySession(PlaySettings settings, IClock clock, ClientSession client, MapCatalog catalog, string mapFolder,
+        PlayMapLoader loader, Action<long>? stepPeers = null)
+    {
+        Settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        Clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        Client = client ?? throw new ArgumentNullException(nameof(client));
+        Catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        MapFolder = mapFolder ?? throw new ArgumentNullException(nameof(mapFolder));
+        Loader = loader ?? throw new ArgumentNullException(nameof(loader));
+        _remote = true;
+        _stepPeers = stepPeers;
+        _start = clock.NowMicroseconds;
+        Client.World.Level.Info.m_dT = Sim.DeltaTime;
+        Client.BeforeWorldTick += ApplyClientInput;
+        InstallClientCalls(Client);
+    }
+
+    public PlaySettings Settings { get; }
+
+    /// <summary>The simulated network of <see cref="PlaySettings.SimLink"/>, or null.</summary>
+    public SimLinkNetwork? SimLink { get; }
+
+    /// <summary>True for a round on a remote server (no host here).</summary>
+    public bool IsRemote => _remote;
+
+    public IClock Clock { get; }
+
+    public MapCatalog Catalog { get; }
+
+    public string MapFolder { get; }
+
+    public PlayMapLoader Loader { get; }
+
+    /// <summary>
+    /// The server. With <see cref="PlayHostMode.Thread"/> it belongs to its thread: read it only through
+    /// <see cref="ServerSnapshot"/> or after <see cref="Stop"/>. Null for a remote round.
+    /// </summary>
+    public ServerHost Host { get; } = null!;
+
+    /// <summary>How long the server's ticks took (readable from any thread), or null for a remote round.</summary>
+    public TickTimes? ServerTicks => _remote ? null : Host.TickTimes;
+
+    public ClientSession Client { get; }
+
+    /// <summary>The input applied to the local controller at the next tick (the input layer fills it).</summary>
+    public LocalInput Input { get; } = new();
+
+    public MouseLook Mouse { get; set; } = new();
+
+    /// <summary>Allow camera look during a spy roll while keeping the roll's starting direction.</summary>
+    public bool SpyRollFreeLook { get; set; }
+
+    /// <summary>Release the spy's built-in cloak when its input is released.</summary>
+    public bool SpyCloakHold { get; set; }
+
+    /// <summary>Hear hacked enemy communications without holding the Hack Comm key (the auto_hack_comms setting).</summary>
+    public bool AutoHackComms { get; set; }
+
+    /// <summary>The viewport size the input mapping scales the mouse by.</summary>
+    public (int Width, int Height) ViewportSize { get; set; } = (1280, 720);
+
+    /// <summary>Called on the client's thread before each client tick, before the input is applied (scripted input).</summary>
+    public Action<PlaySession, long>? BeforeClientTick { get; set; }
+
+    /// <summary>Called on the client's thread after each client tick and its calc view (views take their tick state here).</summary>
+    public Action<PlaySession, long>? AfterClientTick { get; set; }
+
+    /// <summary>
+    /// Updates the local spy's logical shadow after simulation and before calc view. Called every tick so the
+    /// original light visibility cache is warm when a sticky-camera transition starts; true adds its shadow view solve.
+    /// </summary>
+    public Func<SPlayerController, bool>? StickyCamShadowUpdate { get; set; }
+
+    /// <summary>How far the clock is into the next tick after <see cref="Update"/> (0 to 1), for the render interpolation.</summary>
+    public float Alpha => (float)_alpha;
+
+    /// <summary>The local player's controller on the client, once replicated.</summary>
+    public SPlayerController? LocalController => Client.World.Level.Info.LocalPlayerController as SPlayerController;
+
+    /// <summary>The local pawn on the client, once replicated and possessed.</summary>
+    public SBasePawn? LocalPawn => LocalController?.Pawn as SBasePawn;
+
+    /// <summary>Client ticks run so far.</summary>
+    public long TicksRun => _ticks;
+
+    /// <summary>
+    /// Replaces the calc view after each client tick when set (demo playback's cameras, docs/DEMOS.md): it gets the
+    /// calc view (invalid when there is no local controller) and returns the view to draw.
+    /// </summary>
+    public Func<ViewSample, ViewSample>? ViewOverride { get; set; }
+
+    /// <summary>
+    /// When set, the pawn drawn as seen from inside (body hidden) instead of the local first-person pawn: demo
+    /// playback's first-person view of another player. Returns null for none.
+    /// </summary>
+    public Func<SBasePawn?>? FirstPersonOverride { get; set; }
+
+    /// <summary>Draws <paramref name="view"/> from now on without waiting for a tick (a paused demo's free camera).</summary>
+    public void SetViewNow(ViewSample view)
+    {
+        _previousView = view;
+        _view = view;
+    }
+
+    /// <summary>The view after the last client tick.</summary>
+    public ViewSample View => _view;
+
+    /// <summary>The view after the tick before it (the render interpolates between the two).</summary>
+    public ViewSample PreviousView => _previousView;
+
+    /// <summary>The server's login of the local player failed with this reason, or null.</summary>
+    public string? LoginError { get; private set; }
+
+    /// <summary>The server-side controller of the local player (server thread data).</summary>
+    public SPlayerController? ServerController { get; private set; }
+
+    /// <summary>Queue a local practice side change; only the host thread changes or respawns the pawn.</summary>
+    public void RequestPracticeTeamSwap()
+    {
+        if (_remote || IsStopped || !Settings.UnlimitedGear || LocalController is not { } pc ||
+            !OpenScct.Game.Modes.PracticeRules.IsOn(pc) || pc.IsMercDeathMatch) return;
+        int team = SGameInfo.TeamIndexOf(pc);
+        if (team is 0 or 1) System.Threading.Interlocked.Exchange(ref _requestedPracticeTeam, 1 - team);
+    }
+
+    private void TickPracticeTeamSwap(ServerHost host)
+    {
+        // Offline sessions create their rules in PlayMapLoader, so host.Game is unset.
+        if (Loader.Game is not { bGameEnded: false } game || ServerController is not { } pc ||
+            !OpenScct.Game.Modes.PracticeRules.IsOn(pc)) return;
+        int team = System.Threading.Interlocked.Exchange(ref _requestedPracticeTeam, -1);
+        if (!_practiceTeamRespawn && team is 0 or 1 && game.eventChangeTeam(pc, team, true))
+        {
+            _previousTeamPawn = pc.Pawn;
+            pc.UnPossess();
+            pc.bCrouchWithRoll = false;
+            pc.SPawnType = team == 0 ? PawnType.SPAWNOFFENSE : PawnType.SPAWNDEFENSE;
+            pc.DefaultFOV = pc.DesiredFOV = team == 0 ? pc.SpyFOV : pc.DefenderFOV;
+            if (pc.PlayerReplicationInfo is { Team: STeamInfo side } pri)
+            {
+                int mesh = pri.MyMeshNum;
+                pc.SetPawnClass(mesh >= 0 && mesh < side.PawnList.Count ? side.PawnList[mesh] : Name.None);
+                pri.NumLives = team == 0 ? game.MatchInfo?.NumLivesATT ?? 1 : game.MatchInfo?.NumLivesDEF ?? 1;
+            }
+            _practiceTeamSince = pc.Level.TimeSeconds;
+            _practiceTeamRespawn = true;
+        }
+        if (!_practiceTeamRespawn) return;
+        // As the online practice switch: wait for the old pawn channel to close
+        // before ClientRestart acquires a replacement, with the same three-second cap.
+        if (_previousTeamPawn is { } old && pc.Level.TimeSeconds - _practiceTeamSince < 3f)
+            foreach (var player in host.Players)
+                if (player.Connection.FindActorChannel(old) is not null) return;
+        _practiceTeamRespawn = false;
+        _previousTeamPawn = null;
+        game.eventRestartPlayer(pc);
+        game.UpdateTeamNumLives();
+    }
+
+    public bool IsStopped { get; private set; }
+
+    /// <summary>The listen server's failure, if its thread stopped.</summary>
+    public Exception? ServerFailure => _listen?.Failure;
+
+    /// <summary>Commands the input asked for that the port does not have.</summary>
+    public IReadOnlyList<string> Log
+    {
+        get
+        {
+            lock (_logGate)
+            {
+                return _log.ToArray();
+            }
+        }
+    }
+
+    /// <summary>Runs the ticks due by the clock (server and client inline, the client only with a server thread).</summary>
+    public int Update(int maxCatchUpTicks = MaxCatchUpTicks)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxCatchUpTicks, 1);
+        if (IsStopped)
+        {
+            return 0;
+        }
+
+        long now = Clock.NowMicroseconds;
+        long due = (now - _start) * Sim.Hz / 1_000_000;
+        if (due - _ticks > maxCatchUpTicks)
+        {
+            _ticks = due - maxCatchUpTicks;
+        }
+
+        int run = 0;
+        while (_ticks < due)
+        {
+            Step(now);
+            run++;
+        }
+
+        double exact = (now - _start) * (double)Sim.Hz / 1_000_000.0;
+        _alpha = Math.Clamp(exact - _ticks, 0.0, 1.0);
+        return run;
+    }
+
+    /// <summary>One tick now (inline server first), whatever the clock says. For tests and tools.</summary>
+    public void Step(long nowMicros)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _stepPeers?.Invoke(nowMicros);
+        if (_listen is null && !_remote)
+        {
+            Host.World.Level.Info.m_dT = Sim.DeltaTime * Host.World.Level.Info.TimeDilation;
+            Host.Tick(nowMicros);
+        }
+
+        TickClient(nowMicros);
+        _ticks++;
+        _alpha = 1.0;
+    }
+
+    /// <summary>Reads server state on the server's thread: at once inline, or between ticks after <see cref="Stop"/>.</summary>
+    public T ServerSnapshot<T>(Func<ServerHost, T> read)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+        if (_remote)
+        {
+            throw new InvalidOperationException("A remote round has no server in this process.");
+        }
+
+        if (_listen is not null && !IsStopped)
+        {
+            throw new InvalidOperationException("The listen server runs on its own thread; stop it first or use the inline host.");
+        }
+
+        return read(Host);
+    }
+
+    /// <summary>Stops the server thread (inline: no further server ticks).</summary>
+    public void Stop()
+    {
+        if (IsStopped)
+        {
+            return;
+        }
+
+        IsStopped = true;
+        _listen?.Stop();
+    }
+
+    private void ApplyClientInput(ClientSession client)
+    {
+        Level level = Client.World.Level;
+        level.Info.m_dT = Sim.DeltaTime * level.Info.TimeDilation;
+        BeforeClientTick?.Invoke(this, Client.LocalTick);
+        if (LocalController is { } pc)
+        {
+            pc.SpyRollFreeLook = SpyRollFreeLook;
+            pc.SpyCloakHold = SpyCloakHold;
+            pc.bAutoHackComms = AutoHackComms;
+            Input.ApplyButtons(pc);
+            Mouse.Apply(pc, Input.MouseX, Input.MouseY);
+            pc.aUp = Input.Up;
+            if (pc.FreeCameraFlying != 0)
+            {
+                // The cinematic free camera: the wheel (or the pad's shoulder buttons) steps its speed, Shift and Alt
+                // scale it, the pad's triggers fly it up and down.
+                pc.StepFreeCamSpeed(Input.Wheel);
+                pc.FreeCamSpeedFactor = Input.Fast ? CinematicCameraK.FastFactor : Input.Slow ? CinematicCameraK.SlowFactor : 1f;
+                pc.FreeCamPadUp = Input.PadUp;
+            }
+
+            foreach (InputCommand command in Input.Commands)
+            {
+                if (!PlayerCommands.Execute(pc, command))
+                {
+                    AddLog("unsupported command: " + command);
+                }
+            }
+        }
+
+        Input.EndTick();
+    }
+
+    private void TickClient(long now)
+    {
+        Client.Tick(now);
+        if (Client.Map is null) Input.EndTick();
+        if (!ReferenceEquals(_clientCombat, Client.Combat))
+        {
+            _clientCombat?.Pump();
+        }
+        RestoreBehindView();
+        _previousView = _view;
+        if (LocalController is { } viewer)
+        {
+            bool stickyCamShadow = StickyCamShadowUpdate?.Invoke(viewer) ?? true;
+            PlayerCalcView.FrameView(viewer, out _, out FVector location, out FRotator rotation, stickyCamShadow);
+            if (viewer.Pawn is SBasePawn { NetworkCorrectionSeconds: > 0f } corrected &&
+                PlayerCalcView.SourceOf(viewer) is PlayerCalcView.EViewSource.Default)
+            {
+                FVector shown = location + corrected.NetworkCorrectionOffset;
+                if (OpenScct.Game.Movement.MovementNatives.Driver(corrected) is { } driver &&
+                    driver.Collision.LineCheck(out var hit, corrected, shown, location, new FVector(4f, 4f, 4f),
+                        ETraceFlags.TRACE_Level | ETraceFlags.TRACE_Movers | ETraceFlags.TRACE_LevelGeometry))
+                    shown = hit.Location + hit.Normal;
+                location = shown;
+            }
+            _view = new ViewSample(Client.LocalTick, location, rotation, viewer.FovAngle, true, viewer.SpyFirstPersonActive);
+            if (Client.RecordingPlayerViews && ViewOverride is null && viewer.Pawn is SBasePawn { Health: > 0 } recordedPawn)
+            {
+                Client.SubmitDemoView(new DemoViewFrame(0, 0, 0, location, rotation, viewer.FovAngle, viewer.Rotation,
+                    viewer.BinocularBreath, recordedPawn.MyWeapon is SWeaponDefense rifle ? rifle.GetAccuracy() : 0f,
+                    viewer.SpyFirstPersonActive,
+                    viewer.FreeCameraFlying == 0 && PlayerCalcView.SourceOf(viewer) == PlayerCalcView.EViewSource.Default &&
+                        (!viewer.bBehindView || viewer.SpyFirstPersonActive),
+                    viewer.FreeCameraFlying != 0 ? (byte)15 : (byte)PlayerCalcView.SourceOf(viewer)));
+            }
+            if (viewer.Pawn is SBasePawn viewed && (!ReferenceEquals(viewed, _viewPawn) || _viewReset != viewed.NetworkResetId))
+            {
+                _viewPawn = viewed;
+                _viewReset = viewed.NetworkResetId;
+                _previousView = _view;
+            }
+        }
+
+        if (ViewOverride is { } viewOverride)
+        {
+            _view = viewOverride(LocalController is null ? default : _view);
+        }
+
+        AfterClientTick?.Invoke(this, Client.LocalTick);
+    }
+
+    /// <summary>
+    /// The view mode of a new possession, as ClientRestart sets it (bBehindView = Pawn.PointOfView()). Over loopback
+    /// the restart call reaches the client before the pawn's channel, so the controller waits for its pawn and
+    /// WaitingForPawn.EndState clears the flag right after the late restart set it; the spy would then be drawn in
+    /// first person. Applied once per possession on the client.
+    /// </summary>
+    private void RestoreBehindView()
+    {
+        if (LocalController is not { } pc || pc.Pawn is not { } pawn || ReferenceEquals(pawn, _possessed))
+        {
+            if (LocalController?.Pawn is null)
+            {
+                _possessed = null;
+            }
+
+            return;
+        }
+
+        if (pc.IsInState("WaitingForPawn"))
+        {
+            return;
+        }
+
+        _possessed = pawn;
+        pc.bBehindView = pawn.PointOfView();
+    }
+
+    /// <summary>
+    /// The server-side bots of <see cref="PlaySettings.Bots"/> (docs/AI.md): they log in before the local player,
+    /// whose login starts the match, and play through the same input path. Server thread data.
+    /// </summary>
+    public ServerBots? Bots { get; private set; }
+
+    private void AddBots(AiNavCache? nav)
+    {
+        if (Settings.Bots <= 0 && Settings.Route is null && !Settings.UnlimitedGear)
+        {
+            return;
+        }
+
+        AiDifficulty difficulty = AiDifficulty.TryParse(Settings.Difficulty, out AiSkill skill) ? AiDifficulty.For(skill) : AiDifficulty.For(AiSkill.Normal);
+        var bots = new List<ServerBotSpec>(ServerBotSettings.Fill(Settings.Bots, Settings.Team, difficulty));
+        if (Settings.Route is { } route)
+        {
+            bots.Add(RouteBot(route, difficulty));
+        }
+
+        Bots = new ServerBots(Host, new ServerBotSettings
+        {
+            Bots = bots,
+            Nav = nav,
+            Maps = Catalog,
+            TerminalsBlockPlayers = Settings.TerminalsBlockPlayers ?? true,
+            PrepareWhenEmpty = !OperatingSystem.IsBrowser(),
+        });
+    }
+
+    private bool OnPracticeBotChat(PlayerSlot player, string text)
+    {
+        if (!text.StartsWith('!')) return false;
+        string[] parts = text[1..].Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return false;
+        string verb = parts[0].ToLowerInvariant();
+        void Reply(string line) => player.Connection.ControlChannel?.Send(ControlMessage.Chat(new ChatLine(EChatScope.Say, 0, "Server", 255, line)));
+        if (verb is "infinite" or "resources")
+        {
+            Reply(PracticeResourceCommands.Run(Host.World.Level, parts.Length > 1 ? parts[1] : ""));
+            return true;
+        }
+        if (verb == "lagcomp")
+        {
+            // ChatFilter executes on the host's simulation thread, including a threaded listen host.
+            // Keep the same parser and reply wording as an online server; no client-side state is changed.
+            Reply(Host.LagCompensation.Command(parts.Length > 1 ? parts[1] : string.Empty) ??
+                "lagcomp: !lagcomp [on|off|reset|<ceiling>]");
+            return true;
+        }
+        if (verb is "help" or "?")
+        {
+            string topic = parts.Length > 1 ? parts[1].Trim() : "bots";
+            if (topic.Equals("infinite", StringComparison.OrdinalIgnoreCase) || topic.Equals("resources", StringComparison.OrdinalIgnoreCase))
+            {
+                Reply(PracticeResourceCommands.Help);
+                return true;
+            }
+            if (topic.Equals("lagcomp", StringComparison.OrdinalIgnoreCase))
+            {
+                Reply("!lagcomp [on|off|reset|<ceiling>] - Show or change the local server's rewind ceiling in milliseconds (0 to 500).");
+                return true;
+            }
+            foreach (string line in PracticeBotCommands.GetHelp(topic, chat: true) ?? ["Use !help bots or !help <bot command>. For all console commands, type help in the console."])
+                Reply(line);
+            return true;
+        }
+        if (!PracticeBotCommands.IsCommand(verb)) return false;
+        string reply = Bots is null ? "Bot commands work in practice / Visit Map games only." :
+            PracticeBotCommands.Run(Host, Bots, player.Controller ?? player.Connection.Actor as PlayerController, Host.Settings.MaxPlayers, parts[0].ToLowerInvariant(), parts.Length > 1 ? parts[1] : "");
+        Reply(reply);
+        return true;
+    }
+
+    /// <summary>
+    /// The route bot: its stops found on the host's map (a stop naming no actor is reported by the walk), and with a
+    /// start given, every other start of its side switched off so it starts there (<see cref="RouteAi"/>).
+    /// </summary>
+    private ServerBotSpec RouteBot(PlayRoute route, AiDifficulty difficulty)
+    {
+        int team = route.Side == PlaySide.Spy ? 0 : 1;
+        MapLoadResult? map = Host.Map.Loaded;
+        var stops = new List<AiRouteStop>();
+        foreach (string stop in route.Stops)
+        {
+            stops.Add(PlayRoute.Point(stop) is { } point
+                ? new AiRouteStop(stop, point, null)
+                : new AiRouteStop(stop, null, map?.FindActor(stop)));
+        }
+
+        if (route.From is { } from)
+        {
+            if (map?.FindActor(from) is not PlayerStart { bEnabled: true } start || start.TeamNumber != team)
+            {
+                throw new ArgumentException($"{from} is not an enabled player start of the {(team == 0 ? "spies" : "mercs")}, so the route cannot start there");
+            }
+
+            foreach ((Actor actor, _) in map.PlacedActors())
+            {
+                if (actor is PlayerStart other && other.TeamNumber == team && !ReferenceEquals(other, start))
+                {
+                    other.bEnabled = false;
+                }
+            }
+        }
+
+        return new ServerBotSpec(team == 0 ? "SpyRoute" : "MercRoute", team, difficulty) { Route = new AiRoute(stops, route.Report) };
+    }
+
+    /// <summary>Server thread: the connection joined, so the player logs in (UE2 SpawnPlayActor) and the host starts.</summary>
+    private void OnPlayerJoined(PlayerSlot slot)
+    {
+        Bots?.LoginAll();
+        SGameInfo? game = Loader.Game;
+        if (game is null)
+        {
+            LoginError = "the map has no game rules";
+            slot.Connection.Close(LoginError);
+            return;
+        }
+
+        string error = string.Empty;
+        PlayerController? pc = game.Login(string.Empty, Settings.LoginOptions, ref error);
+        if (pc is null)
+        {
+            LoginError = string.IsNullOrEmpty(error) ? "login refused" : error;
+            slot.Connection.Close(LoginError);
+            return;
+        }
+
+        // Play From Camera: the first spawn, at PostLogin or at the match start, happens where the editor's camera stood.
+        if (Settings.StartAt is { } at)
+        {
+            game.PendingTestStart = new TestStart(pc, at.Location, at.Rotation);
+        }
+
+        // ULevel::SpawnPlayActor: the connection's player, the roles, the connection's actor, then PostLogin.
+        pc.Player = new SimNetConnection();
+        pc.Role = ENetRole.ROLE_Authority;
+        pc.RemoteRole = ENetRole.ROLE_AutonomousProxy;
+        if (pc is SPlayerController merc && Settings.LocalWeaponCareer is { } career) merc.WeaponProgress = career;
+        slot.Connection.Actor = pc;
+        game.PostLogin(pc);
+        ServerController = pc as SPlayerController;
+
+        // A network match from the lobby: the host launches it (StartMatchOnServer). Play Level started at login.
+        if (Settings.Rules == PlayRules.MapSettings && ServerController is { } host && !(game.GameReplicationInfo?.bMatchHasBegun ?? false))
+        {
+            game.bDelayedStart = false;
+            host.StartMatchOnServer();
+        }
+    }
+
+    private void AddLog(string line)
+    {
+        lock (_logGate)
+        {
+            if (_log.Count < 256)
+            {
+                _log.Add(line);
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        StickyCamShadowUpdate = null;
+        Client.BeforeWorldTick -= ApplyClientInput;
+        Stop();
+        if (_remote)
+        {
+            return;
+        }
+
+        System.Threading.Interlocked.Decrement(ref s_offlineSessions);
+        Bots?.Dispose();
+        Client.Dispose();
+        if (_listen is not null)
+        {
+            _listen.Dispose();
+        }
+        else
+        {
+            Host.Dispose();
+        }
+    }
+}

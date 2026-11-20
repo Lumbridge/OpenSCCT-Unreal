@@ -1,0 +1,1328 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using OpenScct.Game.Equipment;
+using OpenScct.Net.Cosmetics;
+using OpenScct.Provenance;
+
+namespace OpenScctGame.Options;
+
+/// <summary>Visual sampling quality only; smoke coverage and gameplay stay identical on every setting.</summary>
+public enum ResponsiveSmokeQuality { Low, Medium, High }
+
+/// <summary>
+/// The player's chosen gear per side (an OpenSCCT addition, spec/additions/gear-change.md): class paths of the four
+/// gadget slots and the merc's weapon. Read on this machine whenever the server asks for a kit, so a new choice goes
+/// on at the next spawn (or at once while the server allows it). New profiles use the fixed gadget kits and the M4 primary.
+/// </summary>
+public sealed class LoadoutSettings
+{
+    public const int Slots = 4;
+
+    [JsonPropertyName("spy_gadgets")]
+    public string[] SpyGadgets { get; set; } = DefaultSpy();
+
+    [JsonPropertyName("merc_gadgets")]
+    public string[] MercGadgets { get; set; } = DefaultMerc();
+
+    [JsonPropertyName("merc_weapon")]
+    public string MercWeapon { get; set; } = WeaponAttachments.M4;
+
+    [JsonPropertyName("merc_sidearm")]
+    public string MercSidearm { get; set; } = DefaultSidearm;
+
+    public static string DefaultSidearm => OpenScct.Core.Engine.Sidearms.Get(OpenScct.Core.Engine.SidearmKind.Unsuppressed).CarryId;
+
+    public static string[] DefaultSpy() => Array.ConvertAll(Loadouts.SpyFixedGadgets, c => c.Path ?? "");
+
+    public static string[] DefaultMerc() => Array.ConvertAll(Loadouts.MercFixedGadgets, c => c.Path ?? "");
+
+    /// <summary>The slots of a side.</summary>
+    public string[] GadgetsOf(bool spy) => spy ? SpyGadgets : MercGadgets;
+
+    internal void Clamp()
+    {
+        SpyGadgets = Fit(SpyGadgets, DefaultSpy());
+        for (int i = 0; i < SpyGadgets.Length; i++)
+        {
+            if (!SpyCloak.IsLegacyGadget(SpyGadgets[i])) continue;
+            SpyGadgets[i] = "";
+            foreach (string replacement in DefaultSpy())
+                if (!Array.Exists(SpyGadgets, g => string.Equals(g, replacement, StringComparison.OrdinalIgnoreCase)))
+                { SpyGadgets[i] = replacement; break; }
+        }
+        MercGadgets = Fit(MercGadgets, DefaultMerc());
+        MercWeapon = MercPrimarySelection.SavedPreference(MercWeapon);
+        MercSidearm ??= DefaultSidearm;
+        bool migrated = false;
+        for (int i = 0; i < MercGadgets.Length; i++)
+        {
+            if (OpenScct.Core.Engine.Sidearms.Find(MercGadgets[i]) is not { } pistol) continue;
+            if (!migrated) MercSidearm = pistol.CarryId;
+            migrated = true;
+            MercGadgets[i] = "";
+            foreach (string replacement in DefaultMerc())
+                if (Array.IndexOf(MercGadgets, replacement) < 0) { MercGadgets[i] = replacement; break; }
+        }
+    }
+
+    private static string[] Fit(string[]? slots, string[] defaults)
+    {
+        if (slots is null)
+        {
+            return defaults;
+        }
+
+        var fitted = new string[Slots];
+        for (int i = 0; i < Slots; i++)
+        {
+            fitted[i] = i < slots.Length ? (slots[i] ?? "").Trim() : "";
+        }
+
+        return fitted;
+    }
+}
+
+/// <summary>Look sensitivities of one side and device, as Reloaded's control groups hold them.</summary>
+public sealed class LookSettings
+{
+    [JsonPropertyName("walk_behavior")]
+    public string WalkBehavior { get; set; } = "Toggle";
+
+    [JsonPropertyName("scope_behavior")]
+    public string ScopeBehavior { get; set; } = "Toggle";
+
+    /// <summary>Spy first-person perspective; the keyboard group's choice also applies to controller bindings.</summary>
+    [JsonPropertyName("perspective_behavior")]
+    public string PerspectiveBehavior { get; set; } = "Toggle";
+
+    /// <summary>Spy cloak behavior, shared by keyboard, mouse and controller.</summary>
+    [JsonPropertyName("cloak_behavior")]
+    public string CloakBehavior { get; set; } = "Toggle";
+
+    /// <summary>Spy: free look with the gun holstered (merc: unused).</summary>
+    [JsonPropertyName("free_look")]
+    public float FreeLook { get; set; } = 1.4f;
+
+    /// <summary>Spy: look with the gun drawn. Merc: the look.</summary>
+    [JsonPropertyName("look")]
+    public float Look { get; set; } = 1f;
+
+    [JsonPropertyName("scope")]
+    public float Scope { get; set; } = 0.75f;
+
+    /// <summary>Merc: the sniper scope's vertical scale (2.45 restores 1:1 from the stock 40.8 %).</summary>
+    [JsonPropertyName("scope_vertical")]
+    public float ScopeVertical { get; set; } = 2.45f;
+
+    [JsonPropertyName("vertical")]
+    public float Vertical { get; set; } = 1f;
+
+    /// <summary>Sticky camera and camera network.</summary>
+    [JsonPropertyName("cam")]
+    public float Cam { get; set; } = 1f;
+
+    /// <summary>Linear, CurveSoft, CurveMedium or CurveAggressive.</summary>
+    [JsonPropertyName("look_response")]
+    public string LookResponse { get; set; } = "Linear";
+
+    /// <summary>The spy controller's response with its weapon drawn, independent of free look.</summary>
+    [JsonPropertyName("gun_look_response")]
+    public string GunLookResponse { get; set; } = "Linear";
+
+    /// <summary>The first sensitivity clutch: a held button multiplies the look by this (rl:input.clutch).</summary>
+    [JsonPropertyName("clutch_one")]
+    public float ClutchOne { get; set; }
+
+    [JsonPropertyName("clutch_one_enabled")]
+    public bool ClutchOneEnabled { get; set; }
+
+    /// <summary>The second clutch (Reloaded gives it to the merc only).</summary>
+    [JsonPropertyName("clutch_two")]
+    public float ClutchTwo { get; set; }
+
+    [JsonPropertyName("clutch_two_enabled")]
+    public bool ClutchTwoEnabled { get; set; }
+
+    /// <summary>Controller groups: the left stick click and the left bumper trade places (rl:input.pad).</summary>
+    [JsonPropertyName("swap_ls_lb")]
+    public bool SwapLsLb { get; set; }
+
+    /// <summary>Controller groups: the right stick click and the right bumper trade places (rl:input.pad).</summary>
+    [JsonPropertyName("swap_rs_rb")]
+    public bool SwapRsRb { get; set; }
+
+    /// <summary>
+    /// The pad control that is read for <paramref name="control"/>: with a swap on, LB reads the left stick click and
+    /// LS the left bumper (RB and RS the same with the right swap).
+    /// </summary>
+    public string PhysicalControl(string control) => control switch
+    {
+        "LB" when SwapLsLb => "LS",
+        "LS" when SwapLsLb => "LB",
+        "RB" when SwapRsRb => "RS",
+        "RS" when SwapRsRb => "RB",
+        _ => control,
+    };
+
+    /// <summary>The multiplier of the clutches held (1 with none): each enabled clutch with a value above 0 counts.</summary>
+    public float ClutchOf(bool one, bool two) =>
+        (one && ClutchOneEnabled && ClutchOne > 0f ? ClutchOne : 1f) * (two && ClutchTwoEnabled && ClutchTwo > 0f ? ClutchTwo : 1f);
+
+    internal void Clamp(float freeLookMax = 10f)
+    {
+        WalkBehavior = WalkBehavior == "Hold" ? "Hold" : "Toggle";
+        ScopeBehavior = ScopeBehavior == "Hold" ? "Hold" : "Toggle";
+        PerspectiveBehavior = PerspectiveBehavior == "Hold" ? "Hold" : "Toggle";
+        CloakBehavior = CloakBehavior == "Hold" ? "Hold" : "Toggle";
+        ClutchOne = Range(ClutchOne, 0f, 10f);
+        ClutchTwo = Range(ClutchTwo, 0f, 10f);
+        FreeLook = Range(FreeLook, 0.05f, freeLookMax);
+        Look = Range(Look, 0.05f, 10f);
+        Scope = Range(Scope, 0.05f, 10f);
+        ScopeVertical = Range(ScopeVertical, 0.05f, 10f);
+        Vertical = Range(Vertical, 0.05f, 10f);
+        Cam = Range(Cam, 0.05f, 10f);
+        if (Array.IndexOf(GameSettings.Responses, LookResponse) < 0)
+        {
+            LookResponse = "Linear";
+        }
+        if (Array.IndexOf(GameSettings.Responses, GunLookResponse) < 0) GunLookResponse = LookResponse;
+    }
+
+    internal static float Range(float v, float min, float max) => float.IsFinite(v) ? Math.Clamp(v, min, max) : min;
+}
+
+/// <summary>Native controller settings (Reloaded's controller_* keys).</summary>
+public sealed class PadSettings
+{
+    /// <summary>Reloaded asks once before enabling native controller support.</summary>
+    [JsonPropertyName("enabled")]
+    [Provenance(ProvenanceKind.Decoded, "Reloaded controller_enabled defaults false, rl:input.pad")]
+    public bool Enabled { get; set; }
+
+    public const int CurrentLayoutVersion = 1;
+
+    /// <summary>Zero preserves the earlier OpenSCCT layout and movement behavior.</summary>
+    [JsonPropertyName("layout_version")]
+    public int LayoutVersion { get; set; } = CurrentLayoutVersion;
+
+    [JsonPropertyName("spy_layout_version")]
+    public int? SpyLayoutVersion { get; set; }
+
+    [JsonPropertyName("merc_layout_version")]
+    public int? MercLayoutVersion { get; set; }
+
+    public int LayoutVersionOf(bool merc) => (merc ? MercLayoutVersion : SpyLayoutVersion) ?? LayoutVersion;
+
+    /// <summary>The pad controls a layout binds, in the order the options list them (Xbox names).</summary>
+    public static readonly string[] PhysicalControls =
+    [
+        "A", "B", "X", "Y", "LB", "RB", "LT", "RT", "LS", "RS", "DpadUp", "DpadDown", "DpadLeft", "DpadRight", "Start", "Back",
+        // Back paddles, on controllers that report them as buttons of their own (SDL paddle 1 to 4).
+        "P1", "P2", "P3", "P4",
+    ];
+
+    public static readonly string[] Controls =
+    [
+        .. PhysicalControls, "B:Hold", "LS+Y", "LS+X", "LS+B", "LS+A",
+        "LB+Y", "LB+X", "LB+B", "LB+A", "LB+DpadDown", "LB+Back", "LB+RB",
+    ];
+
+    /// <summary>The menu command (<c>ShowMenu</c>; Escape when the layout binds no key to it).</summary>
+    public const string MenuAction = "ShowMenu";
+
+    /// <summary>The pad bind held for the first sensitivity clutch (Reloaded's "Right Clutch" for the spy, "Left Clutch" for the merc).</summary>
+    public const string ClutchOneAction = "Clutch1";
+
+    /// <summary>The pad bind held for the second clutch (the merc's).</summary>
+    public const string ClutchTwoAction = "Clutch2";
+
+    /// <summary>The prefix of a binding that presses a key directly (the hub's own keys, which are not layout commands).</summary>
+    public const string KeyPrefix = "Key:";
+
+    public const string WallLaserAction = "Pad:walllaser";
+    public const string SpyFireAction = "Pad:spyfire";
+    public const string SpyGadgetAction = "Pad:spygadget";
+    public const string MercGadgetAction = "Pad:mercgadget";
+    public const string CrouchAction = "Pad:crouch";
+    public const string LongRollAction = "Pad:longroll";
+
+    /// <summary>Reloaded's native controller layout, including held-button combinations.</summary>
+    public static Dictionary<string, string> DefaultButtons(bool merc = false) => new(StringComparer.Ordinal)
+    {
+        ["A"] = "Action:use",
+        ["B"] = CrouchAction,
+        ["X"] = merc ? "Action:reload" : "Action:ready",
+        ["Y"] = "Action:jump",
+        ["LB"] = merc ? ClutchOneAction : "Action:coop",
+        ["RB"] = merc ? "Action:scope" : "Action:roll",
+        ["LT"] = merc ? MercGadgetAction : SpyGadgetAction,
+        ["RT"] = merc ? "Action:fire" : SpyFireAction,
+        ["LS"] = "",
+        ["RS"] = merc ? ClutchTwoAction : ClutchOneAction,
+        ["DpadUp"] = merc ? "Action:torch" : "Action:sticky",
+        ["DpadDown"] = merc ? "Action:laser" : WallLaserAction,
+        ["DpadLeft"] = "Action:vision1",
+        ["DpadRight"] = "Action:vision2",
+        ["Start"] = "Action:menu",
+        ["Back"] = "Action:hackcomms",
+        ["P1"] = "", ["P2"] = "", ["P3"] = "", ["P4"] = "",
+        ["B:Hold"] = merc ? "" : LongRollAction,
+        ["LS+Y"] = "Action:slot1",
+        ["LS+X"] = "Action:slot2",
+        ["LS+B"] = "Action:slot3",
+        ["LS+A"] = "Action:slot4",
+        ["LB+Y"] = merc ? "" : "Action:launch1",
+        ["LB+X"] = merc ? "" : "Action:launch2",
+        ["LB+B"] = merc ? "" : "Action:launch3",
+        ["LB+A"] = merc ? "" : "Action:launch4",
+        ["LB+DpadDown"] = merc ? "Action:rof" : "Action:scope",
+        ["LB+Back"] = "Action:session",
+        ["LB+RB"] = merc ? "" : "Action:cloak",
+    };
+
+    /// <summary>The previous defaults, used only when loading an existing unversioned profile.</summary>
+    internal static Dictionary<string, string> LegacyButtons(bool merc = false) => new(StringComparer.Ordinal)
+    {
+        ["A"] = "Jump",
+        ["B"] = "bCrouch",
+        ["X"] = "bUsing",
+        ["Y"] = "SwitchHeadset",
+        ["LB"] = merc ? "Action:swapweapon" : "bUseBackToWall",
+        ["RB"] = "bRoll",
+        ["LT"] = "bAltFire",
+        ["RT"] = "bFire",
+        ["LS"] = merc ? "" : "ChangeSpeed",
+        ["RS"] = "SwitchBinocularVision",
+        ["DpadUp"] = "WheelUp",
+        ["DpadDown"] = "WheelDown",
+        ["DpadLeft"] = "bFireMode",
+        ["DpadRight"] = "bReload",
+        ["Start"] = MenuAction,
+        ["Back"] = "DisplaySessionStatus",
+        ["P1"] = "", ["P2"] = "", ["P3"] = "", ["P4"] = "",
+    };
+
+    /// <summary>The spy's pad layout: control name to action (a layout command or button, <see cref="KeyPrefix"/> + a key, or "" for none).</summary>
+    [JsonPropertyName("spy_buttons")]
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Replace)]
+    public Dictionary<string, string> SpyButtons { get; set; } = DefaultButtons();
+
+    [JsonPropertyName("merc_buttons")]
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Replace)]
+    public Dictionary<string, string> MercButtons { get; set; } = DefaultButtons(merc: true);
+
+    public Dictionary<string, string> ButtonsOf(bool merc) => merc ? MercButtons : SpyButtons;
+
+    /// <summary>Presentation order for an action's controller inputs. Older profiles need no order metadata.</summary>
+    [JsonPropertyName("spy_binding_order")]
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Replace)]
+    public Dictionary<string, List<string>> SpyBindingOrder { get; set; } = new(StringComparer.Ordinal);
+
+    [JsonPropertyName("merc_binding_order")]
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Replace)]
+    public Dictionary<string, List<string>> MercBindingOrder { get; set; } = new(StringComparer.Ordinal);
+
+    public Dictionary<string, List<string>> BindingOrderOf(bool merc) => merc
+        ? MercBindingOrder ??= new(StringComparer.Ordinal)
+        : SpyBindingOrder ??= new(StringComparer.Ordinal);
+
+    public void ResetButtons(bool merc)
+    {
+        if (merc) { MercButtons = DefaultButtons(true); MercLayoutVersion = CurrentLayoutVersion; }
+        else { SpyButtons = DefaultButtons(); SpyLayoutVersion = CurrentLayoutVersion; }
+        BindingOrderOf(merc).Clear();
+    }
+
+    [JsonPropertyName("move")]
+    public bool Move { get; set; } = true;
+
+    [JsonPropertyName("aim")]
+    public bool Aim { get; set; } = true;
+
+    [JsonPropertyName("binds")]
+    public bool Binds { get; set; } = true;
+
+    [JsonPropertyName("deadzone_left")]
+    [Provenance(ProvenanceKind.Decoded, "rl:input.pad controller_left_thumb_deadzone 0.25")]
+    public float DeadzoneLeft { get; set; } = 0.25f;
+
+    [JsonPropertyName("deadzone_right")]
+    [Provenance(ProvenanceKind.Decoded, "rl:input.pad controller_right_thumb_deadzone 0.15")]
+    public float DeadzoneRight { get; set; } = 0.15f;
+
+    [JsonPropertyName("vertical_scale")]
+    [Provenance(ProvenanceKind.Decoded, "rl:input.pad controller_right_thumb_vertical_sensitivty 0.75")]
+    public float VerticalScale { get; set; } = 0.75f;
+
+    [JsonPropertyName("run_threshold")]
+    [Provenance(ProvenanceKind.Decoded, "rl:input.pad controller_walk_threshold 0.95")]
+    public float RunThreshold { get; set; } = 0.95f;
+
+    /// <summary>Reloaded presses a trigger above raw SDL value 7680 out of 32767.</summary>
+    [JsonPropertyName("trigger_threshold")]
+    public float TriggerThreshold { get; set; } = 7680f / 32767f;
+
+    /// <summary>Controller vibration (Reloaded's controller_rumble_enabled, off on a first run).</summary>
+    [JsonPropertyName("rumble")]
+    [Provenance(ProvenanceKind.Decoded, "rl:input.rumble controller_rumble_enabled = false")]
+    public bool Rumble { get; set; }
+
+    /// <summary>The vibration's strength, 0 to 1 (controller_rumble_strength).</summary>
+    [JsonPropertyName("rumble_strength")]
+    [Provenance(ProvenanceKind.Decoded, "rl:input.rumble controller_rumble_strength = 1.0")]
+    public float RumbleStrength { get; set; } = 1f;
+
+    /// <summary>A part push of the left stick walks slower (Reloaded's analog slow walk); off, only its direction counts.</summary>
+    [JsonPropertyName("slow_walk")]
+    [Provenance(ProvenanceKind.Decoded, "rl:input.pad controller_left_stick_slow_walk_enabled = true")]
+    public bool SlowWalk { get; set; } = true;
+
+    /// <summary>
+    /// The controller prompt was answered (Reloaded's first-run "Would you like to enable native controller support?"):
+    /// asked once, when a controller is connected while controller support is off.
+    /// </summary>
+    [JsonPropertyName("prompted")]
+    public bool Prompted { get; set; }
+
+    /// <summary>Snap spy movement to eight directions.</summary>
+    [JsonPropertyName("spy_move8")]
+    public bool SpyMove8 { get; set; }
+
+    [JsonPropertyName("merc_move8")]
+    public bool MercMove8 { get; set; }
+
+    /// <summary>
+    /// A multiplier over the look stick's whole speed: 1 is Enhanced's rate (GamepadInput.StickCountsPerSecond),
+    /// which has no such setting. It replaces look_speed (counts a second, default 900, about 4.6 times Enhanced's
+    /// rate), which is no longer read.
+    /// </summary>
+    [JsonPropertyName("look_scale")]
+    public float LookScale { get; set; } = 1f;
+
+    internal void Clamp()
+    {
+        DeadzoneLeft = LookSettings.Range(DeadzoneLeft, 0f, 0.9f);
+        DeadzoneRight = LookSettings.Range(DeadzoneRight, 0f, 0.9f);
+        VerticalScale = LookSettings.Range(VerticalScale, 0.1f, 3f);
+        RunThreshold = LookSettings.Range(RunThreshold, 0.1f, 1f);
+        TriggerThreshold = LookSettings.Range(TriggerThreshold, 0f, 0.99f);
+        RumbleStrength = LookSettings.Range(RumbleStrength, 0f, 1f);
+        LookScale = LookSettings.Range(LookScale, 0.1f, 10f);
+        SpyButtons = CleanButtons(SpyButtons, merc: false);
+        MercButtons = CleanButtons(MercButtons, merc: true);
+        SpyBindingOrder = CleanBindingOrder(SpyBindingOrder);
+        MercBindingOrder = CleanBindingOrder(MercBindingOrder);
+    }
+
+    private static Dictionary<string, List<string>> CleanBindingOrder(Dictionary<string, List<string>>? saved)
+    {
+        var clean = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        if (saved is null) return clean;
+        foreach ((string action, List<string> inputs) in saved)
+        {
+            if (action.Length == 0 || inputs is null) continue;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var ordered = new List<string>();
+            foreach (string input in inputs)
+                if (Array.IndexOf(Controls, input) >= 0 && seen.Add(input)) ordered.Add(input);
+            if (ordered.Count > 0) clean[action] = ordered;
+        }
+        return clean;
+    }
+
+    /// <summary>Known controls only; a control the file leaves out gets its default (an empty value stays unbound).</summary>
+    private Dictionary<string, string> CleanButtons(Dictionary<string, string>? saved, bool merc)
+    {
+        Dictionary<string, string> clean = LayoutVersionOf(merc) == 0 ? LegacyButtons(merc) : DefaultButtons(merc);
+        if (!merc) clean["LB+RB"] = "Action:cloak";
+        if (saved is null)
+        {
+            return clean;
+        }
+
+        foreach (string control in Controls)
+        {
+            if (saved.TryGetValue(control, out string? action))
+            {
+                clean[control] = action ?? "";
+            }
+        }
+
+        return clean;
+    }
+}
+
+/// <summary>The shared display mode of the map browsers.</summary>
+public enum MapBrowserView
+{
+    PictureGrid = 0,
+    List = 1,
+    ThumbnailList = 2,
+}
+
+/// <summary>
+/// The player's settings (spec/reloaded/FEATURES.md section 3: one <c>user://settings.json</c>, JSON with comments,
+/// keys named after Reloaded's where the meaning is the same). Godot-free: the options screen edits it and
+/// <c>SettingsApplier</c> puts it into effect. Defaults are Reloaded's first-run values.
+/// </summary>
+public sealed class GameSettings
+{
+    /// <summary>3: one frame cap applies everywhere.</summary>
+    public const int Version = 3;
+
+    public static readonly string[] Responses = ["Linear", "CurveSoft", "CurveMedium", "CurveAggressive"];
+
+    public static readonly string[] DisplayModes = ["BorderlessFullscreen", "Fullscreen", "Windowed"];
+
+    [Provenance(ProvenanceKind.Decoded, "spec/native/reloaded-features-from-code.md rule 20: ws_fov range 95 to 112")]
+    public const float MinMercFov = 95f;
+
+    [Provenance(ProvenanceKind.Decoded, "spec/native/reloaded-features-from-code.md rule 20; FEATURES ws_fov = 112")]
+    public const float MaxMercFov = 112f;
+
+    [Provenance(ProvenanceKind.Decoded, "spec/native/reloaded-features-from-code.md constants: fps caps 30 to 240")]
+    public const int MinFps = DisplayFrameCap.Min;
+
+    public const int MaxFps = DisplayFrameCap.Max;
+
+    [JsonPropertyName("version")]
+    public int FileVersion { get; set; } = Version;
+
+    // ---- player and mouse --------------------------------------------------------------------------------------
+
+    [JsonPropertyName("player_name")]
+    public string PlayerName { get; set; } = "Player";
+
+    [JsonPropertyName("invert_y")]
+    public bool InvertY { get; set; }
+
+    /// <summary>controls_spy_config_kbm (free_look 1.4, gun look 1.0, scope 0.75, vertical 3.5, cam 1.0).</summary>
+    [JsonPropertyName("controls_spy_kbm")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:input.sens controls_spy_config_kbm")]
+    public LookSettings SpyKbm { get; set; } = new() { FreeLook = 1.4f, Look = 1f, Scope = 0.75f, Vertical = 3.5f, Cam = 1f };
+
+    /// <summary>controls_merc_config_kbm (look 1.0, scope 0.75, scope_vertical 2.45, vertical 1.0, cam 1.0).</summary>
+    [JsonPropertyName("controls_merc_kbm")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:input.sens controls_merc_config_kbm")]
+    public LookSettings MercKbm { get; set; } = new() { FreeLook = 1f, Look = 1f, Scope = 0.75f, ScopeVertical = 2.45f, Vertical = 1f, Cam = 1f };
+
+    /// <summary>controls_spy_config_controller (free_look 1.6, gun look 1.2, scope 0.75, vertical 3.5, cam 1.8, clutch 2.0).</summary>
+    [JsonPropertyName("controls_spy_pad")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md appendix A controls_spy_config_controller")]
+    public LookSettings SpyPad { get; set; } = new()
+    {
+        FreeLook = 1.6f, Look = 1.2f, Scope = 0.75f, Vertical = 3.5f, Cam = 1.8f, LookResponse = "CurveAggressive", GunLookResponse = "CurveSoft",
+        ClutchOne = 2f, ClutchOneEnabled = true,
+    };
+
+    /// <summary>controls_merc_config_controller (look 1.8, scope 0.75, scope_vertical 2.45, vertical 1.0, cam 1.0, clutches 0.5 and 2.0).</summary>
+    [JsonPropertyName("controls_merc_pad")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md appendix A controls_merc_config_controller")]
+    public LookSettings MercPad { get; set; } = new()
+    {
+        FreeLook = 1f, Look = 1.8f, Scope = 0.75f, ScopeVertical = 2.45f, Vertical = 1f, Cam = 1f, LookResponse = "CurveMedium",
+        ClutchOne = 0.5f, ClutchOneEnabled = true, ClutchTwo = 2f, ClutchTwoEnabled = true,
+    };
+
+    [JsonPropertyName("controller")]
+    public PadSettings Pad { get; set; } = new();
+
+    /// <summary>
+    /// The keyboard or mouse key (UE2 name, as the key layouts write it: "LeftAlt", "MiddleMouse") held for the first
+    /// sensitivity clutch; empty for none. The controller's clutches are pad binds (<see cref="PadSettings.ClutchOneAction"/>).
+    /// </summary>
+    [JsonPropertyName("clutch_one_key")]
+    public string ClutchOneKey { get; set; } = "";
+
+    /// <summary>The key held for the second clutch (the merc's).</summary>
+    [JsonPropertyName("clutch_two_key")]
+    public string ClutchTwoKey { get; set; } = "";
+
+    /// <summary>Profile InvertX: the spy's free look turns the other way left and right (Enhanced's "Invert X Axis (Spy)").</summary>
+    [JsonPropertyName("invert_x_spy")]
+    [Provenance(ProvenanceKind.Decoded, "SPlayerProfile InvertX (no default: false); SetPadInvertX sets bInvertHorizontalAxisCamSpy")]
+    public bool InvertXSpy { get; set; }
+
+    /// <summary>Allows the spy's camera to pivot during a roll while the roll keeps its starting direction.</summary>
+    [JsonPropertyName("spy_roll_free_look")]
+    public bool SpyRollFreeLook { get; set; }
+
+    /// <summary>The mouse wheel: "Gadget" (profile SelectedMouse 0, changes gadgets) or "Speed" (1, walk and run).</summary>
+    [JsonPropertyName("mouse_wheel")]
+    [Provenance(ProvenanceKind.Estimated, "OpenSCCT choice: Gadget, as the rewrite has always played; DefaultProfile.ini has SelectedMouse=1 (Speed)")]
+    public string MouseWheel { get; set; } = "Gadget";
+
+    public static readonly string[] WheelModes = ["Gadget", "Speed"];
+
+    /// <summary>
+    /// Separate spy and mercenary key layouts (rl:input.keyboard). Off, both sides play the spy's layout
+    /// (svm_keys_spy.ini) and a change on either side changes both.
+    /// </summary>
+    [JsonPropertyName("use_split_spy_merc_keyboard")]
+    [Provenance(ProvenanceKind.Estimated, "OpenSCCT choice: on, so layouts saved before the toggle existed keep both sides (Reloaded's first-run default is false, Ryan's config true)")]
+    public bool SplitKeyboard { get; set; } = true;
+
+    /// <summary>The chosen gear (spec/additions/gear-change.md).</summary>
+    [JsonPropertyName("loadout")]
+    public LoadoutSettings Loadout { get; set; } = new();
+
+    /// <summary>The chosen spy cosmetics (OpenScct.Net.Cosmetics catalogue ids, one per slot; none is the retail look).</summary>
+    [JsonPropertyName("cosmetics_spy")]
+    public string[] CosmeticsSpy { get; set; } = [];
+
+    /// <summary>The chosen merc cosmetics (catalogue ids).</summary>
+    [JsonPropertyName("cosmetics_merc")]
+    public string[] CosmeticsMerc { get; set; } = [];
+
+    /// <summary>Draw every other player in the retail look (their cosmetics are not shown on this machine).</summary>
+    [JsonPropertyName("cosmetics_hide_others")]
+    public bool CosmeticsHideOthers { get; set; }
+
+    /// <summary>Keep this player's cosmetics to themselves: servers get the retail look, only this machine draws the chosen one.</summary>
+    [JsonPropertyName("cosmetics_hide_mine")]
+    public bool CosmeticsHideMine { get; set; }
+
+    /// <summary>The look sent to servers for a side: the chosen one, or retail while <see cref="CosmeticsHideMine"/> is on.</summary>
+    public CosmeticLook SharedLook(CosmeticSide side) =>
+        CosmeticsHideMine ? CosmeticLook.Default : OwnLook(side);
+
+    /// <summary>The look chosen in the Armoury for a side.</summary>
+    public CosmeticLook OwnLook(CosmeticSide side) =>
+        CosmeticLook.FromIds(side, side == CosmeticSide.Spy ? CosmeticsSpy : CosmeticsMerc);
+
+    /// <summary>The title shown under the name (OpenScct.Net.Cosmetics.TitleCatalog id), or null for none.</summary>
+    [JsonPropertyName("title")]
+    public string? Title { get; set; }
+
+    // ---- display -------------------------------------------------------------------------------------------
+
+    /// <summary>Fullscreen, BorderlessFullscreen or Windowed.</summary>
+    [JsonPropertyName("display_mode")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.modes display_mode BorderlessFullscreen")]
+    public string DisplayMode { get; set; } = "BorderlessFullscreen";
+
+    /// <summary>Monitor, numbered from 1.</summary>
+    [JsonPropertyName("display_monitor")]
+    public int Monitor { get; set; } = 1;
+
+    /// <summary>Window size in windowed mode and the exclusive fullscreen mode, "WxH"; empty follows the desktop.</summary>
+    [JsonPropertyName("resolution")]
+    public string Resolution { get; set; } = "";
+
+    /// <summary>Vertical sync; off as the original's render device (UseVSync=False), whose frames Reloaded's limiter paces.</summary>
+    [JsonPropertyName("vsync")]
+    [Provenance(ProvenanceKind.Decoded, "System/Default.ini [D3DDrv.D3DRenderDevice] UseVSync=False")]
+    public bool VSync { get; set; }
+
+    /// <summary>Reloaded's widescreen: the Hor+ view; off stretches the 4:3 picture (Options/ViewFov).</summary>
+    [JsonPropertyName("widescreen")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.widescreen widescreen = true")]
+    public bool Widescreen { get; set; } = true;
+
+    /// <summary>Reloaded's widescreen HUD: each HUD area keeps the 4:3 scale, anchored to its side; off stretches it as stock.</summary>
+    [JsonPropertyName("widescreen_hud")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.hud widescreen_hud = true")]
+    public bool WidescreenHud { get; set; } = true;
+
+    /// <summary>Reloaded's ws_er_small: Enhanced Reality icons keep their 4:3 size on a wide screen instead of growing.</summary>
+    [JsonPropertyName("ws_er_small")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.hud ws_er_small = true")]
+    public bool WideErSmall { get; set; } = true;
+
+    /// <summary>ws_fov: the merc first-person field of view cap in degrees, horizontal at the current aspect.</summary>
+    [JsonPropertyName("ws_fov")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.widescreen ws_fov = 112.0")]
+    public float MercFovCap { get; set; } = 112f;
+
+    /// <summary>The frame cap in menus and matches. -1 follows the monitor and 0 is unlimited.</summary>
+    [JsonPropertyName("max_fps")]
+    public int FpsLimit { get; set; } = DisplayFrameCap.Monitor;
+
+    [JsonPropertyName("resolution_scale")]
+    public float RenderScale { get; set; } = 1f;
+
+    /// <summary>
+    /// The frame rate the automatic render scale holds by lowering the 3D resolution, down to 50% and never above
+    /// Render scale (Options.DynamicRenderScale); 0 is off.
+    /// </summary>
+    [JsonPropertyName("auto_scale_fps")]
+    [Provenance(ProvenanceKind.Estimated, "OpenSCCT addition for integrated graphics; the original has no render scale")]
+    public int AutoScaleFps { get; set; }
+
+    public static readonly int[] AutoScaleTargets = [0, 30, 45, 60, 75, 90, 120, 144];
+
+    /// <summary>Where a window goes in windowed mode: Default (the screen's top left), Centered or Stretched (the whole screen).</summary>
+    [JsonPropertyName("window_position")]
+    [Provenance(ProvenanceKind.Estimated, "OpenSCCT choice: Centered, as the rewrite placed windows; Reloaded's first run has Stretched (rl:gfx.modes)")]
+    public string WindowPosition { get; set; } = "Centered";
+
+    public static readonly string[] WindowPositions = ["Default", "Centered", "Stretched"];
+
+    /// <summary>Anisotropic filtering of the textures: 0 (off), 2, 4, 8 or 16 (Reloaded's filter_level, first run 4).</summary>
+    [JsonPropertyName("filter_level")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.filtering filter_level first-run 4, range 0 to 16")]
+    public int FilterLevel { get; set; } = 4;
+
+    /// <summary>Multisample anti-aliasing of the 3D scene (Reloaded's msaa, first run off); masked surfaces then use alpha to coverage (from the next map).</summary>
+    [JsonPropertyName("msaa")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.aa msaa first-run false")]
+    public bool Msaa { get; set; }
+
+    /// <summary>MSAA samples per pixel: 2, 4 or 8 (Reloaded's msaa_samples, first run 4).</summary>
+    [JsonPropertyName("msaa_samples")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.aa msaa_samples first-run 4")]
+    public int MsaaSamples { get; set; } = 4;
+
+    /// <summary>SMAA over the finished frame (Reloaded's smaa, first run off); it combines with MSAA.</summary>
+    [JsonPropertyName("smaa")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.aa smaa first-run false")]
+    public bool Smaa { get; set; }
+
+    /// <summary>Optional contact shading in normal and night vision; off preserves baked map lighting.</summary>
+    [JsonPropertyName("ambient_occlusion")]
+    public bool AmbientOcclusion { get; set; }
+
+    /// <summary>Shadow map scale (Reloaded's shadow_quality, 0.5 to 16, first run 3): a spot light's map is 256 x this texels high.</summary>
+    [JsonPropertyName("shadow_quality")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.shadows shadow_quality first-run 3.0, range 0.5 to 16.0")]
+    public float ShadowQuality { get; set; } = 3f;
+
+    /// <summary>Rendering detail of responsive smoke when the host enables it.</summary>
+    [JsonPropertyName("responsive_smoke_quality")]
+    public ResponsiveSmokeQuality SmokeQuality { get; set; } = ResponsiveSmokeQuality.Medium;
+
+    public static readonly string[] SmokeQualities = ["Low", "Medium", "High"];
+
+    /// <summary>Soft shadow edges (eight blended lookups on a disc); off keeps the stock single lookup.</summary>
+    [JsonPropertyName("shadow_edge_smoothing")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.shadows shadow_edge_smoothing = true")]
+    public bool ShadowEdgeSmoothing { get; set; } = true;
+
+    /// <summary>Centre-weighted filtering for smoother spot-shadow edges, at an additional GPU cost.</summary>
+    [JsonPropertyName("high_quality_shadows")]
+    public bool HighQualityShadows { get; set; }
+
+    /// <summary>Progressive prefiltering of normal-view bloom to reduce subpixel sparkle.</summary>
+    [JsonPropertyName("stable_bloom")]
+    public bool StableBloom { get; set; }
+
+    /// <summary>Double the coarse thermal, motion and EMF blur targets; keeps the vision colours and gains.</summary>
+    [JsonPropertyName("high_quality_vision")]
+    public bool HighQualityVision { get; set; }
+
+    /// <summary>
+    /// The original Video Options' "Post-Render Quality" (SPlayerProfile.GraphPostQual: 0 Normal, 1 High, default 1).
+    /// What the native GRAPHICPOSTQUALITY command changes is not decoded; the rewrite's Normal leaves the glow out of
+    /// the normal view's composite (the gate still runs), High draws it.
+    /// </summary>
+    [JsonPropertyName("post_quality")]
+    [Provenance(ProvenanceKind.Estimated, "SPlayerProfile.GraphPostQual (DefaultProfile.ini 1); its effect (native GRAPHICPOSTQUALITY, clamped 0..1) not decoded: Normal drops the glow")]
+    public int PostQuality { get; set; } = 1;
+
+    /// <summary>Video_Settings' sQuality captions for the post-render row (Normal, High).</summary>
+    public static readonly string[] PostQualities = ["Normal", "High"];
+
+    /// <summary>
+    /// The Windows graphics driver. Vulkan is the only one since 0.8.126: a profile that chose Direct3D 12 loads as
+    /// Vulkan. The value stays in the settings file for older builds that read it.
+    /// </summary>
+    [JsonPropertyName("graphics_driver")]
+    public string GraphicsDriver { get; set; } = "Vulkan";
+
+    public static readonly string[] GraphicsDrivers = ["Vulkan"];
+
+    /// <summary>"Reduce input lag": On requests two swap-chain images. Needs a restart.</summary>
+    [JsonPropertyName("low_latency_mode")]
+    [Provenance(ProvenanceKind.Estimated, "rl:gfx.pacing: Reloaded's default is On; the rewrite starts Off until frame queue 1 is measured on Vulkan and D3D12")]
+    public string LowLatencyMode { get; set; } = "Off";
+
+    public static readonly string[] LatencyModes = ["Off", "On"];
+
+    /// <summary>
+    /// What draws a map: Standard is Godot's renderer; Fast is the game's own frame (Render/Rd), made for integrated
+    /// graphics, in beta. Fast hands vision modes, responsive smoke and outdoor-sky maps to Standard. From the next map.
+    /// </summary>
+    [JsonPropertyName("renderer")]
+    [Provenance(ProvenanceKind.Estimated, "OpenSCCT choice: Standard until Fast has been played (docs/PERFORMANCE-LOWEND-2026-11.md)")]
+    public string Renderer { get; set; } = "Standard";
+
+    public static readonly string[] Renderers = ["Standard", "Fast"];
+
+    /// <summary>Windows: opt the game out of power throttling (EcoQoS) at start (Reloaded's throttle_stop, experimental).</summary>
+    [JsonPropertyName("throttle_stop")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:gfx.system throttle_stop = false")]
+    public bool ThrottleStop { get; set; }
+
+    // ---- audio ---------------------------------------------------------------------------------------------
+
+    public static readonly string[] AudioOutputModes = ["Speakers", "Headphones"];
+
+    [JsonPropertyName("audio_output_mode")]
+    public string AudioOutputMode { get; set; } = "Speakers";
+
+    /// <summary>Empty follows the operating system default; an unavailable saved device falls back to it.</summary>
+    [JsonPropertyName("audio_output_device")]
+    public string AudioOutputDevice { get; set; } = "";
+
+    [JsonPropertyName("master_volume")]
+    public float MasterVolume { get; set; } = 1f;
+
+    /// <summary>Sound effects (z_cache_sound_volume 0.5 on a first run).</summary>
+    [JsonPropertyName("sound_volume")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:audio.cache z_cache_sound_volume 0.5")]
+    public float SoundVolume { get; set; } = 0.5f;
+
+    /// <summary>The music of a round (a map's Song, the end of round music).</summary>
+    [JsonPropertyName("music_volume")]
+    public float MusicVolume { get; set; } = 0.5f;
+
+    /// <summary>The menus' music (main menu, lobby, the hub's jukebox). A file without it takes <c>music_volume</c>.</summary>
+    [JsonPropertyName("menu_music_volume")]
+    public float MenuMusicVolume { get; set; } = 0.5f;
+
+    /// <summary>
+    /// The objective jingles. A file without it takes <c>sound_volume</c>, or 0 when its old <c>objective_sounds</c>
+    /// switch was off.
+    /// </summary>
+    [JsonPropertyName("objective_volume")]
+    public float ObjectiveVolume { get; set; } = 0.5f;
+
+    /// <summary>The menus' own sounds (button feedback, the join sound). A file without it takes <c>sound_volume</c>.</summary>
+    [JsonPropertyName("menu_sound_volume")]
+    public float MenuSoundVolume { get; set; } = 0.5f;
+
+    /// <summary>
+    /// Profile bObjectiveSounds: the objective jingles play (Enhanced's "Objective Sounds"). Off at objective volume 0,
+    /// so the script drops the jingles as the original does.
+    /// </summary>
+    [JsonIgnore]
+    [Provenance(ProvenanceKind.Decoded, "SPlayerProfile defaults bObjectiveSounds=True")]
+    public bool ObjectiveSounds => ObjectiveVolume > 0f;
+
+    /// <summary>Other players' voices (voice_output_volume).</summary>
+    [JsonPropertyName("voice_output_volume")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md appendix A voice_output_volume 1.0")]
+    public float VoiceVolume { get; set; } = 1f;
+
+    // ---- voice (Reloaded's voice page: spec/game/lobby-and-match-creation.md, docs/VOICE.md) -----------------
+
+    /// <summary>"Enable voice chat": the game's own Allow VoiceChat profile setting. Off: hear nobody, nobody hears you.</summary>
+    [JsonPropertyName("allow_voice_chat")]
+    [Provenance(ProvenanceKind.Decoded, "DefaultProfile.ini allowVoiceChat=True; Reloaded voice page 'Enable voice chat'")]
+    public bool VoiceEnabled { get; set; } = true;
+
+    /// <summary>Transmit only while Push To Talk is held, instead of the activation threshold.</summary>
+    [JsonPropertyName("voice_push_to_talk")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:voice.activation voice_push_to_talk = false")]
+    public bool VoicePushToTalk { get; set; }
+
+    /// <summary>
+    /// Auto hack (an OpenSCCT addition): hacked enemy communications are heard whenever they can be, without holding
+    /// the Hack Comm key. The ToggleAutoHack binding flips it during play.
+    /// </summary>
+    [JsonPropertyName("auto_hack_comms")]
+    public bool AutoHackComms { get; set; }
+
+    /// <summary>Mute Microphone: nothing is sent, everyone is still heard.</summary>
+    [JsonPropertyName("voice_muted")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:voice.mix voice_muted = false")]
+    public bool VoiceMuted { get; set; }
+
+    /// <summary>How loud the microphone must be to transmit, 0 (always) to 1 (never).</summary>
+    [JsonPropertyName("voice_activation_threshold")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:voice.activation voice_activation_threshold = 0.02")]
+    public float VoiceThreshold { get; set; } = 0.02f;
+
+    /// <summary>"Release time": how long transmission goes on after you stop speaking, in milliseconds.</summary>
+    [JsonPropertyName("voice_activation_hold_ms")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:voice.activation voice_activation_hold_ms = 300")]
+    public int VoiceHoldMs { get; set; } = 300;
+
+    /// <summary>"Microphone Volume": gain before encoding (1 = unchanged).</summary>
+    [JsonPropertyName("voice_input_gain")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:voice.gain voice_input_gain = 1.0")]
+    public float VoiceInputGain { get; set; } = 1f;
+
+    /// <summary>"Auto-Adjust Mic Volume": automatic gain; Microphone Volume is not used while it is on.</summary>
+    [JsonPropertyName("voice_auto_gain")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:voice.gain voice_auto_gain = true")]
+    public bool VoiceAutoGain { get; set; } = true;
+
+    /// <summary>"Noise suppression": steady background noise removed before the activation gate.</summary>
+    [JsonPropertyName("voice_noise_suppression")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:voice.noise voice_noise_suppression = true")]
+    public bool VoiceNoiseSuppression { get; set; } = true;
+
+    /// <summary>How hard noise is suppressed: Low (15 dB), Standard (30), High (45) or Extreme (60).</summary>
+    [JsonPropertyName("voice_noise_suppression_level")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:voice.noise voice_noise_suppression_level = \"Standard\"; Low 15, Standard 30, High 45, Extreme 60 dB")]
+    public string VoiceNoiseLevel { get; set; } = "Standard";
+
+    /// <summary>The suppression levels in the order the Voice page lists them.</summary>
+    public static readonly string[] NoiseLevels = ["Low", "Standard", "High", "Extreme"];
+
+    /// <summary>The most attenuation of a suppression level, in dB.</summary>
+    public static int NoiseLevelDecibels(string level) => level switch
+    {
+        "Low" => 15,
+        "High" => 45,
+        "Extreme" => 60,
+        _ => 30,
+    };
+
+    /// <summary>"Echo cancellation" (experimental): other players' voices taken back out of the microphone.</summary>
+    [JsonPropertyName("voice_echo_cancellation")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:voice.echo voice_echo_cancellation = false")]
+    public bool VoiceEchoCancellation { get; set; }
+
+    /// <summary>"Buffering": the jitter buffer in 20 ms frames, 1 to 12.</summary>
+    [JsonPropertyName("voice_jitter_frames")]
+    [Provenance(ProvenanceKind.Estimated, "docs/VOICE.md: default 3 (Reloaded ships 2 to 4), range 1 to 12")]
+    public int VoiceJitterFrames { get; set; } = 3;
+
+    /// <summary>The microphone by name; empty follows the system's choice.</summary>
+    [JsonPropertyName("voice_input_device")]
+    public string VoiceInputDevice { get; set; } = "";
+
+    [JsonPropertyName("hud_layout")]
+    public HudEditorSettings HudLayout { get; set; } = new();
+
+    // ---- HUD -----------------------------------------------------------------------------------------------
+
+    /// <summary>Legacy source compatibility only. The removed compact roster's saved state is ignored.</summary>
+    [JsonIgnore]
+    [JsonPropertyName("show_scoreboard")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:qol.scoreboard show_scoreboard = true")]
+    public bool ShowScoreboard { get; set; } = true;
+
+    /// <summary>Legacy compatibility only; the full scoreboard always includes latency.</summary>
+    [JsonIgnore]
+    [JsonPropertyName("show_ping")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:qol.scoreboard show_ping first-run false")]
+    public bool ShowPing { get; set; }
+
+    /// <summary>
+    /// Legacy compatibility only; the full scoreboard always separates the two roles.
+    /// </summary>
+    [JsonIgnore]
+    [JsonPropertyName("scoreboard_split_team_size")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:qol.scoreboard scoreboard_split_team_size = 3 (1 to 4)")]
+    public int ScoreboardSplitTeamSize { get; set; } = 3;
+
+    [JsonPropertyName("show_fps")]
+    public bool ShowFps { get; set; }
+
+    [JsonPropertyName("fps_telemetry")]
+    public FpsTelemetrySettings FpsTelemetry { get; set; } = new();
+
+    /// <summary>Network readout under the frame-rate readout: ping, jitter, loss, bandwidth, corrections (rl:net.stats).</summary>
+    [JsonPropertyName("show_net")]
+    public bool ShowNet { get; set; }
+
+    [JsonPropertyName("network_telemetry")]
+    public NetworkTelemetrySettings NetworkTelemetry { get; set; } = new();
+
+    /// <summary>Packet loss received and sent in the network readout (Reloaded's show_net_loss, added after v4.0b).</summary>
+    [JsonPropertyName("show_net_loss")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:net.stats show_net_loss = false")]
+    public bool ShowNetLoss { get; set; }
+
+    /// <summary>The name of the place the player is in (the map's zone and volume names), at the top of the screen.</summary>
+    [JsonPropertyName("show_location")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:qol.location show_location = true")]
+    public bool ShowLocation { get; set; } = true;
+
+    [JsonPropertyName("teammate_names_spy")]
+    public bool TeammateNamesSpy { get; set; }
+
+    [JsonPropertyName("teammate_names_merc")]
+    public bool TeammateNamesMerc { get; set; }
+
+    /// <summary>Append current replicated HP to enabled friendly nametags, for either role.</summary>
+    [JsonPropertyName("teammate_health")]
+    public bool TeammateHealth { get; set; }
+
+    [JsonPropertyName("teammate_names_opacity")]
+    public int TeammateNamesOpacity { get; set; } = 50;
+
+    /// <summary>Enhanced Reality icon opacity while its objective is being hacked, 0 to 255 (shown as a percentage).</summary>
+    [JsonPropertyName("hack_alpha")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:qol.hackalpha hack_alpha = 178")]
+    public int HackAlpha { get; set; } = 178;
+
+    /// <summary>The merc crosshair at the original off-centre spot (3 units left and 3 down) instead of centred.</summary>
+    [JsonPropertyName("classic_crosshair")]
+    [Provenance(ProvenanceKind.Decoded, "spec/reloaded/FEATURES.md rl:qol.crosshair classic_crosshair = false; Reloaded.Core 0x100a9140 / 0x100a9160")]
+    public bool ClassicCrosshair { get; set; }
+
+    /// <summary>The merc's CS2-style custom crosshair (off: the original reticle).</summary>
+    [JsonPropertyName("crosshair")]
+    public CrosshairSettings Crosshair { get; set; } = new();
+
+    /// <summary>Profile bInFeet: the HUD's distances in feet instead of metres.</summary>
+    [JsonPropertyName("hud_feet")]
+    [Provenance(ProvenanceKind.Decoded, "SPlayerProfile bInFeet (no default: false, metres)")]
+    public bool HudFeet { get; set; }
+
+    // ---- network -------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Fire prediction (rl:net.fireprediction): your own bullet impacts show at once instead of a round trip later.
+    /// On by default, as Reloaded always predicts; takes effect from the next server you join.
+    /// </summary>
+    [JsonPropertyName("fire_prediction")]
+    public bool FirePrediction { get; set; } = true;
+
+    /// <summary>
+    /// The map group the host's map lists show and the Choose Map arrows step through, or "All" (every installed map).
+    /// </summary>
+    [JsonPropertyName("active_map_playlist")]
+    // Default to all installed maps; retain the player's saved playlist choice.
+    public string ActiveMapPlaylist { get; set; } = "All";
+
+    /// <summary>The saved display mode shared by all map browsers.</summary>
+    [JsonPropertyName("map_view")]
+    public MapBrowserView MapView { get; set; } = MapBrowserView.PictureGrid;
+
+    /// <summary>Compatibility with callers that choose between the original grid and text list.</summary>
+    [JsonIgnore]
+    public bool MapListView
+    {
+        get => MapView == MapBrowserView.List;
+        set => MapView = value ? MapBrowserView.List : MapBrowserView.PictureGrid;
+    }
+
+    // ---- Discord -------------------------------------------------------------------------------------------
+
+    /// <summary>Shows what the player is doing on their Discord profile, with Join for friends (docs/DISCORD.md).</summary>
+    [JsonPropertyName("discord_presence")]
+    public bool DiscordPresence { get; set; } = true;
+
+    // ---- console -------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The developer console opens on the key left of 1 (backtick or tilde, by its place on the keyboard, whatever the
+    /// layout) instead of Chaos Theory's own console key, the apostrophe key (rl:input.console).
+    /// </summary>
+    [JsonPropertyName("override_console_key")]
+    public bool OverrideConsoleKey { get; set; } = true;
+
+    /// <summary>Where the settings came from, for the options screen (not saved).</summary>
+    [JsonIgnore]
+    public string LoadNote { get; set; } = "";
+
+    /// <summary>
+    /// Legacy profiles use the Mercenary cap (also used in menus), or the Spy cap if that is all they have.
+    /// Version 1 profiles with the old first-run caps of 120 for both roles follow the monitor.
+    /// </summary>
+    private void Upgrade(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Object && !root.TryGetProperty("max_fps", out _))
+        {
+            int? merc = ReadLegacyCap("fps_merc");
+            int? spy = ReadLegacyCap("fps_spy");
+            FpsLimit = FileVersion < 2 && merc == 120 && spy == 120
+                ? DisplayFrameCap.Monitor
+                : merc ?? spy ?? DisplayFrameCap.Monitor;
+        }
+
+        // The volumes split off sound_volume and music_volume start where the file's old sliders left them.
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            if (!root.TryGetProperty("menu_music_volume", out _)) MenuMusicVolume = MusicVolume;
+            if (!root.TryGetProperty("menu_sound_volume", out _)) MenuSoundVolume = SoundVolume;
+            if (!root.TryGetProperty("objective_volume", out _))
+            {
+                bool off = root.TryGetProperty("objective_sounds", out JsonElement sounds) && sounds.ValueKind == JsonValueKind.False;
+                ObjectiveVolume = off ? 0f : SoundVolume;
+            }
+        }
+
+        FileVersion = Version;
+
+        int? ReadLegacyCap(string key) =>
+            root.TryGetProperty(key, out JsonElement value) && value.ValueKind == JsonValueKind.Number &&
+            value.TryGetInt32(out int fps) ? fps : null;
+    }
+
+    /// <summary>Puts every value back in its range.</summary>
+    public void Clamp()
+    {
+        PlayerName = PlayerName.Trim();
+        if (PlayerName.Length == 0)
+        {
+            PlayerName = "Player";
+        }
+
+        if (PlayerName.Length > 24)
+        {
+            PlayerName = PlayerName[..24];
+        }
+
+        SpyKbm ??= new LookSettings();
+        MercKbm ??= new LookSettings();
+        SpyPad ??= new LookSettings();
+        MercPad ??= new LookSettings();
+        Pad ??= new PadSettings();
+        Loadout ??= new LoadoutSettings();
+        CosmeticsSpy ??= [];
+        CosmeticsMerc ??= [];
+        Crosshair ??= new CrosshairSettings();
+        Crosshair.Clamp();
+        HudLayout ??= new();
+        HudLayout.Clamp();
+        FpsTelemetry ??= new FpsTelemetrySettings();
+        FpsTelemetry.Clamp();
+        NetworkTelemetry ??= new NetworkTelemetrySettings();
+        NetworkTelemetry.Clamp();
+        Loadout.Clamp();
+        // Legacy mouse responses are fixed gain, not curves. Bake the gain into sensitivity once.
+        float gain = SpyKbm.LookResponse switch
+        {
+            "CurveSoft" => 2f, "CurveMedium" => 2.5f, "CurveAggressive" => 3f, _ => 1f,
+        };
+        if (gain != 1f)
+        {
+            SpyKbm.FreeLook = LookSettings.Range(SpyKbm.FreeLook, 0.05f, 10f) * gain;
+        }
+        SpyKbm.LookResponse = "Linear";
+        SpyKbm.Clamp(30f);
+        MercKbm.Clamp();
+        SpyPad.Clamp();
+        MercPad.Clamp();
+        Pad.Clamp();
+        // Old pad identifiers resolved a keyboard key; retain the intended action after wheel migration.
+        foreach (var buttons in new[] { Pad.SpyButtons, Pad.MercButtons })
+            foreach (string key in new List<string>(buttons.Keys))
+                buttons[key] = buttons[key] switch
+                {
+                    "ChangeSpeed" => "Action:speed", "WheelUp" => "Action:wheelup", "WheelDown" => "Action:wheeldown", _ => buttons[key],
+                };
+        ClutchOneKey = (ClutchOneKey ?? "").Trim();
+        ClutchTwoKey = (ClutchTwoKey ?? "").Trim();
+        MouseWheel = OneOf(WheelModes, MouseWheel);
+        WindowPosition = OneOf(WindowPositions, WindowPosition, "Centered");
+        // Legacy "Default" and "Direct3D 12" profiles select Vulkan, as do missing or invalid choices.
+        GraphicsDriver = OneOf(GraphicsDrivers, GraphicsDriver);
+        // Older Ultra settings used exactly the same engine override as On.
+        if (string.Equals(LowLatencyMode, "Ultra", StringComparison.OrdinalIgnoreCase)) LowLatencyMode = "On";
+        LowLatencyMode = OneOf(LatencyModes, LowLatencyMode);
+        Renderer = OneOf(Renderers, Renderer);
+        FilterLevel = FilterLevel <= 0 ? 0 : FilterLevel <= 2 ? 2 : FilterLevel <= 4 ? 4 : FilterLevel <= 8 ? 8 : 16;
+        ShadowQuality = LookSettings.Range(ShadowQuality, 0.5f, 16f);
+        PostQuality = Math.Clamp(PostQuality, 0, 1);
+        if (!Enum.IsDefined(SmokeQuality)) SmokeQuality = ResponsiveSmokeQuality.Medium;
+        if (!Enum.IsDefined(MapView)) MapView = MapBrowserView.PictureGrid;
+        ScoreboardSplitTeamSize = Math.Clamp(ScoreboardSplitTeamSize, 1, 4);
+        MsaaSamples = MsaaSamples <= 2 ? 2 : MsaaSamples <= 4 ? 4 : 8;
+        HackAlpha = Math.Clamp(HackAlpha, 0, 255);
+        TeammateNamesOpacity = Math.Clamp(TeammateNamesOpacity, 10, 100);
+        if (Array.IndexOf(DisplayModes, DisplayMode) < 0)
+        {
+            DisplayMode = DisplayModes[0];
+        }
+
+        Monitor = Math.Max(1, Monitor);
+        Resolution = ParseResolution(Resolution) is { } r ? FormatResolution(r.Width, r.Height) : "";
+        MercFovCap = LookSettings.Range(MercFovCap, MinMercFov, MaxMercFov);
+        FpsLimit = ClampFps(FpsLimit);
+        RenderScale = LookSettings.Range(RenderScale, 0.5f, 1f);
+        if (Array.IndexOf(AutoScaleTargets, AutoScaleFps) < 0) AutoScaleFps = 0;
+        MasterVolume = LookSettings.Range(MasterVolume, 0f, 1f);
+        AudioOutputMode = OneOf(AudioOutputModes, AudioOutputMode, "Speakers");
+        AudioOutputDevice = (AudioOutputDevice ?? "").Trim();
+        SoundVolume = LookSettings.Range(SoundVolume, 0f, 1f);
+        MusicVolume = LookSettings.Range(MusicVolume, 0f, 1f);
+        MenuMusicVolume = LookSettings.Range(MenuMusicVolume, 0f, 1f);
+        ObjectiveVolume = LookSettings.Range(ObjectiveVolume, 0f, 1f);
+        MenuSoundVolume = LookSettings.Range(MenuSoundVolume, 0f, 1f);
+        VoiceVolume = LookSettings.Range(VoiceVolume, 0f, 1f);
+        VoiceThreshold = LookSettings.Range(VoiceThreshold, 0f, 1f);
+        VoiceHoldMs = Math.Clamp(VoiceHoldMs, 0, 2000);
+        VoiceInputGain = LookSettings.Range(VoiceInputGain, 0f, 8f);
+        VoiceJitterFrames = Math.Clamp(VoiceJitterFrames, 1, 12);
+        VoiceInputDevice ??= "";
+        VoiceNoiseLevel = OneOf(NoiseLevels, VoiceNoiseLevel, "Standard");
+    }
+
+    /// <summary><paramref name="value"/> when it is one of <paramref name="items"/> (any case, given back as listed), else the fallback or the first.</summary>
+    private static string OneOf(string[] items, string? value, string? fallback = null)
+    {
+        int i = Array.FindIndex(items, x => string.Equals(x, value?.Trim(), StringComparison.OrdinalIgnoreCase));
+        return i >= 0 ? items[i] : fallback ?? items[0];
+    }
+
+    /// <summary>The wheel changes gadgets (profile SelectedMouse 0) rather than walk and run (1).</summary>
+    public bool WheelSelectsGadgets => MouseWheel == "Gadget";
+
+    /// <summary>A frame cap: below 0 follows the monitor, 0 is unlimited, otherwise 30 to 700.</summary>
+    public static int ClampFps(int fps) => DisplayFrameCap.Clamp(fps);
+
+    /// <summary>"1920x1080" to (1920, 1080), or null.</summary>
+    public static (int Width, int Height)? ParseResolution(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        string[] parts = text.ToLowerInvariant().Split('x', StringSplitOptions.TrimEntries);
+        if (parts.Length == 2 && int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int w) &&
+            int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int h) && w >= 640 && h >= 480 &&
+            w <= 16384 && h <= 16384)
+        {
+            return (w, h);
+        }
+
+        return null;
+    }
+
+    public static string FormatResolution(int width, int height) =>
+        string.Create(CultureInfo.InvariantCulture, $"{width}x{height}");
+
+    /// <summary>The look group of a side and device.</summary>
+    public LookSettings LookOf(bool merc, bool pad) => merc ? (pad ? MercPad : MercKbm) : (pad ? SpyPad : SpyKbm);
+
+    // ---- the file ------------------------------------------------------------------------------------------
+
+    private static readonly JsonSerializerOptions Json = new()
+    {
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+        WriteIndented = true,
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
+
+        // A group the file names only in part keeps its side's defaults for the rest.
+        PreferredObjectCreationHandling = JsonObjectCreationHandling.Populate,
+    };
+
+    /// <summary>The settings as the file holds them.</summary>
+    public string ToJson() => JsonSerializer.Serialize(this, Json);
+
+    /// <summary>Reads settings; unknown keys are ignored and missing ones keep their defaults.</summary>
+    public static GameSettings FromJson(string json)
+    {
+        using JsonDocument document = JsonDocument.Parse(json, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+        GameSettings s = JsonSerializer.Deserialize<GameSettings>(json, Json) ?? new GameSettings();
+        // The old Boolean is read only when the new choice is absent, independent of the file's key order.
+        if (document.RootElement.ValueKind == JsonValueKind.Object &&
+            !document.RootElement.TryGetProperty("map_view", out _) &&
+            document.RootElement.TryGetProperty("map_list_view", out JsonElement legacyMapList) &&
+            legacyMapList.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            s.MapListView = legacyMapList.GetBoolean();
+        s.PreserveControllerProfile(document.RootElement);
+        s.Upgrade(document.RootElement);
+        s.Clamp();
+        return s;
+    }
+
+    /// <summary>New defaults apply to new profiles; loading an older profile keeps its controls and aim.</summary>
+    private void PreserveControllerProfile(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return;
+        JsonElement controller = root.TryGetProperty("controller", out JsonElement value) && value.ValueKind == JsonValueKind.Object ? value : default;
+        bool Has(JsonElement group, string key) => group.ValueKind == JsonValueKind.Object && group.TryGetProperty(key, out _);
+        Pad ??= new PadSettings();
+        if (!Has(controller, "layout_version")) Pad.LayoutVersion = 0;
+        if (Pad.LayoutVersion == 0)
+        {
+            if (!Has(controller, "enabled")) Pad.Enabled = true;
+            if (!Has(controller, "trigger_threshold")) Pad.TriggerThreshold = 0.5f;
+        }
+        // Replace is intentional: Populate would merge new combinations into a saved old layout.
+        if (!Has(controller, "spy_buttons")) Pad.SpyButtons = Pad.LayoutVersionOf(false) == 0 ? PadSettings.LegacyButtons() : PadSettings.DefaultButtons();
+        if (!Has(controller, "merc_buttons")) Pad.MercButtons = Pad.LayoutVersionOf(true) == 0 ? PadSettings.LegacyButtons(true) : PadSettings.DefaultButtons(true);
+        foreach ((string name, LookSettings look) in new[] { ("controls_spy_pad", SpyPad), ("controls_merc_pad", MercPad) })
+        {
+            if (look is null || Pad.LayoutVersionOf(name == "controls_merc_pad") != 0) continue;
+            JsonElement group = root.TryGetProperty(name, out value) ? value : default;
+            if (!Has(group, "gun_look_response")) look.GunLookResponse = look.LookResponse;
+        }
+    }
+
+    /// <summary>
+    /// Loads <paramref name="path"/>: missing gives the defaults; unreadable JSON is kept as <c>.bak</c> and the
+    /// defaults are used (the note says so).
+    /// </summary>
+    public static GameSettings Load(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        if (!File.Exists(path))
+        {
+            return new GameSettings { LoadNote = "defaults" };
+        }
+
+        try
+        {
+            GameSettings s = FromJson(File.ReadAllText(path));
+            s.LoadNote = path;
+            return s;
+        }
+        catch (JsonException e)
+        {
+            TryBackup(path);
+            return new GameSettings { LoadNote = $"defaults: {Path.GetFileName(path)} was not valid ({e.Message}); kept as .bak" };
+        }
+        catch (IOException e)
+        {
+            return new GameSettings { LoadNote = "defaults: " + e.Message };
+        }
+        catch (UnauthorizedAccessException e)
+        {
+            return new GameSettings { LoadNote = "defaults: " + e.Message };
+        }
+    }
+
+    /// <summary>Writes the file (through a temporary file, so a crash never leaves half a file).</summary>
+    public void Save(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        Clamp();
+        string? dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        string temp = path + ".tmp";
+        File.WriteAllText(temp, "// OpenSCCT settings. JSON with comments; keys follow Reloaded's where they mean the same.\n" + ToJson() + "\n");
+        File.Move(temp, path, overwrite: true);
+    }
+
+    private static void TryBackup(string path)
+    {
+        try
+        {
+            File.Copy(path, path + ".bak", overwrite: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>A copy (the options screen edits a copy and saves it).</summary>
+    public GameSettings Clone() => FromJson(ToJson());
+
+    /// <summary>Every key the file holds, for the settings console and tests.</summary>
+    public static IReadOnlyList<string> Keys()
+    {
+        var keys = new List<string>();
+        foreach (System.Reflection.PropertyInfo p in typeof(GameSettings).GetProperties())
+        {
+            if (p.GetCustomAttributes(typeof(JsonPropertyNameAttribute), false) is [JsonPropertyNameAttribute name])
+            {
+                keys.Add(name.Name);
+            }
+        }
+
+        return keys;
+    }
+}

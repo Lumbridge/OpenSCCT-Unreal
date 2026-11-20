@@ -1,0 +1,554 @@
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using Godot;
+using OpenScct.Core;
+using OpenScct.Core.Engine;
+using OpenScct.Game.SBase;
+using OpenScct.Physics.Collision;
+using OpenScct.Provenance;
+using OpenScctGame.Audio;
+using OpenScctGame.Render.Geometry;
+using OpenScctGame.Render.Materials;
+
+namespace OpenScctGame.Render.SoftBodies;
+
+/// <summary>
+/// The map's soft bodies (ESBPatchActor cloth and ESBStripDoorActor strip curtains): each one a mesh whose vertices
+/// follow its <see cref="SoftBodySim"/>, stepped on this machine only. Pawns push them aside (collActor), rifle
+/// tracers and this machine's own merc shots through them push the hit cell, and they play their collSound and
+/// shotSound. Lit as actors (the soft body render, game 0x10999f90: the FDynamicActor's lights and ambient, no baked
+/// light), bUnlit ones fullbright. docs/RENDERING.md "Soft bodies".
+/// </summary>
+public sealed class SoftBodyViews
+{
+    private readonly Node3D _root;
+    private readonly List<Body> _bodies = [];
+    private readonly List<SoftBodyCollider> _colliders = [];
+    private readonly HashSet<SFireTrace> _traces = [];
+    private readonly List<SFireTrace> _gone = [];
+    private float _bank;
+    private SWeaponDefense? _gun;
+    private int _clip;
+
+    /// <summary>The muzzle count last seen on each merc's third-person gun and each spy's pistol.</summary>
+    private readonly Dictionary<Actor, int> _muzzles = new(ReferenceEqualityComparer.Instance);
+    private readonly List<Actor> _muzzlesGone = [];
+
+    internal SoftBodyViews(Node3D parent)
+    {
+        _root = new Node3D { Name = "SoftBodies" };
+        parent.AddChild(_root);
+    }
+
+    /// <summary>Soft bodies drawn.</summary>
+    public int Count => _bodies.Count;
+
+    /// <summary>Steps run so far (all bodies together).</summary>
+    public long Steps { get; private set; }
+
+    /// <summary>
+    /// Adds the soft body of a placed instance: <paramref name="prim"/> is its library mesh, the body at rest with
+    /// vertex i (and i + N for the back face) on particle i. False when the block or the mesh does not match, and
+    /// the instance is then drawn as a plain mesh. <paramref name="light"/> is <see cref="LightSource.Actor"/> (lit with
+    /// <paramref name="ambientGlow"/> and the Echelon code <paramref name="echelon"/>, see <see cref="Relight"/>) or
+    /// <see cref="LightSource.None"/> for a bUnlit body.
+    /// </summary>
+    internal bool Add(string actor, JsonElement softBody, in Transform3D transform, FVector location, MeshPrimitive[] prims,
+        MaterialCompiler compiler, Vector4 vision, LightSource light = LightSource.None, int ambientGlow = 0, int echelon = 0)
+    {
+        if (prims.Length != 1 || SoftBodySim.Read(softBody) is not { } sim || prims[0].VertexCount != sim.Count * 2)
+        {
+            return false;
+        }
+
+        MeshPrimitive prim = prims[0];
+        Material? material = compiler.Get(prim.Material, light);
+        var body = new Body(actor, sim, transform, location, prim, material) { Light = light, AmbientGlow = ambientGlow };
+        if (body.Front.Count == 0)
+        {
+            return false;
+        }
+
+        OpenScctGame.Render.InstanceParams.Set(body.Node, GameplayObjects.VisionActorParameter, vision);
+        if (light == LightSource.Actor)
+        {
+            ActorLighting.SetEchelonIgnore(body.Node, echelon);
+        }
+
+        _root.AddChild(body.Node);
+        body.Rebuild();
+        body.Notifier.Aabb = body.Mesh.GetAabb().Grow(UeSpace.LengthToGodot(SoftBodyK.PositionClamp) * 0.25f);
+        body.Node.AddChild(body.Notifier);
+        Aabb rest = transform * body.Mesh.GetAabb();
+        body.Center = UeSpace.ToUe(rest.GetCenter());
+        body.Radius = UeSpace.UnitsPerMetre * rest.Size.Length() * 0.5f;
+        _bodies.Add(body);
+        return true;
+    }
+
+    /// <summary>
+    /// Lights every actor-lit body as an actor (UESoftBody render, game 0x10999f90: EnableLighting with dynamic lights
+    /// only, the FDynamicActor's light list through SetLight and its AmbientColor through SetAmbientLight), from its
+    /// rest bounding sphere. The map calls this when it builds and whenever the gameplay meshes are relit.
+    /// </summary>
+    [Provenance(ProvenanceKind.Decoded, "0x10999f90: mode->EnableLighting(RI, 1, 0, 0, NULL, FDynamicActor sphere), SetLight per light of the actor's list, SetAmbientLight(FDynamicActor+0xb8); no static (vertex colour) light")]
+    [Provenance(ProvenanceKind.Estimated, "The light set is chosen once from the rest bounds, not each frame from the moving body")]
+    public void Relight(RenderMap map)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        foreach (Body body in _bodies)
+        {
+            if (body.Light == LightSource.Actor)
+            {
+                ActorLighting.Apply(body.Node, map.LightActor(body.Center, body.Radius, body.AmbientGlow));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Each frame: banks <paramref name="dt"/> and, once a fixed step's worth (1/60 s) is in, steps every body drawn in the
+    /// last 5 s with whole fixed steps against the pawns of <paramref name="level"/>. Tracers, and the shots of
+    /// <paramref name="localPawn"/>'s merc gun, that cross a body push it.
+    /// </summary>
+    public void Update(float dt, Level? level, SoundSystem? sound, SBasePawn? localPawn = null)
+    {
+        if (_bodies.Count == 0)
+        {
+            return;
+        }
+
+        float now = level?.TimeSeconds ?? 0f;
+        if (level is not null)
+        {
+            TrackTracers(level, sound, localPawn);
+            TrackOwnShots(localPawn, sound);
+            TrackMuzzleShots(level, localPawn, sound);
+        }
+
+        _bank = MathF.Min(_bank + dt, SoftBodyK.MaxStep);
+        int steps = (int)(_bank / SoftBodyK.StepInterval);
+        if (steps == 0)
+        {
+            return;
+        }
+
+        _bank = MathF.Max(0f, _bank - (steps * SoftBodyK.StepInterval));
+        foreach (Body body in _bodies)
+        {
+            // The own frame draws nothing through Godot's 3D view, so its notifier never fires there.
+            if (body.Notifier.IsOnScreen() || Rd.RdObjects.InView(body.Mesh))
+            {
+                body.LastSeen = now;
+                body.Seen = true;
+            }
+
+            if (!body.Seen || now - body.LastSeen > SoftBodyK.DrawnRecently)
+            {
+                continue;
+            }
+
+            Colliders(body, level);
+            bool touched = false;
+            for (int i = 0; i < steps; i++)
+            {
+                touched |= body.Sim.Step(SoftBodyK.StepInterval, _colliders);
+            }
+
+            if (touched && now > body.LastCollSound + SoftBodyK.CollSoundInterval)
+            {
+                body.LastCollSound = now;
+                Play(sound, body.Sim.CollSound, body.Location);
+            }
+
+            body.Rebuild();
+            Steps += steps;
+        }
+    }
+
+    /// <summary>The pawns near <paramref name="body"/> in its local space (slot 0x94, 0x1099a850).</summary>
+    [Provenance(ProvenanceKind.Decoded, "0x1099a850: actors overlapping the body's bounds, tested at Location + Velocity * 0.08 with their CollisionRadius and CollisionHeight")]
+    [Provenance(ProvenanceKind.Estimated, "Only pawns with bCollideActors are taken (the original takes any actor whose two collision flags at +0x2f0 are set)")]
+    private void Colliders(Body body, Level? level)
+    {
+        _colliders.Clear();
+        if (level is null || !body.Sim.CollActor)
+        {
+            return;
+        }
+
+        foreach (Pawn p in level.AllActors<Pawn>())
+        {
+            if (p.bDeleteMe || !p.bCollideActors)
+            {
+                continue;
+            }
+
+            FVector local = body.ToLocal(p.Location + (p.Velocity * SoftBodyK.ColliderLookAhead));
+            float reach = p.CollisionRadius + p.CollisionHeight;
+            if (local.X < body.Min.X - reach || local.X > body.Max.X + reach || local.Y < body.Min.Y - reach ||
+                local.Y > body.Max.Y + reach || local.Z < body.Min.Z - reach || local.Z > body.Max.Z + reach)
+            {
+                continue;
+            }
+
+            _colliders.Add(new SoftBodyCollider(local, body.DirectionToLocal(p.Velocity), p.CollisionRadius, p.CollisionHeight,
+                p.Velocity.SizeSquared() > 0f));
+        }
+    }
+
+    /// <summary>
+    /// SBBulletHit / BulletWentTru for the rifle tracers this machine draws: a tracer's line from the muzzle to its
+    /// impact that crosses a body pushes the cell it crosses and plays shotSound.
+    /// </summary>
+    [Provenance(ProvenanceKind.Estimated, "Shots are seen through their SFireTrace tracers only (a share of the rifle's rounds); the push takes the shot's direction at full BulletHitFactor length, as the original sets the momentum's length to it")]
+    private void TrackTracers(Level level, SoundSystem? sound, SBasePawn? localPawn)
+    {
+        _gone.Clear();
+        foreach (SFireTrace t in _traces)
+        {
+            if (t.bDeleteMe)
+            {
+                _gone.Add(t);
+            }
+        }
+
+        foreach (SFireTrace t in _gone)
+        {
+            _traces.Remove(t);
+        }
+
+        foreach (SFireTrace t in level.AllActors<SFireTrace>())
+        {
+            // The players' shots are taken from their aim (TrackOwnShots, TrackMuzzleShots), tracer or not.
+            if (t.bDeleteMe || t.ImpactLoc.IsZero() || !_traces.Add(t) || t.Instigator is SBasePawn)
+            {
+                continue;
+            }
+
+            ShotLine(t.Location, t.ImpactLoc, sound);
+        }
+    }
+
+    /// <summary>
+    /// The local merc's own rounds (each one leaving the clip), with a tracer or not: the line from the gun's fire start
+    /// along his aim to the first world hit within ShootingRange pushes the bodies it crosses. In the original the
+    /// server's trace through a body sends SBBulletHitClient, and the shooter's machine pushes the cell its own last
+    /// line check through the body stored, which is the one under his aim.
+    /// </summary>
+    [Provenance(ProvenanceKind.Estimated, "Soft bodies are not in the simulation, so the server's pass-through trace is stood in for by this machine's aim line (no spread); which of the client's own traces stores the cell in the original was not identified; other players' shots without a tracer do not push")]
+    private void TrackOwnShots(SBasePawn? localPawn, SoundSystem? sound)
+    {
+        if (localPawn?.MyWeapon is not SWeaponDefense gun || localPawn.Controller is not PlayerController pc)
+        {
+            _gun = null;
+            return;
+        }
+
+        if (ReferenceEquals(gun, _gun) && gun.ClipAmmo < _clip)
+        {
+            FVector start = gun.GetFireStart();
+            FVector end = start + (pc.Rotation.Vector() * gun.ShootingRange);
+            if (OpenScct.Game.Equipment.GadgetWorld.Line(localPawn, end, start, ETraceFlags.TRACE_World, out FCheckResult hit))
+            {
+                end = hit.Location;
+            }
+
+            for (int i = gun.ClipAmmo; i < _clip; i++)
+            {
+                ShotLine(start, end, sound);
+            }
+        }
+
+        _gun = gun;
+        _clip = gun.ClipAmmo;
+    }
+
+    /// <summary>
+    /// The other players' rifle rounds and every spy's pistol shots (the local spy's too): each step of the replicated
+    /// muzzle count every machine gets (SWeaponDefenseDummy and SWeaponAttaque MuzzleCount, one per shot) is a line
+    /// from the shooter's eye along his replicated aim (the merc's iDesiredYawPitch, the spy's iYawPitchFromView; the
+    /// local spy's own view) to the first world hit within the gun's ShootingRange, pushing the bodies it crosses.
+    /// </summary>
+    [Provenance(ProvenanceKind.Estimated, "Stands in for the server's pass-through trace and SBBulletHitClient as TrackOwnShots does: one line per muzzle count step at the replicated aim, without spread; the eye point as the start (SWeapon.GetFireStart without the merc's laser case)")]
+    private void TrackMuzzleShots(Level level, SBasePawn? localPawn, SoundSystem? sound)
+    {
+        _muzzlesGone.Clear();
+        foreach (Actor a in _muzzles.Keys)
+        {
+            if (a.bDeleteMe)
+            {
+                _muzzlesGone.Add(a);
+            }
+        }
+
+        foreach (Actor a in _muzzlesGone)
+        {
+            _muzzles.Remove(a);
+        }
+
+        foreach (SWeaponDefenseDummy dummy in level.AllActors<SWeaponDefenseDummy>())
+        {
+            // The local merc's own rounds come from his clip (TrackOwnShots).
+            bool own = localPawn is not null && ReferenceEquals(dummy.Instigator, localPawn);
+            MuzzleShots(dummy, dummy.MuzzleCount, own ? null : dummy.Instigator as SBasePawn, localPawn,
+                SoftBodyK.MercShootingRange, sound);
+        }
+
+        foreach (SWeaponAttaque pistol in level.AllActors<SWeaponAttaque>())
+        {
+            MuzzleShots(pistol, pistol.MuzzleCount, pistol.Instigator as SBasePawn, localPawn, pistol.ShootingRange, sound);
+        }
+    }
+
+    /// <summary>The new steps of one gun's muzzle count, each a shot line from <paramref name="shooter"/> (null: none).</summary>
+    private void MuzzleShots(Actor gun, int count, SBasePawn? shooter, SBasePawn? localPawn, float range, SoundSystem? sound)
+    {
+        if (gun.bDeleteMe)
+        {
+            return;
+        }
+
+        bool seen = _muzzles.TryGetValue(gun, out int last);
+        _muzzles[gun] = count;
+        if (!seen || count <= last || shooter is null)
+        {
+            return;
+        }
+
+        FRotator aim = ReferenceEquals(shooter, localPawn) && shooter.Controller is PlayerController pc
+            ? pc.Rotation
+            : PackedAim(shooter.SPawnType == PawnType.SPAWNDEFENSE ? shooter.iDesiredYawPitch : shooter.iYawPitchFromView);
+        FVector start = shooter.Location + new FVector(0f, 0f, shooter.EyeHeight);
+        FVector end = start + (aim.Vector() * range);
+        if (OpenScct.Game.Equipment.GadgetWorld.Line(shooter, end, start, ETraceFlags.TRACE_World, out FCheckResult hit))
+        {
+            end = hit.Location;
+        }
+
+        for (int i = last; i < count; i++)
+        {
+            ShotLine(start, end, sound);
+        }
+    }
+
+    /// <summary>A pawn's packed aim (pitch in the high 16 bits, yaw in the low 16) as a rotator.</summary>
+    private static FRotator PackedAim(int packed) => new((packed >> 16) & 0xffff, packed & 0xffff, 0);
+
+    /// <summary>SBBulletHit for one shot line: every body it crosses gets the crossed cell pushed and plays shotSound.</summary>
+    private void ShotLine(FVector start, FVector end, SoundSystem? sound)
+    {
+        Span<int> corners = stackalloc int[4];
+        FVector dir = end - start;
+        foreach (Body body in _bodies)
+        {
+            FVector a = body.ToLocal(start);
+            FVector b = body.ToLocal(end);
+            if (body.Sim.LineCheck(a, b, body.Front, corners, out _))
+            {
+                body.Sim.BulletHit(body.DirectionToLocal(dir), corners);
+                Play(sound, body.Sim.ShotSound, body.Location);
+            }
+        }
+    }
+
+    private static void Play(SoundSystem? sound, string path, FVector location)
+    {
+        if (sound is not null && path.Length > 0)
+        {
+            sound.PlaySound(0, path, 0, false, location, 1f, SoftBodyK.SoundRadius, 1f);
+        }
+    }
+
+    private sealed class Body
+    {
+        private readonly int _n;
+        private readonly Vector3[] _verts;
+        private readonly Vector3[] _normals;
+        private readonly Vector2[] _uvs;
+        private readonly int[] _indices;
+        private readonly Material? _material;
+        private readonly Transform3D _toLocal;
+        private byte[]? _vertexData;
+        private int _normalOffset;
+        private int _normalStride;
+        private Rid _meshRid;
+
+        public Body(string actor, SoftBodySim sim, in Transform3D transform, FVector location, MeshPrimitive prim, Material? material)
+        {
+            Sim = sim;
+            Location = location;
+            _n = sim.Count;
+            _material = material;
+            _toLocal = transform.AffineInverse();
+            _verts = new Vector3[_n * 2];
+            _normals = new Vector3[_n * 2];
+            _uvs = new Vector2[_n * 2];
+            for (int i = 0; i < _n * 2; i++)
+            {
+                _uvs[i] = prim.Uvs is null ? Vector2.Zero : new Vector2(prim.Uvs[i * 2], prim.Uvs[(i * 2) + 1]);
+            }
+
+            // glTF triangles are counter-clockwise, Godot's front faces clockwise (as SurfaceBuilder swaps them).
+            _indices = new int[prim.Indices.Length];
+            for (int t = 0; t + 2 < prim.Indices.Length; t += 3)
+            {
+                _indices[t] = prim.Indices[t];
+                _indices[t + 1] = prim.Indices[t + 2];
+                _indices[t + 2] = prim.Indices[t + 1];
+                if (prim.Indices[t] < _n && prim.Indices[t + 1] < _n && prim.Indices[t + 2] < _n)
+                {
+                    Front.Add((prim.Indices[t], prim.Indices[t + 1], prim.Indices[t + 2]));
+                }
+            }
+
+            Mesh = new ArrayMesh { ResourceName = "SoftBody_" + actor };
+            // Its vertices are rewritten as the cloth moves.
+            Rd.RdShadowPass.MarkMutable(Mesh);
+            Node = new MeshInstance3D { Name = actor.Length > 0 ? actor : "SoftBody", Mesh = Mesh, Transform = transform };
+            Notifier = new VisibleOnScreenNotifier3D { Name = "Seen" };
+            Min = new FVector(float.MaxValue, float.MaxValue, float.MaxValue);
+            Max = new FVector(float.MinValue, float.MinValue, float.MinValue);
+            for (int i = 0; i < _n; i++)
+            {
+                FVector p = sim.Position(i);
+                Min = new FVector(MathF.Min(Min.X, p.X), MathF.Min(Min.Y, p.Y), MathF.Min(Min.Z, p.Z));
+                Max = new FVector(MathF.Max(Max.X, p.X), MathF.Max(Max.Y, p.Y), MathF.Max(Max.Z, p.Z));
+            }
+
+            // The rest bounds grow by the strip length: a free edge swings that far at most.
+            float swing = MathF.Max(Max.X - Min.X, Max.Z - Min.Z);
+            Min -= new FVector(0f, swing, 0f);
+            Max += new FVector(0f, swing, 0f);
+        }
+
+        public SoftBodySim Sim { get; }
+
+        public FVector Location { get; }
+
+        public LightSource Light { get; init; }
+
+        public int AmbientGlow { get; init; }
+
+        /// <summary>Rest bounding sphere (uu) the actor light set is chosen for.</summary>
+        public FVector Center { get; set; }
+
+        public float Radius { get; set; }
+
+        public ArrayMesh Mesh { get; }
+
+        public MeshInstance3D Node { get; }
+
+        public VisibleOnScreenNotifier3D Notifier { get; }
+
+        /// <summary>Front-face triangles in the original's order (glTF winding), particle indices.</summary>
+        public List<(int A, int B, int C)> Front { get; } = [];
+
+        /// <summary>Local bounds the pawns are gathered in (rest bounds widened by the body's swing).</summary>
+        public FVector Min { get; }
+
+        public FVector Max { get; }
+
+        public float LastSeen { get; set; }
+
+        public bool Seen { get; set; }
+
+        public float LastCollSound { get; set; } = float.MinValue;
+
+        public FVector ToLocal(FVector world) => UeSpace.ToUe(_toLocal * UeSpace.ToGodot(world));
+
+        public FVector DirectionToLocal(FVector world) => UeSpace.DirectionToUe(_toLocal.Basis * UeSpace.DirectionToGodot(world));
+
+        /// <summary>
+        /// Writes the particles into the mesh (both faces) with normals from the front triangles. The back face keeps
+        /// the front normal: the original draws one face with culling off under D3D vertex lighting, which lights both
+        /// sides by the same normal (the patch's normals, 0x10afef20, are its grid's du x dv, as here).
+        /// </summary>
+        public void Rebuild()
+        {
+            for (int i = 0; i < _n; i++)
+            {
+                FVector p = Sim.Position(i);
+                Vector3 g = UeSpace.ToGodot(p);
+                _verts[i] = g;
+                _verts[i + _n] = g;
+                _normals[i] = Vector3.Zero;
+            }
+
+            for (int t = 0; t + 2 < _indices.Length; t += 3)
+            {
+                int a = _indices[t], b = _indices[t + 1], c = _indices[t + 2];
+                if (a >= _n || b >= _n || c >= _n)
+                {
+                    continue;
+                }
+
+                Vector3 n = (_verts[c] - _verts[a]).Cross(_verts[b] - _verts[a]);
+                _normals[a] += n;
+                _normals[b] += n;
+                _normals[c] += n;
+            }
+
+            for (int i = 0; i < _n; i++)
+            {
+                Vector3 n = _normals[i].LengthSquared() > 1e-12f ? _normals[i].Normalized() : Vector3.Up;
+                _normals[i] = n;
+                _normals[i + _n] = n;
+            }
+
+            if (_vertexData is not null)
+            {
+                // Fixed topology: keep indices, UVs and material on the GPU. Only positions and packed normals
+                // change. The layout guard below leaves unfamiliar formats on the original rebuild path.
+                Span<byte> data = _vertexData;
+                Vector3 min = _verts[0], max = min;
+                for (int i = 0; i < _verts.Length; i++)
+                {
+                    MemoryMarshal.Write(data.Slice(i * 12, 12), in _verts[i]);
+                    Vector2 oct = _normals[i].OctahedronEncode();
+                    uint packed = (uint)Math.Clamp(oct.X * 65535f, 0f, 65535f)
+                        | ((uint)Math.Clamp(oct.Y * 65535f, 0f, 65535f) << 16);
+                    MemoryMarshal.Write(data.Slice(_normalOffset + i * _normalStride, 4), in packed);
+                    min = min.Min(_verts[i]);
+                    max = max.Max(_verts[i]);
+                }
+                RenderingServer.MeshSurfaceUpdateVertexRegion(_meshRid, 0, 0, _vertexData);
+                Mesh.CustomAabb = new Aabb(min, max - min).Grow(0.001f);
+                Rd.RdShadowPass.SetDynamic(Mesh, _verts, _uvs, _indices);
+                Rd.RdObjects.SetDynamic(Mesh, _verts, _normals, _uvs, _indices);
+                return;
+            }
+
+            using var arrays = new Godot.Collections.Array();
+            arrays.Resize((int)Godot.Mesh.ArrayType.Max);
+            arrays[(int)Godot.Mesh.ArrayType.Vertex] = _verts;
+            arrays[(int)Godot.Mesh.ArrayType.Normal] = _normals;
+            arrays[(int)Godot.Mesh.ArrayType.TexUV] = _uvs;
+            arrays[(int)Godot.Mesh.ArrayType.Index] = _indices;
+            Mesh.ClearSurfaces();
+            Mesh.AddSurfaceFromArrays(Godot.Mesh.PrimitiveType.Triangles, arrays, flags: Godot.Mesh.ArrayFormat.FlagUseDynamicUpdate);
+            if (_material is not null)
+            {
+                Mesh.SurfaceSetMaterial(0, _material);
+            }
+
+            var format = (RenderingServer.ArrayFormat)(long)Mesh.SurfaceGetFormat(0);
+            int count = _verts.Length;
+            _normalOffset = (int)RenderingServer.MeshSurfaceGetFormatOffset(format, count, (int)RenderingServer.ArrayType.Normal);
+            _normalStride = (int)RenderingServer.MeshSurfaceGetFormatNormalTangentStride(format, count);
+            if ((format & RenderingServer.ArrayFormat.FlagCompressAttributes) == 0
+                && RenderingServer.MeshSurfaceGetFormatVertexStride(format, count) == 12
+                && _normalOffset == count * 12 && _normalStride is 4 or 8)
+            {
+                _meshRid = Mesh.GetRid();
+                using Godot.Collections.Dictionary surface = RenderingServer.MeshGetSurface(_meshRid, 0);
+                byte[] data = surface["vertex_data"].AsByteArray();
+                if (data.Length == count * (12 + _normalStride)) _vertexData = data;
+            }
+
+            Rd.RdShadowPass.SetDynamic(Mesh, _verts, _uvs, _indices);
+                Rd.RdObjects.SetDynamic(Mesh, _verts, _normals, _uvs, _indices);
+        }
+    }
+}

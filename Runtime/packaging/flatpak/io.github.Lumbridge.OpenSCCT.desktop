@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=OpenSCCT Godot
+Comment=Spies versus mercenaries
+Exec=openscct %u
+MimeType=x-scheme-handler/openscct;
+Icon=io.github.Lumbridge.OpenSCCT
+Terminal=false
+Categories=Game;ActionGame;
+Keywords=Splinter Cell;Chaos Theory;Versus;
+StartupNotify=true
+StartupWMClass=OpenSCCT

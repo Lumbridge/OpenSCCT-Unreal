@@ -1,0 +1,32 @@
+using System.Collections.Generic;
+
+namespace OpenScct.Core.Engine;
+
+/// <summary>Engine.GameReplicationInfo: game state every client sees. Only the core fields so far.</summary>
+public partial class GameReplicationInfo : ReplicationInfo
+{
+    public readonly List<PlayerReplicationInfo> PRIArray = new();
+    public string GameName = string.Empty;
+    public string ServerName = string.Empty;
+    public bool bTeamGame;
+    public bool SidearmsEnabled;
+    public bool RiflesEnabled;
+
+    /// <summary>The shared responsive-smoke rule for this round; false preserves original smoke.</summary>
+    public bool ResponsiveSmokeEnabled;
+
+    /// <summary>Practice can spend resources normally while keeping its other rules. Replicated to owners too.</summary>
+    public bool PracticeFiniteResources;
+
+    /// <summary>
+    /// The player count this round's match-size rules use (spec/additions/match-size-rules.md), 0 when the map has
+    /// none. Replicated: a client hides its own copies of the gated actors from it.
+    /// </summary>
+    public int MatchPlayers;
+    public bool bMatchHasBegun;
+    public int TimeLimit;
+    public int RemainingTime;
+    public int ElapsedTime;
+    public byte WinningTeam;
+    public byte WinningReason;
+}

@@ -1,0 +1,339 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using OpenScct.Net.Scoreboards;
+using Xunit;
+
+namespace OpenScct.Net.Tests;
+
+public sealed class ScoreboardArchiveTests : IDisposable
+{
+    [Fact]
+    public void WireOmitsVersionOneZeroCountersWithoutChangingTheirMeaning()
+    {
+        var stats = new Dictionary<string, int> { ["combat.enemy_kills"] = 0, ["spy.objectives"] = 3 };
+        var board = new RoundScoreboard
+        {
+            RoundId = Guid.NewGuid().ToString("N"),
+            Rows = [new() { ParticipantId = 1, Team = 0, Stats = stats }],
+        };
+        var receiver = new ScoreboardWire.Receiver();
+        RoundScoreboard? received = null;
+        foreach (string line in ScoreboardWire.Encode(board, 1))
+        {
+            Assert.True(receiver.Receive(line, out var result, out _, out _));
+            received = result ?? received;
+        }
+        var row = Assert.Single(Assert.IsType<RoundScoreboard>(received).Rows);
+        var decodedStats = Assert.IsAssignableFrom<IReadOnlyDictionary<string, int>>(row.Stats);
+        Assert.Equal(0, decodedStats.GetValueOrDefault("combat.enemy_kills"));
+        Assert.Equal(3, decodedStats["spy.objectives"]);
+        Assert.False(decodedStats.ContainsKey("combat.enemy_kills"));
+        Assert.True(stats.ContainsKey("combat.enemy_kills")); // Encoding never mutates the authoritative snapshot.
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0d)]
+    [InlineData(65.25)]
+    public void CompactWirePreservesRefreshDeadlineAndCounterAvailability(double? deadline)
+    {
+        var releasedZero = new Dictionary<string, int> { ["combat.enemy_kills"] = 0 };
+        var activeStats = new Dictionary<string, int> { ["combat.enemy_kills"] = 0, ["spy.objectives"] = 3 };
+        var legacyStats = new Dictionary<string, int> { ["combat.enemy_kills"] = 0, ["spy.objectives"] = 2 };
+        var board = new RoundScoreboard
+        {
+            RoundId = Guid.NewGuid().ToString("N"), ElapsedSeconds = 40, AsOfSeconds = 10,
+            NextCombatUpdateSeconds = deadline,
+            Rows =
+            [
+                new() { ParticipantId = 1, Name = "Pending", Stats = null },
+                new() { ParticipantId = 2, Name = "Released zero", Stats = releasedZero },
+                new()
+                {
+                    ParticipantId = 3, Name = "Active", Team = 1, Score = 7, Kills = 2, Deaths = 3,
+                    Lives = -1, Objectives = 4, Rank = 5, PingMs = 42, Bot = true, LeftEarly = true,
+                    Stats = activeStats,
+                },
+                new() { ParticipantId = 4, Name = "Legacy", StatsVersion = 0, Stats = legacyStats },
+                new() { ParticipantId = 5, Name = "Released empty", Stats = new Dictionary<string, int>() },
+            ],
+        };
+        var receiver = new ScoreboardWire.Receiver();
+        RoundScoreboard? received = null;
+        foreach (string line in ScoreboardWire.Encode(board, 3, historical: true))
+        {
+            Assert.True(receiver.Receive(line, out var result, out int local, out bool historical));
+            if (result is null) continue;
+            received = result;
+            Assert.Equal(3, local);
+            Assert.True(historical);
+        }
+        var decoded = Assert.IsType<RoundScoreboard>(received);
+        Assert.Equal(board with { Rows = null! }, decoded with { Rows = null! });
+        Assert.Equal(deadline, decoded.NextCombatUpdateSeconds);
+        Assert.Equal(board.ElapsedSeconds, decoded.ElapsedSeconds);
+        Assert.Equal(board.AsOfSeconds, decoded.AsOfSeconds);
+        Assert.Equal(board.Rows.Count, decoded.Rows.Count);
+        for (int i = 0; i < board.Rows.Count; i++)
+            Assert.Equal(board.Rows[i] with { Stats = null }, decoded.Rows[i] with { Stats = null });
+        Assert.Null(decoded.Rows[0].Stats); // An unreleased sample must remain distinct from a released zero sample.
+        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyDictionary<string, int>>(decoded.Rows[1].Stats));
+        var active = Assert.IsAssignableFrom<IReadOnlyDictionary<string, int>>(decoded.Rows[2].Stats);
+        Assert.Equal(3, active["spy.objectives"]);
+        Assert.False(active.ContainsKey("combat.enemy_kills"));
+        var legacy = Assert.IsAssignableFrom<IReadOnlyDictionary<string, int>>(decoded.Rows[3].Stats);
+        Assert.Equal(0, legacy["combat.enemy_kills"]); // Version zero cannot use version one's absent-counter semantics.
+        Assert.Equal(2, legacy["spy.objectives"]);
+        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyDictionary<string, int>>(decoded.Rows[4].Stats));
+        Assert.Equal(0, releasedZero["combat.enemy_kills"]);
+        Assert.Equal(0, activeStats["combat.enemy_kills"]);
+        Assert.Equal(2, activeStats.Count);
+        Assert.Equal(2, legacyStats.Count);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(1, 1)]
+    [InlineData(255, 255)]
+    public void CompactWirePreservesExplicitResultsAndNonDefaultBoardValues(int winner, int reason)
+    {
+        var board = new RoundScoreboard
+        {
+            RoundId = Guid.NewGuid().ToString("N"), Sequence = 17, Mode = 5, ElapsedSeconds = 40,
+            AsOfSeconds = 0, NextCombatUpdateSeconds = 0, Completed = winner != 255, Practice = true,
+            Partial = winner == 255, Winner = winner, Reason = reason, ObjectivesTaken = 3, ObjectivesNeeded = 4,
+            Rows = [new() { ParticipantId = 1, Name = "Agent", StatsVersion = 0 }],
+        };
+        var receiver = new ScoreboardWire.Receiver();
+        RoundScoreboard? received = null;
+        foreach (string line in ScoreboardWire.Encode(board, 1))
+        {
+            Assert.True(receiver.Receive(line, out var result, out _, out _));
+            received = result ?? received;
+        }
+        var decoded = Assert.IsType<RoundScoreboard>(received);
+        Assert.Equal(board with { Rows = null! }, decoded with { Rows = null! });
+        Assert.Equal(board.Rows[0], Assert.Single(decoded.Rows));
+    }
+
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), "openscct-scoreboard-archive-" + Guid.NewGuid().ToString("N"));
+    private ScoreboardArchive Archive => new(_directory);
+
+    private static ArchivedScoreboard Entry(bool completed = false) => new()
+    {
+        PlayedLocally = true,
+        LocalParticipantId = 7,
+        LeftEarly = !completed,
+        Master = "https://master.test/",
+        AccountId = 17,
+        Scoreboard = new RoundScoreboard
+        {
+            RoundId = Guid.NewGuid().ToString("N"),
+            StartedUtc = DateTimeOffset.UtcNow.AddSeconds(-90),
+            EndedUtc = DateTimeOffset.UtcNow,
+            ElapsedSeconds = 90,
+            AsOfSeconds = completed ? 90 : 60,
+            Completed = completed,
+            Partial = !completed,
+            Sequence = 3,
+            Rows = [new() { ParticipantId = 7, Name = "Agent", Team = 0,
+                Stats = new Dictionary<string, int> { ["spy.neutralisations"] = completed ? 4 : 2 } }],
+        },
+    };
+
+    [Fact]
+    public void Partial_upgrades_once_to_final_and_keeps_local_participation_and_departure()
+    {
+        var archive = Archive;
+        var partial = Entry();
+        archive.Save(partial);
+        var final = partial with
+        {
+            PlayedLocally = false,
+            LocalParticipantId = -1,
+            LeftEarly = false,
+            Scoreboard = partial.Scoreboard with
+            {
+                Completed = true,
+                Partial = false,
+                MatchId = 10,
+                ElapsedSeconds = 120,
+                AsOfSeconds = 120,
+                Rows = [partial.Scoreboard.Rows[0] with { Stats = new Dictionary<string, int> { ["spy.neutralisations"] = 5 } }],
+            },
+        };
+        archive.Save(final);
+        archive.Save(final);
+        var stored = Assert.Single(Archive.ReadAll());
+        Assert.Single(Directory.GetFiles(_directory, "*.json"));
+        Assert.Empty(Directory.GetFiles(_directory, "*.tmp"));
+        Assert.True(stored.Scoreboard.Completed);
+        Assert.False(stored.Scoreboard.Partial);
+        Assert.Equal(7, stored.LocalParticipantId);
+        Assert.True(stored.PlayedLocally);
+        Assert.True(stored.LeftEarly);
+        Assert.True(Assert.Single(stored.Scoreboard.Rows).LeftEarly);
+        Assert.Equal(5, stored.Scoreboard.Rows[0].Stats!["spy.neutralisations"]);
+        Assert.Equal(10, stored.Scoreboard.MatchId);
+    }
+
+    [Fact]
+    public void Completed_results_cannot_be_downgraded_by_a_later_partial_snapshot()
+    {
+        var archive = Archive;
+        var final = Entry(completed: true);
+        archive.Save(final);
+        archive.Save(final with
+        {
+            Scoreboard = final.Scoreboard with
+            {
+                Completed = false,
+                Partial = true,
+                Sequence = 999,
+                ElapsedSeconds = 500,
+                AsOfSeconds = 470,
+                Rows = [final.Scoreboard.Rows[0] with { Stats = null }],
+            }
+        });
+        var stored = Assert.Single(archive.ReadAll());
+        Assert.True(stored.Scoreboard.Completed);
+        Assert.Equal(90, stored.Scoreboard.ElapsedSeconds);
+        Assert.Equal(4, stored.Scoreboard.Rows[0].Stats!["spy.neutralisations"]);
+    }
+
+    [Fact]
+    public void Adding_a_cloud_id_does_not_replace_a_newer_sample_with_older_counters()
+    {
+        var newer = Entry();
+        var older = newer with
+        {
+            Scoreboard = newer.Scoreboard with
+            {
+                MatchId = 3,
+                ElapsedSeconds = 40,
+                AsOfSeconds = 10,
+                Rows = [newer.Scoreboard.Rows[0] with { Stats = null }],
+            }
+        };
+        var merged = ScoreboardArchive.Merge(newer, older);
+        Assert.Equal(90, merged.Scoreboard.ElapsedSeconds);
+        Assert.NotNull(merged.Scoreboard.Rows[0].Stats);
+        Assert.Equal(3, merged.Scoreboard.MatchId);
+        var imported = newer with { LocalParticipantId = -1 };
+        Assert.Equal(7, ScoreboardArchive.Merge(imported, newer).LocalParticipantId);
+    }
+
+    [Fact]
+    public void Failed_replacement_leaves_the_previous_complete_file_readable()
+    {
+        var archive = Archive;
+        var entry = Entry(completed: true);
+        archive.Save(entry);
+        Assert.Throws<InvalidDataException>(() => archive.Save(entry with { ReplayPath = new string('x', 4 * 1024 * 1024) }));
+        Assert.Throws<InvalidDataException>(() => archive.Save(entry with { Scoreboard = entry.Scoreboard with { Rows = null! } }));
+        var stored = Assert.Single(Archive.ReadAll());
+        Assert.Equal(entry.Scoreboard.RoundId, stored.Scoreboard.RoundId);
+        Assert.Null(stored.ReplayPath);
+        Assert.Empty(Directory.GetFiles(_directory, "*.tmp"));
+    }
+
+    [Fact]
+    public void Malformed_unsupported_and_oversized_files_are_isolated_from_valid_history()
+    {
+        var archive = Archive;
+        var entry = Entry(completed: true);
+        archive.Save(entry);
+        File.WriteAllText(Path.Combine(_directory, "malformed.json"), "{");
+        File.WriteAllText(Path.Combine(_directory, "version.json"), JsonSerializer.Serialize(entry with { Version = 999 }));
+        File.WriteAllText(Path.Combine(_directory, "null-master.json"), JsonSerializer.Serialize(entry with { Master = null! }));
+        File.WriteAllText(Path.Combine(_directory, "large.json"), new string('x', 4 * 1024 * 1024 + 1));
+        var problems = new List<string>();
+        Assert.Equal(entry.Scoreboard.RoundId, Assert.Single(archive.ReadAll(problems.Add)).Scoreboard.RoundId);
+        Assert.Equal(4, problems.Count);
+    }
+
+    [Fact]
+    public void Cloud_only_records_are_scoped_to_the_fetching_account_and_master()
+    {
+        var cloud = Entry(completed: true) with { PlayedLocally = false };
+        Assert.True(ScoreboardArchive.VisibleTo(cloud, "HTTPS://MASTER.TEST", 17));
+        Assert.False(ScoreboardArchive.VisibleTo(cloud, "https://master.test", 18));
+        Assert.False(ScoreboardArchive.VisibleTo(cloud, "https://other.test", 17));
+        Assert.False(ScoreboardArchive.VisibleTo(cloud, "https://master.test", 0));
+        Assert.True(ScoreboardArchive.VisibleTo(cloud with { PlayedLocally = true }, "https://other.test", 0));
+        Assert.True(ScoreboardArchive.VisibleTo(cloud with { ImportedReplay = true }, "https://other.test", 0));
+        Assert.NotEqual(ScoreboardArchive.NormaliseMaster("https://master.test/First"),
+            ScoreboardArchive.NormaliseMaster("https://master.test/first"));
+        Assert.NotEqual(ScoreboardArchive.Identity(cloud with { Scoreboard = cloud.Scoreboard with { RoundId = "", MatchId = 5 } }),
+            ScoreboardArchive.Identity(cloud with { Master = "https://other.test", Scoreboard = cloud.Scoreboard with { RoundId = "", MatchId = 5 } }));
+    }
+
+    [Fact]
+    public void Conflicting_master_references_cannot_overwrite_a_saved_round()
+    {
+        var archive = Archive;
+        var entry = Entry(completed: true);
+        archive.Save(entry);
+        Assert.Throws<ArgumentException>(() => archive.Save(entry with { Master = "https://other.test", AccountId = 19 }));
+        var stored = Assert.Single(archive.ReadAll());
+        Assert.Equal(entry.Master, stored.Master);
+        Assert.Equal(17, stored.AccountId);
+    }
+
+    [Fact]
+    public void Scoreboard_persists_after_its_optional_replay_is_deleted()
+    {
+        var archive = Archive;
+        Directory.CreateDirectory(_directory);
+        string replay = Path.Combine(_directory, "round.scctdemo");
+        File.WriteAllBytes(replay, [1, 2]);
+        var entry = Entry(completed: true) with { ReplayPath = replay };
+        archive.Save(entry);
+        File.Delete(replay);
+        Assert.Equal(entry.Scoreboard.RoundId, Assert.Single(Archive.ReadAll()).Scoreboard.RoundId);
+    }
+
+    [Fact]
+    public void Imported_replays_remain_local_without_claiming_the_user_played_them()
+    {
+        var archive = Archive;
+        var imported = Entry(completed: true) with { PlayedLocally = false, LocalParticipantId = -1, ImportedReplay = true };
+        archive.Save(imported);
+        var cloud = imported with { ImportedReplay = false };
+        var stored = archive.Save(cloud);
+        Assert.True(stored.ImportedReplay);
+        Assert.False(stored.PlayedLocally);
+        Assert.Equal(-1, stored.LocalParticipantId);
+        Assert.True(ScoreboardArchive.VisibleTo(stored, "https://other.test", 0));
+    }
+
+    [Fact]
+    public void Fetching_the_same_round_with_another_account_keeps_each_accounts_cached_access()
+    {
+        var archive = Archive;
+        var first = Entry(completed: true) with { PlayedLocally = false, LocalParticipantId = -1 };
+        archive.Save(first);
+        archive.Save(first with { AccountId = 18 });
+        var cached = Assert.Single(Archive.ReadAll());
+        Assert.Equal(new long[] { 17, 18 }, cached.FetchedAccounts);
+        Assert.True(ScoreboardArchive.VisibleTo(cached, "https://master.test", 17));
+        Assert.True(ScoreboardArchive.CanQuery(cached, "https://master.test", 18));
+        Assert.False(ScoreboardArchive.CanQuery(cached, "https://master.test", 19));
+        Assert.False(ScoreboardArchive.VisibleTo(cached, "https://other.test", 17));
+        var backToFirst = archive.Save(first);
+        Assert.Equal(new long[] { 17, 18 }, backToFirst.FetchedAccounts);
+        Assert.True(ScoreboardArchive.CanQuery(backToFirst, "https://master.test", 18));
+        Assert.False(ScoreboardArchive.CanQuery(backToFirst with { Master = "" }, "", 17));
+        Assert.Throws<InvalidDataException>(() => archive.Save(first with { FetchedAccounts = [17, 17] }));
+        Assert.Throws<InvalidDataException>(() => archive.Save(first with { FetchedAccounts = [0] }));
+        Assert.Throws<InvalidDataException>(() => archive.Save(first with { FetchedAccounts = Enumerable.Range(1, 257).Select(i => (long)i).ToArray() }));
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);
+    }
+}

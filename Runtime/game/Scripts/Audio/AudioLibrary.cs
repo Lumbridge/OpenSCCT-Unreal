@@ -1,0 +1,539 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
+using Godot;
+
+namespace OpenScctGame.Audio;
+
+/// <summary>One entry of a random, switch or sequence sound.</summary>
+public readonly record struct SoundEntry(string? Sound, int Value);
+public readonly record struct AudioLoad(string Sound, bool Loop, bool Preload, double Milliseconds);
+
+/// <summary>A Sound of the converted content (svm.audio/1 and svm.mapaudio/1, docs/AUDIO.md).</summary>
+public sealed class SoundDef
+{
+    public required string Path { get; init; }
+
+    /// <summary>wave, stream, multichannel, random, switch or sequence.</summary>
+    public required string Kind { get; init; }
+
+    public int Flags { get; init; }
+
+    /// <summary>The Sound's Gain (linear).</summary>
+    public float Volume { get; init; } = 1f;
+
+    /// <summary>The Sound's own Radius, 0 when it has none.</summary>
+    public float Radius { get; init; }
+
+    public bool Loop { get; init; }
+
+    public bool Positional { get; init; } = true;
+
+    /// <summary>Absolute path of the wave or Ogg file, null for list sounds and missing streams.</summary>
+    public string? File { get; init; }
+
+    public float Duration { get; init; }
+
+    public int LoopStart { get; init; } = -1;
+
+    public int LoopEnd { get; init; } = -1;
+
+    public int Frames { get; init; }
+
+    public SoundEntry[] Entries { get; init; } = [];
+
+    public bool IsList => Kind is "random" or "switch" or "sequence";
+}
+
+/// <summary>
+/// The sounds a client can play: the shared library (<c>.content/shared/audio</c>) with the map's own table
+/// (<c>svmap/&lt;Map&gt;/audio</c>) on top, which supplies the map's streamed sounds. Loads the audio files on first
+/// use and keeps them.
+/// </summary>
+public sealed class AudioLibrary
+{
+    private readonly Dictionary<string, SoundDef> _sounds = new(StringComparer.OrdinalIgnoreCase);
+    private sealed class CachedStream(AudioStream? stream, long bytes, long used, bool pinned)
+    {
+        public AudioStream? Stream = stream;
+        public long Bytes = bytes, Used = used;
+        public bool Pinned = pinned;
+    }
+    private readonly Dictionary<(string File, bool Loop), CachedStream> _streams = new();
+    private long _cacheClock;
+    private int _preloadDepth;
+    public long CacheBudgetBytes { get; set; } = 128L * 1024 * 1024;
+    public long CachedBytes { get; private set; }
+    public int CachedStreams => _streams.Count;
+    public int CacheEvictions { get; private set; }
+    public int RuntimeFilesRead { get; private set; }
+    public double MaxLoadMilliseconds { get; private set; }
+    public bool SessionPrepared { get; private set; }
+    public List<string> PreloadManifest { get; } = [];
+    public List<AudioLoad> LoadAttempts { get; } = [];
+
+    private AudioLibrary(string sharedDir, string? mapDir)
+    {
+        SharedDir = sharedDir;
+        MapDir = mapDir;
+    }
+
+    public string SharedDir { get; }
+
+    public string? MapDir { get; }
+
+    public MapAudioDoc? Map { get; private set; }
+
+    public int Count => _sounds.Count;
+
+    /// <summary>Uncached stream file reads/decodes attempted, for first-use diagnostics.</summary>
+    public int FilesRead { get; private set; }
+
+    /// <summary>Files that failed to load, for reports.</summary>
+    public List<string> LoadErrors { get; } = [];
+
+    /// <summary>The shared library folder of a map folder (the audio folder of <see cref="Render.RenderMap.SharedRootOf"/>).</summary>
+    public static string SharedDirFor(string mapFolder) =>
+        System.IO.Path.Combine(OpenScctGame.Render.RenderMap.SharedRootOf(mapFolder), "audio");
+
+    public static AudioLibrary Load(string sharedDir, string? mapFolder)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sharedDir);
+        string? mapDir = mapFolder is null ? null : System.IO.Path.Combine(mapFolder, "audio");
+        var lib = new AudioLibrary(sharedDir, mapDir);
+        lib.ReadShared(System.IO.Path.Combine(sharedDir, "audio.json"));
+        string sidearms = System.IO.Path.Combine(sharedDir, "sidearms.json");
+        if (File.Exists(sidearms)) lib.ReadShared(sidearms);
+        string weapons = System.IO.Path.Combine(sharedDir, "weapons.json");
+        if (File.Exists(weapons)) lib.ReadShared(weapons);
+        string sidearmAudio = System.IO.Path.Combine(sharedDir, "sidearm-audio.json");
+        if (File.Exists(sidearmAudio)) lib.ReadShared(sidearmAudio);
+        string rifles = System.IO.Path.Combine(sharedDir, "rifles.json");
+        if (File.Exists(rifles)) lib.ReadShared(rifles);
+        string userGuns = System.IO.Path.Combine(sharedDir, "user-gun-audio.json");
+        if (File.Exists(userGuns)) lib.ReadShared(userGuns);
+        if (mapDir is not null && System.IO.File.Exists(System.IO.Path.Combine(mapDir, "audio.json")))
+        {
+            lib.Map = MapAudioDoc.Load(System.IO.Path.Combine(mapDir, "audio.json"));
+            lib.ReadMapSounds(System.IO.Path.Combine(mapDir, "audio.json"));
+        }
+        else if (mapDir is not null)
+        {
+            // Without the map's table the map plays none of its own sounds: no zone ambience, reverb, streamed
+            // loops or client-only ambient actors. A maps rebuild removes the folder; audio-map puts it back.
+            GD.PushWarning($"SVM_AUDIO the map has no audio table at {mapDir}: its ambience, reverb and streamed " +
+                           $"sounds are silent (python -m svmbuild audio-map --maps {System.IO.Path.GetFileName(mapFolder)})");
+        }
+
+        lib.ReadAnimationPack(System.Environment.GetEnvironmentVariable("SVM_ANIMATION_PACK"));
+        lib.ReadAnimationPack(mapFolder);
+        return lib;
+    }
+
+    private void ReadAnimationPack(string? folder)
+    {
+        if (folder is null || OpenScct.Content.AnimationBundle.Load(folder) is not { } bundle) return;
+        foreach (var asset in bundle.Assets)
+            if (asset.Key.StartsWith("audio/animations/", StringComparison.Ordinal))
+            {
+                string id = "osanim." + System.IO.Path.GetFileNameWithoutExtension(asset.Key);
+                _sounds[id] = new SoundDef { Path = id, Kind = "stream", File = OpenScct.Content.AnimationBundle.AssetPath(folder, asset.Key) };
+            }
+    }
+
+    public SoundDef? Find(string? path) => path is not null && _sounds.TryGetValue(path, out SoundDef? d) ? d : null;
+
+    /// <summary>Decode every possible leaf of a sound before its first use.</summary>
+    public void Preload(string path, bool forceLoop = false, bool pin = false)
+    {
+        var oneShots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var loops = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Load(string name, bool loop)
+        {
+            if (!(loop ? loops : oneShots).Add(name) || Find(name) is not { } def) return;
+            if (def.IsList)
+            {
+                foreach (var entry in def.Entries)
+                    if (entry.Sound is { } child)
+                        Load(child, loop || def.Kind == "sequence" && (entry.Value & AudioK.SequenceTimedLoop) != 0);
+            }
+            else Stream(def, loop || def.Loop || (def.Flags & AudioK.FlagLoop) != 0, pin);
+        }
+        _preloadDepth++;
+        try { Load(path, forceLoop); }
+        finally { _preloadDepth--; }
+    }
+
+    /// <summary>Resolve all possible leaves, without consuming random choices or switch state.</summary>
+    public void PrepareSession()
+    {
+        if (SessionPrepared) return;
+        foreach (SoundDef def in _sounds.Values)
+            if (def.Path.StartsWith("Sound_Persos.", StringComparison.OrdinalIgnoreCase) ||
+                def.Path.StartsWith("Armes_impacts.", StringComparison.OrdinalIgnoreCase) ||
+                def.Path.StartsWith("Interface.", StringComparison.OrdinalIgnoreCase) ||
+                def.Path.StartsWith("OpenScct", StringComparison.OrdinalIgnoreCase) ||
+                def.Path.StartsWith("osanim.", StringComparison.OrdinalIgnoreCase) ||
+                MapDir is not null && def.File?.StartsWith(MapDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) == true)
+            {
+                PreloadManifest.Add(def.Path);
+                Preload(def.Path, pin: true);
+                // Live camera/gadget actors assign these short authored waves to
+                // AmbientSound while operating, even when the wave is not flagged as a loop.
+                if (def.Path.StartsWith("Armes_impacts.Gadgets.", StringComparison.OrdinalIgnoreCase))
+                    Preload(def.Path, forceLoop: true, pin: true);
+            }
+        if (Map is { } map)
+        {
+            foreach (MapSoundActor actor in map.Actors)
+                if (actor.AmbientSound is { } ambient) { PreloadManifest.Add(ambient); Preload(ambient, actor.Loop && actor.RepeatInterval <= 0, true); }
+            foreach (MapSoundZone zone in map.Zones.Values)
+                if (zone.AmbientSound is { } ambient) { PreloadManifest.Add(ambient); Preload(ambient, zone.Loop && zone.RepeatInterval <= 0, true); }
+            if (map.LevelSong is { } song) { PreloadManifest.Add(song); Preload(song, pin: true); }
+        }
+        SessionPrepared = true;
+    }
+
+    /// <summary>The playable stream of a wave or streamed sound, looping or not; null when it has no file.</summary>
+    public AudioStream? Stream(SoundDef def, bool loop, bool pin = false)
+    {
+        ArgumentNullException.ThrowIfNull(def);
+        if (def.File is null)
+        {
+            return null;
+        }
+
+        if (_streams.TryGetValue((def.File, loop), out CachedStream? cached))
+        {
+            cached.Used = ++_cacheClock;
+            cached.Pinned |= pin;
+            return cached.Stream;
+        }
+
+        long started = Stopwatch.GetTimestamp();
+        long bytesOnDisk = 0;
+        AudioStream? stream = null;
+        string? error = null;
+        try
+        {
+            FilesRead++;
+            if (SessionPrepared && _preloadDepth == 0) RuntimeFilesRead++;
+            bytesOnDisk = new FileInfo(def.File).Length;
+            if (def.File.EndsWith(".ogg", StringComparison.OrdinalIgnoreCase))
+            {
+                AudioStreamOggVorbis ogg = AudioStreamOggVorbis.LoadFromFile(def.File);
+                ogg.Loop = loop;
+                stream = ogg;
+            }
+            else
+            {
+                byte[] waveBytes = WavChunks.WithoutEmptySampler(System.IO.File.ReadAllBytes(def.File));
+                AudioStreamWav wav = AudioStreamWav.LoadFromBuffer(waveBytes);
+                if (loop)
+                {
+                    int frames = def.Frames > 0 ? def.Frames : (int)Math.Round(wav.GetLength() * wav.MixRate);
+                    wav.LoopMode = AudioStreamWav.LoopModeEnum.Forward;
+                    wav.LoopBegin = def.LoopStart >= 0 ? def.LoopStart : 0;
+                    wav.LoopEnd = def.LoopEnd > 0 ? def.LoopEnd : frames;
+                }
+                else
+                {
+                    // A one-shot plays once whatever the file's sampler chunk says (the loop comes from the Sound).
+                    wav.LoopMode = AudioStreamWav.LoopModeEnum.Disabled;
+                }
+
+                stream = wav;
+            }
+        }
+        catch (Exception e) when (e is IOException or InvalidOperationException or ArgumentException or NullReferenceException)
+        {
+            error = e.Message;
+            stream = null;
+        }
+
+        if (stream is null)
+        {
+            LoadErrors.Add($"{def.Path}: {error ?? def.File + " did not load"}");
+        }
+
+        double duration = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        MaxLoadMilliseconds = Math.Max(MaxLoadMilliseconds, duration);
+        if (LoadAttempts.Count == 256) LoadAttempts.RemoveRange(0, 128);
+        LoadAttempts.Add(new AudioLoad(def.Path, loop, _preloadDepth > 0 || !SessionPrepared, duration));
+        long bytes = stream is null ? 0 : bytesOnDisk;
+        TrimCache(Math.Max(0, CacheBudgetBytes - bytes));
+        // Oversize streams remain owned by their player instead of defeating the
+        // cache budget. Eviction drops our reference, never disposes live audio.
+        if (bytes <= CacheBudgetBytes && CachedBytes + bytes <= CacheBudgetBytes)
+        {
+            _streams[(def.File, loop)] = new CachedStream(stream, bytes, ++_cacheClock, pin);
+            CachedBytes += bytes;
+        }
+        return stream;
+    }
+
+    private void TrimCache(long target)
+    {
+        while (CachedBytes > target)
+        {
+            (string File, bool Loop)? oldest = null;
+            long used = long.MaxValue;
+            foreach (var pair in _streams)
+                if (!pair.Value.Pinned && (pair.Value.Stream is null || pair.Value.Stream.GetReferenceCount() <= 1) && pair.Value.Used < used)
+                { oldest = pair.Key; used = pair.Value.Used; }
+            if (oldest is not { } key) return;
+            CachedBytes -= _streams[key].Bytes;
+            _streams.Remove(key);
+            CacheEvictions++;
+        }
+    }
+
+    /// <summary>Frees every loaded stream (the players using them must be stopped first).</summary>
+    public void ReleaseStreams()
+    {
+        foreach (CachedStream s in _streams.Values)
+        {
+            s.Stream?.Dispose();
+        }
+
+        _streams.Clear();
+        CachedBytes = 0;
+        SessionPrepared = false;
+        PreloadManifest.Clear();
+    }
+
+    private void ReadShared(string path)
+    {
+        using JsonDocument doc = JsonDocument.Parse(System.IO.File.ReadAllBytes(path));
+        JsonElement root = doc.RootElement;
+        if (!root.TryGetProperty("format", out JsonElement f) || f.GetString() != "svm.audio/1")
+        {
+            throw new InvalidDataException($"{path}: not an svm.audio/1 library");
+        }
+
+        foreach (JsonProperty p in root.GetProperty("sounds").EnumerateObject())
+        {
+            _sounds[p.Name] = Read(p.Name, p.Value, SharedDir);
+        }
+    }
+
+    private void ReadMapSounds(string path)
+    {
+        using JsonDocument doc = JsonDocument.Parse(System.IO.File.ReadAllBytes(path));
+        foreach (JsonProperty p in doc.RootElement.GetProperty("sounds").EnumerateObject())
+        {
+            JsonElement v = p.Value;
+
+            // A complete source definition: a sound stored in the map package itself, or a bank stream whose
+            // object path an older shared library may not contain. Its file lives in the map folder.
+            if (v.TryGetProperty("root", out JsonElement own) && own.GetString() == "map" && v.TryGetProperty("flags", out _))
+            {
+                _sounds[p.Name] = Read(p.Name, v, MapDir!);
+                continue;
+            }
+
+            if (!v.TryGetProperty("file", out JsonElement file) || !v.TryGetProperty("root", out JsonElement root) ||
+                root.GetString() != "map" || !_sounds.TryGetValue(p.Name, out SoundDef? shared))
+            {
+                continue;
+            }
+
+            // A streamed sound of this map's bank: the shared entry with the map's file and duration.
+            _sounds[p.Name] = new SoundDef
+            {
+                Path = shared.Path, Kind = shared.Kind, Flags = shared.Flags, Volume = shared.Volume, Radius = shared.Radius,
+                Loop = shared.Loop, Positional = shared.Positional, Entries = shared.Entries,
+                File = System.IO.Path.GetFullPath(System.IO.Path.Combine(MapDir!, file.GetString()!)),
+                Duration = v.TryGetProperty("duration", out JsonElement d) ? d.GetSingle() : 0f,
+            };
+        }
+    }
+
+    private static SoundDef Read(string path, JsonElement v, string baseDir)
+    {
+        var entries = new List<SoundEntry>();
+        if (v.TryGetProperty("entries", out JsonElement es))
+        {
+            foreach (JsonElement e in es.EnumerateArray())
+            {
+                string? s = e.TryGetProperty("sound", out JsonElement sv) && sv.ValueKind == JsonValueKind.String ? sv.GetString() : null;
+                entries.Add(new SoundEntry(s, e.GetProperty("value").GetInt32()));
+            }
+        }
+
+        string kind = v.GetProperty("kind").GetString()!;
+        string? file = v.TryGetProperty("file", out JsonElement fe)
+            ? System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, fe.GetString()!))
+            : null;
+        return new SoundDef
+        {
+            Path = path,
+            Kind = kind,
+            Flags = v.GetProperty("flags").GetInt32(),
+            Volume = v.GetProperty("volume").GetSingle(),
+            Radius = v.GetProperty("radius").GetSingle(),
+            Loop = v.GetProperty("loop").GetBoolean(),
+            Positional = v.GetProperty("positional").GetBoolean(),
+            File = file,
+            Duration = v.TryGetProperty("duration", out JsonElement du) ? du.GetSingle() : 0f,
+            LoopStart = v.TryGetProperty("loopStart", out JsonElement ls) ? ls.GetInt32() : -1,
+            LoopEnd = v.TryGetProperty("loopEnd", out JsonElement le) ? le.GetInt32() : -1,
+            Frames = v.TryGetProperty("frames", out JsonElement fr) ? fr.GetInt32() : 0,
+            Entries = entries.ToArray(),
+        };
+    }
+}
+
+/// <summary>A sound actor of the map's audio.json (also the client-only AmbientSound actors).</summary>
+public sealed record MapSoundActor(
+    string Id,
+    string Class,
+    string Category,
+    OpenScct.Core.FVector Location,
+    string? AmbientSound,
+    byte SoundVolume,
+    float SoundRadius,
+    byte SoundPitch,
+    int LightType,
+    float LightBrightness,
+    byte SoundOcclusion = 0,
+    bool Loop = true,
+    float RepeatInterval = 0);
+
+/// <summary>A zone of the map's audio.json: its ambience and its I3DL2 reverb parameters.</summary>
+public sealed record MapSoundZone(string Id, string? AmbientSound, byte SoundVolume, byte SoundPitch, string? EffectClass,
+    IReadOnlyDictionary<string, float> Effect, bool Loop = true, float RepeatInterval = 0);
+
+/// <summary>svmap/&lt;Map&gt;/audio/audio.json (svm.mapaudio/1): actors and zones.</summary>
+public sealed class MapAudioDoc
+{
+    private readonly HashSet<string> _oneShots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, float> _intervals = new(StringComparer.OrdinalIgnoreCase);
+    public bool Loops(string id) => !_oneShots.Contains(id);
+    public float RepeatInterval(string id) => _intervals.TryGetValue(id, out float seconds) ? seconds : 0;
+    public List<MapSoundActor> Actors { get; } = [];
+
+    public Dictionary<string, MapSoundZone> Zones { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>ZoneDist (ULevel, game 0x109ea770): <see cref="ZoneCount"/> x <see cref="ZoneCount"/> portal distances, row-major.</summary>
+    public byte[] ZoneDist { get; private set; } = [];
+
+    /// <summary>LevelInfo.Song: the music the engine starts when the map loads (TermD; the menu levels).</summary>
+    public string? LevelSong { get; private set; }
+
+    public int ZoneCount { get; private set; }
+
+    /// <summary>The portal distance between two zone numbers; 0 when the map has no table (no zone term then).</summary>
+    public int ZoneDistance(int a, int b) =>
+        a >= 0 && b >= 0 && a < ZoneCount && b < ZoneCount ? ZoneDist[(a * ZoneCount) + b] : 0;
+
+    public static MapAudioDoc Load(string path)
+    {
+        using JsonDocument doc = JsonDocument.Parse(System.IO.File.ReadAllBytes(path));
+        JsonElement root = doc.RootElement;
+        if (!root.TryGetProperty("format", out JsonElement f) || f.GetString() != "svm.mapaudio/1")
+        {
+            throw new InvalidDataException($"{path}: not an svm.mapaudio/1 file");
+        }
+
+        var m = new MapAudioDoc();
+        foreach (JsonElement a in root.GetProperty("actors").EnumerateArray())
+        {
+            JsonElement loc = a.GetProperty("location");
+            if (a.GetProperty("class").GetString() is { } cls && cls.EndsWith("LevelInfo", StringComparison.Ordinal) &&
+                a.TryGetProperty("sounds", out JsonElement levelSounds) && levelSounds.TryGetProperty("Song", out JsonElement song))
+            {
+                m.LevelSong = song.GetString();
+            }
+
+            m.Actors.Add(new MapSoundActor(
+                a.GetProperty("id").GetString()!,
+                a.GetProperty("class").GetString()!,
+                a.GetProperty("category").GetString()!,
+                new OpenScct.Core.FVector(loc.GetProperty("X").GetSingle(), loc.GetProperty("Y").GetSingle(), loc.GetProperty("Z").GetSingle()),
+                a.TryGetProperty("ambientSound", out JsonElement s) ? s.GetString() : null,
+                (byte)Num(a, "soundVolume", 128),
+                Num(a, "soundRadius", 64f),
+                (byte)Num(a, "soundPitch", 64),
+                (int)Num(a, "lightType", 0),
+                Num(a, "lightBrightness", 64f),
+                (byte)Num(a, "soundOcclusion", 0), !a.TryGetProperty("loop", out JsonElement loop) || loop.ValueKind != JsonValueKind.False,
+                Interval(a)));
+            if (!m.Actors[^1].Loop) m._oneShots.Add(m.Actors[^1].Id);
+            if (m.Actors[^1].RepeatInterval > 0) m._intervals[m.Actors[^1].Id] = m.Actors[^1].RepeatInterval;
+        }
+
+        // The portal distance between zones (rows and columns by zone number), absent in older content.
+        if (root.TryGetProperty("zoneDist", out JsonElement dist) && dist.ValueKind == JsonValueKind.Array)
+        {
+            int n = dist.GetArrayLength();
+            m.ZoneDist = new byte[n * n];
+            m.ZoneCount = n;
+            int i = 0;
+            foreach (JsonElement row in dist.EnumerateArray())
+            {
+                int j = 0;
+                foreach (JsonElement v in row.EnumerateArray())
+                {
+                    if (j < n)
+                    {
+                        m.ZoneDist[(i * n) + j] = (byte)Math.Clamp(v.GetInt32(), 0, 255);
+                    }
+
+                    j++;
+                }
+
+                i++;
+            }
+        }
+
+        foreach (JsonElement z in root.GetProperty("zones").EnumerateArray())
+        {
+            var effect = new Dictionary<string, float>(StringComparer.Ordinal);
+            string? cls = null;
+            if (z.TryGetProperty("effect", out JsonElement e))
+            {
+                cls = e.TryGetProperty("class", out JsonElement c) ? c.GetString() : null;
+                if (e.TryGetProperty("params", out JsonElement ps))
+                {
+                    foreach (JsonProperty p in ps.EnumerateObject())
+                    {
+                        if (p.Value.ValueKind == JsonValueKind.Number)
+                        {
+                            effect[p.Name] = p.Value.GetSingle();
+                        }
+                        else if (p.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                        {
+                            effect[p.Name] = p.Value.GetBoolean() ? 1f : 0f;
+                        }
+                        else if (p.Value.ValueKind == JsonValueKind.Object)
+                        {
+                            foreach (string axis in new[] { "X", "Y", "Z" })
+                                if (p.Value.TryGetProperty(axis, out JsonElement value) && value.ValueKind == JsonValueKind.Number)
+                                    effect[p.Name + axis] = value.GetSingle();
+                        }
+                    }
+                }
+            }
+
+            string id = z.GetProperty("id").GetString()!;
+            m.Zones[id] = new MapSoundZone(id, z.TryGetProperty("ambientSound", out JsonElement s) ? s.GetString() : null,
+                (byte)Num(z, "soundVolume", 128), (byte)Num(z, "soundPitch", 64), cls, effect,
+                !z.TryGetProperty("loop", out JsonElement loop) || loop.ValueKind != JsonValueKind.False, Interval(z));
+            if (!m.Zones[id].Loop) m._oneShots.Add(id);
+            if (m.Zones[id].RepeatInterval > 0) m._intervals[id] = m.Zones[id].RepeatInterval;
+        }
+
+        return m;
+    }
+
+    private static float Num(JsonElement e, string name, float fallback) =>
+        e.TryGetProperty(name, out JsonElement v) && v.ValueKind == JsonValueKind.Number ? v.GetSingle() : fallback;
+    private static float Interval(JsonElement element)
+    {
+        float seconds = Num(element, "repeatInterval", 0);
+        return float.IsFinite(seconds) ? Math.Clamp(seconds, 0, 86400) : 0;
+    }
+}

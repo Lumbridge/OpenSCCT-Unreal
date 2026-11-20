@@ -1,0 +1,168 @@
+name: linux-export
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/linux-export.yml'
+      - 'game/**'
+      - 'src/**'
+      - 'shared/**'
+      - 'packaging/**'
+      - 'tools/linux/**'
+      - 'tools/release/**'
+      - 'tests/OpenScct.Launcher.Tests/**'
+      - 'tools/audio/**'
+      - 'Directory.*'
+      - 'global.json'
+      - 'godot-version.txt'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/linux-export.yml'
+      - 'game/**'
+      - 'src/**'
+      - 'shared/**'
+      - 'packaging/**'
+      - 'tools/linux/**'
+      - 'tools/release/**'
+      - 'tests/OpenScct.Launcher.Tests/**'
+      - 'tools/audio/**'
+      - 'Directory.*'
+      - 'global.json'
+      - 'godot-version.txt'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-export-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  launcher:
+    # Build against this glibc baseline so the binary also runs on Debian 12 and newer desktops.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Publish and package native launcher
+        run: bash tools/linux/build-launcher.sh
+      - name: Launcher and packaging tests
+        run: |
+          dotnet test --project tests/OpenScct.Launcher.Tests -c Release
+          python3 -m unittest discover -s tools/linux/tests -v
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openscct-linux-launcher
+          path: local/dist/OpenSCCT.Launcher*
+          retention-days: 14
+
+  launcher-distros:
+    needs: launcher
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: Ubuntu 22.04
+            image: ubuntu:22.04
+            packages: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates tar gzip diffutils libx11-6 libice6 libsm6 libfontconfig1 fonts-dejavu-core libgl1 libicu70 libssl3 zlib1g xvfb xauth desktop-file-utils
+          - distro: Debian 12
+            image: debian:12-slim
+            packages: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates tar gzip diffutils libx11-6 libice6 libsm6 libfontconfig1 fonts-dejavu-core libgl1 libicu72 libssl3 zlib1g xvfb xauth desktop-file-utils
+          - distro: Fedora
+            image: fedora:latest
+            packages: dnf install -y ca-certificates tar gzip diffutils libX11 libICE libSM fontconfig dejavu-sans-fonts mesa-libGL libicu openssl3-libs zlib libstdc++ xorg-x11-server-Xvfb xorg-x11-xauth desktop-file-utils
+          - distro: Arch Linux
+            image: archlinux:base
+            packages: pacman -Syu --noconfirm --needed ca-certificates tar gzip diffutils libx11 libice libsm fontconfig ttf-dejavu mesa icu openssl openssl-3 zlib gcc-libs xorg-server-xvfb xorg-xauth desktop-file-utils
+    name: Launcher on ${{ matrix.distro }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: openscct-linux-launcher
+          path: local/dist
+      - name: Run native and desktop smokes
+        env:
+          DISTRO_IMAGE: ${{ matrix.image }}
+          DISTRO_PACKAGES: ${{ matrix.packages }}
+        run: |
+          docker run --rm -v "$PWD:/workspace" -w /workspace -e DISTRO_PACKAGES "$DISTRO_IMAGE" \
+            sh -c 'eval "$DISTRO_PACKAGES" && bash tools/linux/smoke-launcher.sh local/dist/OpenSCCT.Launcher-linux-x64.tar.gz'
+
+  package:
+    needs: launcher
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_PROCESSOR_COUNT: '2'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Linux export dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends flatpak curl unzip python3 python3-pip ripgrep git build-essential ninja-build libxcursor1 libxinerama1 libxi6 libxrandr2 libgl1 libasound2 libpulse0
+          python3 -m pip install --user 'cmake==3.31.6'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v7
+        with:
+          name: openscct-linux-launcher
+          path: local/dist
+      - name: Install pinned toolchain and templates
+        run: tools/linux/bootstrap.sh
+      - name: Restore pinned Godot assemblies
+        shell: pwsh
+        run: |
+          $config = ./tools/browser/Get-TwoDog.ps1 -ManagedOnly
+          $env:DOTNET_ROOT = Join-Path $PWD 'local/toolchain/dotnet'
+          $env:PATH = "$env:DOTNET_ROOT" + [IO.Path]::PathSeparator + $env:PATH
+          dotnet restore game/OpenScctGame.slnx --configfile $config
+      - name: Export and package
+        run: |
+          export DOTNET_ROOT="$PWD/local/toolchain/dotnet"
+          export PATH="$DOTNET_ROOT:$PATH"
+          export GODOT="$PWD/local/toolchain/Godot_v4.7.2-stable_mono_linux_x86_64/Godot_v4.7.2-stable_mono_linux.x86_64"
+          tools/linux/build.sh
+      - name: Smoke the exported native runtime
+        run: tools/linux/smoke.sh
+      - name: Prepare native game and launcher release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [xml]$props = Get-Content Directory.Build.props
+          $version = @($props.Project.PropertyGroup.VersionPrefix | Where-Object { $_ })[0]
+          ./tools/release/New-Release.ps1 -Version $version -Platform linux-x64 -BuildDir local/linux -LauncherExe local/dist/OpenSCCT.Launcher-linux-x64 -OutDir local/release/linux-x64 -StoreTag game-files-4
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openscct-linux-release
+          path: local/release/linux-x64
+          retention-days: 14
+      - name: Install and smoke the Flatpak sandbox
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive --assumeyes local/dist/OpenSCCT-linux-x86_64.flatpak
+          tools/linux/smoke-flatpak.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openscct-linux-flatpak
+          path: |
+            local/dist/OpenSCCT-linux-x86_64.flatpak
+            local/dist/SHA256SUMS
+            local/linux/openscct-build.json
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: openscct-linux-smoke-logs
+          path: local/verification
+          retention-days: 14

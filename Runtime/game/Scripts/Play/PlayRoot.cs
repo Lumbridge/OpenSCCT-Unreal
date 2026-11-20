@@ -1,0 +1,1197 @@
+using SteamVersusMaps = OpenScct.Maps.SteamVersusMaps;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using Godot;
+using OpenScct.Content;
+using OpenScct.Core;
+using OpenScct.Core.Engine;
+using OpenScct.Game.SBase;
+using OpenScct.Net;
+using OpenScctGame.Cameras;
+using OpenScctGame.Controls;
+using OpenScctGame.Diagnostics;
+using OpenScctGame.Hud;
+using OpenScctGame.Match;
+using OpenScctGame.Play.Session;
+using OpenScctGame.Render;
+using OpenScctGame.Views;
+using ViewSource = OpenScct.Game.Camera.PlayerCalcView.EViewSource;
+
+namespace OpenScctGame.Play;
+
+/// <summary>What <see cref="PlayRoot"/> plays.</summary>
+public sealed record PlayConfig
+{
+    public PlaySettings Settings { get; init; } = new();
+
+    /// <summary>Builds the map's render and the views (off for sim-only runs).</summary>
+    public bool Render { get; init; } = true;
+
+    /// <summary>Adds the HUD (when the UI content exists).</summary>
+    public bool Hud { get; init; } = true;
+
+    /// <summary>Plays the match's sound (when the map's audio is converted).</summary>
+    public bool Audio { get; init; } = true;
+
+    /// <summary>
+    /// 0 runs the simulation by the wall clock (real play). Above 0, each frame runs that many ticks on a virtual
+    /// clock whatever the frame took (smoke runs: fast and deterministic).
+    /// </summary>
+    public int TicksPerFrame { get; init; }
+
+    /// <summary>Retain full-session timing samples for diagnostic percentiles (off in ordinary gameplay).</summary>
+    public bool CaptureFrameHistory { get; init; }
+
+    /// <summary>A scripted local player instead of the keyboard and mouse, or null.</summary>
+    public ScriptedPilot? Pilot { get; init; }
+
+    /// <summary>The original game folder the key layouts come from, or null for the default.</summary>
+    public string? GameRoot { get; init; }
+
+    /// <summary>
+    /// Makes the session instead of an offline match (an online round: OpenScctGame.Online gives the visit's session).
+    /// </summary>
+    public Func<IClock, PlaySession>? CreateSession { get; init; }
+
+    /// <summary>A demo being watched (docs/DEMOS.md): its cameras, playback bar and keys replace the player's input.</summary>
+    public Demo.DemoPlayer? Demo { get; init; }
+
+    /// <summary>A play of <see cref="LaunchOptions.PlayMap"/> with the launch options' side, mode, rules and host.</summary>
+    public static PlayConfig FromOptions(LaunchOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        PlaySide side = options.PlaySide is "merc" or "mercs" or "1" ? PlaySide.Merc : PlaySide.Spy;
+        PlayRules rules = options.PlayRules is "playlevel" or "play-level" or "editor" ? PlayRules.PlayLevel : PlayRules.MapSettings;
+        PlayHostMode host = options.PlayHost == "inline" ? PlayHostMode.Inline : PlayHostMode.Thread;
+        var settings = new PlaySettings
+        {
+            Map = options.PlayMap ?? SteamVersusMaps.DefaultHostMap,
+            Side = side,
+            Mode = options.PlayMode,
+            Rules = rules,
+            HostMode = host,
+            MapRoots = [.. options.MapRoots],
+            Bots = options.PlayBots,
+            Difficulty = options.PlayDifficulty,
+            MatchPlayers = options.PlayPlayers,
+            ResponsiveSmoke = options.ResponsiveSmoke,
+            UnlimitedGear = options.Practice,
+            OfflineRules = options.Practice,
+            StartAt = options.PlayStartAt,
+        };
+        if (options.PlayNetRate > 0)
+        {
+            settings = settings with { NetRate = options.PlayNetRate };
+        }
+
+        // A simulated bad link needs the host in this thread: the simulated network delivers when the client polls.
+        if (options.PlaySimLink is { } link)
+        {
+            settings = settings with { HostMode = PlayHostMode.Inline, SimLink = SimLinkProfile.Get(link) };
+        }
+
+        if (options.PlayRecord)
+        {
+            settings = settings with { DemoFolder = OpenScctGame.Play.Demo.DemoLibrary.SavedFolder };
+        }
+
+        if (options.PlayRoute is { } stops)
+        {
+            // The route bot walks on the side asked for; the local player stands by on the other one.
+            settings = settings with
+            {
+                Side = side == PlaySide.Spy ? PlaySide.Merc : PlaySide.Spy,
+                Route = new PlayRoute(stops, side, options.PlayRouteFrom, line => GD.Print($"{RoutePrefix} {line}")),
+            };
+        }
+
+        return new PlayConfig { Settings = settings, GameRoot = options.GameRoot };
+    }
+
+    /// <summary>The prefix of the route bot's report lines, which the map editor reads.</summary>
+    public const string RoutePrefix = "SVM_ROUTE";
+}
+
+/// <summary>
+/// The offline play scene: a <see cref="PlaySession"/> (listen server with the map and the game rules, the local
+/// player over loopback, logged in through the game flow), the map built by <see cref="MapBuilder"/> and drawn by a
+/// <see cref="FaithfulView"/> placed by the simulation's calc view (<see cref="PlayCamera"/>), the pawns, devices
+/// and the merc's first-person arms drawn from the client world, the HUD, and the keyboard and mouse
+/// (<see cref="PlayInput"/>) or a <see cref="ScriptedPilot"/> feeding the local player's input each tick.
+/// </summary>
+public partial class PlayRoot : Node3D
+{
+    public const string ScenePath = "res://Scenes/Play.tscn";
+
+    private const long TickMicros = 1_000_000 / Sim.Hz;
+    private Demo.DemoXRayView? _demoXRay;
+
+    private VirtualClock? _virtualClock;
+    private Label? _status;
+    private Exception? _reportedServerFailure;
+    private Label? _prompt;
+    private ColorRect? _cameraOcclusion;
+    private ColorRect? _loadingCover;
+    private bool _smokePreparing, _smokeRestoreControls;
+    private bool _smokeRestoreLoaded;
+    private bool _browserPreparingPlayer, _browserRestoreControls;
+    private ulong _browserPlayerWaitAt;
+    private int _browserPlayerFrames;
+    private static readonly int[] BrowserPlayerVisions =
+        [RenderK.RendMapNormal, RenderK.RendMapNight, RenderK.RendMapThermal, RenderK.RendMapMotion, RenderK.RendMapEmf];
+    private int _lastRendMap = -1;
+    private bool _lastBinoculars;
+    private int _lastRemanenceCaptures;
+    private double _pilotMs;
+    private readonly Stopwatch _watch = new();
+    private readonly LookAhead _look = new();
+    private readonly HudBinocularAim _aim = new();
+    private readonly DrawnTime _time = new();
+    private float _alpha = 1f;
+    private SpyShadowLighting? _spyShadowLighting;
+    private Render.Projectors.SpyShadowProjector? _spyShadowProjector;
+    private int _loadId;
+    private bool _loadTimed;
+
+    public PlayConfig Config { get; private set; } = new();
+
+    public PlaySession? Session { get; private set; }
+
+    public RenderMap? Map { get; private set; }
+
+    public FaithfulView? View { get; private set; }
+
+    public PlayCamera? Camera { get; private set; }
+
+    public PawnViews? Pawns { get; private set; }
+
+    public DeviceViews? Devices { get; private set; }
+
+    /// <summary>The map's conveyors: belts, rollers and items moving with the replicated belt phase.</summary>
+    public ConveyorViews? Conveyors { get; private set; }
+
+    public FirstPersonView? FirstPerson { get; private set; }
+
+    public SpyFirstPersonView? SpyFirstPerson { get; private set; }
+
+    /// <summary>Muzzle flashes, tracers, impact marks and sparks (game/Scripts/Fx).</summary>
+    public OpenScctGame.Fx.CombatFxView? Fx { get; private set; }
+
+    /// <summary>The merc torch light (game/Scripts/Render/FlashLightView.cs).</summary>
+    public FlashLightView? FlashLight { get; private set; }
+
+    /// <summary>The merc laser beams (game/Scripts/Render/MercLaserView.cs).</summary>
+    public MercLaserView? MercLasers { get; private set; }
+
+    /// <summary>The spy pistols' laser dots and beam (game/Scripts/Fx/SpyLaserView.cs).</summary>
+    public OpenScctGame.Fx.SpyLaserView? SpyLasers { get; private set; }
+
+    /// <summary>The map's laser tripwire beams (game/Scripts/Fx/LaserTriggerView.cs).</summary>
+    public OpenScctGame.Fx.LaserTriggerView? LaserTriggers { get; private set; }
+
+    /// <summary>The sticky shock sparks on shocked pawns (game/Scripts/Fx/ShockFxView.cs).</summary>
+    public OpenScctGame.Fx.ShockFxView? ShockFx { get; private set; }
+
+    public PlayInput? Controls { get; private set; }
+
+    public HudLayer? Hud { get; private set; }
+
+    /// <summary>The In-Game Menu (Escape).</summary>
+    public PlayMenu? Menu { get; private set; }
+
+    /// <summary>The match's sound, or null.</summary>
+    public PlayAudio? Audio { get; private set; }
+
+    public bool IsLoaded { get; private set; }
+
+    public string? LoadError { get; private set; }
+
+    public PlayFrameStats Stats { get; private set; } = new();
+
+    /// <summary>Seconds the map render and the session took to build.</summary>
+    public double LoadSeconds { get; private set; }
+
+    /// <summary>A play scene for <paramref name="config"/>, not yet in the tree.</summary>
+    public static PlayRoot Create(PlayConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var root = GD.Load<PackedScene>(ScenePath).Instantiate<PlayRoot>();
+        root.Config = config;
+        root.Stats = new PlayFrameStats(config.CaptureFrameHistory);
+        return root;
+    }
+
+    /// <summary>Replaces the current scene with a play scene for <paramref name="config"/>.</summary>
+    public static PlayRoot Enter(SceneTree tree, PlayConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        // The front end's entry may have started the timer already (before its loading picture). A play scene still
+        // current is the last round: a load it never finished is not this one.
+        if (!LoadTimer.Running || tree.CurrentScene is PlayRoot) LoadTimer.Begin("play " + config.Settings.Map);
+        if (config.Render) OpenScctGame.Render.Materials.ResponsiveSmokeShaders.Prewarm(config.Settings.Map);
+        LoadTimer.Mark("play.enter");
+        // The load below blocks the frames the menu music's fade needs.
+        OpenScctGame.Audio.FrontEndAudio.Silence(tree);
+        PlayRoot root = Create(config);
+        Node? previous = tree.CurrentScene;
+        tree.Root.AddChild(root);
+        tree.CurrentScene = root;
+        previous?.QueueFree();
+        return root;
+    }
+
+    public override void _Ready()
+    {
+        _loadId = LoadTimer.Id;
+        var hud = new CanvasLayer { Name = "PlayStatus", Layer = HudLayer.DefaultLayer + 1 };
+        _status = new Label { Name = "Status", Position = new Vector2(16f, 12f) };
+        _prompt = new Label { Name = "Prompt", Visible = false };
+        hud.AddChild(_status);
+        hud.AddChild(_prompt);
+        AddChild(hud);
+        var watch = Stopwatch.StartNew();
+        try
+        {
+            Load();
+            if (Config.Render && Fx is not null && MercLasers is not null)
+            {
+                _status.Text = OperatingSystem.IsBrowser() ? "Preparing map, weapons and vision..." : "Preparing effects...";
+                // The warm frames draw the map's cell meshes in every material variant, wrong light included
+                // (LightReach.Warm): black under the status until loading finishes.
+                ShowLoadingCover(true);
+                var warmup = GameplayFxWarmup.For(GetViewport());
+                AddChild(warmup);
+                warmup.PreloadMap(Map);
+                LoadTimer.Mark("ready.warmup-viewport");
+                if (Session is { } smokeSession && OpenScct.Game.Equipment.ResponsiveSmokeWorld.IsEnabled(smokeSession.Client.World.Level))
+                {
+                    SetSmokeLoading(true);
+                    View?.PreloadSmokeBackground();
+                    warmup.PreloadResponsiveSmoke(smokeSession.Client.World.Level,Map,GetViewport());
+                    LoadTimer.Mark("ready.smoke");
+                }
+                warmup.PreloadView(View);
+                LoadTimer.Mark("ready.view-post");
+                Fx.Preload(warmup.Samples);
+                LoadTimer.Mark("ready.fx");
+                MercLasers.Preload(warmup.Samples);
+                LoadTimer.Mark("ready.merc-lasers");
+                SpyLasers?.Preload(warmup.Samples);
+                LoadTimer.Mark("ready.spy-lasers");
+                FirstPerson?.Warmup(warmup.Samples);
+                SpyFirstPerson?.Warmup(warmup.Samples);
+                LoadTimer.Mark("ready.spy-first-person");
+                if (Map is { } map)
+                {
+                    Render.Characters.PawnOutfits.Warmup(map.Outfits, map.Folder, map.SharedRoot, warmup.Samples,
+                        sidearms: FirstPerson?.Needs.Sidearms ?? true);
+                    LoadTimer.Mark("ready.outfits");
+                    DeviceViews.PreloadSecuritySkins(map, warmup.Samples);
+                    DeviceViews.PreloadSkeletalProps(map, warmup.Samples);
+                    LoadTimer.Mark("ready.security-skins");
+                }
+                warmup.PreloadScene(this);
+                warmup.Begin(FinishLoading);
+                LoadTimer.Mark("ready.warmup-begin");
+            }
+            else FinishLoading();
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or SvMapFormatException or IOException or InvalidDataException
+            or InvalidOperationException or ArgumentException or UnauthorizedAccessException)
+        {
+            LoadError = ex.Message;
+            GD.PushError($"Could not start play on '{Config.Settings.Map}': {ex.Message}");
+            _status.Text = $"Could not start play on '{Config.Settings.Map}': {ex.Message}";
+        }
+
+        LoadSeconds = watch.Elapsed.TotalSeconds;
+    }
+
+    private void FinishLoading()
+    {
+        SetSmokeLoading(false);
+        Session?.Client.MarkReadyToPlay();
+        if (GameplayFxWarmup.BrowserPreparation && Config.Render)
+        {
+            // The client world and first pawn bind only after the ready message. Keep their initial
+            // simulation catch-up and first real scene draws under the same cover as the shader warmup.
+            _browserPreparingPlayer = true;
+            _browserPlayerWaitAt = Time.GetTicksMsec();
+            if (Controls is { } controls)
+            {
+                _browserRestoreControls = controls.Enabled;
+                controls.Enabled = false;
+            }
+            if (_status is not null) _status.Text = "Preparing player...";
+            ShowLoadingCover(true);
+            return;
+        }
+        CompleteLoading();
+    }
+
+    private void CompleteLoading()
+    {
+        if (_browserPreparingPlayer && Controls is { } controls) controls.Enabled = _browserRestoreControls;
+        _browserPreparingPlayer = false;
+        IsLoaded = true;
+        ShowLoadingCover(false);
+        if (_status is not null) _status.Text = "";
+        LoadTimer.Mark("ready.finish");
+    }
+
+    private void SetSmokeLoading(bool loading)
+    {
+        if (_smokePreparing == loading) return;
+        _smokePreparing = loading;
+        if (loading)
+        {
+            _smokeRestoreLoaded = IsLoaded; IsLoaded = false;
+            if (Controls is { } controls)
+            {
+                _smokeRestoreControls = controls.Enabled; controls.Enabled = false;
+                if (Session is { } session) controls.ClearHeld(session.Input);
+            }
+            if (_status is not null) _status.Text = "Preparing smoke effects...";
+        }
+        else
+        {
+            IsLoaded = _smokeRestoreLoaded;
+            if (Controls is { } controls) controls.Enabled = _smokeRestoreControls;
+            if (_status is not null) _status.Text = "";
+        }
+        // While the match is still loading the cover stays up: FinishLoading lifts it.
+        ShowLoadingCover(loading || !IsLoaded);
+    }
+
+    /// <summary>Black over the view, under the status text, while loading draws frames the player must not see.</summary>
+    private void ShowLoadingCover(bool visible)
+    {
+        // The Fast renderer lets Godot draw too while the cover is up, so both make their pipelines behind it.
+        Render.Rd.RdWorldRenderer.Loading = visible;
+        if (visible && _loadingCover is null && _status?.GetParent() is { } layer)
+        {
+            _loadingCover = new ColorRect { Name = "LoadingCover", Color = Colors.Black, MouseFilter = Control.MouseFilterEnum.Stop };
+            layer.AddChild(_loadingCover);
+            layer.MoveChild(_loadingCover, 0);
+            _loadingCover.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+        }
+
+        if (_loadingCover is not null) _loadingCover.Visible = visible;
+    }
+
+    private bool PrepareLateSmoke(PlaySession session)
+    {
+        if (!Config.Render || !OpenScct.Game.Equipment.ResponsiveSmokeWorld.IsEnabled(session.Client.World.Level)
+            || ResponsiveSmokeRenderer.IsPrepared) return false;
+        if (!_smokePreparing)
+        {
+            // Online rules can arrive after the ordinary FX loading viewport. Keep receiving packets while
+            // an explicit cover/input gate prevents a playable transparent-smoke interval during preparation.
+            SetSmokeLoading(true);
+            var warmup = GameplayFxWarmup.For(GetViewport()); AddChild(warmup);
+            View?.PreloadSmokeBackground();
+            bool switching = !OpenScctGame.Render.Materials.ResponsiveSmokeShaders.Enabled;
+            warmup.PreloadResponsiveSmoke(session.Client.World.Level,Map,GetViewport());
+            // The match's shaders were built without smoke and switch now: draw the first-use samples of _Ready again
+            // under the cover, so the first effect, laser or outfit does not compile in play.
+            if (switching && DisplayServer.GetName() != "headless")
+            {
+                PreloadGameplaySamples(warmup.Samples);
+                warmup.PreloadView(View);
+                warmup.PreloadScene(this);
+            }
+            warmup.Begin(() => SetSmokeLoading(false));
+        }
+        return true;
+    }
+
+    // The first-use samples _Ready draws while loading (effects, lasers, spy first person, outfits, security skins).
+    private void PreloadGameplaySamples(Node3D samples)
+    {
+        Fx?.Preload(samples);
+        MercLasers?.Preload(samples);
+        SpyLasers?.Preload(samples);
+        FirstPerson?.Warmup(samples);
+        SpyFirstPerson?.Warmup(samples);
+        if (Map is { } map)
+        {
+            Render.Characters.PawnOutfits.Warmup(map.Outfits, map.Folder, map.SharedRoot, samples,
+                sidearms: FirstPerson?.Needs.Sidearms ?? true);
+            DeviceViews.PreloadSecuritySkins(map, samples);
+            DeviceViews.PreloadSkeletalProps(map, samples);
+        }
+    }
+
+    private void Load()
+    {
+        // Local TestRange is a practice space. A supplied session belongs to an online host or demo and keeps
+        // its own rules; do not infer client-side practice from that server's map name.
+        PlaySettings settings = Config.CreateSession is null ? Config.Settings.ForLocalLaunch() : Config.Settings;
+        if (Config.Render && settings.ResponsiveSmoke && ResponsiveSmokeRenderer.UnsupportedReason is { } rendererError)
+            throw new InvalidOperationException(rendererError);
+        IClock clock;
+        if (Config.TicksPerFrame > 0)
+        {
+            _virtualClock = new VirtualClock();
+            clock = _virtualClock;
+        }
+        else
+        {
+            clock = new StopwatchClock();
+        }
+
+        var sessionLoad = Stopwatch.StartNew();
+        Session = Config.CreateSession?.Invoke(clock) ?? new PlaySession(settings, clock,
+            message => GD.Print($"SVM_PLAY load seconds={sessionLoad.Elapsed.TotalSeconds:F2} {message}"));
+        LoadTimer.Mark("play.session");
+        // Compile responsive smoke into this match's shaders only when its rules use it. Rules that arrive later
+        // switch them (GameplayFxWarmup.PreloadResponsiveSmoke, ResponsiveSmokeRenderer).
+        OpenScctGame.Render.Materials.ResponsiveSmokeShaders.Use(OpenScct.Game.Equipment.ResponsiveSmokeWorld.IsEnabled(Session.Client.World.Level));
+        if (Config.Render && OpenScct.Game.Equipment.ResponsiveSmokeWorld.IsEnabled(Session.Client.World.Level)
+            && ResponsiveSmokeRenderer.UnsupportedReason is { } sessionRendererError)
+        {
+            Session.Dispose();
+            Session = null;
+            throw new InvalidOperationException(sessionRendererError);
+        }
+        if (Config.Demo is null) _scoreboardCapture = new ScoreboardCapture(Session.Client);
+        CrashLog.Context = settings.Map + " " + settings.Mode;
+        if (settings.Bots > 0)
+        {
+            GD.Print($"SVM_PLAY bots: {settings.Bots} at {settings.Difficulty} ({(settings.HostMode == PlayHostMode.Inline ? "status every 10 s" : "host thread")})");
+        }
+
+        bool headless = DisplayServer.GetName() == "headless";
+        if (Config.Render)
+        {
+            Map = MapBuilder.Build(Session.MapFolder);
+            LoadTimer.Mark("play.map");
+            // Read the effects and decode their PNGs on a worker while the views and outfits load (CombatFxView takes it).
+            OpenScctGame.Fx.FxLibrary.BeginLoad(Map.SharedRoot);
+            _spyShadowLighting = new SpyShadowLighting(Map, Session.Client, () => Pawns);
+            Session.StickyCamShadowUpdate = _spyShadowLighting.Update;
+            AddChild(Map.Root);
+            _spyShadowProjector = new Render.Projectors.SpyShadowProjector(Map.Root);
+            AddChild(_spyShadowProjector);
+            View = new FaithfulView();
+            AddChild(View);
+            View.Attach(Map);
+            View.Camera.MakeCurrent();
+            // SVM_RD_PROTO=1: the RenderingDevice world renderer prototype replaces Godot's 3D drawing.
+            if (OpenScctGame.Render.RdProto.RdProtoRenderer.Enabled && !headless)
+            {
+                AddChild(new OpenScctGame.Render.RdProto.RdProtoRenderer(Map, View));
+            }
+            // SVM_RD_WORLD=1: our own world pass draws the merged map inside Godot's frame.
+            if (OpenScctGame.Render.Rd.RdWorldRenderer.Enabled && !headless && Map.RdWorld is not null)
+            {
+                AddChild(new OpenScctGame.Render.Rd.RdWorldRenderer(Map, View));
+            }
+
+            GameplayObjects.ShowMode(Map, settings.Mode);
+            LoadTimer.Mark("play.view");
+            Camera = new PlayCamera(View);
+            var cameraMask = new CanvasLayer { Name = "CameraOcclusion", Layer = HudLayer.DefaultLayer - 1 };
+            _cameraOcclusion = new ColorRect
+            {
+                Name = "BlockedView", Color = Colors.Black, Visible = false, MouseFilter = Control.MouseFilterEnum.Ignore,
+            };
+            cameraMask.AddChild(_cameraOcclusion);
+            AddChild(cameraMask);
+            _cameraOcclusion.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+            Pawns = new PawnViews { Map = Map, SharedRoot = Map.SharedRoot };
+            AddChild(Pawns);
+            FirstPerson = new FirstPersonView { Map = Map, SharedRoot = Map.SharedRoot };
+            AddChild(FirstPerson);
+            LoadTimer.Mark("play.pawn-views");
+            PlaySettings built = Session.Settings;
+            var needs = FirstPersonNeeds.Of(Config.Demo is not null, Session.IsRemote, built.Side == PlaySide.Merc,
+                built.Mode, built.Sidearms, Session.Client.World.Level);
+            FirstPerson.Preload(needs);
+            LoadTimer.Mark("play.sidearms");
+            SpyFirstPerson = new SpyFirstPersonView { Map = Map, SharedRoot = Map.SharedRoot };
+            AddChild(SpyFirstPerson);
+            if (needs.Spy) SpyFirstPerson.Preload();
+            LoadTimer.Mark("play.spy-first-person");
+            Render.Characters.PawnOutfits.Prepare(Map.Outfits, Map.Folder, Map.SharedRoot,
+                rain: Session.Client.World.Level.GetService<RainVolumeList>() is { Volumes.Count: > 0 });
+            LoadTimer.Mark("play.outfits");
+            Fx = new OpenScctGame.Fx.CombatFxView
+            {
+                Pawns = Pawns, FirstPerson = FirstPerson, SpyFirstPerson = SpyFirstPerson, SharedRoot = Map.SharedRoot,
+            };
+            AddChild(Fx);
+            FlashLight = new FlashLightView { Name = "FlashLight", Map = Map, Pawns = Pawns };
+            AddChild(FlashLight);
+            MercLasers = new MercLaserView { Name = "MercLasers", Map = Map, Pawns = Pawns, FirstPerson = FirstPerson };
+            AddChild(MercLasers);
+            SpyLasers = new OpenScctGame.Fx.SpyLaserView
+            {
+                Name = "SpyLasers", Map = Map, Pawns = Pawns, SpyFirstPerson = SpyFirstPerson, SharedRoot = Map.SharedRoot,
+            };
+            AddChild(SpyLasers);
+            LaserTriggers = new OpenScctGame.Fx.LaserTriggerView(Map);
+            ShockFx = new OpenScctGame.Fx.ShockFxView { Name = "ShockFx", Pawns = Pawns };
+            AddChild(ShockFx);
+            LoadTimer.Mark("play.fx");
+            if (Map.Warnings.Count > 0)
+            {
+                GD.Print($"SVM_PLAY {Map.MapId} render warnings={Map.Warnings.Count} first: {Map.Warnings[0]}");
+            }
+        }
+
+        _bindingsSide = settings.Side;
+        _seedInputMap = !headless;
+        InputBindings.Rebound += OnKeysRebound;
+        Controls = new PlayInput
+        {
+            Bindings = InputBindings.Load(settings.Side, Config.GameRoot, seedInputMap: !headless),
+            Target = Session.Input,
+            Enabled = Config.Pilot is null && !headless,
+            CapturePointer = !headless && !OperatingSystem.IsBrowser(),
+        };
+        AddChild(Controls);
+        if (Config.Demo is { } demo)
+        {
+            // A demo's keys are the playback bar's; the spectator the recorder was takes no input.
+            Controls.Enabled = false;
+            AddChild(new Demo.DemoHud(demo));
+        }
+
+        LoadTimer.Mark("play.input");
+        if (Config.Audio)
+        {
+            // Before the HUD: the sound takes the client world's event sink first and the HUD's tap wraps it.
+            Audio = PlayAudio.Attach(this, Session, ListenerView, Config.Demo);
+            if (Map is { } map) Audio?.PreloadSecuritySounds(map.Actors);
+            LoadTimer.Mark("play.audio");
+        }
+
+        Session.BeforeClientTick = BeforeTick;
+        Session.AfterClientTick = AfterTick;
+        if (Config.Hud && Config.Render)
+        {
+            Hud = HudLayer.Attach(this, () => Session?.LocalController, out string? error);
+            if (Hud is null)
+            {
+                GD.Print($"SVM_PLAY no HUD: {error}");
+            }
+            else
+            {
+                Hud.Net.Source = ReadNet;
+                if (Hud.GadgetViews is { } gadgets && Audio is { } audio)
+                {
+                    // The heart sensor's heartbeat and scan ping (spec/equipment/gadget-hud.md rules 24 and 27).
+                    gadgets.Heart.PlaySound = s => audio.PlayHudSound(s.Sound);
+                }
+            }
+
+            if (Hud is not null && View is not null)
+            {
+                // The scope sights follow the aim point drawn between ticks, as the camera is.
+                Hud.DrawnAimLocation = () => _aim.At(_alpha);
+
+                // The HUD's fades and page time at the drawn moment, as the map's time.
+                Hud.DrawnTime = () => _time.At(_alpha);
+                Camera3D cam = View.Camera;
+                Hud.Projector = p =>
+                {
+                    Vector3 g = UeSpace.ToGodot(p);
+                    return cam.IsInsideTree() && !cam.IsPositionBehind(g) ? cam.UnprojectPosition(g) : null;
+                };
+            }
+        }
+
+        // Calls from the server land between client ticks (a ClientDamage's flash): their HUD events go in before the step.
+        Session.Client.BeforeWorldTick += PostLateHudEvents;
+
+        // Server messages and chat for the HUD, the chat line, the HUD's keys and the player's settings; the In-Game
+        // Menu on the ShowMenu key (Escape).
+        PlayHud.Parts hud = PlayHud.Attach(this, Session, Controls, Hud);
+        Menu = PlayMenu.Attach(this, Session, Controls, hud);
+        if (Config.Hud && Config.Demo is null && Config.Pilot is null && View is { } view)
+        {
+            TeamPingHud.Attach(this, Session, Controls, hud, view.Camera);
+        }
+
+        LoadTimer.Mark("play.hud");
+    }
+
+    /// <summary>The local player's link totals for the network readout (main thread, between client ticks).</summary>
+    private NetReadout? ReadNet()
+    {
+        if (Session is not { IsStopped: false } session || session.Client.Connection?.Stats is not { } stats)
+        {
+            return null;
+        }
+
+        long corrections = session.LocalController is { } pc
+            ? session.Client.Movement.PeekEndpoint(pc)?.Client?.CorrectionsApplied ?? 0
+            : 0;
+        // A listen host's own player is on loopback: its line is the other players' pings (their PRI.Ping, set by the
+        // server from each connection's round trip; bots and the host have none).
+        bool host = session.Client.Connection.IsLocal;
+        int clients = 0;
+        int best = int.MaxValue;
+        int worst = 0;
+        if (host && (session.LocalController?.GameReplicationInfo ?? session.Client.World.Level.Info.GRI) is { } gri)
+        {
+            foreach (OpenScct.Core.Engine.PlayerReplicationInfo? pri in gri.PRIArray)
+            {
+                if (pri is { bDeleteMe: false, Ping: > 0 })
+                {
+                    int ms = pri.Ping * OpenScctGame.Hud.HudK.PingUnit;
+                    clients++;
+                    best = Math.Min(best, ms);
+                    worst = Math.Max(worst, ms);
+                }
+            }
+        }
+
+        return new NetReadout(stats.HasRtt, stats.RttMicros, stats.JitterMicros, stats.InBytes, stats.OutBytes,
+            stats.InPackets, stats.InPacketsLost, stats.OutPackets, stats.OutPacketsLost, corrections, session.Client.ServerNetRate,
+            host, clients, clients > 0 ? best : 0, worst,
+            session.Client.InterpolationDelayMs, session.Client.Presentation.Underflows,
+            session.LocalController is { } owner ? session.Client.Movement.PeekEndpoint(owner)?.Client?.MovesReplayed ?? 0 : 0,
+            session.LocalController is { } mover ? session.Client.Movement.PeekEndpoint(mover)?.Client?.LastCorrectionDistance ?? 0f : 0f,
+            session.Client.PawnStates?.MissingDescriptors ?? 0,
+            session.Client.PawnStates is { LatestSnapshotTick: >= 0 } poses
+                ? Math.Max(0, session.Client.Driver.Timeline.RenderTimeFixed(session.Client.LocalTick, 0) - poses.LatestSnapshotTick * NetTimeline.Fraction) * (Sim.DeltaTime * 1000f / NetTimeline.Fraction) : 0,
+            session.Client.PawnStates?.Resets ?? 0,
+            session.LocalController is { } predicted ? session.Client.Movement.PeekEndpoint(predicted)?.Sequenced?.HistoryResets ?? 0 : 0,
+            session.Client.PawnStates?.StateGaps ?? 0);
+    }
+
+    /// <summary>
+    /// Where the player hears from (spec/native/audio.md rule 23): UNIAudio's Update listens at the viewport's
+    /// player controller's Location, turned by the drawn view (game 0x10b05260). The following camera's solver moves
+    /// the controller to the camera spot, so there the drawn (interpolated) camera is the same place. The object
+    /// views (sticky camera, camera network, Mirador and the move to a sticky camera) leave the controller where the
+    /// following camera put it, by the pawn: the player keeps hearing from there, not from the remote camera.
+    /// First person keeps the camera (where the original's controller sits then is not decoded).
+    /// </summary>
+    private (FVector Location, FRotator Rotation)? ListenerView()
+    {
+        (FVector Location, FRotator Rotation)? view = null;
+        if (Camera is { } camera)
+        {
+            (FVector location, FRotator rotation, float _) = camera.Current;
+            view = (location, rotation);
+        }
+        else if (Session is { View.Valid: true } s)
+        {
+            view = (s.View.Location, s.View.Rotation);
+        }
+
+        if (view is { } v && Session?.LocalController is { } pc &&
+            OpenScct.Game.Camera.PlayerCalcView.SourceOf(pc) is ViewSource.StickyCam or ViewSource.StickyCamSmoothToPosition
+                or ViewSource.Mirador)
+        {
+            return (pc.Location, v.Rotation);
+        }
+
+        return view;
+    }
+
+    private void PostLateHudEvents(OpenScct.Server.ClientSession client)
+    {
+        if (Hud is { } hud)
+        {
+            OpenScctGame.Hud.HudEventTap.TakeLate(client.World, hud.Effects);
+        }
+    }
+
+    private void BeforeTick(PlaySession session, long tick)
+    {
+        if (_smokePreparing)
+        {
+            Controls?.ClearHeld(session.Input);
+        }
+        else if (Config.Pilot is { } pilot)
+        {
+            long start = Stopwatch.GetTimestamp();
+            pilot.Tick(session);
+            _pilotMs += Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        }
+        else
+        {
+            Controls?.FillTick(session.Input);
+        }
+
+        // The mouse counts this tick takes, for the drawn view's look-ahead.
+        _look.BeforeTick(session.LocalController, session.Mouse, session.Input.MouseX, session.Input.MouseY);
+    }
+
+    private void AfterTick(PlaySession session, long tick)
+    {
+        Demo.DemoPlayer? demo = Config.Demo;
+        demo?.AfterTick(session);
+        Stats.Ticks++;
+        _time.OnTick(session.Client.World.Level.Info.TimeSeconds);
+        _look.AfterTick(session.LocalController, session.View);
+        if (session.FirstPersonOverride is { } fpOverride)
+            FirstPerson?.OnObservedTick(fpOverride());
+        else
+            FirstPerson?.OnTick(session.LocalController);
+        _aim.OnTick(session.LocalController);
+        if (Devices is null && Map is not null && session.Client.Map?.Loaded is { } loaded)
+        {
+            Devices = new DeviceViews(Map, loaded, Map.Root, Map.SharedRoot);
+            Conveyors = new ConveyorViews(Map, loaded, Map.Root);
+        }
+
+        Devices?.OnTick(session.Client.World.Level);
+        Map?.LightBeams?.OnTick(session.Client.Map?.Loaded);
+        if (demo is null) TriggerMapEmitters(session);
+        Pawns?.OnTick(session.Client.World.Level);
+        if (demo is not null) AdvanceDemoPresentation(demo, session);
+        else Fx?.OnTick(session);
+        FollowSide(session);
+    }
+
+    private PlaySide _bindingsSide;
+    private bool _seedInputMap;
+
+    /// <summary>
+    /// The keys follow the local pawn's side: a hub side change (docs/HUB.md) gives the player the other side's pawn
+    /// in the same round, so the layout loaded for the side he entered with is swapped for the new side's (a merc on
+    /// the spy layout had no fire key and threw the spy's gadgets).
+    /// </summary>
+    private void FollowSide(PlaySession session)
+    {
+        if (Controls is not { } controls || session.LocalPawn is not { } pawn)
+        {
+            return;
+        }
+
+        PlaySide side = pawn.SPawnType == PawnType.SPAWNDEFENSE ? PlaySide.Merc : PlaySide.Spy;
+        if (side == _bindingsSide)
+        {
+            return;
+        }
+
+        _bindingsSide = side;
+        controls.Bindings = InputBindings.Load(side, Config.GameRoot, _seedInputMap);
+        controls.ClearHeld(session.Input);
+        GD.Print($"SVM_PLAY keys: {(side == PlaySide.Merc ? "merc" : "spy")} layout for the new side");
+    }
+
+    /// <summary>
+    /// A rebind in the options (in-game menu or the hub) saved a side's keys: when it is the side being played, the
+    /// round's layout is reloaded so the change applies at once instead of on the next round.
+    /// </summary>
+    private void OnKeysRebound(PlaySide side)
+    {
+        if (Controls is not { } controls || side != _bindingsSide)
+        {
+            return;
+        }
+
+        controls.Bindings = InputBindings.Load(side, Config.GameRoot, _seedInputMap);
+        if (Session is { } session)
+        {
+            controls.ClearHeld(session.Input);
+        }
+    }
+
+    /// <summary>
+    /// Emitter.ReplicateTrigger on this machine: every map Emitter the event graph triggered this tick (its own
+    /// notify, or the server's relayed by NetDeviceEvents) fires its drawn particle systems.
+    /// </summary>
+    private void TriggerMapEmitters(PlaySession session)
+    {
+        if (Map?.Emitters is not { } emitters || session.Client.Map?.Loaded is not { } loaded)
+        {
+            return;
+        }
+
+        OpenScct.Core.World world = session.Client.World;
+        foreach (SimEvent e in world.Events.Current)
+        {
+            if (e.Kind == SimEventKind.Notify && e.What == OpenScct.Core.Engine.Emitter.NAME_ReplicateTrigger &&
+                world.Level.FindActor(e.ActorId) is OpenScct.Core.Engine.Emitter actor && loaded.RecordOf(actor)?.Id is { } id)
+            {
+                emitters.TriggerActor(id);
+            }
+        }
+    }
+
+    private long _botsPrintedAt;
+    private OpenScct.Core.Engine.Pawn? _printedPawn;
+
+    /// <summary>
+    /// Where each new pawn of the local player stands as the client first sees it, so a headless round (the map
+    /// editor's playtest) can report the spawn, a Play From Camera one included.
+    /// </summary>
+    private void PrintSpawn(PlaySession session)
+    {
+        if (session.LocalController?.Pawn is not { } pawn || ReferenceEquals(pawn, _printedPawn))
+        {
+            return;
+        }
+
+        _printedPawn = pawn;
+        GD.Print($"SVM_PLAY player {(session.Settings.Side == PlaySide.Merc ? "merc" : "spy")} spawned at {pawn.Location} yaw {pawn.Rotation.Yaw}");
+    }
+
+    private long _serverTicksPrintedAt;
+
+    /// <summary>SVM_TICK_LOG=1: the server's tick costs go to the log every 10 s, slow ticks or not.</summary>
+    public static bool TickLogWanted { get; } = System.Environment.GetEnvironmentVariable("SVM_TICK_LOG") is "1" or "true";
+
+    /// <summary>
+    /// What the local server's ticks cost over the last 10 s of play (nothing for a remote round): only when some ran
+    /// over their slot, or always with <see cref="TickLogWanted"/>.
+    /// </summary>
+    private void PrintServerTicks(PlaySession session)
+    {
+        if (session.ServerTicks is not { } ticks || session.TicksRun - _serverTicksPrintedAt < 10 * Sim.Hz)
+        {
+            return;
+        }
+
+        _serverTicksPrintedAt = session.TicksRun;
+        OpenScct.Server.TickSummary recent = ticks.Recent(10 * Sim.Hz);
+        if (!TickLogWanted && recent.Slow == 0)
+        {
+            return;
+        }
+
+        GD.Print($"SVM_PLAY server ticks ({(session.Settings.HostMode == PlayHostMode.Inline ? "inline" : "host thread")}, {session.Settings.Bots} bots): {recent}");
+    }
+
+    /// <summary>The server bots' status every 10 s of play, when the host runs inline (its state is safe to read here).</summary>
+    private void PrintBots(PlaySession session)
+    {
+        if (session.Settings.HostMode != PlayHostMode.Inline || session.Bots is not { } bots || session.TicksRun - _botsPrintedAt < 10 * Sim.Hz)
+        {
+            return;
+        }
+
+        _botsPrintedAt = session.TicksRun;
+        foreach (string line in bots.Log)
+        {
+            GD.Print($"SVM_PLAY bots: {line}");
+        }
+
+        foreach (OpenScct.Game.AI.AiController bot in bots.Bots)
+        {
+            GD.Print($"SVM_PLAY bot {bot.Controller.PlayerReplicationInfo?.PlayerName}: {bot.Status} at {bot.Pawn?.Location}");
+            // SVM_AI_LOG=1: what each bot decided and ran into since the last print (AiEventLog).
+            if (_botEventLog)
+            {
+                _botEventsPrinted.TryGetValue(bot, out int printed);
+                foreach ((float time, string text) in bot.Events.Since(printed))
+                {
+                    GD.Print(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                        $"SVM_PLAY bot {bot.Controller.PlayerReplicationInfo?.PlayerName} @{time:F1}: {text}"));
+                }
+
+                _botEventsPrinted[bot] = bot.Events.Total;
+            }
+        }
+    }
+
+    private readonly bool _botEventLog = System.Environment.GetEnvironmentVariable("SVM_AI_LOG") is "1" or "true";
+    private readonly System.Collections.Generic.Dictionary<OpenScct.Game.AI.AiController, int> _botEventsPrinted = new();
+
+    public override void _Process(double delta)
+    {
+        if (!IsLoaded && !_smokePreparing && !_browserPreparingPlayer) return;
+        if (Session is not { } session || session.IsStopped)
+        {
+            return;
+        }
+
+        _watch.Restart();
+        Vector2 size = GetViewport().GetVisibleRect().Size;
+        if (size.X >= 1f && size.Y >= 1f)
+        {
+            session.ViewportSize = ((int)size.X, (int)size.Y);
+        }
+
+        float alpha;
+        if (Config.Demo is { IsSeeking: true })
+        {
+            // The playback HUD steps the seek with a frame budget and can retry a failed checkpoint.
+            alpha = 1f;
+        }
+        else if (_virtualClock is { } clock)
+        {
+            for (int i = 0; i < Config.TicksPerFrame; i++)
+            {
+                clock.Advance(TickMicros);
+                session.Step(clock.NowMicroseconds);
+            }
+
+            alpha = 1f;
+        }
+        else
+        {
+            // Chrome can delay a visible/background frame while activating the window. Running five
+            // local server+client ticks afterward can prolong that stall. Drop the older backlog and
+            // recover with at most two ticks; remote matches retain their existing prediction cadence.
+            session.Update(OperatingSystem.IsBrowser() && !session.IsRemote ? 2 : PlaySession.MaxCatchUpTicks);
+            alpha = session.Alpha;
+        }
+
+        if (session.ServerFailure is { } serverFailure && !ReferenceEquals(serverFailure, _reportedServerFailure))
+        {
+            _reportedServerFailure = serverFailure;
+            GD.PrintErr("SVM_HOST_FAILURE " + serverFailure);
+        }
+
+        if (Config.Demo is null && session.Client.State is OpenScct.Server.EClientState.Disconnected or OpenScct.Server.EClientState.Rejected)
+        {
+            LoadError = session.LoginError ?? session.Client.RejectReason ?? session.Client.Connection?.CloseReason ?? "Connection closed";
+            IsLoaded = false;
+            session.Stop();
+            if (_status is not null) _status.Text = $"Could not play '{Config.Settings.Map}': {LoadError}. Press Escape to leave.";
+            GD.PushError("Play connection failed: " + LoadError);
+            return;
+        }
+
+        if (Config.Render && OpenScct.Game.Equipment.ResponsiveSmokeWorld.IsEnabled(session.Client.World.Level)
+            && ResponsiveSmokeRenderer.UnsupportedReason is { } rendererError)
+        {
+            LoadError = rendererError;
+            IsLoaded = false;
+            session.Stop();
+            if (_status is not null) _status.Text = rendererError;
+            GD.PushError(rendererError);
+            return;
+        }
+
+        if (PrepareLateSmoke(session) || _smokePreparing) return;
+
+        PrintBots(session);
+        PrintServerTicks(session);
+        PrintSpawn(session);
+        Audio?._Process(delta);
+
+        // The scripted pilot's route planning runs inside the ticks; it is a test driver, so it is counted apart.
+        double simMs = _watch.Elapsed.TotalMilliseconds - _pilotMs;
+        Stats.PilotMs += _pilotMs;
+        _pilotMs = 0;
+        _watch.Restart();
+
+        // With a fixed step the views advance by the simulated time of the frame, so they keep pace with the ticks.
+        float viewDt = _virtualClock is not null ? Config.TicksPerFrame * Sim.DeltaTime : (float)delta;
+        DrawViews(session, alpha, viewDt);
+        double viewMs = _watch.Elapsed.TotalMilliseconds;
+        Stats.Add(simMs, viewMs, delta * 1000.0);
+        if (_browserPreparingPlayer && session.Client.Map?.Loaded is not null &&
+            (session.LocalController is not null || Time.GetTicksMsec() - _browserPlayerWaitAt >= 2000) &&
+            ++_browserPlayerFrames >= (BrowserPlayerVisions.Length + 1) * 2)
+            CompleteLoading();
+        if (!_loadTimed && session.LocalPawn is not null && (Controls?.Enabled == true || Config.Pilot is not null))
+        {
+            // The first frame the player (or the test pilot) drives his pawn ends the load.
+            _loadTimed = true;
+            if (LoadTimer.Id == _loadId) LoadTimer.End("first-control");
+            OpenScctGame.Render.Materials.ResponsiveSmokeShaders.SaveList();
+            if (OpenScctGame.Render.Materials.ResponsiveSmokeShaders.Baking) GetTree().Quit();
+        }
+        if (session.ServerFailure is { } failure && _status is not null)
+        {
+            _status.Text = "Server stopped: " + failure.Message;
+        }
+    }
+
+    private void DrawViews(PlaySession session, float alpha, float dt)
+    {
+        SPlayerController? pc = session.LocalController;
+        if (FirstPerson is { } firstPersonView && Camera is { } aimCamera)
+        {
+            float target = session.LocalPawn?.MyWeapon is OpenScct.Game.Svm.MercRifle { AimRequested: true } ? 1f : 0f;
+            firstPersonView.AimBlend = Mathf.Lerp(firstPersonView.AimBlend, target, 1f - MathF.Exp(-18f * dt));
+            aimCamera.RifleAimBlend = firstPersonView.AimBlend;
+        }
+        _alpha = alpha;
+
+        // The mouse turn not yet simulated is drawn now (no frame of delay, as the original's per-frame controller).
+        (float pendingX, float pendingY) = Controls?.PendingMouse ?? (0f, 0f);
+        FRotator look = session.ViewOverride is not null ? default
+            : _look.Offset(pc, session.Mouse, pendingX + session.Input.MouseX, pendingY + session.Input.MouseY, alpha);
+        bool cameraApplied = false;
+        if (Camera is not null && View is not null && Camera.Apply(session.PreviousView, session.View, alpha, look,
+            _look.OrbitDistance(pc), session.ViewOverride is null ? pc : null))
+        {
+            cameraApplied = true;
+            if (_cameraOcclusion is not null) _cameraOcclusion.Visible = Camera.Occluded;
+            // Materials, light types and the map's emitters at the drawn moment between ticks (they moved only at the
+            // 60 Hz ticks before, so they held still in most frames above 60 fps).
+            Map?.SetTime(_time.At(alpha));
+            int rendMap = pc is null || pc.RendMap == 0 ? RenderK.RendMapNormal : pc.RendMap;
+            // The loading samples cannot reproduce the bound player's camera, visible pawn and post targets.
+            // Present each vision twice on that real view under the cover, then restore the controller's mode
+            // for two frames before enabling input. Only the renderer changes; gameplay goggles stay untouched.
+            if (_browserPreparingPlayer && _browserPlayerFrames / 2 < BrowserPlayerVisions.Length)
+                rendMap = BrowserPlayerVisions[_browserPlayerFrames / 2];
+            View.SquintingFactor = pc?.SquintingFactor ?? 0f;
+            if (rendMap != _lastRendMap)
+            {
+                _lastRendMap = rendMap;
+                View.RendMap = rendMap;
+            }
+
+            // The motion tracker's clean view rectangles (HudMotionTracking, from the last HUD frame) as parts of the picture.
+            View.MotionCleanRects = Hud is { } hud
+                ? OpenScctGame.Render.Post.DisplayPostSettings.Normalize(hud.Motion.CleanRects, hud.DrawnScreen)
+                : [];
+
+            View.DoubleVision.Factor = Hud?.Effects.Sfx.CrossEyedFactor ?? 0f;
+            View.DoubleVision.Spread = OpenScctGame.Render.Post.RemanenceEffect.DoubleVisionSpread(View.DoubleVision.Factor, Time.GetTicksMsec() / 1000.0);
+
+            // The flash-bang after-image: a capture on each bCaptureRemanence, drawn by RemanenceBlendFactor.
+            if (Hud is { } flashHud)
+            {
+                if (flashHud.Effects.RemanenceCaptures != _lastRemanenceCaptures)
+                {
+                    _lastRemanenceCaptures = flashHud.Effects.RemanenceCaptures;
+                    View.Remanence.RequestCapture();
+                }
+
+                View.Remanence.Factor = flashHud.Effects.Sfx.RemanenceBlendFactor;
+            }
+
+            bool binoculars = session.LocalPawn?.bBinocularsOn ?? false;
+            if (binoculars != _lastBinoculars)
+            {
+                _lastBinoculars = binoculars;
+                View.BinocularsOn = binoculars;
+            }
+        }
+
+        SBasePawn? firstPerson = session.FirstPersonOverride is { } fpOverride ? fpOverride()
+            : pc is { FreeCameraFlying: 0 } && (!pc.bBehindView || session.View.SpyFirstPerson) ? session.LocalPawn : null;
+        // The local spy's arm aims at the view drawn this frame (its controller's rotation plus the mouse turn not yet
+        // simulated), as the camera does, so the pistol and its laser keep up with the mouse.
+        SBasePawn? aimer = session.LocalPawn is { SPawnType: not PawnType.SPAWNDEFENSE } spy && pc is not null && spy.Controller == pc ? spy : null;
+        FRotator drawnView = default;
+        if (aimer is not null)
+        {
+            FRotator pending = session.ViewOverride is null && _look.Active ? _look.Pending : default;
+            drawnView = new FRotator(pc!.Rotation.Pitch + pending.Pitch, pc.Rotation.Yaw + pending.Yaw, pc.Rotation.Roll);
+        }
+
+        // The conveyors first: riders' feet are drawn on the escalator steps placed for this frame.
+        if (session.Client.ViewTimeFixed >= 0)
+        {
+            Conveyors?.Draw(session.Client.ViewTimeFixed / (double)NetTimeline.Fraction, dt);
+        }
+
+        if (Pawns is not null)
+        {
+            Pawns.FeetLift = Conveyors is { Steps: > 0 } conveyors ? conveyors.FeetLift : null;
+        }
+
+        Pawns?.Draw(alpha, dt, firstPerson, aimer, drawnView);
+        _spyShadowProjector?.Draw(session.LocalPawn is SPawnAttaque ownSpy && !ownSpy.bHidden && ownSpy.Health > 0
+            ? Pawns?.ViewOf(ownSpy)?.Model : null, _spyShadowLighting?.Darkness ?? 0,
+            _spyShadowLighting is { } lighting ? UeSpace.DirectionToGodot(lighting.Direction) : Vector3.Up, View?.RendMap ?? 5, View?.Camera);
+        if (Config.Demo is { XRay: true } && session.View.Valid && View is { } view && Pawns is { } pawns)
+        {
+            if (_demoXRay is null)
+            {
+                _demoXRay = new Demo.DemoXRayView();
+                AddChild(_demoXRay);
+            }
+            _demoXRay.Draw(view.Camera, pawns.Views);
+        }
+        else _demoXRay?.Disable();
+        session.Client.ReportRenderedFrame(alpha);
+        Devices?.Draw(alpha, dt, Pawns);
+        Map?.SoftBodies?.Update(dt, session.Client.World.Level, Audio?.Sound, session.LocalPawn);
+        if (Camera is not null)
+        {
+            (FVector location, FRotator rotation, float _) = Camera.Current;
+            if (session.FirstPersonOverride is not null)
+            {
+                float weaponDt = Config.Demo is { } demo ? demo.Clock.Paused ? 0f : dt * (float)demo.Clock.Speed : dt;
+                FirstPerson?.DrawObserved(firstPerson, location, rotation, weaponDt, alpha);
+            }
+            else
+                FirstPerson?.Draw(pc, location, rotation, dt, alpha);
+            SPawnAttaque? eyeSpy = cameraApplied && !Camera.Occluded && session.ViewOverride is null &&
+                session.FirstPersonOverride is null && session.View.SpyFirstPerson && pc is { SpyFirstPersonActive: true }
+                ? firstPerson as SPawnAttaque : null;
+            SpyFirstPerson?.Draw(pc, eyeSpy, location, rotation, dt, alpha);
+            Fx?.Draw(dt, location, rotation, pc, demoPlayback: Config.Demo is not null);
+            FlashLight?.Draw(session.Client.World.Level, session.LocalPawn, location,
+                ReferenceEquals(firstPerson, session.LocalPawn) ? (location, rotation) : null);
+            Map?.LightBeams?.UpdateSlots();   // after the spot lights took this frame's slots
+            MercLasers?.Draw(session.Client.World.Level, session.LocalPawn, (location, rotation), _time.At(alpha));
+            SpyLasers?.Draw(session.Client.World.Level, _time.At(alpha));
+            LaserTriggers?.Draw(session.Client.World.Level);
+            ShockFx?.Draw(session.Client.World.Level, dt);
+        }
+
+        UpdatePrompt(pc);
+    }
+
+    /// <summary>A one-line Use prompt when there is no HUD to draw the interaction list.</summary>
+    private void UpdatePrompt(SPlayerController? pc)
+    {
+        if (_prompt is null)
+        {
+            return;
+        }
+
+        SInteractObject? current = Hud is null ? pc?.IManager?.GetCurrentInteraction() : null;
+        bool show = current is not null && (pc!.IManager!.HasUsableInteractions());
+        _prompt.Visible = show;
+        if (show)
+        {
+            string text = string.IsNullOrEmpty(current!.Description) ? "Use" : current.Description;
+            _prompt.Text = "[Shift] " + text;
+            Vector2 size = GetViewport().GetVisibleRect().Size;
+            _prompt.Position = new Vector2((size.X * 0.5f) - 60f, size.Y * 0.62f);
+        }
+    }
+
+    private ScoreboardCapture? _scoreboardCapture;
+
+    public override void _ExitTree()
+    {
+        // Whatever ends the round (results, the lobby, a disconnect, a map change), the pointer it took goes back.
+        OpenScctGame.Controls.Pointer.Release();
+        LoadTimer.Abandon(_loadId);
+        InputBindings.Rebound -= OnKeysRebound;
+        CrashLog.Context = "";
+        _scoreboardCapture?.Dispose();
+        _scoreboardCapture = null;
+        Session?.Dispose();
+        Session = null;
+        _spyShadowLighting = null;
+        _spyShadowProjector = null;
+        Config.Demo?.Dispose();
+        _demoXRay = null;
+        Devices = null;
+        Conveyors = null;
+        Pawns = null;
+        FirstPerson = null;
+        SpyFirstPerson = null;
+        Fx = null;
+        FlashLight = null;
+        MercLasers = null;
+        SpyLasers = null;
+        LaserTriggers = null;
+        ShockFx = null;
+        Camera = null;
+        Map = null;
+        View = null;
+        Hud = null;
+        Controls = null;
+        Menu = null;
+        Audio = null;
+
+        // Let the wrappers of the meshes, clips and materials this scene made be finalized now, while the engine
+        // still runs, rather than at process exit after the servers are gone.
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+    }
+}

@@ -1,0 +1,159 @@
+using OpenScct.Core;
+using OpenScct.Core.Engine;
+using OpenScct.Game.Combat;
+using OpenScct.Game.Equipment;
+using K = OpenScct.Game.GameFlow.K;
+
+namespace OpenScct.Game.SBase;
+
+// OpenSCCT's own kill bookkeeping for achievements (not retail): sorts an enemy kill by its cause into the retail
+// statistics retail declares but never fills (Merc_*Kills, Spy_DeathFrom*) and into the round's feats (FeatKeys).
+public partial class SGameInfo
+{
+    /// <summary>The merc gun class of a weapon for the camo ladders ("ar", "smg", "shotgun"), or null.</summary>
+    public static string? GunClassOf(SWeapon? weapon) => weapon switch
+    {
+        MercSidearm pistol => pistol.Definition.Id,
+        SWeaponDefense_Uzi or Svm.CompactSMG => "smg",
+        SWeaponDefense_Shotgun => "shotgun",
+        SWeaponDefense => "ar",
+        _ => null,
+    };
+
+    /// <summary>
+    /// A merc killed by a merc mine a spy set off: a mine kill feat for that spy (the kill, a team kill or a suicide,
+    /// stays the mine owner's as in retail).
+    /// </summary>
+    private static void CountSpyMineKill(Controller killed, Pawn? killedPawn)
+    {
+        if (GadgetBlast.CurrentIsMine != true || GadgetBlast.CurrentDetonator is not { Controller: { } spy } ||
+            (killedPawn ?? killed.Pawn) is not SPAWNDEFENSE || TeamIndexOf(spy) == TeamIndexOf(killed))
+        {
+            return;
+        }
+
+        spy.PlayerReplicationInfo?.Stats?.AddFeat(FeatKeys.SpyMineKills);
+    }
+
+    private static bool IsMagnifiedShot(SWeapon? weapon, SDamageType type) =>
+        weapon is SWeaponDefense { AimRequested: true } aimed
+            ? WeaponAttachments.OpticPower(aimed) > 1f
+            : type == SDamageType.SDTSnipeShot;
+
+    /// <summary>Counts one enemy kill's cause for the killer and the victim.</summary>
+    private static void CountKillFeats(Controller killer, Controller killed, Pawn? killedPawn, SDamageType type)
+    {
+        USPlayerStats? ks = killer.PlayerReplicationInfo?.Stats;
+        USPlayerStats? vs = killed.PlayerReplicationInfo?.Stats;
+        if (type == SDamageType.SDTStickyBlast)
+        {
+            if (TeamIndexOf(killed) == 0 && vs is not null) vs.Spy_DeathFromJumpingTasedMerc++;
+            return;
+        }
+        if (ks is null)
+        {
+            return;
+        }
+
+        switch (type)
+        {
+            case SDamageType.DamTypeGrabBreak:
+                ks.AddFeat(FeatKeys.SpyGrabKills);
+                ks.AddFeat(FeatKeys.SpyNeckBreaks);
+                return;
+            case SDamageType.DamTypeGrabChoke:
+                ks.AddFeat(FeatKeys.SpyGrabKills);
+                ks.AddFeat(FeatKeys.SpyChokes);
+                return;
+            case SDamageType.SDamage_DropAttacked:
+                ks.AddFeat(FeatKeys.SpyDropKills);
+                return;
+        }
+
+        if (TeamIndexOf(killer) != 1)
+        {
+            return;
+        }
+
+        // These sources outlive their owner's pawn. Poison's delayed health tick uses SDTBase, so read its
+        // retained source instead of treating every poisoned victim's later bullet death as a poison kill.
+        bool poison = type == SDamageType.SDamage_Poison ||
+            CombatDeathContext.Current.Cause is CombatDeathCause.PoisonMine or CombatDeathCause.Poison;
+        if (poison || GadgetBlast.CurrentIsMine is not null)
+        {
+            if (poison || GadgetBlast.CurrentIsMine == true)
+            {
+                ks.Merc_MineKills++;
+                ks.AddFeat(FeatKeys.MercMineKills);
+                if (vs is not null)
+                {
+                    vs.Spy_DeathFromMine++;
+                }
+            }
+            else
+            {
+                ks.Merc_GrenadeKills++;
+                ks.AddFeat(FeatKeys.MercGrenadeKills);
+                if (vs is not null)
+                {
+                    vs.Spy_DeathFromGrenade++;
+                }
+            }
+
+            return;
+        }
+
+        if (killer.Pawn is not SPAWNDEFENSE merc) return;
+
+        if (killedPawn is not null && ReferenceEquals(merc.m_PawnToTerminate, killedPawn))
+        {
+            ks.Merc_TerminateKills++;
+            ks.AddFeat(FeatKeys.MercTerminateKills);
+            if (vs is not null)
+            {
+                vs.Spy_DeathFromTerminate++;
+            }
+
+            return;
+        }
+
+        if (type is not (SDamageType.SDTBase or SDamageType.SDTSnipeShot))
+        {
+            return;
+        }
+
+        var firearm = killedPawn is SBasePawn { LastBulletWeapon: { } damageWeapon } && ReferenceEquals(damageWeapon.Instigator, merc)
+            ? damageWeapon : merc.MyWeapon;
+        if (GunClassOf(firearm) is not { } gun)
+        {
+            return;
+        }
+
+        bool headshot = killed is SPlayerController vpc && vpc.LastDamages[0].PillTag == K.HeadPill;
+        ks.AddFeat(FeatKeys.GunKills(gun));
+        if (headshot)
+        {
+            ks.AddFeat(FeatKeys.MercHeadshots);
+            ks.AddFeat(FeatKeys.GunHeadshots(gun));
+        }
+
+        if (IsMagnifiedShot(firearm, type))
+        {
+            ks.Merc_WeaponSniperKills++;
+            ks.AddFeat(FeatKeys.MercSniperKills);
+            if (vs is not null)
+            {
+                vs.Spy_DeathFromWeaponSniper++;
+            }
+        }
+        else if (firearm is not SWeaponDefense { AimRequested: true })
+        {
+            ks.Merc_WeaponHipfireKills++;
+            ks.AddFeat(FeatKeys.MercHipfireKills);
+            if (vs is not null)
+            {
+                vs.Spy_DeathFromWeaponHipfire++;
+            }
+        }
+    }
+}

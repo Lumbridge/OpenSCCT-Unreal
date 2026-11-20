@@ -1,0 +1,113 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="$(RepoRoot)build/Test.props" />
+  <PropertyGroup>
+    <RootNamespace>OpenScctGame.Logic.Tests</RootNamespace>
+  </PropertyGroup>
+  <!--
+    The Godot-free parts of the client (game/): they are compiled here from their sources so they can be tested
+    without the Godot runtime. Only files that use no Godot type may be listed.
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\game\Scripts\Options\PadMenuNavigation.cs" Link="Linked\PadMenuNavigation.cs" />
+    <Compile Include="..\..\game\Scripts\Chat\QuickChatState.cs" Link="Linked\QuickChatState.cs" />
+    <Compile Include="..\..\game\Scripts\App\LaunchOptions.cs" Link="Linked\LaunchOptions.cs" />
+    <Compile Include="..\..\game\Scripts\Render\GlassFracture.cs" Link="Render\GlassFracture.cs" />
+    <Compile Include="..\..\game\Scripts\Discord\DiscordInvitePipe.cs" Link="Linked\DiscordInvitePipe.cs" />
+    <Compile Include="..\..\shared\ProjectLinks.cs" Link="Shared\ProjectLinks.cs" />
+    <Compile Include="..\..\game\Scripts\UI\GameReportState.cs" Link="Linked\GameReportState.cs" />
+    <Compile Include="..\..\game\Scripts\Chat\ChatTranscript.cs" Link="Linked\ChatTranscript.cs" />
+    <Compile Include="..\..\game\Scripts\Chat\ChatNotifications.cs" Link="Linked\ChatNotifications.cs" />
+    <Compile Include="..\..\game\Scripts\Play\PlayFrameStats.cs" Link="Linked\PlayFrameStats.cs" />
+    <Compile Include="..\..\game\Scripts\Render\Gltf\GlbDocument.cs" Link="Linked\GlbDocument.cs" />
+    <Compile Include="..\..\game\Scripts\Render\MapSpotLightBudget.cs" Link="Linked\MapSpotLightBudget.cs" />
+    <Compile Include="..\..\game\Scripts\Render\SmokeRenderFrame.cs" Link="Linked\SmokeRenderFrame.cs" />
+    <Compile Include="..\..\game\Scripts\Render\SmokeFlowTimeline.cs" Link="Linked\SmokeFlowTimeline.cs" />
+    <Compile Include="..\..\game\Scripts\Render\SmokeGrowthCache.cs" Link="Linked\SmokeGrowthCache.cs" />
+    <Compile Include="..\..\game\Scripts\Render\SmokeTemporalHistory.cs" Link="Linked\SmokeTemporalHistory.cs" />
+    <Compile Include="..\..\game\Scripts\UI\StatsModel.cs" Link="Linked\StatsModel.cs" />
+    <Compile Include="..\..\game\Scripts\UI\RoundScoreboardModel.cs" Link="Linked\RoundScoreboardModel.cs" />
+    <Compile Include="..\..\game\Scripts\Input\ScoreboardInputState.cs" Link="Linked\ScoreboardInputState.cs" />
+    <Compile Include="..\..\game\Scripts\Input\TeamPingInput.cs" Link="Linked\TeamPingInput.cs" />
+    <Compile Include="..\..\game\Scripts\UI\MenuDashboardModel.cs" Link="Linked\MenuDashboardModel.cs" />
+    <Compile Include="..\..\game\Scripts\UI\ConsoleCommands.cs" Link="Linked\ConsoleCommands.cs" />
+    <Compile Include="..\..\game\Scripts\UI\PlayerLocationReport.cs" Link="Linked\PlayerLocationReport.cs" />
+    <Compile Include="..\..\game\Scripts\Options\SettingsConsole.cs" Link="Linked\SettingsConsole.cs" />
+    <Compile Include="..\..\game\Scripts\UI\LinuxSetupContent.cs" Link="Linked\LinuxSetupContent.cs" />
+    <Compile Include="..\..\game\Scripts\UI\GearMenuModel.cs" Link="Linked\GearMenuModel.cs" />
+    <Compile Include="..\..\game\Scripts\Options\HudEditorSettings.cs" Link="Linked\HudEditorSettings.cs" />
+    <Compile Include="..\..\game\Scripts\Options\GameSettings.cs" Link="Linked\GameSettings.cs" />
+    <Compile Include="..\..\game\Scripts\Options\CrosshairSettings.cs" Link="Linked\CrosshairSettings.cs" />
+    <Compile Include="..\..\game\Scripts\Options\TelemetrySettings.cs" Link="Linked\TelemetrySettings.cs" />
+    <Compile Include="..\..\game\Scripts\Options\DisplayFrameCap.cs" Link="Linked\DisplayFrameCap.cs" />
+    <Compile Include="..\..\game\Scripts\Options\ViewFov.cs" Link="Linked\ViewFov.cs" />
+    <Compile Include="..\..\game\Scripts\Options\UserDataMigration.cs" Link="Linked\UserDataMigration.cs" />
+    <!-- Reloaded's widescreen layout rules for the picture and the HUD. -->
+    <Compile Include="..\..\game\Scripts\Hud\HudLayout.cs" Link="Linked\HudLayout.cs" />
+    <!-- The motion tracker's 640 x 480 frame on the screen. -->
+    <Compile Include="..\..\game\Scripts\Hud\HudMotionFrame.cs" Link="Linked\HudMotionFrame.cs" />
+    <Compile Include="..\..\game\Scripts\Hud\HudMessages.cs" Link="Linked\HudMessages.cs" />
+    <Compile Include="..\..\game\Scripts\Hud\HudActivityFeed.cs" Link="Linked\HudActivityFeed.cs" />
+    <Compile Include="..\..\game\Scripts\Hud\HudActivityPresentation.cs" Link="Linked\HudActivityPresentation.cs" />
+    <Compile Include="..\..\game\Scripts\Hud\HudActivityClassifier.cs" Link="Linked\HudActivityClassifier.cs" />
+    <!-- The key token pass of drawn texts. -->
+    <Compile Include="..\..\game\Scripts\Input\KeyTokens.cs" Link="Linked\KeyTokens.cs" />
+    <!-- The English names of the key bindings and the Magma text table, with the layout parser they read. -->
+    <Compile Include="..\..\game\Scripts\UI\EnglishText.cs" Link="Linked\EnglishText.cs" />
+    <Compile Include="..\..\game\Scripts\UI\ControlActions.cs" Link="Linked\ControlActions.cs" />
+    <Compile Include="..\..\game\Scripts\UI\BindingLabels.cs" Link="Linked\BindingLabels.cs" />
+    <Compile Include="..\..\game\Scripts\Input\InputActionState.cs" Link="Linked\InputActionState.cs" />
+    <Compile Include="..\..\game\Scripts\Input\BindingKey.cs" Link="Linked\BindingKey.cs" />
+    <Compile Include="..\..\game\Scripts\Input\BindingInputState.cs" Link="Linked\BindingInputState.cs" />
+    <Compile Include="..\..\game\Scripts\Input\DefaultKeyLayout.cs" Link="Linked\DefaultKeyLayout.cs" />
+    <Compile Include="..\..\game\Scripts\Input\HubBindings.cs" Link="Linked\HubBindings.cs" />
+    <Compile Include="..\..\game\Scripts\Options\PadBindingState.cs" Link="Linked\PadBindingState.cs" />
+    <Compile Include="..\..\game\Scripts\Options\PadBindingCapture.cs" Link="Linked\PadBindingCapture.cs" />
+    <Compile Include="..\..\game\Scripts\Options\PadBindingOrder.cs" Link="Linked\PadBindingOrder.cs" />
+    <Compile Include="..\..\game\Scripts\Options\PadActionState.cs" Link="Linked\PadActionState.cs" />
+    <Compile Include="..\..\game\Scripts\Input\KeyLayout.cs" Link="Linked\KeyLayout.cs" />
+    <Compile Include="..\..\game\Scripts\UI\InGameMenuModel.cs" Link="Linked\InGameMenuModel.cs" />
+    <!-- The Create Session page and the Lobby Room's rules (docs/MENUS.md). -->
+    <Compile Include="..\..\game\Scripts\UI\CreateSessionModel.cs" Link="Linked\CreateSessionModel.cs" />
+    <Compile Include="..\..\game\Scripts\UI\LobbyPresentation.cs" Link="Linked\LobbyPresentation.cs" />
+    <Compile Include="..\..\game\Scripts\UI\LobbyRoomModel.cs" Link="Linked\LobbyRoomModel.cs" />
+    <!-- The play session (the listen server, the loopback client and the bots), for the client-side view checks. -->
+    <Compile Include="..\..\game\Scripts\Play\Session\*.cs" Link="Linked\Session\%(Filename)%(Extension)" />
+    <!-- The drawn view between ticks: the camera blend and the mouse look-ahead, the view model's one-shot clock. -->
+    <Compile Include="..\..\game\Scripts\Cameras\ViewBlend.cs" Link="Linked\ViewBlend.cs" />
+    <Compile Include="..\..\game\Scripts\Play\Demo\DemoChaseCamera.cs" Link="Linked\DemoChaseCamera.cs" />
+    <Compile Include="..\..\game\Scripts\Views\OneShotClock.cs" Link="Linked\OneShotClock.cs" />
+    <Compile Include="..\..\game\Scripts\Views\ObservedWeaponViewModel.cs" Link="Linked\ObservedWeaponViewModel.cs" />
+    <Compile Include="..\..\game\Scripts\Views\MeshSwap.cs" Link="Linked\MeshSwap.cs" />
+    <!-- Frame pacing: the level time drawn between ticks and the frame-rate smoke's motion measures. -->
+    <Compile Include="..\..\game\Scripts\Play\DrawnTime.cs" Link="Linked\DrawnTime.cs" />
+    <Compile Include="..\..\game\Scripts\Smoke\FrameMotion.cs" Link="Linked\FrameMotion.cs" />
+    <!-- The end banner's side in an online round. -->
+    <Compile Include="..\..\game\Scripts\Online\RoundResultSide.cs" Link="Linked\RoundResultSide.cs" />
+    <!-- The play scene's sound router. -->
+    <Compile Include="..\..\game\Scripts\Play\PlayAudioRouter.cs" Link="Linked\PlayAudioRouter.cs" />
+    <!-- The wave chunk fixes the sound library applies before Godot loads a file. -->
+    <Compile Include="..\..\game\Scripts\Audio\WavChunks.cs" Link="Linked\WavChunks.cs" />
+    <Compile Include="..\..\game\Scripts\Audio\AudioK.cs" Link="Linked\AudioK.cs" />
+    <Compile Include="..\..\game\Scripts\Audio\SoundRules.cs" Link="Linked\SoundRules.cs" />
+    <Compile Include="..\..\game\Scripts\Audio\EaxEnvironment.cs" Link="Linked\EaxEnvironment.cs" />
+    <Compile Include="..\..\game\Scripts\Audio\AcousticTransmission.cs" Link="Linked\AcousticTransmission.cs" />
+    <Compile Include="..\..\game\Scripts\Audio\AcousticScene.cs" Link="Linked\AcousticScene.cs" />
+    <Compile Include="..\..\game\Scripts\Audio\CornerPathSearch.cs" Link="Linked\CornerPathSearch.cs" />
+    <Compile Include="..\..\game\Scripts\Audio\ReverbGeometryProbe.cs" Link="Linked\ReverbGeometryProbe.cs" />
+    <Compile Include="..\..\game\Scripts\Voice\VoiceMicrophoneState.cs" Link="Linked\VoiceMicrophoneState.cs" />
+    <Compile Include="..\..\game\Scripts\Render\Post\ZoneFogRules.cs" Link="Render\ZoneFogRules.cs" />
+    <Compile Include="..\..\game\Scripts\Render\Post\FogVolumeRules.cs" Link="Render\FogVolumeRules.cs" />
+    <Compile Include="..\..\game\Scripts\Render\Materials\MaterialSequenceClock.cs" Link="Linked\MaterialSequenceClock.cs" />
+    <!-- The particle natives (spec/native/emitters.md): parameters, the sub-emitter and Emitter updates, the geometry. -->
+    <Compile Include="..\..\game\Scripts\Render\Particles\ParticleParams.cs" Link="Linked\Particles\ParticleParams.cs" />
+    <Compile Include="..\..\game\Scripts\Render\Particles\ParticleEmitterSim.cs" Link="Linked\Particles\ParticleEmitterSim.cs" />
+    <Compile Include="..\..\game\Scripts\Render\Particles\ParticleSystemSim.cs" Link="Linked\Particles\ParticleSystemSim.cs" />
+    <Compile Include="..\..\game\Scripts\Render\Particles\ParticleGeometry.cs" Link="Linked\Particles\ParticleGeometry.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="DiscordRichPresence" />
+    <ProjectReference Include="..\..\src\OpenScct.Game\OpenScct.Game.csproj" />
+    <ProjectReference Include="..\..\src\OpenScct.Server\OpenScct.Server.csproj" />
+    <ProjectReference Include="..\..\src\OpenScct.Bots\OpenScct.Bots.csproj" />
+  </ItemGroup>
+</Project>

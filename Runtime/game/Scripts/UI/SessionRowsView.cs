@@ -1,0 +1,569 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using Godot;
+using OpenScct.Server.Online;
+
+namespace OpenScctGame.UI;
+
+/// <summary>
+/// The Create Session page's rows drawn from a <see cref="CreateSessionModel"/> (docs/MENUS.md): Map / Mode, the
+/// session rows (Password, Voice Chat with its hint, Max Players) and the three rule boxes the LAN page lays out at
+/// its foot (Revenge, Random Map, Voice in Lobby, Games in a Row; Game Length, Spy Lives, Mercenary Lives; Respawn
+/// Length, Active Disks, Disks to Take). A list or number row has the original's arrows either side of its value; a
+/// check box row toggles. Read only, it is the clients' Session Parameters page; a changed value blinks for three
+/// seconds (<see cref="LobbyRoomModel"/>). Node names: <c>Row_&lt;row&gt;</c>, <c>&lt;row&gt;Prev</c>,
+/// <c>&lt;row&gt;Next</c>, <c>&lt;row&gt;Check</c>, <c>&lt;row&gt;Value</c>, <c>PasswordEdit</c>, <c>VoiceHint</c>.
+/// </summary>
+public partial class SessionRowsView : VBoxContainer
+{
+    private readonly Dictionary<SessionRow, Control> _rows = new();
+    private readonly Dictionary<SessionRow, Label> _values = new();
+    private readonly Dictionary<SessionRow, Label> _captions = new();
+    private readonly Dictionary<SessionRow, CheckBox> _checks = new();
+    private readonly Dictionary<SessionRow, SpinBox> _numbers = new();
+    private readonly Dictionary<SessionRow, OptionButton> _choices = new();
+    private readonly List<BaseButton> _arrows = new();
+    private Label? _hint;
+    private LineEdit? _password;
+    private bool _editable = true;
+    private BoxContainer? _columns;
+    private bool _refreshing;
+
+    /// <param name="compact">The lobby's layout (<see cref="BuildCompact"/>) instead of the page's three rule boxes.</param>
+    public SessionRowsView(CreateSessionModel model, IReadOnlyCollection<SessionRow> rows, bool showPassword, bool compact = false, bool form = false)
+    {
+        Model = model ?? throw new ArgumentNullException(nameof(model));
+        Name = "SessionRows";
+        _compact = compact;
+        _form = form;
+        Build(rows, showPassword);
+        model.Changed += Refresh;
+    }
+
+    private readonly bool _compact;
+    private readonly bool _form;
+
+    public CreateSessionModel Model { get; }
+
+    /// <summary>Unsubmitted number text is still an edit, even before the field loses focus.</summary>
+    public bool HasPendingEdits
+    {
+        get
+        {
+            if (!_editable) return false;
+            foreach (SpinBox number in _numbers.Values)
+                if (number.GetLineEdit().HasFocus() && number.GetLineEdit().Text.Trim() != number.Value.ToString(CultureInfo.InvariantCulture))
+                    return true;
+            return false;
+        }
+    }
+
+    public event Action? PendingEditsChanged;
+
+    /// <summary>Commit typed values before an action reads the model.</summary>
+    public void CommitEdits()
+    {
+        if (!_editable) return;
+        // A clicked action may already own focus while the editor's focus-loss commit is still queued.
+        foreach (SpinBox number in _numbers.Values) number.Apply();
+    }
+
+    /// <summary>Blinking of values the host changed (clients), or null.</summary>
+    public LobbyRoomModel? Blink { get; set; }
+
+    /// <summary>The host edits; others read.</summary>
+    public bool Editable
+    {
+        get => _editable;
+        set
+        {
+            bool changed = _editable != value;
+            _editable = value;
+            foreach (BaseButton b in _arrows)
+            {
+                b.Visible = value;
+            }
+
+            foreach (CheckBox c in _checks.Values)
+            {
+                c.Disabled = !value;
+            }
+
+            foreach (SpinBox number in _numbers.Values) number.Editable = value;
+            foreach (OptionButton choice in _choices.Values) choice.Disabled = !value;
+
+            if (_password is not null)
+            {
+                _password.Editable = value;
+            }
+            if (changed && !value) Refresh();
+        }
+    }
+
+    public override void _ExitTree() => Model.Changed -= Refresh;
+
+    private void Build(IReadOnlyCollection<SessionRow> rows, bool showPassword)
+    {
+        AddThemeConstantOverride("separation", 4);
+        if (_form)
+        {
+            AddThemeConstantOverride("separation", 8);
+            foreach (SessionRow row in rows)
+                if (row != SessionRow.Password || showPassword) AddChild(MakeFormRow(row));
+            Refresh();
+            return;
+        }
+        if (_compact)
+        {
+            BuildCompact(rows);
+            Refresh();
+            return;
+        }
+
+        var top = new VBoxContainer { Name = "MapMode" };
+        var session = new VBoxContainer { Name = "Session" };
+        var boxes = new BoxContainer { Name = "RuleBoxes" };
+        _columns = boxes;
+        boxes.AddThemeConstantOverride("separation", 12);
+        AddChild(top);
+        AddChild(session);
+        AddChild(boxes);
+        VBoxContainer left = Box(boxes, "BoxLeft");
+        VBoxContainer mid = Box(boxes, "BoxMid");
+        VBoxContainer right = Box(boxes, "BoxRight");
+        foreach (SessionRow row in CreateSessionModel.Rows)
+        {
+            if (!Contains(rows, row) || (row == SessionRow.Password && !showPassword))
+            {
+                continue;
+            }
+
+            VBoxContainer parent = row switch
+            {
+                SessionRow.Map or SessionRow.Mode => top,
+                SessionRow.Password or SessionRow.VoiceChat or SessionRow.MaxPlayers => session,
+                SessionRow.Revenge or SessionRow.RandomMap or SessionRow.VoiceInLobby or SessionRow.AutoBalance or SessionRow.Alternate or
+                    SessionRow.GamesInARow or SessionRow.Practice => left,
+                SessionRow.TimeLimit or SessionRow.SpyLives or SessionRow.MercLives => mid,
+                _ => right,
+            };
+            parent.AddChild(MakeRow(row));
+            if (row == SessionRow.VoiceChat)
+            {
+                _hint = new Label { Name = "VoiceHint", Modulate = UiStyle.MenuFocus, HorizontalAlignment = HorizontalAlignment.Right };
+                parent.AddChild(_hint);
+            }
+        }
+
+        Refresh();
+    }
+
+    /// <summary>
+    /// The lobby's layout: Map and Mode as two left-aligned lines, then three columns grouped by what they set (the
+    /// match's length and lives; voice and bots; rule switches), every value in a cell of one width so the columns
+    /// line up. A check box row has no Yes/No beside the box, and the voice hint is the Voice Chat row's tooltip.
+    /// </summary>
+    private void BuildCompact(IReadOnlyCollection<SessionRow> rows)
+    {
+        AddThemeConstantOverride("separation", 14);
+        VBoxContainer top = LobbyPanels.Card(this, "MapMode", "Map & game mode");
+        var columns = new BoxContainer { Name = "Columns" };
+        _columns = columns;
+        columns.AddThemeConstantOverride("separation", 14);
+        AddChild(columns);
+        VBoxContainer match = LobbyPanels.Card(columns, "Match", "Round & objectives");
+        VBoxContainer players = LobbyPanels.Card(columns, "Players", "Players & voice");
+        VBoxContainer rules = LobbyPanels.Card(columns, "Rules", "Extra rules");
+        foreach (SessionRow row in CreateSessionModel.Rows)
+        {
+            if (!Contains(rows, row) || row is SessionRow.Password or SessionRow.MaxPlayers)
+            {
+                continue;
+            }
+
+            VBoxContainer parent = row switch
+            {
+                SessionRow.Map or SessionRow.Mode => top,
+                SessionRow.TimeLimit or SessionRow.Respawn or SessionRow.SpyLives or SessionRow.MercLives or SessionRow.GamesInARow or
+                    SessionRow.ActiveDisks or SessionRow.DisksToTake => match,
+                SessionRow.VoiceChat or SessionRow.VoiceInLobby or SessionRow.Bots or SessionRow.BotsPerSide or SessionRow.BotSkill or
+                    SessionRow.SpyBots or SessionRow.MercBots or SessionRow.AutoBalance => players,
+                _ => rules,
+            };
+            parent.AddChild(MakeRow(row));
+        }
+
+        // Within a column: lengths before lives, voice before bots.
+        Order(match, SessionRow.TimeLimit, SessionRow.Respawn, SessionRow.SpyLives, SessionRow.MercLives, SessionRow.GamesInARow,
+            SessionRow.ActiveDisks, SessionRow.DisksToTake);
+        Order(players, SessionRow.VoiceChat, SessionRow.VoiceInLobby, SessionRow.Bots, SessionRow.BotsPerSide, SessionRow.SpyBots, SessionRow.MercBots, SessionRow.BotSkill,
+            SessionRow.AutoBalance);
+    }
+
+    private void Order(VBoxContainer column, params SessionRow[] order)
+    {
+        int at = 1; // Keep the section heading above its rows.
+        foreach (SessionRow row in order)
+        {
+            if (_rows.TryGetValue(row, out Control? line) && line.GetParent() == column)
+            {
+                column.MoveChild(line, at++);
+            }
+        }
+    }
+
+    /// <summary>The fixed width of a compact row's value cell (arrows and value, or the check box).</summary>
+    private const float CompactCell = 144f;
+
+    private static bool Contains(IReadOnlyCollection<SessionRow> rows, SessionRow row)
+    {
+        foreach (SessionRow r in rows)
+        {
+            if (r == row)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static VBoxContainer Box(BoxContainer parent, string name)
+    {
+        var frame = new PanelContainer { Name = name, SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        frame.AddThemeStyleboxOverride("panel", UiStyle.MenuPanelBox());
+        parent.AddChild(frame);
+        var column = new VBoxContainer { Name = "Column" };
+        frame.AddChild(column);
+        return column;
+    }
+
+    /// <summary>Place form controls in the host page's sections while retaining their shared model binding.</summary>
+    public void MoveRowsTo(Container parent, params SessionRow[] rows)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        foreach (SessionRow row in rows)
+        {
+            if (!_rows.TryGetValue(row, out Control? line)) continue;
+            line.GetParent()?.RemoveChild(line);
+            parent.AddChild(line);
+        }
+    }
+
+    private Control MakeFormRow(SessionRow row)
+    {
+        var line = new HBoxContainer { Name = "Row_" + row, CustomMinimumSize = new Vector2(0, 36) };
+        line.AddThemeConstantOverride("separation", 12);
+        var caption = new Label
+        {
+            Name = row + "Caption", Text = Model.Caption(row),
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            TooltipText = Description(row), MouseFilter = MouseFilterEnum.Pass,
+        };
+        line.AddChild(caption);
+        _captions[row] = caption;
+        _rows[row] = line;
+        if (CreateSessionModel.IsCheck(row))
+        {
+            caption.Hide();
+            var check = new CheckBox
+            {
+                Name = row + "Check", Text = Model.Caption(row), TooltipText = Description(row),
+                CustomMinimumSize = new Vector2(0, 36), SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            };
+            check.Toggled += on => { if (_editable && !_refreshing) Model.SetChecked(row, on); };
+            _checks[row] = check;
+            line.AddChild(check);
+        }
+        else if (row == SessionRow.Password)
+        {
+            _password = new LineEdit
+            {
+                Name = "PasswordEdit", Secret = true, MaxLength = LobbySetup.MaxPasswordLength,
+                PlaceholderText = "Optional", Text = Model.Password,
+                CustomMinimumSize = new Vector2(220, 36),
+                TooltipText = "Leave empty to allow players to join without a password.",
+            };
+            _password.TextChanged += text =>
+            {
+                string clean = CreateSessionModel.FilterPassword(text);
+                if (clean != text)
+                {
+                    int caret = _password.CaretColumn;
+                    _password.Text = clean;
+                    _password.CaretColumn = Math.Min(caret, clean.Length);
+                }
+                if (_editable && !_refreshing) Model.SetPassword(clean);
+            };
+            line.AddChild(_password);
+        }
+        else if (row is SessionRow.Mode or SessionRow.VoiceChat or SessionRow.Bots or SessionRow.BotSkill)
+        {
+            var choice = new OptionButton
+            {
+                Name = row + "Choice", CustomMinimumSize = new Vector2(220, 36),
+                FitToLongestItem = false, TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
+            };
+            choice.ItemSelected += index =>
+            {
+                if (!_editable || _refreshing) return;
+                if (row == SessionRow.Mode) Model.SelectMode(Model.Modes[(int)index]);
+                else Model.Step(row, (int)index - Model.Number(row));
+            };
+            _choices[row] = choice;
+            line.AddChild(choice);
+        }
+        else if (row == SessionRow.Map)
+        {
+            var value = new Label
+            {
+                Name = "MapValue", SizeFlagsHorizontal = SizeFlags.ExpandFill,
+                AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            };
+            _values[row] = value;
+            line.AddChild(value);
+        }
+        else
+        {
+            var number = new SpinBox
+            {
+                Name = row + "Value", CustomMinimumSize = new Vector2(220, 36),
+                Rounded = true, Step = 1, UpdateOnTextChanged = false,
+            };
+            number.ValueChanged += value => { if (_editable && !_refreshing) Model.SetNumber(row, (int)value); };
+            number.GetLineEdit().TextChanged += _ => { if (_editable && !_refreshing) PendingEditsChanged?.Invoke(); };
+            _numbers[row] = number;
+            line.AddChild(number);
+        }
+        return line;
+    }
+
+    private void RefreshChoice(SessionRow row, OptionButton choice)
+    {
+        var labels = new List<string>();
+        int selected = Model.Number(row);
+        switch (row)
+        {
+            case SessionRow.Mode:
+                selected = 0;
+                foreach (var mode in Model.Modes)
+                {
+                    if (mode == Model.Setup.Mode) selected = labels.Count;
+                    labels.Add(CreateSessionModel.ModeName(mode));
+                }
+                break;
+            case SessionRow.VoiceChat: labels.AddRange(LobbySetup.VoiceModeNames); break;
+            case SessionRow.Bots: labels.AddRange(OnlineBotRoster.FillNames); break;
+            case SessionRow.BotSkill: labels.AddRange(OnlineBotRoster.SkillNames); break;
+        }
+        bool changed = choice.ItemCount != labels.Count;
+        for (int i = 0; !changed && i < labels.Count; i++) changed = choice.GetItemText(i) != labels[i];
+        if (changed)
+        {
+            choice.Clear();
+            foreach (string label in labels) choice.AddItem(label);
+        }
+        choice.Select(selected);
+        choice.TooltipText = row == SessionRow.VoiceChat ? Model.VoiceHint : Model.Text(row);
+    }
+
+    private Control MakeRow(SessionRow row)
+    {
+        var line = new HBoxContainer { Name = "Row_" + row, CustomMinimumSize = new Vector2(0, _compact ? 38 : 0) };
+        if (_compact) line.AddThemeConstantOverride("separation", 12);
+        bool wide = row is SessionRow.Map or SessionRow.Mode;
+        var caption = new Label
+        {
+            Name = row + "Caption", Text = Model.Caption(row), TooltipText = Model.Caption(row), MouseFilter = MouseFilterEnum.Pass,
+            SizeFlagsHorizontal = _compact && wide ? SizeFlags.ShrinkBegin : SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(_compact ? (wide ? 140f : 0f) : 150f, 0f),
+            AutowrapMode = _compact ? TextServer.AutowrapMode.WordSmart : TextServer.AutowrapMode.Off,
+        };
+        line.AddChild(caption);
+        _captions[row] = caption;
+
+        // Compact rows put their control in a cell of one width, so values line up down a column.
+        Container cell = line;
+        if (_compact && !wide && !CreateSessionModel.IsCheck(row))
+        {
+            var box = new HBoxContainer
+            {
+                Name = row + "Cell", CustomMinimumSize = new Vector2(CompactCell, 0f), Alignment = BoxContainer.AlignmentMode.Center,
+            };
+            line.AddChild(box);
+            cell = box;
+        }
+
+        if (CreateSessionModel.IsCheck(row))
+        {
+            var check = new CheckBox { Name = row + "Check", Text = _compact ? Model.Caption(row) : "",
+                SizeFlagsHorizontal = SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(0, _compact ? 38 : 0),
+                TooltipText = Description(row) };
+            if (_compact) caption.Visible = false;
+            check.Toggled += on =>
+            {
+                if (_editable)
+                {
+                    Model.SetChecked(row, on);
+                }
+            };
+            cell.AddChild(check);
+            _checks[row] = check;
+            if (!_compact)
+            {
+                var value = new Label { Name = row + "Value", CustomMinimumSize = new Vector2(40f, 0f) };
+                cell.AddChild(value);
+                _values[row] = value;
+            }
+        }
+        else if (row == SessionRow.Password)
+        {
+            _password = new LineEdit
+            {
+                Name = "PasswordEdit", Secret = true, MaxLength = LobbySetup.MaxPasswordLength, PlaceholderText = "none",
+                CustomMinimumSize = new Vector2(220f, 0f),
+            };
+            _password.TextChanged += text =>
+            {
+                string clean = CreateSessionModel.FilterPassword(text);
+                if (clean != text)
+                {
+                    int caret = _password.CaretColumn;
+                    _password.Text = clean;
+                    _password.CaretColumn = Math.Min(caret, clean.Length);
+                }
+
+                Model.SetPassword(clean);
+            };
+            cell.AddChild(_password);
+        }
+        else
+        {
+            cell.AddChild(Arrow(row, "Prev", "◄", -1));
+            var value = new Label
+            {
+                Name = row + "Value", HorizontalAlignment = HorizontalAlignment.Center,
+                SizeFlagsHorizontal = wide || _compact ? SizeFlags.ExpandFill : SizeFlags.Fill,
+                AutowrapMode = wide ? TextServer.AutowrapMode.WordSmart : TextServer.AutowrapMode.Off,
+                CustomMinimumSize = new Vector2(
+                    _compact ? (wide ? 280f : 0f) : row is SessionRow.Map ? 300f : row is SessionRow.Mode or SessionRow.VoiceChat ? 170f : 44f, 0f),
+                // Long map names wrap on narrow windows instead of being ellipsized or widening the page.
+            };
+            cell.AddChild(value);
+            _values[row] = value;
+            cell.AddChild(Arrow(row, "Next", "►", 1));
+        }
+
+        _rows[row] = line;
+        return line;
+    }
+
+    private Button Arrow(SessionRow row, string which, string glyph, int delta)
+    {
+        var b = new Button { Name = row + which, Text = glyph, CustomMinimumSize = new Vector2(_compact ? 32f : 40f, _compact ? 38f : 28f), FocusMode = FocusModeEnum.All,
+            TooltipText = (delta < 0 ? "Previous / decrease " : "Next / increase ") + Model.Caption(row) };
+        b.Pressed += () =>
+        {
+            if (_editable)
+            {
+                Model.Step(row, delta);
+            }
+        };
+        _arrows.Add(b);
+        return b;
+    }
+
+    /// <summary>Redraws the values, captions and which rows show.</summary>
+    public void Refresh()
+    {
+        _refreshing = true;
+        foreach ((SessionRow row, Control line) in _rows)
+        {
+            line.Visible = Model.Visible(row);
+            _captions[row].Text = Model.Caption(row);
+            if (_values.TryGetValue(row, out Label? value))
+            {
+                value.Text = Model.Text(row);
+            }
+
+            if (_checks.TryGetValue(row, out CheckBox? check))
+            {
+                check.SetPressedNoSignal(Model.Checked(row));
+            }
+
+            if (_numbers.TryGetValue(row, out SpinBox? number))
+            {
+                (int min, int max) = Model.Range(row);
+                number.MinValue = min;
+                number.MaxValue = max;
+                number.SetValueNoSignal(Model.Number(row));
+                // Also reset unsubmitted text when loading the same numeric value (discard or loss of control).
+                number.GetLineEdit().Text = Model.Number(row).ToString(CultureInfo.InvariantCulture);
+                number.TooltipText = min == 0 && row is SessionRow.TimeLimit or SessionRow.SpyLives or SessionRow.MercLives
+                    ? "0 = unlimited. Type a value or use the arrows." : "Type a value or use the arrows.";
+            }
+            if (_choices.TryGetValue(row, out OptionButton? choice)) RefreshChoice(row, choice);
+        }
+
+        if (_hint is not null)
+        {
+            _hint.Text = Model.VoiceHint;
+        }
+        else if ((_compact || _form) && _captions.TryGetValue(SessionRow.VoiceChat, out Label? voice))
+        {
+            voice.TooltipText = Model.Caption(SessionRow.VoiceChat) + ": " + Model.VoiceHint;
+        }
+        _refreshing = false;
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_columns is not null)
+        {
+            // Use the viewport, not our minimum-inflated width, so a row can recover after shrinking.
+            float width = GetParent() is ScrollContainer scroll ? scroll.Size.X : GetViewportRect().Size.X;
+            _columns.Vertical = width < (_compact ? 1080f : 1200f);
+        }
+        if (Blink is null)
+        {
+            return;
+        }
+
+        double now = Time.GetTicksMsec() / 1000.0;
+        foreach ((SessionRow row, Control line) in _rows)
+        {
+            float a = Blink.Lit(row, now) ? 1f : 0.15f;
+            if (!Mathf.IsEqualApprox(line.Modulate.A, a))
+            {
+                line.Modulate = new Color(1f, 1f, 1f, a);
+            }
+        }
+    }
+
+    /// <summary>The control of a row's arrow or check (tests and the menu pilot).</summary>
+    public Control? Find(string name)
+    {
+        if (FindChild(name, recursive: true, owned: false) is Control child) return child;
+        foreach (Control row in _rows.Values)
+        {
+            if (row.Name == name) return row;
+            if (row.FindChild(name, recursive: true, owned: false) is Control relocated) return relocated;
+        }
+        return null;
+    }
+
+    private static string Description(SessionRow row) => row switch
+    {
+        SessionRow.Revenge => "Play a return match with the teams swapped.",
+        SessionRow.RandomMap => "Choose the next map at random.",
+        SessionRow.VoiceInLobby => "Allow players to use voice chat before the match.",
+        SessionRow.AutoBalance => "Keep the teams balanced when players join.",
+        SessionRow.Alternate => "Customize the abilities and gadgets allowed for each team using Alternate rules.",
+        SessionRow.Practice => "Unlimited lives, quick respawns and practice commands. Match stats are not recorded.",
+        SessionRow.MaxPlayers => "Up to 24 places for human players and bots (12v12). Spectators do not use these places.",
+        SessionRow.SpyBots or SessionRow.MercBots => "Requested bots on this team. Use 0 for no bots. Human players take priority when slots are full.",
+        _ => string.Empty,
+    };
+}

@@ -1,0 +1,287 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using Godot;
+using OpenScct.Core;
+using OpenScct.Core.Engine;
+using OpenScct.Core.Uc;
+using OpenScct.Game.Devices;
+using OpenScct.Game.SBase;
+using OpenScct.Server;
+using OpenScctGame.Audio;
+using OpenScctGame.Play.Demo;
+using OpenScctGame.Play.Session;
+using OpenScctGame.Render.Data;
+
+namespace OpenScctGame.Play;
+
+/// <summary>
+/// The play scene's sound: a <see cref="SoundSystem"/> with the map's audio (the shared library and the map's
+/// table), bound to the client's world once its map is loaded (actor locations, ambient loops, zones, surfaces),
+/// fed with the client world's events through a <see cref="PlayAudioRouter"/> (installed as the world's event
+/// sink before the HUD wraps it), and listening from the play camera every frame. The server's sounds reach the
+/// client's world as ClientHearSound calls (<see cref="NetHearSound"/>), the interface sounds as ClientPlaySound.
+/// <para>
+/// <c>SVM_AUDIO_MUTE=1</c> turns the Master bus 80 dB down (the mix still runs to the output and is metered),
+/// <c>SVM_AUDIO_LOG=1</c> prints the voices and the bus peaks every 10 s.
+/// </para>
+/// </summary>
+public sealed partial class PlayAudio : Node
+{
+    private const double LogSeconds = 10.0;
+
+    private PlaySession? _session;
+    private DemoPlayer? _demo;
+    private Func<(FVector Location, FRotator Rotation)?>? _view;
+    private bool _bound;
+    private bool _log;
+    private bool _quiet;
+    private double _sinceLog;
+
+    public PlayAudio()
+    {
+        Name = "PlayAudio";
+    }
+
+    public SoundSystem? Sound { get; private set; }
+
+    public PlayAudioRouter? Router { get; private set; }
+
+    public AudioLibrary? Library { get; private set; }
+
+    /// <summary>The loudest bus outputs since the scene started (sampled every frame).</summary>
+    public AudioPeaks Peaks { get; } = new();
+
+    /// <summary>Why the scene plays no sound, or null.</summary>
+    public string? Problem { get; private set; }
+
+    /// <summary>
+    /// Adds the sound of <paramref name="session"/> to <paramref name="parent"/>, listening from <paramref name="view"/>
+    /// (the camera's location and rotation in UE space, null while there is none). Returns null, with a printed
+    /// reason, when the map has no converted audio.
+    /// </summary>
+    public static PlayAudio? Attach(Node parent, PlaySession session, Func<(FVector Location, FRotator Rotation)?> view,
+        DemoPlayer? demo = null)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        string shared = AudioLibrary.SharedDirFor(session.MapFolder);
+        if (!File.Exists(Path.Combine(shared, "audio.json")))
+        {
+            GD.Print($"SVM_AUDIO no sound: no converted audio at {shared} (python -m svmbuild audio audio-map --maps {session.Settings.Map})");
+            return null;
+        }
+
+        var audio = new PlayAudio { _session = session, _view = view, _demo = demo };
+        audio.Library = AudioLibrary.Load(shared, session.MapFolder);
+        audio.Library.PrepareSession();
+        audio.Library.Preload("Armes_impacts.Armes.RA_GunDef_1shot");
+        // The blast sound is a nested random list. Decode every leaf while loading rather than reading
+        // and decoding a different WAV on the frame of each of the first few explosions.
+        audio.Library.Preload("Armes_impacts.Grenade.RA_GrenExpl");
+        foreach (var pistol in Sidearms.All)
+            foreach (string action in new[] { "fire", "reload" })
+                if (audio.Library.Find("OpenScctSidearms." + pistol.Id + "_" + action) is { } sound)
+                    audio.Library.Stream(sound, false);
+        audio.Sound = new SoundSystem { Name = "SoundSystem", Headphones = AudioOutput.Headphones,
+            Acoustics = parent is PlayRoot { Map: { } rendered } ? MapAcoustics.FromLighting(rendered.Lighting) : null };
+        audio.AddChild(audio.Sound);
+        parent.AddChild(audio);
+        if (demo is not null) audio.Sound.SetDemoSeek(true, demo.Clock.Paused);
+        audio.Sound.Bind(audio.Library, null, seed: (int)(session.Settings.MatchSeed & 0x7fffffff));
+        // PlayRoot drains audio before rendering, so cold models/effects cannot hold shot starts behind their work.
+        audio.SetProcess(false);
+        audio.Sound.SetProcess(false);
+
+        // The router becomes the world's sink now, before the HUD wraps whatever sink is there; it also takes the
+        // sounds of the calls received before a step (ClientHearSound, ClientPlaySound) and of the input commands.
+        audio.Router = PlayAudioRouter.Install(session.Client, audio.Sound);
+        if (audio.Library.Map is null)
+        {
+            audio.Problem = "the map has no audio table (python -m svmbuild audio-map)";
+        }
+
+        audio._log = System.Environment.GetEnvironmentVariable("SVM_AUDIO_LOG") is "1" or "true";
+        if (System.Environment.GetEnvironmentVariable("SVM_AUDIO_MUTE") is "1" or "true")
+        {
+            audio._quiet = true;
+            AudioPeaks.Quiet();
+        }
+
+        GD.Print($"SVM_AUDIO {audio.Library.Count} sounds, {audio.Library.Map?.Zones.Count ?? 0} zones, {audio.Sound.Buses?.ReverbBusCount ?? 0} reverb buses, " +
+                 $"output {AudioServer.OutputDevice} at {AudioServer.GetMixRate()} Hz, Master {AudioServer.GetBusVolumeDb(0):F0} dB{(AudioServer.IsBusMute(0) ? " (muted)" : "")}");
+        return audio;
+    }
+
+    /// <summary>Decode map security sounds before the first disable, destruction or detection.</summary>
+    internal void PreloadSecuritySounds(GameplayActors actors)
+    {
+        if (Library is not { } library)
+        {
+            return;
+        }
+
+        var sounds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var loops = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (GameplayActor actor in actors.Actors)
+        {
+            if (actor.ShortClass is not (nameof(SCamera) or nameof(SLaserTrigger) or nameof(SVolumetricSensor)))
+            {
+                continue;
+            }
+
+            Load(SensorK.ChaffExplosionSound.Path);
+            Load(actor.Asset(nameof(SBasicGamePlayObject.TakeDamageSound)));
+            Load(actor.Asset(nameof(SBasicGamePlayObject.DestroySound)));
+            if (actor.ShortClass == nameof(SCamera))
+            {
+                Load(actor.Asset(nameof(SCamera.CamDzzz)));
+                Load(actor.Asset(nameof(SCamera.CamBipbip)), forceLoop: true);
+            }
+        }
+
+        void Load(string? path, bool forceLoop = false)
+        {
+            if (path is not null && (forceLoop ? loops : sounds).Add(path))
+            {
+                library.Preload(path, forceLoop);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A gadget page's sound (the heart sensor's heartbeat and scan ping): 2D with no actor, as the HUD natives play
+    /// it on the player's own machine (AudioK.HudSoundRadius).
+    /// </summary>
+    public void PlayHudSound(AssetRef sound)
+    {
+        if (!sound.IsNone)
+        {
+            Sound?.PlaySound(0, sound.Path!, 0, false, FVector.Zero, 1f, AudioK.HudSoundRadius, 1f, attenuate: false, flat: true);
+        }
+    }
+
+    /// <summary>Gives the sound the client world once its map is in (apart from _Process: its lambda's closure would be made every frame).</summary>
+    private void Bind(PlaySession session, SoundSystem sound)
+    {
+        if (session.Client.Map is { } map)
+        {
+            _bound = true;
+            Level level = session.Client.World.Level;
+            sound.SetWorld(new LevelAudioWorld(level, map.Physics?.Collision, a => map.Loaded?.RecordOf(a)?.Id, Library?.Map?.Actors));
+        }
+    }
+
+    internal void AdvanceDemoTick(DemoPlayer demo, IReadOnlyList<DemoPresentationSample> history, bool atCheckpoint)
+    {
+        if (!demo.RebuildingPresentation || _session is not { } session || Sound is not { } sound) return;
+        if (!_bound) Bind(session, sound);
+        sound.SetDemoSeek(true, demo.Clock.Paused);
+        if (demo.ViewFor(session.View) is { Valid: true } view)
+            sound.SetListener(view.Location, view.Rotation);
+
+        if (atCheckpoint)
+        {
+            uint tick = demo.Recording.Index.FirstTick;
+            uint target = demo.CurrentTick;
+            int rate = demo.Header.TickRate;
+            foreach (DemoPresentationSample sample in history)
+            {
+                if (sample.Event.Kind is not (SimEventKind.PlaySound or SimEventKind.StopSound or
+                    SimEventKind.PlayMusic or SimEventKind.StopMusic or SimEventKind.SetSwitch)) continue;
+                uint next = Math.Clamp(sample.Tick, tick, target);
+                sound.AdvanceDemoVoices((next - tick) / (double)rate);
+                sound.Handle(sample.Event, sample.MissingSource);
+                tick = next;
+            }
+            sound.AdvanceDemoVoices((target - tick) / (double)rate);
+        }
+
+        sound.AdvanceDemoTick(atCheckpoint ? 0 : Sim.DeltaTime);
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_session is not { } session || Sound is not { } sound)
+        {
+            return;
+        }
+
+        if (!_bound)
+        {
+            Bind(session, sound);
+        }
+
+        if (_view?.Invoke() is { } v)
+        {
+            sound.SetListener(v.Location, v.Rotation);
+        }
+
+        // SetAudioZoom: the local player's scope or binoculars (AudioZoomFactor is 0 outside them).
+        if (session.LocalController is { } pc)
+        {
+            sound.SetAudioZoom(pc.AudioZoomFactor, pc.FovAngle);
+            sound.ViewActorId = (pc.ViewTarget ?? pc.Pawn)?.ActorId ?? 0;
+            sound.LocalPawnId = pc.Pawn?.ActorId ?? 0;
+            sound.LocalControllerId = pc.ActorId;
+        }
+        else
+        {
+            sound.LocalPawnId = 0;
+            sound.LocalControllerId = 0;
+        }
+
+        if (_demo is { } demo)
+        {
+            sound.SetDemoSeek(demo.IsSeeking, demo.Clock.Paused);
+            if (demo.IsSeeking) return;
+            if (demo.Clock.Paused) delta = 0;
+        }
+        sound.Headphones = AudioOutput.Headphones;
+        sound.Update(delta);
+
+        if (_quiet)
+        {
+            AudioPeaks.Quiet();
+        }
+
+        Peaks.Sample();
+        if (_log && (_sinceLog += delta) >= LogSeconds)
+        {
+            _sinceLog = 0;
+            GD.Print(Report());
+        }
+    }
+
+    /// <summary>One line: voices, starts, the router's counts and the bus peaks.</summary>
+    public string Report()
+    {
+        SoundSystem? s = Sound;
+        PlayAudioRouter? r = Router;
+        string top = s is null ? "" : string.Join(",", s.Calls.GroupBy(c => c.Sound[(c.Sound.LastIndexOf('.') + 1)..])
+            .OrderByDescending(g => g.Count()).Take(8).Select(g => g.Key + "=" + g.Count()));
+        double[] dsp = s?.Buses?.CaptureSpatializerMetrics() ?? new double[5];
+        string lateLoads = Library is null ? "" : string.Join(",", Library.LoadAttempts.Where(l => !l.Preload).Select(l => l.Sound).TakeLast(3));
+        return string.Create(CultureInfo.InvariantCulture,
+            $"SVM_AUDIO voices={s?.ActiveVoices} virtual={s?.VirtualVoices} stolen={s?.StolenVoices} rejected={s?.RejectedVoices} promoted={s?.VirtualPromotions} " +
+            $"started={s?.StartCount} silent={s?.Silent} unknown={s?.Unknown.Count} zone={s?.ListenerZone} own={r?.OwnPlayed} heard={r?.HeardPlayed} duplicates={r?.Duplicates} " +
+            $"updateMaxMs={s?.MaxUpdateMilliseconds:F3} queueMaxMs={s?.MaxQueueMilliseconds:F3} traces={s?.OcclusionQueries} " +
+            $"reverbRays={s?.Buses?.GeometryQueries} reverbProbeMaxMs={s?.Buses?.MaxGeometryBatchMilliseconds:F3} reverbRejected={s?.Buses?.GeometryRejectedPackets} " +
+            $"reads={Library?.FilesRead} runtimeReads={Library?.RuntimeFilesRead} loadMaxMs={Library?.MaxLoadMilliseconds:F3} cacheBytes={Library?.CachedBytes} evictions={Library?.CacheEvictions} " +
+            $"hrtfCalls={dsp[0]} hrtfMaxMs={dsp[3] / 1000000:F3} sourceDeadlineMisses={dsp[4]} " +
+            $"outputLatencyEstimateMs={AudioServer.GetOutputLatency() * 1000 + (s?.Headphones == true ? 128000 / AudioServer.GetMixRate() : 0):F2} runtimeLoads={lateLoads} " +
+            $"calls: {top} peaks: {Peaks.Summary()}");
+    }
+
+    public override void _ExitTree()
+    {
+        Router?.Uninstall();
+
+        Sound?.StopAll();
+        Library?.ReleaseStreams();
+        _session = null;
+    }
+}

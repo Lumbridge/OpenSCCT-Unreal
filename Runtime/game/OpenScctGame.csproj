@@ -1,0 +1,54 @@
+<Project Sdk="Godot.NET.Sdk/4.7.2">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <RootNamespace>OpenScctGame</RootNamespace>
+    <AssemblyName>OpenScctGame</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    Godot builds with Debug, ExportDebug or ExportRelease. The libraries only know Debug and Release,
+    and a configuration name they do not know would build them without optimisation, so map it here.
+    OpenScctGame.slnx carries the same mapping for solution builds.
+  -->
+  <PropertyGroup>
+    <SvmLibraryConfiguration Condition="'$(Configuration)' == 'ExportRelease' or '$(Configuration)' == 'Release'">Release</SvmLibraryConfiguration>
+    <SvmLibraryConfiguration Condition="'$(SvmLibraryConfiguration)' == ''">Debug</SvmLibraryConfiguration>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ProjectReference>
+      <SetConfiguration>Configuration=$(SvmLibraryConfiguration)</SetConfiguration>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <Compile Include="..\shared\ProjectLinks.cs" Link="Shared\ProjectLinks.cs" />
+    <ProjectReference Include="..\src\OpenScct.Core\OpenScct.Core.csproj" />
+    <ProjectReference Include="..\src\OpenScct.Content\OpenScct.Content.csproj" />
+    <ProjectReference Include="..\src\OpenScct.Net\OpenScct.Net.csproj" />
+    <ProjectReference Include="..\src\OpenScct.Server\OpenScct.Server.csproj" />
+    <ProjectReference Include="..\src\OpenScct.Bots\OpenScct.Bots.csproj" />
+    <ProjectReference Include="..\src\OpenScct.Maps\OpenScct.Maps.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Discord Rich Presence over the local Discord app's pipe (docs/DISCORD.md). -->
+    <PackageReference Include="DiscordRichPresence" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Embed licensed vector icons so desktop/export builds do not depend on editor import caches. -->
+    <EmbeddedResource Include="Shaders/svm_authored.gdshaderinc" LogicalName="AuthoredMaterialShader" />
+    <EmbeddedResource Include="branding/icons/event-feed/*.svg" LogicalName="EventFeed/%(Filename)%(Extension)" />
+  </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="2dog.godotsharp" />
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="2dog.godotsharp.editor" Condition="'$(Configuration)' == 'Debug' Or '$(Configuration)' == 'Editor'" />
+    </ItemGroup>
+    <!-- added by the 2dog tool: properties 2dog hosts need that were not already set -->
+    <PropertyGroup>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <DefaultItemExcludes>$(DefaultItemExcludes);OpenScctGame.web/**</DefaultItemExcludes>
+    </PropertyGroup>
+</Project>

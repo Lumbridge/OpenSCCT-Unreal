@@ -1,0 +1,541 @@
+using System;
+using System.Collections.Generic;
+using OpenScct.Core;
+using OpenScct.Core.Engine;
+using OpenScct.Game.Camera;
+using OpenScct.Game.Combat;
+using OpenScct.Game.SBase;
+using OpenScct.Net;
+using OpenScct.Provenance;
+
+namespace OpenScct.Server;
+
+/// <summary>
+/// The combat and equipment port's calls between machines (<see cref="ICombatNet"/>) over the network driver. Each
+/// <see cref="CombatCall"/> travels reliably as one hand-written function of SPlayerController,
+/// <see cref="FunctionName"/>, on the channel of the sending or receiving player's controller; the receiving machine
+/// hands it to its copy of that controller (<see cref="SPlayerController.ReceiveCombatCall"/>), which checks that an
+/// owner-to-server call only names actors that player owns.
+/// <para>
+/// Wire form: the function name, the target actor, then each field behind a bit saying whether it is set (as UE2
+/// writes parameters): Int1, Int2, Int3, Float1, Bool1, Vector1, Vector2 (exact floats, because the port also carries
+/// non-geometric values in vectors), Rotation (exact ints), Actor1, Actor2, DamageType, Name1. Actors go through the
+/// connection's object map (a dynamic actor without an acknowledged channel arrives as None). A call to the server
+/// then carries the server time at which the client showed other players when it made the call
+/// (<see cref="ClientSession.ViewTimeFixed"/>, behind a presence bit): a server with lag compensation traces the call's
+/// shots at that time (<see cref="LagCompensation"/>). It also carries the sending pawn's identity, captured when
+/// queued rather than when sent. Calls from a previous possession cannot affect a replacement pawn.
+/// </para>
+/// </summary>
+[Provenance(ProvenanceKind.Estimated, "One reliable net-layer function per call; the original sends each combat function on its own actor")]
+public sealed class NetCombatBridge : ICombatNet
+{
+    /// <summary>The hand-written SPlayerController function that carries the calls.</summary>
+    public const string FunctionName = "SvmCombatCall";
+
+    private readonly NetDriver _driver;
+    private readonly NetCallArgs _deferredArgs = new();
+    private static readonly Name OrientableRotation = new("ServerUpdateOrientableRotation");
+    private static readonly Name UseCamNetwork = new("UseCamNetwork");
+    private static readonly Name SpawnInventory = new("ServerSpawnInventory");
+    private static readonly Name SpawnWeapon = new("ServerSpawnWeapon");
+    private Pending? _orientation, _lastOrientation;
+    private long _lastOrientationSent = long.MinValue / 2;
+
+    public NetCombatBridge(NetDriver driver)
+    {
+        _driver = driver ?? throw new ArgumentNullException(nameof(driver));
+    }
+
+    /// <summary>Calls sent and received, for tests and diagnostics.</summary>
+    public long Sent { get; private set; }
+
+    public long Received { get; private set; }
+
+    /// <summary>Calls that found no channel to their player (dropped).</summary>
+    public long Dropped { get; private set; }
+
+    /// <summary>When set, every call sent and received is listed here (diagnostics).</summary>
+    public List<string>? Trace { get; set; }
+
+    /// <summary>The hand-written members SPlayerController gets on both sides (<see cref="NetClasses.Create"/>).</summary>
+    public static RepExtension CreateExtension()
+    {
+        var extension = new RepExtension();
+        extension.Functions.Add(new RepExtensionFunction(FunctionName, Reliable: true, ClientToServer: true, Signature: "combat5-pawn-lifetime",
+            ReceiveFromClient));
+        extension.Functions.Add(new RepExtensionFunction(FunctionName + "ToClient", Reliable: true, ClientToServer: false,
+            Signature: "combat1", ReceiveFromServer));
+        return extension;
+    }
+
+    /// <summary>Installs a bridge on <paramref name="level"/>.</summary>
+    public static NetCombatBridge Install(Level level, NetDriver driver)
+    {
+        ArgumentNullException.ThrowIfNull(level);
+        var bridge = new NetCombatBridge(driver);
+        level.SetService<ICombatNet>(bridge);
+        level.SetService(bridge);
+        return bridge;
+    }
+
+    public void ClientCall(PlayerController Owner, in CombatCall Call)
+    {
+        if (_driver.IsServer && _driver.OwningConnection(Owner) is { } connection)
+        {
+            Send(Owner, connection, FunctionName + "ToClient", Call, -1);
+        }
+    }
+
+    public void ServerCall(PlayerController Sender, in CombatCall Call)
+    {
+        if (_driver.World?.IsReplaying == true) return;
+        if (!_driver.IsServer && _driver.ServerConnection is { } connection)
+        {
+            // The view time of the moment the call is made, kept while the call waits.
+            long viewTime = _driver.World?.Level.GetService<ClientSession>()?.ViewTimeFixed ?? -1;
+            if (Call.Function == OrientableRotation)
+            {
+                // The original angle report is unreliable. Our shared reliable equipment channel must not
+                // accumulate an idle 60 Hz stream ahead of movement, or the command fences stop progressing.
+                // Retain the newest pose and send it after movement, within the budget, at at most 20 Hz.
+                _orientation = new Pending(Sender, connection, FunctionName, Call, viewTime, _driver.Time, Sender.Pawn);
+                return;
+            }
+            if (Call.Function == UseCamNetwork) _orientation = _lastOrientation = null;
+            Send(Sender, connection, FunctionName, Call, viewTime, Sender.Pawn);
+        }
+    }
+
+    public bool HasActor(PlayerController Owner, Actor A) =>
+        _driver.IsServer && _driver.OwningConnection(Owner) is { } connection && Mapped(connection, A);
+
+    /// <summary>Seconds a call may wait for the actors it names to reach the other side before it is dropped.</summary>
+    public const float MaxWaitSeconds = 5f;
+
+    private readonly List<Pending> _pending = new();
+    private readonly HashSet<ActorChannel> _cloakChannels = new();
+    private readonly List<ActorChannel> _closedCloakChannels = new();
+
+    private readonly record struct Pending(PlayerController Controller, NetConnection Connection, string Function, CombatCall Call,
+        long ViewTime, long QueuedAt, Pawn? SenderPawn);
+
+    /// <summary>Calls waiting for an actor they name to be known on the other side.</summary>
+    public int Waiting => _pending.Count;
+
+    private void Send(PlayerController pc, NetConnection connection, string function, in CombatCall call, long viewTime,
+        Pawn? senderPawn = null)
+    {
+        // A call naming an actor the other side does not have yet (a pawn spawned this tick, whose channel opening is
+        // not acknowledged) waits, in order, until it is: the original sends such a call on that actor's own channel,
+        // which carries the actor first.
+        if (HasPendingFor(connection) || !Mapped(connection, call) || (function == FunctionName && !Mapped(connection, senderPawn)))
+        {
+            _pending.Add(new Pending(pc, connection, function, call, viewTime, _driver.Time, senderPawn));
+            return;
+        }
+
+        SendNow(pc, connection, function, call, viewTime, senderPawn);
+    }
+
+    private readonly List<Inbound> _inbound = new();
+
+    private readonly record struct Inbound(SPlayerController Controller, CombatCall Call, bool FromOwner, long ReceivedAt);
+
+    /// <summary>Calls received for a pawn this machine's player has not possessed yet (see <see cref="Deliver"/>).</summary>
+    public int Held => _inbound.Count;
+
+    /// <summary>
+    /// Sends the waiting calls whose actors are now known and delivers the held calls whose pawn is now possessed
+    /// (call once a tick, before the driver flushes).
+    /// </summary>
+    public void Pump()
+    {
+        long now = _driver.Time;
+        while (_inbound.Count > 0)
+        {
+            Inbound held = _inbound[0];
+            bool expired = now - held.ReceivedAt > (long)(MaxWaitSeconds * 1_000_000f);
+            if (!held.Controller.bDeleteMe && !expired && !Possessed(held.Controller, held.Call))
+            {
+                break;
+            }
+
+            _inbound.RemoveAt(0);
+            if (!held.Controller.bDeleteMe)
+            {
+                held.Controller.ReceiveCombatCall(held.Call, held.FromOwner);
+            }
+        }
+
+        for (int i = 0; i < _pending.Count;)
+        {
+            Pending p = _pending[i];
+            // Cold client map/model loading can take longer than the ordinary RPC timeout.
+            // The first kit must survive until this pawn's channel is acknowledged; stop
+            // retaining it as soon as the controller moves to a different pawn.
+            bool initialKit = p.Call.Function == new Name("UpdateInventory") &&
+                p.Call.Target is SBasePawn { Health: > 0, bDeleteMe: false } pawn &&
+                ReferenceEquals(p.Controller.Pawn, pawn);
+            if (p.Connection.State == EConnectionState.USOCK_Closed || p.Controller.bDeleteMe ||
+                (p.Function == FunctionName && !ReferenceEquals(p.Controller.Pawn, p.SenderPawn)) ||
+                (!initialKit && now - p.QueuedAt > (long)(MaxWaitSeconds * 1_000_000f)))
+            {
+                _pending.RemoveAt(i);
+                Dropped++;
+                Trace?.Add("expire " + p.Call.Function);
+                continue;
+            }
+
+            if (!Mapped(p.Connection, p.Call) || (p.Function == FunctionName && !Mapped(p.Connection, p.SenderPawn)) ||
+                HasPendingBefore(p.Connection, i))
+            {
+                i++;
+                continue;
+            }
+
+            _pending.RemoveAt(i);
+            SendNow(p.Controller, p.Connection, p.Function, p.Call, p.ViewTime, p.SenderPawn);
+        }
+        PumpOrientation();
+        PumpInitialCloaks();
+    }
+
+    private void PumpInitialCloaks()
+    {
+        if (!_driver.IsServer) return;
+        foreach (ActorChannel channel in _cloakChannels)
+            if (channel.Closing || channel.Connection.State == EConnectionState.USOCK_Closed)
+                _closedCloakChannels.Add(channel);
+        foreach (ActorChannel channel in _closedCloakChannels) _cloakChannels.Remove(channel);
+        _closedCloakChannels.Clear();
+
+        foreach (NetConnection connection in _driver.ClientConnections)
+        {
+            if (connection.Actor is not SPlayerController viewer) continue;
+            foreach (ActorChannel channel in connection.ActorChannels)
+            {
+                if (channel is not { OpenAcked: true, Closing: false, Actor: SPawnAttaque pawn } ||
+                    !_cloakChannels.Add(channel) || ReferenceEquals(viewer.Pawn, pawn)) continue;
+                float now = pawn.Level.TimeSeconds;
+                float flicker = MathF.Max(0f, pawn.PerturbationStartTime + pawn.PerturbationDuration - now);
+                if (pawn.DesiredGlassEffect == 0 && pawn.GlassEffect == 0 && flicker == 0f) continue;
+                float fade = pawn.SlopeGlassEffect == 0f ? 0f : MathF.Max(0f,
+                    (pawn.DesiredGlassEffect - (now * pawn.SlopeGlassEffect + pawn.BGlassEffect)) / pawn.SlopeGlassEffect);
+                // Relative durations survive different server/client clocks. Use the same reliable stream as
+                // later transitions, and avoid playing activation sounds again for a newly relevant pawn.
+                ClientCall(viewer, new CombatCall(new Name("InitialCloakState"))
+                {
+                    Target = pawn, Int1 = pawn.GlassEffect, Int2 = pawn.DesiredGlassEffect, Float1 = fade,
+                    Vector1 = new FVector(flicker, pawn.PerturbationValue, 0f),
+                });
+            }
+        }
+    }
+
+    private void PumpOrientation()
+    {
+        if (_orientation is not { } p) return;
+        if (p.Connection.State == EConnectionState.USOCK_Closed || p.Controller is not SPlayerController pc ||
+            pc.bDeleteMe || p.SenderPawn is not { bDeleteMe: false, Health: > 0 } ||
+            !ReferenceEquals(pc.Pawn, p.SenderPawn) || p.Call.Actor1 is not { bDeleteMe: false } camera ||
+            !ReferenceEquals(pc.SBPawn?.UsedObject, camera) || PlayerCalcView.SourceOf(pc) is not
+                (PlayerCalcView.EViewSource.StickyCam or PlayerCalcView.EViewSource.StickyCamSmoothToPosition or PlayerCalcView.EViewSource.Mirador))
+        {
+            _orientation = _lastOrientation = null;
+            return;
+        }
+        if (_lastOrientation is { } last && ReferenceEquals(last.Controller, pc) &&
+            ReferenceEquals(last.SenderPawn, p.SenderPawn) && ReferenceEquals(last.Call.Actor1, camera) &&
+            last.Call.Int1 == p.Call.Int1 && last.Call.Int2 == p.Call.Int2)
+        {
+            _orientation = null;
+            return;
+        }
+        if (_driver.Time - _lastOrientationSent < 50_000 || !p.Connection.IsNetReady || HasPendingFor(p.Connection) ||
+            !Mapped(p.Connection, p.Call) || !Mapped(p.Connection, p.SenderPawn)) return;
+
+        SendNow(pc, p.Connection, p.Function, p.Call, p.ViewTime, p.SenderPawn);
+        _lastOrientation = p;
+        _lastOrientationSent = _driver.Time;
+        _orientation = null;
+    }
+
+    private bool HasPendingFor(NetConnection connection) => HasPendingBefore(connection, _pending.Count);
+
+    private bool HasPendingBefore(NetConnection connection, int index)
+    {
+        for (int i = 0; i < index; i++)
+        {
+            if (ReferenceEquals(_pending[i].Connection, connection))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool Mapped(NetConnection connection, in CombatCall call) =>
+        Mapped(connection, call.Target) && Mapped(connection, call.Actor1) && Mapped(connection, call.Actor2);
+
+    // Whether a reference to the actor arrives as the actor (net-replication.md rule 18).
+    private bool Mapped(NetConnection connection, Actor? actor)
+    {
+        if (actor is null || actor.bDeleteMe)
+        {
+            return true;
+        }
+
+        if ((actor.bStatic || actor.bNoDelete) && _driver.MapBinding.IndexOf(actor) >= 0)
+        {
+            return true;
+        }
+
+        return connection.FindActorChannel(actor) is { Closing: false } channel && (channel.OpenAcked || !_driver.IsServer);
+    }
+
+    private void SendNow(PlayerController pc, NetConnection connection, string function, in CombatCall call, long viewTime,
+        Pawn? senderPawn)
+    {
+        ActorChannel? channel = _driver.ChannelForCall(pc, connection);
+        RepFunction? f = channel?.Layout?.FindFunction(function);
+        if (channel is null || f is null)
+        {
+            Dropped++;
+            Trace?.Add("drop " + call.Function);
+            return;
+        }
+
+        Trace?.Add("send " + call.Function + " target " + call.Target?.GetType().Name);
+        FOutBunch bunch = channel.BeginFunction(f, reliable: true);
+        Write(bunch.Writer, call, connection);
+        if (function == FunctionName)
+        {
+            if (Flag(bunch.Writer, viewTime >= 0)) bunch.Writer.WriteUInt64((ulong)viewTime);
+            // Controller channels survive respawn. Bind even targetless self-damage, blast and grab calls to
+            // the pawn that made them; a delayed packet must never act on the controller's replacement pawn.
+            if (Flag(bunch.Writer, senderPawn is not null)) connection.WriteObject(bunch.Writer, senderPawn, out _);
+        }
+
+        channel.SendFunction(bunch);
+        Sent++;
+    }
+
+    private static void ReceiveFromClient(Actor actor, FBitReader reader, NetConnection connection)
+    {
+        CombatCall call = Read(reader, connection);
+        long viewTime = reader.ReadBit() ? (long)reader.ReadUInt64() : -1;
+        bool hadPawn = reader.ReadBit();
+        Pawn? senderPawn = hadPawn ? connection.ReadObject(reader) as Pawn : null;
+        if (reader.IsError || actor is not SPlayerController { bDeleteMe: false } pc)
+        {
+            return;
+        }
+        long pawnId = senderPawn?.ActorId ?? 0;
+        if (!CurrentPossession(pc, call, hadPawn, senderPawn, pawnId)) return;
+
+        // Native state/action RPCs wait for their input command's reliable fence. Equipment calls share that
+        // controller channel, so executing them during packet decode can overtake the state immediately before
+        // them (CamNet's wait state, for example). Keep the decoded call and its original possession until that
+        // same fence; the bit reader is borrowed and cannot outlive this receive callback.
+        // Kit grants depend on the current possession, not a movement command. In particular, an
+        // editor or mirror placement can reset movement before the first input command arrives.
+        if (call.Function != SpawnInventory && call.Function != SpawnWeapon &&
+            pc.XLevel.GetService<NetCombatBridge>() is { } ordered &&
+            ordered._driver.Classes.Find(pc.GetType())?.Layout.FindFunction(FunctionName) is { } function)
+        {
+            NetFunctionHandler deliver = (self, _, _, _) =>
+                ReceiveOwnerCall((SPlayerController)self, call, viewTime, hadPawn, senderPawn, pawnId);
+            if (ordered._driver.DeferReceivedFunction?.Invoke(pc, function, ordered._deferredArgs.Clear(), connection, deliver) == true)
+                return;
+        }
+
+        ReceiveOwnerCall(pc, call, viewTime, hadPawn, senderPawn, pawnId);
+    }
+
+    private static bool CurrentPossession(SPlayerController pc, CombatCall call, bool hadPawn, Pawn? senderPawn, long pawnId)
+    {
+        if (pc.bDeleteMe) return false;
+
+        if ((hadPawn && (senderPawn is null || senderPawn.bDeleteMe || senderPawn.ActorId != pawnId)) || !ReferenceEquals(pc.Pawn, senderPawn))
+        {
+            if (pc.XLevel.GetService<NetCombatBridge>() is { } bridge)
+            {
+                bridge.Dropped++;
+                bridge.Trace?.Add("stale pawn " + call.Function);
+            }
+            return false;
+        }
+        return true;
+    }
+
+    private static void ReceiveOwnerCall(SPlayerController pc, CombatCall call, long viewTime, bool hadPawn, Pawn? senderPawn, long pawnId)
+    {
+        if (!CurrentPossession(pc, call, hadPawn, senderPawn, pawnId)) return;
+
+        // The call's traces see the other players where this client saw them (when the server compensates lag).
+        LagCompensation? lag = pc.XLevel.GetService<LagCompensation>();
+        lag?.BeginShot(viewTime);
+        try
+        {
+            Receive(pc, call, true);
+        }
+        finally
+        {
+            lag?.EndShot();
+        }
+    }
+
+    private static void ReceiveFromServer(Actor actor, FBitReader reader, NetConnection connection)
+    {
+        CombatCall call = Read(reader, connection);
+        if (!reader.IsError && actor is SPlayerController { bDeleteMe: false } pc)
+        {
+            Receive(pc, call, false);
+        }
+    }
+
+    private static void Receive(SPlayerController pc, in CombatCall call, bool fromOwner)
+    {
+        if (pc.XLevel.GetService<NetCombatBridge>() is not { } bridge)
+        {
+            pc.ReceiveCombatCall(call, fromOwner);
+            return;
+        }
+
+        bridge.Received++;
+        bridge.Trace?.Add("recv " + call.Function + " target " + call.Target?.GetType().Name);
+        bridge.Deliver(pc, call, fromOwner);
+    }
+
+    /// <summary>
+    /// Hands a received call to the controller. On a client, a call aimed at the player's own pawn (an autonomous
+    /// proxy here) that arrives before the controller's Pawn does is held, with every later call, until the
+    /// controller possesses that pawn: the original sends such a call on the pawn's own channel, behind the pawn's
+    /// Controller, so it never runs on a pawn its player does not yet own.
+    /// </summary>
+    private void Deliver(SPlayerController pc, in CombatCall call, bool fromOwner)
+    {
+        if (_inbound.Count > 0 || !Possessed(pc, call))
+        {
+            _inbound.Add(new Inbound(pc, call, fromOwner, _driver.Time));
+            return;
+        }
+
+        pc.ReceiveCombatCall(call, fromOwner);
+    }
+
+    private static bool Possessed(SPlayerController pc, in CombatCall call) =>
+        call.Target is not Pawn { Role: ENetRole.ROLE_AutonomousProxy } own ||
+        (ReferenceEquals(pc.Pawn, own) && ReferenceEquals(own.Controller, pc));
+
+    // ---- wire form --------------------------------------------------------------------------------------------
+
+    /// <summary>Writes <paramref name="call"/> (see the class remarks).</summary>
+    public static void Write(FBitWriter w, in CombatCall call, NetConnection map)
+    {
+        ArgumentNullException.ThrowIfNull(w);
+        ArgumentNullException.ThrowIfNull(map);
+        w.WriteString(call.Function.ToString());
+        map.WriteObject(w, call.Target, out _);
+        WriteInt(w, call.Int1);
+        WriteInt(w, call.Int2);
+        WriteInt(w, call.Int3);
+        if (Flag(w, call.Float1 != 0f))
+        {
+            w.WriteFloat(call.Float1);
+        }
+
+        w.WriteBit(call.Bool1);
+        WriteVector(w, call.Vector1);
+        WriteVector(w, call.Vector2);
+        bool rot = call.Rotation != default;
+        if (Flag(w, rot))
+        {
+            w.WriteInt32(call.Rotation.Pitch);
+            w.WriteInt32(call.Rotation.Yaw);
+            w.WriteInt32(call.Rotation.Roll);
+        }
+
+        WriteActor(w, call.Actor1, map);
+        WriteActor(w, call.Actor2, map);
+        w.WriteByte((byte)call.DamageType);
+        if (Flag(w, !call.Name1.IsNone))
+        {
+            w.WriteString(call.Name1.ToString());
+        }
+    }
+
+    /// <summary>Reads a call written by <see cref="Write"/>.</summary>
+    public static CombatCall Read(FBitReader r, NetConnection map)
+    {
+        ArgumentNullException.ThrowIfNull(r);
+        ArgumentNullException.ThrowIfNull(map);
+        var function = ReadName(r);
+        Actor? target = map.ReadObject(r) as Actor;
+        int i1 = ReadInt(r);
+        int i2 = ReadInt(r);
+        int i3 = ReadInt(r);
+        float f1 = r.ReadBit() ? Finite(r.ReadFloat()) : 0f;
+        bool b1 = r.ReadBit();
+        FVector v1 = ReadVector(r);
+        FVector v2 = ReadVector(r);
+        FRotator rot = r.ReadBit() ? new FRotator(r.ReadInt32(), r.ReadInt32(), r.ReadInt32()) : default;
+        Actor? a1 = ReadActor(r, map);
+        Actor? a2 = ReadActor(r, map);
+        var damage = (SDamageType)r.ReadByte();
+        Name name1 = r.ReadBit() ? ReadName(r) : Name.None;
+        return new CombatCall(function)
+        {
+            Target = target, Int1 = i1, Int2 = i2, Int3 = i3, Float1 = f1, Bool1 = b1, Vector1 = v1, Vector2 = v2, Rotation = rot,
+            Actor1 = a1, Actor2 = a2, DamageType = damage, Name1 = name1,
+        };
+    }
+
+    private static bool Flag(FBitWriter w, bool value)
+    {
+        w.WriteBit(value);
+        return value;
+    }
+
+    private static void WriteInt(FBitWriter w, int value)
+    {
+        if (Flag(w, value != 0))
+        {
+            w.WriteInt32(value);
+        }
+    }
+
+    private static int ReadInt(FBitReader r) => r.ReadBit() ? r.ReadInt32() : 0;
+
+    private static void WriteVector(FBitWriter w, FVector v)
+    {
+        if (Flag(w, !v.IsZero()))
+        {
+            w.WriteFloat(v.X);
+            w.WriteFloat(v.Y);
+            w.WriteFloat(v.Z);
+        }
+    }
+
+    private static FVector ReadVector(FBitReader r) =>
+        r.ReadBit() ? new FVector(Finite(r.ReadFloat()), Finite(r.ReadFloat()), Finite(r.ReadFloat())) : default;
+
+    /// <summary>A number from the other side: NaN and infinity never reach the game's physics.</summary>
+    private static float Finite(float value) => float.IsFinite(value) ? value : 0f;
+
+    /// <summary>A name from the other side; names stay interned, so one longer than any real name is None.</summary>
+    private static Name ReadName(FBitReader r) =>
+        r.ReadString() is { Length: <= NetWire.MaxNameLength } text ? new Name(text) : Name.None;
+
+    private static void WriteActor(FBitWriter w, Actor? actor, NetConnection map)
+    {
+        if (Flag(w, actor is not null))
+        {
+            map.WriteObject(w, actor, out _);
+        }
+    }
+
+    private static Actor? ReadActor(FBitReader r, NetConnection map) => r.ReadBit() ? map.ReadObject(r) as Actor : null;
+}

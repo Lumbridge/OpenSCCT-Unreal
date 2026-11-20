@@ -1,0 +1,139 @@
+using System;
+using System.Threading;
+using Godot;
+using OpenScct.Net;
+using OpenScct.Server;
+using OpenScct.Server.Hub;
+using OpenScctGame.Match;
+
+namespace OpenScctGame.Hub;
+
+/// <summary>
+/// A hub hosted from the game (docs/HUB.md, "Running a hub"): the dedicated server's
+/// <see cref="HubServer"/> on its own thread, on a UDP port of this PC, so a player without a hub server can open one
+/// and others (LAN, direct IP, or the master's hub list with its NAT relay) join it. The host's own player joins it
+/// like anyone else, on 127.0.0.1.
+/// </summary>
+public sealed class HubHost : IDisposable
+{
+    private readonly CancellationTokenSource _stop = new();
+    private readonly System.Collections.Concurrent.ConcurrentQueue<Action<HubServer>> _inspections = new();
+
+    /// <summary>Runs diagnostics or controlled test setup between ticks on the owning server thread.</summary>
+    public void Inspect(Action<HubServer> action) => _inspections.Enqueue(action);
+    /// <summary>Optional diagnostic observer, called on the server thread even while the host's renderer loads.</summary>
+    public event Action<HubServer>? Ticked;
+    private readonly Thread _thread;
+    private bool _disposed;
+
+    private HubHost(HubServer server, LiteNetLibTransport udp, string hostKey)
+    {
+        Server = server;
+        Udp = udp;
+        HostKey = hostKey;
+        _thread = new Thread(Run) { IsBackground = true, Name = "OpenSCCT hub host" };
+    }
+
+    /// <summary>The hub; it belongs to the host thread.</summary>
+    public HubServer Server { get; }
+
+    public LiteNetLibTransport Udp { get; }
+
+    public int Port => Udp.LocalPort;
+
+    /// <summary>The key the host's own player logs in with (<c>?SvmHost=</c>): his looks and rank go by the host account.</summary>
+    public string HostKey { get; }
+
+    /// <summary>Where the host's own player joins.</summary>
+    public string LocalAddress => "127.0.0.1:" + Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>The thread's failure, if it stopped.</summary>
+    public Exception? Failure { get; private set; }
+
+    public bool IsRunning => _thread.IsAlive;
+
+    /// <summary>
+    /// Opens UDP <paramref name="port"/> and the hub on <paramref name="maps"/> and starts the host thread. Throws
+    /// <see cref="InvalidOperationException"/> with a readable reason (the port is in use, the hub map is missing).
+    /// With <paramref name="master"/> the hub lists itself in that master's hub list; <paramref name="hostAccount"/> is
+    /// the hosting game's own account (its player's unlocks and rank), or null.
+    /// </summary>
+    public static HubHost Start(int port, string name, MapCatalog maps, NetClassRegistry classes, OpenScct.Server.Online.MasterLinkSettings? master = null,
+        OpenScct.Server.Online.HostAccount? hostAccount = null, bool loopbackOnly = false)
+    {
+        ArgumentNullException.ThrowIfNull(maps);
+        LiteNetLibTransport udp = LiteNetLibTransport.Listen(port, HubK.DefaultMaxPlayers + 8, loopbackOnly: loopbackOnly);
+        try
+        {
+            string key = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
+            HubServer server;
+            try
+            {
+                var botNavigation = new OpenScct.Bots.AiNavCache();
+                server = new HubServer(udp, new HubSettings
+                {
+                    Name = name,
+                    Maps = maps,
+                    Classes = classes,
+                    MatchBots = OpenScct.Bots.OnlineServerBots.Factory(botNavigation),
+                    PrepareMatchBots = OpenScct.Bots.OnlineServerBots.Preparation(botNavigation),
+                    MatchClock = static () => new StopwatchClock(),
+                    Master = master,
+                    HostKey = key,
+                    HostAccount = hostAccount,
+                    // Maps a pad's laptop picks that this PC lacks come down whole into the player's own packs.
+                    Content = OpenScctGame.Online.ContentPacks.Store,
+                    ContentKind = OpenScct.Maps.ContentKind.Full,
+                });
+            }
+            catch (System.IO.IOException e)
+            {
+                throw new InvalidOperationException("The hub map could not be loaded: " + e.Message, e);
+            }
+
+            server.Logged += line => GD.Print("SVM_HUB " + line);
+            GD.Print("SVM_HUB " + server.PadsSummary);
+            var host = new HubHost(server, udp, key);
+            host._thread.Start();
+            GD.Print($"SVM_HUB hosting {name} on UDP port {udp.LocalPort}");
+            return host;
+        }
+        catch
+        {
+            udp.Dispose();
+            throw;
+        }
+    }
+
+    private void Run()
+    {
+        try
+        {
+            Server.RunRealtime(new StopwatchClock(), _stop.Token, s =>
+            {
+                while (_inspections.TryDequeue(out var inspect)) inspect(s);
+                Ticked?.Invoke(s);
+            });
+        }
+        catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException or ArgumentException or System.IO.IOException)
+        {
+            Failure = e;
+            GD.PushError("The hub host stopped: " + e.Message);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _stop.Cancel();
+        _thread.Join(TimeSpan.FromSeconds(3));
+        Server.Dispose();
+        Udp.Dispose();
+        _stop.Dispose();
+    }
+}

@@ -1,0 +1,1737 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using Godot;
+using OpenScct.Core;
+using OpenScctGame.Render;
+
+namespace OpenScctGame.Audio;
+
+/// <summary>
+/// One wave or stream the sound system started: the sound the call named, the leaf it resolved to, the actor (0:
+/// none, negative: a client-only map actor), whether it plays 3D, as an ambient loop or as music, its source volume
+/// and the sound system's time.
+/// </summary>
+public readonly record struct SoundStart(string Call, string Leaf, int ActorId, bool Positional, bool Ambient, bool Music,
+    float Volume, double Time, float Offset = 0, bool Resumed = false);
+
+/// <summary>
+/// One PlaySound call the sound system handled: the sound, the actor, whether it came from the server
+/// (ClientHearSound) and plays 2D, and whether a voice started, the call played nothing (an empty random or switch
+/// entry, no voice) or named a sound the library does not have.
+/// </summary>
+public readonly record struct SoundCall(string Sound, int ActorId, bool Heard, bool Flat, SoundCallOutcome Outcome);
+
+/// <summary>A playing source after mixer update; captured on demand by the network/audio labs.</summary>
+public readonly record struct SoundVoice(string Call, string Leaf, int ActorId, bool Positional, bool Ambient,
+    bool AtListener, FVector Location, FVector Listener, float Distance, float Radius, float SourceVolume,
+    float AppliedGain, float Pitch, string Bone, float RoomGain, FVector Arrival = default, float AmbientEnvelope = 1,
+    string? ReflectionRoom = null);
+
+public enum SoundCallOutcome : byte
+{
+    Started,
+    Silent,
+    Unknown,
+}
+
+/// <summary>
+/// The client's sound playback, driven by the simulation's <see cref="SimEvent"/>s (install it as the client
+/// world's <see cref="World.EventSink"/>): PlaySound, PlayOwnedSound, StopSound, PlayMusic, StopMusic and SetSwitch,
+/// plus the ambient loops of the actors (zone ambiences, AmbientSound actors, movers, ambient triggers) and the
+/// listener zone's reverb. The rules are UNIAudio's (spec/native/audio.md): <see cref="AudioK.Voices"/> voices with
+/// slot ids and priorities, the inverse distance gain computed here (Godot's own attenuation is off), random, switch
+/// and sequence sounds, 2D sounds. MakeNoise is gameplay and never reaches it.
+/// <para>Events can arrive on the simulation's thread; they are queued and played in <see cref="_Process"/>.</para>
+/// </summary>
+public sealed partial class SoundSystem : Node3D, ISimEventSink
+{
+    public bool AdaptiveReverb { get; set; }=true;
+    private readonly List<Voice> _voices = [];
+    private readonly record struct QueuedSound(SimEvent Event, long QueuedAt);
+    private readonly List<QueuedSound> _pending = [];
+    private readonly List<QueuedSound> _work = [];
+    private readonly object _gate = new();
+    private readonly List<AmbientSource> _ambient = [];
+    private readonly Dictionary<int, Voice> _ambientVoices = [];
+    private readonly HashSet<int> _ambientSeen = [];
+    // Counts UpdateAmbient passes: a 2D loop started in this pass is not yet "playing" for the others of the pass.
+    private int _ambientPass;
+    private AudioListener3D? _listener;
+    private Random _random = new(1);
+    private int _freshId;
+    private int _pendingSwitch = -1;
+    private Voice? _music;
+    private int _musicHandle;
+    private double _now;
+    private string? _listenerZone;
+    private int _listenerZoneIndex;
+    private int _voiceUpdateStart;
+    public long StolenVoices { get; private set; }
+    public long RejectedVoices { get; private set; }
+    public long OcclusionQueries { get; private set; }
+    public double MaxUpdateMilliseconds { get; private set; }
+    public double MaxQueueMilliseconds { get; private set; }
+    public bool Headphones { get; set; }
+    public string? SpatializerProblem { get; private set; }
+    /// <summary>Presentation-only modernization. Disable for original-renderer reference captures.</summary>
+    public bool MaterialTransmission { get; set; } = true;
+
+    public AudioLibrary? Library { get; private set; }
+
+    public IAudioWorld? World { get; private set; }
+    private AnimationSequenceAudio? _animationAudio;
+
+    public ReverbBuses? Buses { get; private set; }
+
+    public FVector ListenerLocation { get; private set; }
+
+    public FRotator ListenerRotation { get; private set; }
+
+    /// <summary>The listener's velocity from its own movement over the last update (uu/s), for the Doppler shift.</summary>
+    public FVector ListenerVelocity { get; private set; }
+
+    private FVector _lastListener;
+    private bool _lastListenerSet;
+
+    /// <summary>
+    /// The actor the player views (0: none), used by ambient handling. Spectating an actor does not make its
+    /// one-shot sounds local; native PlaySound tests the pawn's controller, not the viewport's ViewTarget.
+    /// </summary>
+    public int ViewActorId { get; set; }
+
+    /// <summary>The pawn controlled by this machine; a spectated pawn is not locally controlled.</summary>
+    public int LocalPawnId { get; set; }
+
+    /// <summary>The viewport controller; native local-pawn voices belong to it for actor-wide stops.</summary>
+    public int LocalControllerId { get; set; }
+
+    /// <summary>The scope's or binoculars' audio zoom (SetAudioZoom: 0.33, 0.66 or 1; 0 is off).</summary>
+    public float AudioZoom { get; private set; }
+
+    /// <summary>The view FOV in degrees the audio zoom is measured against.</summary>
+    public float AudioZoomFov { get; private set; } = 90f;
+
+    /// <summary>Sounds started since <see cref="Bind"/>, by leaf sound path (waves and streams), for tests and reports.</summary>
+    public List<string> Started { get; } = [];
+
+    /// <summary>Every wave or stream started since <see cref="Bind"/> with its call and how it plays (the newest <see cref="MaxStarts"/>).</summary>
+    public List<SoundStart> Starts { get; } = [];
+
+    /// <summary>
+    /// Per actor, how often its ambient loop stopped for a reason of the rules: another call took its voice (rule 15) or
+    /// it left the range or its zone (rules 20 to 22). Each explains one later start of the loop (the audio smokes).
+    /// </summary>
+    public Dictionary<int, int> AmbientStops { get; } = [];
+
+    /// <summary>Starts kept in <see cref="Starts"/> and <see cref="Started"/>; older ones are dropped.</summary>
+    public const int MaxStarts = 4096;
+
+    /// <summary>Waves and streams started since <see cref="Bind"/>, all of them.</summary>
+    public long StartCount { get; private set; }
+
+    /// <summary>The PlaySound calls handled since <see cref="Bind"/> (the newest <see cref="MaxStarts"/>).</summary>
+    public List<SoundCall> Calls { get; } = [];
+
+    /// <summary>Events that named a sound the library does not have.</summary>
+    public List<string> Unknown { get; } = [];
+
+    /// <summary>Calls that played nothing (random silence, an empty switch, no free voice).</summary>
+    public int Silent { get; private set; }
+
+    public int ActiveVoices
+    {
+        get
+        {
+            int n = 0;
+            foreach (Voice v in _voices)
+            {
+                n += v.Active ? 1 : 0;
+            }
+
+            return n;
+        }
+    }
+
+    public SoundVoice[] CaptureVoices()
+    {
+        var result = new List<SoundVoice>();
+        foreach (Voice v in _voices)
+        {
+            if (!v.Active) continue;
+            result.Add(new SoundVoice(v.CallPath, v.Leaf?.Path ?? "", v.ActorId, v.Positional, v.Ambient,
+                v.FollowListener, v.Location, ListenerLocation, FVector.Dist(v.Location, ListenerLocation),
+                v.Radius, v.Volume, v.AppliedGain, v.AppliedPitch, v.Bone.ToString(), v.AppliedRoomGain, v.RenderLocation, v.AmbientGain,v.ReflectionRoom));
+        }
+        return result.ToArray();
+    }
+
+    /// <summary>The listener's zone (map id of its ZoneInfo), from the last update.</summary>
+    public string? ListenerZone => _listenerZone;
+
+    /// <summary>
+    /// Uses <paramref name="library"/> for the sounds and <paramref name="world"/> (may be null) for actor
+    /// locations, ambient loops, zones and surfaces. <paramref name="seed"/> seeds the random lists.
+    /// </summary>
+    public void Bind(AudioLibrary library, IAudioWorld? world, int seed = 1)
+    {
+        StopAll();
+        foreach (Voice voice in _voices) voice.Route = null;
+        Buses?.Dispose();
+        Library = library ?? throw new ArgumentNullException(nameof(library));
+        World = world;
+        if (_animationAudio is null) { _animationAudio = new AnimationSequenceAudio { Name = "AnimationSequenceAudio" }; AddChild(_animationAudio); }
+        _animationAudio.World = (world as LevelAudioWorld)?.Level; _animationAudio.Library = library;
+        _random = new Random(seed);
+        Buses = new ReverbBuses(library.Map,Acoustics is { PortalCount: > 0 });
+        _listenerZone = null;
+        _listenerZoneIndex = 0;
+        _lastListenerSet = false;
+        if (_listener is null)
+        {
+            _listener = new AudioListener3D { Name = "Listener" };
+            AddChild(_listener);
+        }
+
+        while (_voices.Count < AudioK.Voices)
+        {
+            var v = new Voice(_voices.Count);
+            AddChild(v.Player3D);
+            AddChild(v.Player2D);
+            AddChild(v.RoomPlayer);
+            _voices.Add(v);
+        }
+
+        for (int i = 0; i < _voices.Count; i++) _voices[i].Route = Buses.CreateSourceRoute(i);
+
+        StopAll();
+        Started.Clear();
+        Starts.Clear();
+        Calls.Clear();
+        StartCount = 0;
+        Unknown.Clear();
+        Silent = 0;
+        StolenVoices = RejectedVoices = OcclusionQueries = 0;
+        MaxUpdateMilliseconds = 0;
+        MaxQueueMilliseconds = 0;
+        VirtualPromotions = 0;
+
+        // The engine's map load plays the LevelInfo's Song as music with no fade (game 0x109e82c4 and 0x109eb982:
+        // Audio->PlayMusic(Level->Song, 0)).
+        if (library.Map?.LevelSong is { } song)
+        {
+            PlayMusic(song, 0f);
+        }
+    }
+
+
+    /// <summary>Replaces the world the sounds read actor locations, ambient loops, zones and surfaces from.</summary>
+    public void SetWorld(IAudioWorld? world) => World = world;
+
+    /// <summary>The view the player hears from (the camera), UE space.</summary>
+    public void SetListener(FVector location, FRotator rotation)
+    {
+        ListenerLocation = location;
+        ListenerRotation = rotation;
+        if (_listener is not null)
+        {
+            _listener.Transform = FaithfulView.CameraTransform(location, rotation);
+            if (_listener.IsInsideTree() && !_listener.IsCurrent())
+            {
+                _listener.MakeCurrent();
+            }
+        }
+    }
+
+    /// <summary>
+    /// SetAudioZoom: 3D sounds near the aim line get louder, the rest quieter (spec/native/audio.md, docs/VOICE.md
+    /// "Eavesdropping"). The listening player's AudioZoomFactor and view FOV, every frame.
+    /// </summary>
+    public void SetAudioZoom(float zoom, float fov)
+    {
+        AudioZoom = Math.Max(zoom, 0f);
+        AudioZoomFov = fov;
+    }
+
+    public void OnSimEvents(long tick, ReadOnlySpan<SimEvent> events)
+    {
+        lock (_gate)
+        {
+            foreach (SimEvent e in events)
+            {
+                if (e.Kind is SimEventKind.PlaySound or SimEventKind.StopSound or SimEventKind.PlayMusic or
+                    SimEventKind.StopMusic or SimEventKind.SetSwitch)
+                {
+                    _pending.Add(new QueuedSound(e, Stopwatch.GetTimestamp()));
+                }
+            }
+        }
+    }
+
+    public override void _Process(double delta)
+    {
+        Update(delta);
+    }
+
+    /// <summary>One update: queued events, then every voice (follow, gain, sequences, fades), ambient loops, reverb.</summary>
+    public void Update(double delta)
+    {
+        if (Library is null)
+        {
+            return;
+        }
+
+        long updateStarted = Stopwatch.GetTimestamp();
+        _transmissionBudget = 8;
+        _now += delta;
+        _cornerBudget=_now>=_nextCornerBatch?12:0;
+        if (_now>=_nextCornerBatch) _nextCornerBatch=_now+1.0/60;
+        DispatchPending();
+
+        if (World is not null)
+        {
+            // Rule 23: a point in zone 0 keeps the last zone.
+            _listenerZone = World.ZoneIdAt(ListenerLocation) ?? _listenerZone;
+            int zone = World.ZoneIndexAt(ListenerLocation);
+            _listenerZoneIndex = zone != 0 ? zone : _listenerZoneIndex;
+        }
+
+        // Rule 17: the listener's velocity is its movement over this update.
+        ListenerVelocity = _lastListenerSet && delta > 0 ? (ListenerLocation - _lastListener) * (float)(1.0 / delta) : default;
+        _lastListener = ListenerLocation;
+        _lastListenerSet = true;
+
+        UpdateAcousticScene();
+        Buses?.EnableGeometry(AdaptiveReverb && World?.SupportsReverbGeometry==true);
+        Buses?.SetEnvironment(_listenerZone);
+        Buses?.UpdateSourceRooms(Acoustics,(float)delta);
+        string bus = ReverbBuses.WorldBus;
+        UpdateAmbient();
+        for (int i = 0; i < _voices.Count; i++)
+        {
+            Voice v = _voices[(_voiceUpdateStart + i) % _voices.Count];
+            if (v.Active) UpdateVoice(v, (float)delta, bus);
+        }
+        _voiceUpdateStart = (_voiceUpdateStart + 8) % _voices.Count;
+        UpdateVirtualVoices(delta);
+        Buses?.UpdateGeometry(World,Acoustics,ListenerLocation,_listenerZoneIndex,(float)delta);
+        MaxUpdateMilliseconds = Math.Max(MaxUpdateMilliseconds, Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds);
+    }
+
+    private void DispatchPending()
+    {
+        lock (_gate)
+        {
+            _work.Clear();
+            _work.AddRange(_pending);
+            _pending.Clear();
+        }
+        foreach (QueuedSound queued in _work)
+        {
+            MaxQueueMilliseconds = Math.Max(MaxQueueMilliseconds, Stopwatch.GetElapsedTime(queued.QueuedAt).TotalMilliseconds);
+            Handle(queued.Event);
+        }
+    }
+
+    /// <summary>Plays one event now (main thread).</summary>
+    public void Handle(in SimEvent e) => Handle(e, missingSource: false);
+
+    internal void Handle(in SimEvent e, bool missingSource)
+    {
+        switch (e.Kind)
+        {
+            case SimEventKind.PlaySound:
+                // A PlayOwnedSound (e.Owned) plays the same way: this client's world raised it, so it is not a copy.
+                // Rule 5: an unattenuated sound of the actor the player views plays without 3D.
+            {
+                string sound = e.What.ToString();
+                int unknown = Unknown.Count;
+                bool started = InHearingReach(e) && PlaySound(e.ActorId, sound, e.Slot, e.NoOverride, e.Location, e.Volume, e.Radius, e.Pitch, !e.NoAttenuate,
+                    flat: e.Flat, bone: e.Bone, missingSource: missingSource);
+                if (Calls.Count >= MaxStarts)
+                {
+                    Calls.RemoveRange(0, MaxStarts / 2);
+                }
+
+                Calls.Add(new SoundCall(sound, e.ActorId, e.Heard, e.Flat,
+                    started ? SoundCallOutcome.Started : Unknown.Count > unknown ? SoundCallOutcome.Unknown : SoundCallOutcome.Silent));
+                break;
+            }
+            case SimEventKind.StopSound:
+                StopSound(e.ActorId, e.What.ToString());
+                break;
+            case SimEventKind.PlayMusic:
+                PlayMusic(e.What.ToString(), e.Radius);
+                break;
+            case SimEventKind.StopMusic:
+                StopMusic(e.Radius);
+                break;
+            case SimEventKind.SetSwitch:
+                _pendingSwitch = e.Slot;
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Rule 4's reach test for a call this machine's own simulation made (APlayerController::HearSound, which the
+    /// local player's calls go through as well): an attenuated sound plays only when the actor the player views is
+    /// nearer to the sound than 100 x its radius; with something in the way the radius first shrinks by
+    /// 0.8 ^ (ZoneDist ^ 2) between the two zones. The server tested its own calls before sending them (heard).
+    /// The HUD's noise cue (radius 1, at the controller, which is at the camera) so reaches a first-person merc and
+    /// not a third-person spy, whose pawn is further than 100 uu from the camera.
+    /// </summary>
+    [OpenScct.Provenance.Provenance(OpenScct.Provenance.ProvenanceKind.Decoded, "APlayerController::HearSound editor 0x11189770 (vtable +0x14c) and its helper 0x111895e0: |ViewTarget.Location - Source.Location|^2 < (100.0 (0x115beffc) x R)^2, R x pow(0.8, ZoneDist^2) when the line check is blocked; only Attenuate false passes regardless")]
+    [OpenScct.Provenance.Provenance(OpenScct.Provenance.ProvenanceKind.Estimated, "A zero radius still plays here (the native drops it on a client); the blocked test uses the occlusion trace, the native a BSP line check or, for SoundOcclusion 3, an actor trace")]
+    private bool InHearingReach(in SimEvent e)
+    {
+        if (e.Heard || e.NoAttenuate || e.ActorId == 0 || e.Radius == 0f || ViewActorId == 0 || World is null ||
+            !World.TryGetActorLocation(ViewActorId, out FVector ear))
+        {
+            return true;
+        }
+
+        float radius = e.Radius;
+        if (World.SoundOcclusionOf(e.ActorId) != AudioK.OcclusionNone && World.OcclusionBetween(ear, e.Location, out _))
+        {
+            radius *= SoundRules.AmbientZoneFactor(
+                Library?.Map?.ZoneDistance(World.ZoneIndexAt(ear), World.ZoneIndexAt(e.Location)) ?? 0);
+        }
+
+        float reach = AudioK.RangeFactor * radius;
+        return FVector.DistSquared(ear, e.Location) < reach * reach;
+    }
+
+    /// <summary>Rules 9 to 17 for one call. Returns false when nothing started.</summary>
+    public bool PlaySound(int actorId, string sound, int slot, bool noOverride, FVector location, float volume, float radius,
+        float pitch, bool attenuate = true, bool flat = false, Name bone = default, bool missingSource = false)
+    {
+        SoundDef? def = Library?.Find(sound);
+        if (def is null)
+        {
+            if (Unknown.Count >= MaxStarts)
+            {
+                Unknown.RemoveRange(0, MaxStarts / 2);
+            }
+
+            Unknown.Add(sound);
+            return false;
+        }
+
+        float r = radius == 0f ? AudioK.DefaultHearRadius : radius;
+        int id = SoundRules.SoundId(actorId, Math.Clamp(slot, 0, 7), noOverride, ref _freshId);
+        var call = new PlayCall(def, actorId, id, location, volume, r, pitch, music: false, loop: false, ambient: false,
+            flat, missingSource: missingSource);
+        if (!Start(call, follow: actorId != 0))
+        {
+            return false;
+        }
+
+        // Rule 17: a source started on a bone follows that bone of its actor's drawn mesh.
+        if (LastStarted is { } started)
+        {
+            started.Bone = started.FollowListener ? default : bone;
+        }
+
+        return true;
+    }
+
+    /// <summary>None is an actor wildcard; actor 0 with None stops all non-music sources.</summary>
+    public void StopSound(int actorId, string? sound)
+    {
+        bool allSounds = string.IsNullOrEmpty(sound) || string.Equals(sound, "None", StringComparison.OrdinalIgnoreCase);
+        foreach (Voice v in AllVoices())
+        {
+            bool actorMatches = actorId == 0 ? !allSounds || !v.Music :
+                v.ActorId == actorId || v.ListenerControllerId == actorId;
+            if (v.Active && actorMatches && (allSounds || string.Equals(v.CallPath, sound, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(v.Leaf?.Path, sound, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (v == _music) _music = null;
+                v.Stop();
+            }
+        }
+    }
+
+    /// <summary>Rule 24: one music track, fading in; the previous one fades out.</summary>
+    public int PlayMusic(string song, float fadeIn)
+    {
+        SoundDef? def = Library?.Find(song);
+        if (def is null)
+        {
+            Unknown.Add(song);
+            return 0;
+        }
+
+        if (_music is { Active: true, StopWhenFaded: false } && string.Equals(_music.CallPath, song, StringComparison.OrdinalIgnoreCase))
+        {
+            return _musicHandle;
+        }
+
+        Voice? previous = _music;
+        var call = new PlayCall(def, 0, 1, default, 1f, AudioK.MusicRadius, 1f, music: true, loop: def.Loop, ambient: false);
+        if (!Start(call, follow: false))
+        {
+            return 0;
+        }
+
+        Voice started = LastStarted!;
+        if (fadeIn > 0f)
+        {
+            started.FadeTo(0f, 1f, fadeIn);
+        }
+
+        if (previous is not null && previous != started && previous.Active)
+        {
+            previous.FadeOut(Math.Max(fadeIn, AudioK.MusicMinFadeOut));
+        }
+
+        _music = started;
+        return ++_musicHandle;
+    }
+
+    public void StopMusic(float fadeOut)
+    {
+        if (_music is { Active: true })
+        {
+            if (fadeOut > 0f)
+            {
+                _music.FadeOut(fadeOut);
+            }
+            else
+            {
+                _music.Stop();
+            }
+        }
+    }
+
+    public void StopAll()
+    {
+        lock (_gate) _pending.Clear();
+        foreach (Voice v in _virtualVoices) v.Stop();
+        _virtualVoices.Clear();
+        foreach (Voice v in _voices)
+        {
+            v.Stop();
+            v.Player3D.Stream = null;
+            v.Player2D.Stream = null;
+            v.RoomPlayer.Stream = null;
+        }
+
+        _ambientVoices.Clear();
+        _ambientOneShots.Clear();
+        _music = null;
+        _pendingSwitch = -1;
+        Buses?.ResetSourceRooms();
+    }
+
+    public override void _ExitTree()
+    {
+        StopAll();
+        foreach (Voice voice in _voices) voice.Route = null;
+        Buses?.Dispose();
+    }
+
+    private Voice? LastStarted { get; set; }
+
+    // ---- starting a call ------------------------------------------------------------------------------------
+
+    private readonly record struct PlayCall(SoundDef Def, int ActorId, int Id, FVector Location, float Volume, float Radius,
+        float Pitch, bool music, bool loop, bool ambient, bool flat = false, byte occlusion = 0, bool missingSource = false,
+        float ambientGain = 1, float ambientHF = 1, float ambientRoom = 0);
+
+    private bool Start(in PlayCall call, bool follow)
+    {
+        LastStarted = null;
+        float chain = 1f;
+        SoundDef? leaf = Resolve(call.Def, call.Location, 0, ref chain, call.music);
+        if (leaf is null)
+        {
+            Silent++;
+            return false;
+        }
+
+        bool music = call.music;
+        float source = SoundRules.SourceVolume(call.Volume * chain, leaf.Volume, music);
+        float radius = SoundRules.Radius(leaf.Radius, call.Radius);
+        int flags = leaf.Flags | (music ? AudioK.FlagMusic | AudioK.Flag2D : 0) | (call.loop ? AudioK.FlagLoop : 0);
+        // One-shots can outlive the actor that made them. Indefinite loops need their source.
+        if (call.missingSource && leaf.Kind != "sequence" && ((flags & AudioK.FlagLoop) != 0 || leaf.Loop)) return false;
+        // Native PlaySound (retail 0x10b03fd5..0x10b04020) replaces a locally controlled pawn with the
+        // viewport controller, clears BoneIdx, and starts at the listener. Preserve the original actor for
+        // slot ownership/StopSound, but bind this voice to the listener for its entire lifetime. Resolve the
+        // surface switch above at the pawn first: the trailing camera may be over a different material.
+        bool atListener = !music && !call.ambient && call.ActorId != 0 && call.ActorId == LocalPawnId;
+        FVector location = atListener ? ListenerLocation : call.Location;
+        float d2 = FVector.DistSquared(location, ListenerLocation);
+        byte occlusion = call.ActorId > 0 && !call.ambient && World is not null ? World.SoundOcclusionOf(call.ActorId) : call.occlusion;
+        bool positional = (call.ambient ? call.Def.Positional : leaf.Positional) && !music && !call.flat && !atListener;
+        float priority = SoundRules.Priority(d2, radius, source, flags,
+            positional && occlusion != AudioK.OcclusionNone && TryOcclusion(location, out _, out float factor) ? factor : 1f);
+        Voice? v = Allocate(call.Id, priority, call.ambient);
+        if (v is null)
+        {
+            Silent++;
+            return false;
+        }
+
+        v.Begin(call.Def.Path, call.ActorId, call.Id, follow, location, priority);
+        v.RenderedAt = _now;
+        v.FollowListener = atListener;
+        v.ListenerControllerId = atListener ? LocalControllerId : 0;
+        v.Music = music;
+        v.Objective = !music && SoundRules.IsObjectiveJingle(call.Def.Path);
+        v.Flat = call.flat;
+        v.Ambient = call.ambient;
+        v.DiffuseAmbient = call.ambient && !call.Def.Positional && Acoustics is { PortalCount: > 0 };
+        v.AmbientGain = call.ambient ? 0 : 1;
+        SetAmbientTarget(v, call.ambientGain, call.ambientHF, call.ambientRoom);
+        // Rules 20 to 22: an ambient loop is 3D or 2D by its own Sound (the one the actor names), whatever the entry a
+        // list sound resolves to; a one-shot plays by its leaf's flag (rule 9).
+        v.AmbientPositional = call.ambient && call.Def.Positional;
+        v.BaseVolume = call.Volume * chain;
+        v.CallRadius = call.Radius;
+        // Rule 18: an actor whose SoundOcclusion is OCCLUSION_None is never occluded; a call without an actor is.
+        v.SoundOcclusion = occlusion;
+        v.OcclusionSettled = false;
+        v.Pitch = call.ambient ? call.Pitch : SoundRules.Pitch(call.Pitch);
+        if (leaf.Kind == "sequence")
+        {
+            // The sequence's own gain applies to every entry (rule 10 runs before the list dispatch).
+            v.BaseVolume *= music ? 1f : leaf.Volume;
+            v.Sequence = new SequenceState(leaf);
+            if (!NextInSequence(v))
+            {
+                v.Stop();
+                Silent++;
+                return false;
+            }
+        }
+        else if (!PlayLeaf(v, leaf, call.ambient ? call.loop : (flags & AudioK.FlagLoop) != 0 || leaf.Loop))
+        {
+            v.Stop();
+            return false;
+        }
+
+        LastStarted = v;
+        return true;
+    }
+
+    /// <summary>
+    /// Rules 12 and 13: random and switch sounds down to a wave, stream or sequence; null for silence. Each list on
+    /// the way multiplies <paramref name="gain"/> by its own Gain (not for music).
+    /// </summary>
+    private SoundDef? Resolve(SoundDef def, FVector location, int depth, ref float gain, bool music)
+    {
+        if (depth > 8)
+        {
+            return null;
+        }
+
+        switch (def.Kind)
+        {
+            case "random":
+            {
+                Span<int> weights = stackalloc int[def.Entries.Length];
+                for (int i = 0; i < weights.Length; i++)
+                {
+                    weights[i] = def.Entries[i].Value;
+                }
+
+                int pick = SoundRules.PickRandom(weights, _random.Next(AudioK.RandomTotal));
+                gain *= music ? 1f : def.Volume;
+                return pick < 0 ? null : Entry(def, pick, location, depth, ref gain, music);
+            }
+            case "switch":
+            {
+                int surface = _pendingSwitch;
+                _pendingSwitch = -1;
+                if (surface < 0 && World is not null)
+                {
+                    surface = World.SurfaceOf(location + new FVector(0f, 0f, AudioK.SwitchTraceUp),
+                        location - new FVector(0f, 0f, AudioK.SwitchTraceDown));
+                }
+
+                Span<int> values = stackalloc int[def.Entries.Length];
+                for (int i = 0; i < values.Length; i++)
+                {
+                    values[i] = def.Entries[i].Value;
+                }
+
+                int pick = SoundRules.PickSwitch(values, Math.Max(surface, 0));
+                gain *= music ? 1f : def.Volume;
+                return pick < 0 ? null : Entry(def, pick, location, depth, ref gain, music);
+            }
+            default:
+                return def;
+        }
+    }
+
+    private SoundDef? Entry(SoundDef list, int index, FVector location, int depth, ref float gain, bool music)
+    {
+        SoundDef? next = Library!.Find(list.Entries[index].Sound);
+        return next is null ? null : Resolve(next, location, depth + 1, ref gain, music);
+    }
+
+    /// <summary>Rule 14: plays the sequence's next entry on its voice; false when the sequence is over.</summary>
+    private bool NextInSequence(Voice v)
+    {
+        SequenceState s = v.Sequence!;
+        for (int guard = 0; guard < 64; guard++)
+        {
+            if (s.Index >= s.Def.Entries.Length)
+            {
+                return false;
+            }
+
+            SoundEntry entry = s.Def.Entries[s.Index];
+            SoundDef? def = Library!.Find(entry.Sound);
+            float chain = 1f;
+            SoundDef? leaf = def is null ? null : Resolve(def, v.Location, 1, ref chain, v.Music);
+            bool timed = false;
+            if (s.Remaining == 0)
+            {
+                s.Remaining = entry.Value;
+                if ((entry.Value & AudioK.SequenceTimedLoop) != 0)
+                {
+                    float duration = leaf?.Duration ?? 0f;
+                    v.LoopUntil = _now + (duration * (entry.Value & (AudioK.SequenceTimedLoop - 1)));
+                    s.Remaining = 1;
+                    timed = true;
+                }
+            }
+
+            if (leaf is null || leaf.Kind == "sequence" || !PlayLeaf(v, leaf, timed, chain))
+            {
+                s.Index++;
+                s.Remaining = 0;
+                continue;
+            }
+
+            if (--s.Remaining <= 0)
+            {
+                s.Index++;
+                s.Remaining = 0;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool PlayLeaf(Voice v, SoundDef leaf, bool loop, float chain = 1f)
+    {
+        AudioStream? stream = Library!.Stream(leaf, loop);
+        if (stream is null)
+        {
+            Silent++;
+            return false;
+        }
+
+        v.Leaf = leaf;
+        v.Radius = SoundRules.Radius(leaf.Radius, v.CallRadius);
+        v.MinDistance = SoundRules.MinDistance(v.Radius);
+        v.Volume = SoundRules.SourceVolume(v.BaseVolume * chain, leaf.Volume, v.Music);
+        v.Positional = (v.Ambient ? v.AmbientPositional : leaf.Positional) && !v.Music && !v.Flat;
+        // Native PlaySound stores a separate priority radius after allocation (retail 0x10b042dd):
+        // an occluded source uses the portal distance between its location and the listener, with base 0.8.
+        v.PriorityRadiusFactor = v.Positional && !v.FollowListener && v.SoundOcclusion != AudioK.OcclusionNone &&
+            TryOcclusion(v.Location, out _, out _) && World is not null
+            ? SoundRules.AmbientZoneFactor(Library?.Map?.ZoneDistance(World.ZoneIndexAt(v.Location), _listenerZoneIndex) ?? 0)
+            : 1f;
+        v.Looping = loop;
+        if (_demoSeeking)
+        {
+            v.Simulate(stream);
+            return true;
+        }
+
+        StartStream(v, stream, 0f);
+        return true;
+    }
+
+    private void StartStream(Voice v, AudioStream stream, float offset, bool resumed = false)
+    {
+        // The dry and room players must start with the same source state before the mixer can see either.
+        // Reused voices otherwise expose the prior gain/location or a dry-only first block.
+        AudioServer.Lock();
+        try
+        {
+            // Sequence leaves and resumed loops start at their own current
+            // level, including an allocation fade, rather than the old input.
+            v.ReflectedInput=0;
+            v.ReflectionRoom=null;
+            v.Play(stream, offset, _demoPaused);
+            ApplyVoice(v, 0, ReverbBuses.WorldBus);
+        }
+        finally { AudioServer.Unlock(); }
+        if (Started.Count >= MaxStarts)
+        {
+            Started.RemoveRange(0, MaxStarts / 2);
+            Starts.RemoveRange(0, Math.Min(Starts.Count, MaxStarts / 2));
+        }
+
+        string leaf = v.Leaf!.Path;
+        Started.Add(leaf);
+        Starts.Add(new SoundStart(v.CallPath, leaf, v.ActorId, v.Positional, v.Ambient, v.Music, v.Volume, _now, offset, resumed));
+        StartCount++;
+    }
+
+    /// <summary>Rule 15: a free voice, else the same slot (unless the new call keeps it), else the lowest priority.</summary>
+    private Voice? Allocate(int id, float priority, bool ambient = false, bool promoting = false)
+    {
+        if (ambient && !promoting)
+            foreach (Voice saved in _virtualVoices)
+                if (saved.Active && saved.Ambient && saved.AmbientEligible && saved.Priority >= priority)
+                { RejectedVoices++; return null; }
+        int ambientCount = 0;
+        foreach (Voice voice in _voices) if (voice.Active && voice.Ambient) ambientCount++;
+        foreach (Voice v in _voices)
+        {
+            if (!v.Active && (!ambient || ambientCount < MaxRenderedAmbient))
+            {
+                return v;
+            }
+        }
+
+        Voice? chosen = null;
+        float lowest = promoting ? priority / 1.15f : priority;
+        foreach (Voice v in _voices)
+        {
+            if (((v.Id ^ id) & ~1) == 0)
+            {
+                if ((id & 1) != 0)
+                {
+                    return null;
+                }
+
+                chosen = v;
+                break;
+            }
+
+            if (!v.Active || ambient && !v.Ambient || v.Music || v.Objective ||
+                promoting && _now - v.RenderedAt < 0.15) continue;
+            // Short cues can always reclaim an ambient channel. New ambience
+            // cannot evict short cues, music or objective feedback.
+            if (!ambient && v.Ambient && (chosen is null || !chosen.Ambient || v.Priority < chosen.Priority))
+            {
+                chosen = v;
+                continue;
+            }
+            if (chosen?.Ambient != true && v.Priority < lowest)
+            {
+                lowest = v.Priority;
+                chosen = v;
+            }
+        }
+
+        if (chosen is null) { RejectedVoices++; return null; }
+        StolenVoices++;
+        if (chosen.Looping && chosen.Sequence is null && !chosen.Music && ((chosen.Id ^ id) & ~1) != 0)
+            return Virtualize(chosen);
+        chosen.Stop();
+        return chosen;
+    }
+
+    // ---- every update ---------------------------------------------------------------------------------------
+
+    private void UpdateVoice(Voice v, float dt, string worldBus)
+    {
+        if (v.FollowListener)
+        {
+            v.Location = ListenerLocation;
+        }
+        else if (v.Follow && World is not null)
+        {
+            if (!v.Bone.IsNone && World.TryGetBoneLocation(v.ActorId, v.Bone, out FVector onBone))
+            {
+                v.Location = onBone;
+            }
+            else if (World.TryGetActorLocation(v.ActorId, out FVector at))
+            {
+                v.Location = at;
+            }
+            else
+            {
+                if (v.Looping) { v.Stop(); return; }
+                v.Follow = false;
+            }
+        }
+
+        if (v.LoopUntil > 0 && _now >= v.LoopUntil)
+        {
+            // A timed sequence entry (rule 14) has looped long enough: the sequence moves on below.
+            v.LoopUntil = 0;
+            v.Looping = false;
+            v.Halt();
+        }
+
+        if (!v.IsPlaying && !v.Looping)
+        {
+            if (v.Sequence is null || !NextInSequence(v))
+            {
+                if (v == _music)
+                {
+                    _music = null;
+                }
+
+                v.Stop();
+                return;
+            }
+        }
+
+        if (!v.StepFade(dt))
+        {
+            v.Stop();
+            return;
+        }
+
+        if (v.Ambient)
+        {
+            v.AmbientGain = AmbientTransitions.Approach(v.AmbientGain, v.AmbientGainTarget, dt);
+            v.AmbientRenderedVolume = AmbientTransitions.Approach(v.AmbientRenderedVolume, v.Volume * v.AmbientGainTarget, dt);
+            v.AmbientHF = AmbientTransitions.Approach(v.AmbientHF, v.AmbientHFTarget, dt);
+            v.AmbientRoom = AmbientTransitions.Approach(v.AmbientRoom, v.AmbientRoomTarget, dt);
+            if (!v.Virtual && !v.AmbientEligible && v.AmbientGain < 0.001f) { Virtualize(v); return; }
+        }
+        if (!_demoSeeking && !v.Virtual) ApplyVoice(v, dt, worldBus);
+    }
+
+    private void ApplyVoice(Voice v, float dt, string worldBus)
+    {
+        float d = FVector.Dist(v.Location, ListenerLocation);
+
+        // The audio zoom scales the source volume, which DirectSound cannot raise above full.
+        float volume = v.Positional && AudioZoom > 0f ? Math.Min(1f, v.Volume * AudioZoomGain(v.Location)) : v.Volume;
+        float gain = v.Fade * (v.Ambient ? v.AmbientRenderedVolume * (v.Volume > 0 ? volume / v.Volume : 0) : volume);
+        float roomGain = 0;
+        string? reflectionRoom=null;
+        v.RenderLocation = v.Location;
+        TransmissionLevels transmission = v.Positional ? SourceTransmission(v, dt) : TransmissionLevels.Clear;
+        if (v.Positional) transmission = PropagatePoint(v, transmission, dt, out d);
+        bool binaural = Headphones && v.Positional && !v.FollowListener && v.Route?.BinauralAvailable == true;
+        if (Headphones && v.Route?.BinauralAvailable == false && SpatializerProblem is null)
+        {
+            SpatializerProblem = $"Binaural audio unavailable at {AudioServer.GetMixRate()} Hz; using speaker panning.";
+            GD.PushWarning(SpatializerProblem);
+        }
+        if (v.Route is { } spatialRoute)
+        {
+            ListenerRotation.GetAxes(out FVector forward, out FVector right, out FVector up);
+            FVector direction = v.RenderLocation - ListenerLocation;
+            spatialRoute.SetSpatializer(binaural, new Vector3(direction | right, direction | up, -(direction | forward)));
+        }
+        v.Player3D.PanningStrength = binaural ? 0 : 1;
+        if (v.Positional)
+        {
+            if (v.Route is { } route && Buses?.CurrentEnvironment is { } environment)
+            {
+                // Preserve EAX distance/room character; source transmission is a
+                // separate presentation filter and never changes hearing/priority.
+                EaxSourceGains source = environment.SourceGains(d, v.MinDistance);
+                float reference=environment.HighFrequencyReference;
+                var roomLevels=new EaxSourceLevels(source.Room==0?0:transmission.RoomGain,source.RoomHF*transmission.RoomHF);
+                string destination=Buses.EnvironmentBus!;
+                roomGain = gain * source.Room;
+                if (!v.FollowListener && World is { } world &&
+                    Buses.RoomForSource(world.ZoneIdAt(v.Location),world.ZoneIndexAt(v.Location),Acoustics,v.Ambient,v.Location) is { } field)
+                {
+                    AcousticPath path=Acoustics!.PathTo(field.ZoneIndex);
+                    float inputDistance=!path.Valid || path.Hops==0 ? d : FVector.Dist(v.Location,path.LastOpening);
+                    EaxSourceGains reflected=field.Environment.SourceGains(inputDistance,v.MinDistance);
+                    float target=gain*reflected.Room;
+                    v.ReflectedInput=v.ReflectionRoom!=field.ZoneId ? target
+                        : v.ReflectedInput+(target-v.ReflectedInput)*(dt>0?1-MathF.Exp(-dt/0.06f):0);
+                    roomGain=v.ReflectedInput;
+                    reflectionRoom=field.ZoneId;
+                    // The room field's output already includes the portal's
+                    // transmission. Applying the direct wall/path here as well
+                    // would attenuate that same journey twice.
+                    roomLevels=path.Hops==0
+                        ? new(transmission.RoomGain,reflected.RoomHF*transmission.RoomHF)
+                        : new(1,reflected.RoomHF);
+                    reference=field.Environment.HighFrequencyReference;
+                    destination=field.Bus;
+                }
+                route.Set(new EaxSourceLevels(source.Direct==0?0:transmission.DirectGain,transmission.DirectHF),roomLevels,reference);
+                route.SetRoomDestination(destination);
+                gain *= source.Direct;
+            }
+            else
+            {
+                gain *= SoundRules.DistanceGain(d, MaterialTransmission ? v.MinDistance : OccludedMinDistance(v));
+                v.Route?.Set(new EaxSourceLevels(transmission.DirectGain, transmission.DirectHF),
+                    new EaxSourceLevels(0, 1), 5000);
+            }
+        }
+        else if (v.DiffuseAmbient && v.Route is { } diffuse)
+        {
+            EaxEnvironment? room = Buses?.CurrentEnvironment;
+            EaxSourceGains source = room?.SourceGains(0, v.MinDistance) ?? default;
+            diffuse.Set(new EaxSourceLevels(1, v.AmbientHF),
+                new EaxSourceLevels(1, MathF.Sqrt(v.AmbientHF) * source.RoomHF), room?.HighFrequencyReference ?? 5000);
+            roomGain = gain * v.AmbientRoom * source.Room;
+            diffuse.SetRoomDestination(Buses!.EnvironmentBus!);
+        }
+
+        v.ReflectionRoom=reflectionRoom;
+        v.Apply(gain, v.Pitch * Doppler(v, dt),
+            v.Music ? ReverbBuses.MusicBus : v.Positional ? worldBus : v.Objective ? ReverbBuses.ObjectiveBus : ReverbBuses.FlatBus,
+            UeSpace.ToGodot(v.RenderLocation), roomGain, UeSpace.ToGodot(ListenerLocation));
+        v.Priority = SoundRules.Priority(FVector.DistSquared(v.Location, ListenerLocation), v.Radius, v.Volume,
+            (v.Leaf?.Flags ?? 0) | (v.Music ? AudioK.FlagMusic | AudioK.Flag2D : 0), v.PriorityRadiusFactor);
+    }
+
+    /// <summary>
+    /// Rule 17: the Doppler pitch factor of a 3D source, from its movement over this update and the listener's. The
+    /// listener-bound pawn sounds get no source velocity.
+    /// </summary>
+    private float Doppler(Voice v, float dt)
+    {
+        FVector velocity = v.HasLastLocation && dt > 0f ? (v.Location - v.LastLocation) * (1f / dt) : default;
+        v.LastLocation = v.Location;
+        v.HasLastLocation = true;
+        if (!v.Positional || v.Music)
+        {
+            return 1f;
+        }
+
+        if (v.FollowListener || v.Ambient && v.ActorId != 0 && v.ActorId == ViewActorId)
+        {
+            velocity = default;
+        }
+
+        return SoundRules.DopplerPitch(ListenerLocation, ListenerVelocity, v.Location, velocity);
+    }
+
+    /// <summary>
+    /// Rule 18 on the DirectSound path (UseEAX off; game 0x10b05e80 and 0x10b0bc80): every update the occlusion
+    /// factor between the listener and the source shrinks the source's minimum distance, down to 0.1 uu; the
+    /// distance eases toward a new value in proportion to the time since it last settled and settles after 1 s.
+    /// </summary>
+    private float OccludedMinDistance(Voice v)
+    {
+        float target = v.MinDistance;
+        if (World is not null && v.SoundOcclusion != AudioK.OcclusionNone && !v.FollowListener &&
+            !(v.Ambient && v.ActorId != 0 && v.ActorId == ViewActorId) &&
+            TryOcclusion(v.Location, out _, out float factor))
+        {
+            target = Math.Max(v.MinDistance * factor, AudioK.OccludedMinDistance);
+        }
+
+        double since = _now - v.OcclusionSettledAt;
+        if (!v.OcclusionSettled || since >= AudioK.OcclusionSettleSeconds)
+        {
+            v.OccludedMinDistance = target;
+            v.OcclusionSettledAt = _now;
+            v.OcclusionSettled = true;
+        }
+        else
+        {
+            v.OccludedMinDistance += (target - v.OccludedMinDistance) * (float)since;
+        }
+
+        return v.OccludedMinDistance;
+    }
+
+    private bool TryOcclusion(FVector location, out OcclusionHits hits, out float factor)
+    {
+        hits = default;
+        factor = 1f;
+        if (World is null || !World.OcclusionBetween(ListenerLocation, location, out hits) ||
+            SoundRules.Occlusion(FVector.Dist(hits.NearListener, hits.NearSource), hits.TypeNearListener, hits.TypeNearSource,
+                hits.ZoneNearListener, hits.ZoneNearSource,
+                Library?.Map?.ZoneDistance(hits.ZoneNearListener, hits.ZoneNearSource) ?? 0) is not { } value)
+        {
+            return false;
+        }
+
+        factor = value;
+        return true;
+    }
+
+    private float AudioZoomGain(FVector location)
+    {
+        ListenerRotation.GetAxes(out FVector x, out _, out _);
+        FVector to = location - ListenerLocation;
+        float forward = to | x;
+        float sideways = MathF.Sqrt(MathF.Max(to.SizeSquared() - (forward * forward), 0f));
+        return SoundRules.AudioZoomGain(AudioZoom, AudioZoomFov, forward, sideways);
+    }
+
+    /// <summary>Rules 19 to 22: start, keep or stop each actor's ambient loop.</summary>
+    private void UpdateAmbient()
+    {
+        _ambient.Clear();
+        if (World is not null)
+        {
+            World.CollectAmbient(_ambient, ListenerLocation);
+        }
+
+        AddStaticAmbient();
+        if (Library!.Map is { } map)
+            for (int i = 0; i < _ambient.Count; i++)
+            {
+                var source = _ambient[i];
+                _ambient[i] = source with { Loop = source.Loop && map.Loops(source.Id), RepeatInterval = Math.Max(source.RepeatInterval, map.RepeatInterval(source.Id)) };
+            }
+        SelectZoneBeds();
+        _ambientSeen.Clear();
+        _oneShotSeen.Clear();
+        _ambientPass++;
+        foreach (AmbientSource a in _ambient)
+        {
+            SoundDef? def = Library!.Find(a.Sound);
+            if (def is null)
+            {
+                continue;
+            }
+
+            if (!a.Loop || a.RepeatInterval > 0) { UpdateAmbientOneShot(a, def); continue; }
+            RemoveAmbientOneShot(a.ActorId);
+
+            float volume = AmbientVolume(a);
+            float radius = def.Radius > 0f ? def.Radius : a.SoundRadius;
+            float d = FVector.Dist(a.Location, ListenerLocation);
+            bool audible;
+            float ambientGain = 1, ambientHF = 1, ambientRoom = 0;
+            float playVolume = volume;
+            if (!def.Positional && Acoustics is { PortalCount: > 0 } &&
+                _zoneBeds.TryGetValue(a.Sound, out var winner) && winner.Actor != a.ActorId) continue;
+            if (def.Positional)
+            {
+                // Zone membership is not a render-audibility boundary. Keep the
+                // authored range; geometry transmission handles walls/openings.
+                float range = AudioK.RangeFactor * radius;
+                ambientGain = AmbientTransitions.RangeGain(d, range);
+                audible = ambientGain > 0;
+            }
+            else if (a.IsZone)
+            {
+                if (_zoneBeds.TryGetValue(a.Sound, out var selected) && selected.Actor != a.ActorId) continue;
+                (ambientGain, ambientHF, ambientRoom) = ZoneBed(a.Id);
+                audible = ambientGain > 0.001f;
+            }
+            else
+            {
+                Update2DActorLoop(a, def, volume, radius, d);
+                continue;
+            }
+
+            if (!audible)
+            {
+                continue;
+            }
+
+            _ambientSeen.Add(a.ActorId);
+            int id = (a.ActorId * 16) + AudioK.AmbientSlotId;
+            // A voice another call took over (rule 15) belongs to that call now: it is neither this loop nor stopped.
+            Voice? running = _ambientVoices.TryGetValue(a.ActorId, out Voice? kept) && OwnsAmbient(kept, id) ? kept : null;
+            if (kept is not null && running is null)
+            {
+                // Its voice went to another call (rule 15): the loop starts again when it wins a voice back.
+                _ambientVoices.Remove(a.ActorId);
+                CountAmbientStop(a.ActorId);
+            }
+
+            if (running is null && !def.Positional)
+            {
+                // Rules 21 and 22: a 2D loop already playing this sound for another actor carries on for this one.
+                if (Shared2DLoop(def.Path, a) is { } shared)
+                {
+                    running = shared;
+                }
+            }
+
+            if (running is not null && string.Equals(running.CallPath, def.Path, StringComparison.OrdinalIgnoreCase))
+            {
+                running.AmbientEligible = true;
+                SetAmbientTarget(running, ambientGain, ambientHF, ambientRoom);
+                running.BaseVolume = playVolume;
+                running.Volume = SoundRules.SourceVolume(playVolume, running.Leaf?.Volume ?? def.Volume, false);
+                running.Pitch = SoundRules.AmbientPitch(a.SoundPitch);
+                running.CallRadius = a.SoundRadius;
+                if (!running.Follow)
+                {
+                    running.Location = a.Location;
+                }
+
+                continue;
+            }
+
+            if (running is not null) RetireAmbient(running);
+            var call = new PlayCall(def, a.ActorId, id, a.Location, playVolume, radius, SoundRules.AmbientPitch(a.SoundPitch),
+                music: false, loop: true, ambient: true, occlusion: a.SoundOcclusion,
+                ambientGain: ambientGain, ambientHF: ambientHF, ambientRoom: ambientRoom);
+            if (Start(call, follow: a.ActorId > 0 && a.Follow) && LastStarted is { } v)
+            {
+                v.AmbientZoneId = a.IsZone ? a.Id : null;
+                _ambientVoices[a.ActorId] = v;
+            }
+        }
+
+        PruneAmbientOneShots();
+        // Loops whose actor no longer has its sound, or left the range.
+        List<int>? gone = null;
+        foreach (KeyValuePair<int, Voice> kv in _ambientVoices)
+        {
+            if (!_ambientSeen.Contains(kv.Key) || !OwnsAmbient(kv.Value, (kv.Key * 16) + AudioK.AmbientSlotId))
+            {
+                (gone ??= []).Add(kv.Key);
+            }
+        }
+
+        if (gone is not null)
+        {
+            foreach (int k in gone)
+            {
+                if (_ambientVoices.TryGetValue(k, out Voice? existing) && OwnsAmbient(existing, (k * 16) + AudioK.AmbientSlotId) &&
+                    TryAmbientSource(k, out AmbientSource source) &&
+                    string.Equals(source.Sound, existing.CallPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    existing.AmbientEligible = false;
+                    SetAmbientTarget(existing, 0);
+                    continue;
+                }
+                if (_ambientVoices.Remove(k, out Voice? v))
+                {
+                    CountAmbientStop(k);
+                    if (OwnsAmbient(v, (k * 16) + AudioK.AmbientSlotId))
+                    {
+                        v.Stop();
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Rule 22: the 2D ambient loop of an actor that is not a zone (UpdateAmbientSounds game 0x10b04bb0, Update
+    /// 0x10b0589c..0x10b05d26; checked against the running game on MoonD, 2026-11-11). An actor whose loop plays keeps
+    /// it, at its own volume falling off beyond the radius, until that is under 0.05. An actor without one is a
+    /// candidate when the unguarded formula gives 0.05: if a loop of the same Sound already plays, the candidate takes
+    /// it over when it is louder than that loop's actor and otherwise does nothing; if none plays, it starts its own.
+    /// Candidates are only compared with loops that played before this update, so actors that become candidates
+    /// together each start one: MoonD's seven park speakers all play, and their volumes add up.
+    /// </summary>
+    private void Update2DActorLoop(in AmbientSource a, SoundDef def, float volume, float radius, float d)
+    {
+        int id = (a.ActorId * 16) + AudioK.AmbientSlotId;
+        Voice? own = _ambientVoices.TryGetValue(a.ActorId, out Voice? kept) && OwnsAmbient(kept, id) ? kept : null;
+        if (kept is not null && own is null)
+        {
+            // Its voice went to another call (rule 15).
+            _ambientVoices.Remove(a.ActorId);
+            CountAmbientStop(a.ActorId);
+        }
+
+        float playing = SoundRules.Ambient2DPlayingVolume(volume, d, radius);
+        if (own is not null && string.Equals(own.CallPath, def.Path, StringComparison.OrdinalIgnoreCase))
+        {
+            if (SoundRules.SourceVolume(playing, own.Leaf?.Volume ?? def.Volume, false) >= AudioK.Ambient2DCut * 0.5f)
+            {
+                _ambientSeen.Add(a.ActorId);
+                Set2DLoop(own, a, playing, def);
+            }
+
+            // Else it is not seen this pass, and the pass's end stops it.
+            return;
+        }
+
+        if (own is not null)
+        {
+            RetireAmbient(own);
+            _ambientVoices.Remove(a.ActorId);
+            CountAmbientStop(a.ActorId);
+        }
+
+        float candidate = SoundRules.Ambient2DVolume(volume, def.Volume, d, radius);
+        if (candidate < AudioK.Ambient2DCut * 0.5f)
+        {
+            return;
+        }
+
+        int owner = 0;
+        Voice? found = null;
+        foreach (KeyValuePair<int, Voice> kv in _ambientVoices)
+        {
+            Voice v = kv.Value;
+            if (kv.Key != a.ActorId && OwnsAmbient(v, (kv.Key * 16) + AudioK.AmbientSlotId) && !v.AmbientPositional &&
+                v.AmbientPass != _ambientPass && string.Equals(v.CallPath, def.Path, StringComparison.OrdinalIgnoreCase))
+            {
+                owner = kv.Key;
+                found = v;
+                break;
+            }
+        }
+
+        if (found is not null)
+        {
+            if (found.AmbientZoneId is not null && string.Equals(found.AmbientZoneId, _listenerZone, StringComparison.OrdinalIgnoreCase) &&
+                !(_zoneBeds.TryGetValue(def.Path, out var preferred) && preferred.Actor == a.ActorId && Acoustics is { PortalCount: > 0 }))
+            {
+                // The listener's zone ambience keeps a sound it plays.
+                return;
+            }
+
+            if (found.AmbientZoneId is null && TryAmbientSource(owner, out AmbientSource other))
+            {
+                float theirs = SoundRules.Ambient2DVolume(AmbientVolume(other), def.Volume, FVector.Dist(other.Location, ListenerLocation),
+                    def.Radius > 0f ? def.Radius : other.SoundRadius);
+                if (candidate <= theirs)
+                {
+                    return;
+                }
+            }
+
+            // The loop carries on for this actor from where it was.
+            _ambientVoices.Remove(owner);
+            found.ActorId = a.ActorId;
+            found.Id = id;
+            found.Follow = a.ActorId > 0 && a.Follow;
+            found.Location = a.Location;
+            found.AmbientZoneId = null;
+            _ambientVoices[a.ActorId] = found;
+            _ambientSeen.Add(a.ActorId);
+            Set2DLoop(found, a, playing, def);
+            return;
+        }
+
+        var call = new PlayCall(def, a.ActorId, id, a.Location, playing, radius, SoundRules.AmbientPitch(a.SoundPitch),
+            music: false, loop: true, ambient: true, occlusion: a.SoundOcclusion,
+            ambientGain: AmbientTransitions.CutGain(candidate, AudioK.Ambient2DCut));
+        if (Start(call, follow: a.ActorId > 0 && a.Follow) && LastStarted is { } started)
+        {
+            started.AmbientZoneId = null;
+            started.AmbientPass = _ambientPass;
+            _ambientVoices[a.ActorId] = started;
+            _ambientSeen.Add(a.ActorId);
+        }
+    }
+
+    private void Set2DLoop(Voice v, in AmbientSource a, float playVolume, SoundDef def)
+    {
+        v.AmbientEligible = true;
+        SetAmbientTarget(v, AmbientTransitions.CutGain(SoundRules.SourceVolume(playVolume, v.Leaf?.Volume ?? def.Volume, false), AudioK.Ambient2DCut));
+        v.BaseVolume = playVolume;
+        v.Volume = SoundRules.SourceVolume(playVolume, v.Leaf?.Volume ?? def.Volume, false);
+        v.Pitch = SoundRules.AmbientPitch(a.SoundPitch);
+        v.CallRadius = a.SoundRadius;
+        if (!v.Follow)
+        {
+            v.Location = a.Location;
+        }
+    }
+
+    private bool TryAmbientSource(int actorId, out AmbientSource source)
+    {
+        foreach (AmbientSource s in _ambient)
+        {
+            if (s.ActorId == actorId)
+            {
+                source = s;
+                return true;
+            }
+        }
+
+        source = default;
+        return false;
+    }
+
+    /// <summary>
+    /// The 2D ambient loop playing <paramref name="sound"/> for another actor, handed over to <paramref name="a"/> without
+    /// a restart (UpdateAmbientSounds, editor 0x10f6d390: a 2D candidate whose sound a source already plays takes that
+    /// source over, its actor, id, location and volume, when it is louder or the source's actor is the zone the listener
+    /// left). A non-zone actor never takes the listener zone's loop. Null when no such loop plays.
+    /// </summary>
+    private Voice? Shared2DLoop(string sound, in AmbientSource a)
+    {
+        int owner = 0;
+        Voice? found = null;
+        foreach (KeyValuePair<int, Voice> kv in _ambientVoices)
+        {
+            Voice v = kv.Value;
+            if (kv.Key != a.ActorId && OwnsAmbient(v, (kv.Key * 16) + AudioK.AmbientSlotId) && !v.AmbientPositional &&
+                string.Equals(v.CallPath, sound, StringComparison.OrdinalIgnoreCase))
+            {
+                owner = kv.Key;
+                found = v;
+                break;
+            }
+        }
+
+        if (found is null || (!a.IsZone && found.AmbientZoneId is not null &&
+                              string.Equals(found.AmbientZoneId, _listenerZone, StringComparison.OrdinalIgnoreCase)))
+        {
+            return null;
+        }
+
+        _ambientVoices.Remove(owner);
+        found.ActorId = a.ActorId;
+        found.Id = (a.ActorId * 16) + AudioK.AmbientSlotId;
+        found.Follow = a.ActorId > 0 && a.Follow;
+        found.Location = a.Location;
+        found.AmbientZoneId = a.IsZone ? a.Id : null;
+        _ambientVoices[a.ActorId] = found;
+        return found;
+    }
+
+    /// <summary>The listener zone's ambience loop when it plays <paramref name="sound"/>, else null.</summary>
+    private Voice? ListenerZoneLoop(string sound)
+    {
+        foreach (KeyValuePair<int, Voice> kv in _ambientVoices)
+        {
+            Voice v = kv.Value;
+            if (v.AmbientZoneId is not null && string.Equals(v.AmbientZoneId, _listenerZone, StringComparison.OrdinalIgnoreCase) &&
+                OwnsAmbient(v, (kv.Key * 16) + AudioK.AmbientSlotId) &&
+                string.Equals(v.CallPath, sound, StringComparison.OrdinalIgnoreCase))
+            {
+                return v;
+            }
+        }
+
+        return null;
+    }
+
+    private void CountAmbientStop(int actorId) => AmbientStops[actorId] = AmbientStops.TryGetValue(actorId, out int n) ? n + 1 : 1;
+
+    /// <summary>Whether <paramref name="v"/> still plays the ambient loop of sound id <paramref name="id"/>.</summary>
+    private static bool OwnsAmbient(Voice v, int id) => v.Active && v.Ambient && v.Id == id;
+
+    /// <summary>The client-only actors the simulation does not have (AmbientSound actors and other render actors).</summary>
+    private void AddStaticAmbient()
+    {
+        MapAudioDoc? map = Library!.Map;
+        if (map is null)
+        {
+            return;
+        }
+
+        bool fromWorld = World is not null;
+        for (int i = 0; i < map.Actors.Count; i++)
+        {
+            MapSoundActor a = map.Actors[i];
+            if (a.AmbientSound is null || (fromWorld && a.Category != "render"))
+            {
+                continue;
+            }
+
+            // Negative ids keep these apart from simulated actors.
+            _ambient.Add(new AmbientSource(-(i + 1), a.Id, a.Location, a.AmbientSound, a.SoundVolume, a.SoundRadius,
+                a.SoundPitch, a.Class.EndsWith("ZoneInfo", StringComparison.Ordinal) || a.Class.EndsWith("LevelInfo", StringComparison.Ordinal),
+                a.LightType, a.LightBrightness, a.SoundOcclusion));
+        }
+    }
+
+    /// <summary>Rule 19: SoundVolume / 255 (ambient volume setting 1), times LightBrightness / 255 for lights.</summary>
+    private static float AmbientVolume(in AmbientSource a)
+    {
+        float v = a.SoundVolume / AudioK.VolumeUnit;
+        if (a.LightType != 0)
+        {
+            v *= a.LightBrightness / AudioK.VolumeUnit;
+        }
+
+        return v;
+    }
+
+    // ---- voices ---------------------------------------------------------------------------------------------
+
+    private sealed class SequenceState(SoundDef def)
+    {
+        public SoundDef Def { get; } = def;
+
+        public int Index;
+        public int Remaining;
+    }
+
+    private sealed partial class Voice
+    {
+        public Voice(int index)
+        {
+            Player3D = new AudioStreamPlayer3D
+            {
+                Name = "Voice3D" + index,
+                AttenuationModel = AudioStreamPlayer3D.AttenuationModelEnum.Disabled,
+                // Godot's high-shelf attenuation also responds to VolumeDb when distance attenuation is
+                // disabled. Our own distance/occlusion gain must not additionally muffle quiet sources.
+                AttenuationFilterDb = 0f,
+                AttenuationFilterCutoffHz = 20500f,
+                MaxDistance = 0f,
+                DopplerTracking = AudioStreamPlayer3D.DopplerTrackingEnum.Disabled,
+                Bus = ReverbBuses.WorldBus,
+            };
+            Player2D = new AudioStreamPlayer { Name = "Voice2D" + index, Bus = ReverbBuses.FlatBus };
+            // Match the 3D player's audio/physics scheduling while removing source azimuth from the common
+            // room-field input. Independent EAX reflection/late pans are applied by the native environment.
+            RoomPlayer = new AudioStreamPlayer3D
+            {
+                Name = "Room3D" + index,
+                AttenuationModel = AudioStreamPlayer3D.AttenuationModelEnum.Disabled,
+                AttenuationFilterDb = 0, AttenuationFilterCutoffHz = 20500,
+                MaxDistance = 0, PanningStrength = 0,
+                DopplerTracking = AudioStreamPlayer3D.DopplerTrackingEnum.Disabled,
+                Bus = ReverbBuses.WorldBus, VolumeDb = -100,
+            };
+            _bus3D = ReverbBuses.WorldBus;
+            _bus2D = ReverbBuses.FlatBus;
+        }
+
+        // The bus each player was last given: the Bus property takes a StringName, so setting it every frame made a
+        // StringName (a finalizable wrapper) per voice per frame.
+        private string _bus3D;
+        private string _bus2D;
+        private float _db3D = float.NaN, _db2D = float.NaN;
+        private float _pitch3D = float.NaN, _pitch2D = float.NaN;
+        private Vector3? _position3D;
+
+        public AudioStreamPlayer3D Player3D { get; private set; } = null!;
+
+        public AudioStreamPlayer Player2D { get; private set; } = null!;
+        public AudioStreamPlayer3D RoomPlayer { get; private set; } = null!;
+        public EaxSourceRoute? Route;
+
+        public bool Active;
+        public string CallPath = "";
+        public SoundDef? Leaf;
+        public int ActorId;
+        public int Id;
+        public bool Follow;
+        public bool FollowListener;
+        public int ListenerControllerId;
+        public float AppliedGain;
+        public float AppliedRoomGain;
+        public float AppliedPitch;
+
+        /// <summary>The bone of the actor's mesh the source follows (None: the actor's location).</summary>
+        public Name Bone;
+        public FVector Location;
+
+        /// <summary>Where the source was at the last update (its Doppler velocity).</summary>
+        public FVector LastLocation;
+        public bool HasLastLocation;
+        public float Priority;
+        public bool Music;
+
+        /// <summary>An objective jingle: a 2D one plays on the objective bus (its own volume slider).</summary>
+        public bool Objective;
+        public bool Flat;
+        public bool Ambient;
+        public bool AmbientPositional;
+
+        /// <summary>The map id of the ZoneInfo whose ambience this loop is (rule 21), else null.</summary>
+        public string? AmbientZoneId;
+
+        /// <summary>The UpdateAmbient pass that started this 2D loop.</summary>
+        public int AmbientPass;
+        public float BaseVolume;
+        public float Volume;
+        public float CallRadius;
+        public float Radius;
+        public float PriorityRadiusFactor = 1f;
+        public float MinDistance;
+
+        /// <summary>The actor's SoundOcclusion (rule 18) and the eased, occluded minimum distance.</summary>
+        public byte SoundOcclusion;
+        public float OccludedMinDistance;
+        public double OcclusionSettledAt;
+        public bool OcclusionSettled;
+        public float Pitch = 1f;
+        public bool Positional;
+        public bool Looping;
+        public double LoopUntil;
+        public SequenceState? Sequence;
+        public float Fade = 1f;
+        private float _fadeTarget = 1f;
+        private float _fadeRate;
+        public bool StopWhenFaded;
+
+        public bool IsPlaying => DemoStream is not null
+            ? DemoPosition < _demoLength
+            : Positional ? Player3D.Playing : Player2D.Playing;
+
+        public void Begin(string callPath, int actorId, int id, bool follow, FVector location, float priority)
+        {
+            Active = true;
+            CallPath = callPath;
+            ActorId = actorId;
+            Id = id;
+            Follow = follow;
+            FollowListener = false;
+            ListenerControllerId = 0;
+            Bone = default;
+            Location = location;
+            HasLastLocation = false;
+            RenderedAt = 0;
+            Priority = priority;
+            Sequence = null;
+            LoopUntil = 0;
+            Fade = 1f;
+            _fadeTarget = 1f;
+            _fadeRate = 0f;
+            StopWhenFaded = false;
+            Virtual = false;
+            AmbientEligible = true;
+            DiffuseAmbient = false;
+            AmbientGain = AmbientGainTarget = AmbientHF = AmbientHFTarget = 1;
+            AmbientRenderedVolume = 0;
+            AmbientRoom = AmbientRoomTarget = PropagationMix = 0;
+            ReflectedInput=0;
+            ReflectionRoom=null;
+            LastPropagationPath = default;
+            TransmissionInitialized = false;
+            WallBlocked=false;
+            Corner.Reset();
+            NextCornerSearch=0;
+            Transmission = TransmissionTarget = TransmissionLevels.Clear;
+        }
+
+        public void Play(AudioStream stream, float offset, bool paused)
+        {
+            Halt();
+            Route?.Reset();
+            if (Positional)
+            {
+                Player3D.Stream = stream;
+                Player3D.PitchScale = Pitch;
+                _pitch3D = Pitch;
+                Player3D.Play(offset);
+                Player3D.StreamPaused = paused;
+                if (Route is { } route)
+                {
+                    Player3D.Bus = route.DryBus;
+                    _bus3D = route.DryBus;
+                    RoomPlayer.Bus = route.RoomBus;
+                    RoomPlayer.Stream = stream;
+                    RoomPlayer.PitchScale = Pitch;
+                    RoomPlayer.VolumeDb = -100;
+                    RoomPlayer.Play(offset);
+                    RoomPlayer.StreamPaused = paused;
+                }
+            }
+            else
+            {
+                Player2D.Stream = stream;
+                Player2D.PitchScale = Pitch;
+                _pitch2D = Pitch;
+                Player2D.Play(offset);
+                Player2D.StreamPaused = paused;
+                if (DiffuseAmbient && Route is { } route)
+                {
+                    Player2D.Bus = route.DryBus; _bus2D = route.DryBus;
+                    RoomPlayer.Bus = route.RoomBus; RoomPlayer.Stream = stream;
+                    RoomPlayer.PitchScale = Pitch; RoomPlayer.VolumeDb = -100;
+                    RoomPlayer.Play(offset); RoomPlayer.StreamPaused = paused;
+                }
+            }
+        }
+
+        public void Apply(float gain, float pitch, string bus, Vector3 position, float roomGain, Vector3 listener)
+        {
+            AppliedGain = gain;
+            AppliedRoomGain = roomGain;
+            AppliedPitch = pitch;
+            float db = Mathf.LinearToDb(Math.Max(gain, AudioK.MinVolume));
+            if (Positional)
+            {
+                if (Route is { } route)
+                {
+                    bus = route.DryBus;
+                    RoomPlayer.Position = listener;
+                    RoomPlayer.PitchScale = pitch;
+                    // Godot's unpanned mono 3D voice uses equal-power stereo (.7071 per side). The room
+                    // kernel takes an unpanned mono send before that pan, so restore unity on its input.
+                    RoomPlayer.VolumeDb = Mathf.LinearToDb(Math.Max(roomGain * MathF.Sqrt(2), AudioK.MinVolume));
+                }
+                if (_db3D != db) { _db3D = db; Player3D.VolumeDb = db; }
+                if (_pitch3D != pitch) { _pitch3D = pitch; Player3D.PitchScale = pitch; }
+                if (!string.Equals(_bus3D, bus, StringComparison.Ordinal))
+                {
+                    _bus3D = bus;
+                    Player3D.Bus = bus;
+                }
+
+                if (_position3D != position) { _position3D = position; Player3D.Position = position; }
+            }
+            else
+            {
+                if (DiffuseAmbient && Route is { } diffuse)
+                {
+                    bus = diffuse.DryBus;
+                    RoomPlayer.Position = listener; RoomPlayer.PitchScale = pitch;
+                    RoomPlayer.VolumeDb = Mathf.LinearToDb(Math.Max(roomGain * MathF.Sqrt(2), AudioK.MinVolume));
+                }
+                if (_db2D != db) { _db2D = db; Player2D.VolumeDb = db; }
+                if (_pitch2D != pitch) { _pitch2D = pitch; Player2D.PitchScale = pitch; }
+                if (!string.Equals(_bus2D, bus, StringComparison.Ordinal))
+                {
+                    _bus2D = bus;
+                    Player2D.Bus = bus;
+                }
+            }
+        }
+
+        public void FadeTo(float from, float to, float seconds)
+        {
+            Fade = from;
+            _fadeTarget = to;
+            _fadeRate = seconds > 0f ? Math.Abs(to - from) / seconds : float.PositiveInfinity;
+        }
+
+        public void FadeOut(float seconds)
+        {
+            FadeTo(Fade, 0f, seconds);
+            StopWhenFaded = true;
+        }
+
+        /// <summary>Moves the fade; false when a fade-out has finished.</summary>
+        public bool StepFade(float dt)
+        {
+            if (Fade != _fadeTarget)
+            {
+                float step = _fadeRate * dt;
+                Fade = Fade < _fadeTarget ? Math.Min(_fadeTarget, Fade + step) : Math.Max(_fadeTarget, Fade - step);
+            }
+
+            return !(StopWhenFaded && Fade <= 0f);
+        }
+
+        public void Halt()
+        {
+            if (DemoStream is not null)
+            {
+                DemoStream = null;
+                return;
+            }
+            AudioServer.Lock();
+            try
+            {
+                Player3D.Stop();
+                Player2D.Stop();
+                RoomPlayer.Stop();
+                // Stopped player properties otherwise pin every old resource in
+                // the cache. Virtual/demo emitters retain their own saved stream.
+                Player3D.Stream = null;
+                Player2D.Stream = null;
+                RoomPlayer.Stream = null;
+            }
+            finally { AudioServer.Unlock(); }
+        }
+
+        public void Stop()
+        {
+            Halt();
+            Active = false;
+            Sequence = null;
+            Leaf = null;
+            Ambient = false;
+            AmbientPositional = false;
+            AmbientZoneId = null;
+            Music = false;
+            Objective = false;
+            Flat = false;
+            Id = 0;
+            Priority = 0f;
+        }
+    }
+}

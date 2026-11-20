@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Windows desktop launcher: WinForms on .NET 10. Publish: see docs/LAUNCHER.md. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- Lets the Linux CI job build the whole solution (it never runs the launcher). -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>OpenSCCT.Launcher</AssemblyName>
+    <RootNamespace>OpenScct.Launcher.App</RootNamespace>
+    <ApplicationIcon>..\..\game\branding\icon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- Its own version, apart from the game's (Directory.Build.props). -->
+    <Version>$(LauncherVersion)</Version>
+    <Product>OpenSCCT Launcher</Product>
+    <Company>OpenSCCT</Company>
+    <Description>OpenSCCT Launcher</Description>
+    <!-- Lower startup cost for the published exe. -->
+    <TieredPGO>true</TieredPGO>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!-- Publish settings, used by: dotnet publish src/OpenScct.Launcher -c Release -r win-x64 -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\game\branding\icon.ico" LogicalName="OpenScct.Launcher.icon.ico" Link="branding\icon.ico" />
+    <EmbeddedResource Include="branding\operation.jpg" LogicalName="OpenScct.Launcher.operation.jpg" />
+    <EmbeddedResource Include="branding\editor.ico" LogicalName="OpenScct.Launcher.editor.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Keep the Windows-only WMI dependency version in the launcher release fingerprint. -->
+    <PackageVersion Include="System.Management" Version="10.0.8" />
+    <PackageReference Include="System.Management" />
+    <ProjectReference Include="..\OpenScct.Launcher.Core\OpenScct.Launcher.Core.csproj" />
+    <Compile Include="..\..\shared\ProjectLinks.cs" Link="Shared\ProjectLinks.cs" />
+  </ItemGroup>
+</Project>

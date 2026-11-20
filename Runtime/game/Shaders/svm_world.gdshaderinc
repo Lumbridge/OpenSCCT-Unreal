@@ -1,0 +1,1598 @@
+#ifdef SVM_PROJECTOR_DECAL
+#ifdef SVM_PAWN_SHADOW_DECAL
+#include "res://Shaders/svm_pawn_shadow_decal.gdshaderinc"
+#else
+#include "res://Shaders/svm_projector_decal.gdshaderinc"
+#endif
+#else
+// Faithful material template (docs/RENDERING.md#materials). Every value written here is a display value, the
+// number the original's framebuffer would hold; the display-space post pass turns the frame into linear light at
+// the end. The includer sets render_mode and one define of each group:
+//   light:  LIGHT_LIGHTMAP | LIGHT_VERTEX | LIGHT_ACTOR | (none: fullbright)
+//   blend:  BLEND_MASKED | BLEND_TRANSLUCENT | BLEND_ADDITIVE | BLEND_MODULATE | BLEND_DARKEN | (none: opaque)
+//   extras: SELF_ILLUM, SELF_ILLUM_MASK, ENV_COLOR (+ ENV_TEX, SPEC_LAYER), UV_ANIM, OPACITY_LAYER, COMBINE, FLIPBOOK
+//   SVM_PLAIN_DEPTH (MaterialCompiler.GetPlain): one-sided opaque merged map geometry whose actors are fully visible in
+//     thermal and EMF, or any under SVM_NORMAL_VISION. The vision cut-outs below never fire there, so they are left
+//     out, and so is the vertex position (no foreground depth on map geometry): without discard or POSITION Godot
+//     draws the depth pre-pass with its shared depth-only shader (scene_shader_forward_clustered.h
+//     uses_shared_shadow_material).
+//   SVM_SKY_ZONE (MaterialCompiler.GetSky, with skip_vertex_transform): a surface of the sky zone, drawn as the sky
+//     camera sees it whichever camera draws it (the main view, or the sky view of a sky zone fogged solid): the drawing
+//     camera's rotation and projection, the eye at the SkyZoneInfo (svm_sky_origin), the sky camera's layers (fog slot)
+//     and its depth squeezed behind the whole main world (svm_sky_depth.gdshaderinc). Lighting stays in world space.
+//   SVM_NO_SPOT, SVM_NO_DYN (MaterialCompiler.GetUnreached): merged map geometry that no spot shadow light (SVM_NO_SPOT
+//     alone), or neither a spot nor a dynamic world light (both), can reach this frame (LightReach). The left-out
+//     terms are exactly zero there, so the pixels match.
+//   SVM_NORMAL_VISION (MaterialCompiler.GetNormalVision): merged map geometry drawn while svm_vision is neither 36 nor
+//     38 (LightReach). The thermal and EMF outputs and their cut-outs are left out; every other mode draws the same.
+//   SVM_COSMETIC (MaterialCompiler.Cosmetics): materials that can draw on a character model, the only meshes that set
+//     OpenSCCT's cosmetics (svm_tint, svm_glow_hue, the camo and sheen). Without it the template draws as those hold
+//     their defaults. The instance uniforms stay declared either way, so every material of an instance indexes them
+//     alike.
+// Textures are sampled raw (no sRGB decode): they hold display values like the original's.
+// Vision modes (global svm_vision = PlayerController.RendMap, docs/RENDERING.md#vision-modes) replace the output:
+//   36 thermal: the Z pass, (0, heat, 1 - viewZ / 5000); translucent surfaces blend (0, 0, fade) by alpha x HeatOpacity
+//   38 EMF: the environment map by camera-space reflection x (1 - EMF glow), x the material's EMF texture
+//   other modes draw the normal scene.
+
+global uniform float svm_time;
+// The shadow cameras' marker layer (RenderLayers.ShadowPass): they keep only depth, so the lighting is skipped.
+const uint SVM_SHADOW_PASS = 262144u;
+// Texture LOD bias of colour textures (0 at the original's DefaultTexMipBias; a calibration switch).
+global uniform float svm_mip_bias;
+global uniform int svm_vision;
+#ifndef SVM_NORMAL_VISION
+global uniform sampler2D svm_emf_env;
+#endif
+// Light night vision adds to every lit surface's light term: the render interface's boost byte (30 in night vision),
+// halved into the texture factor and added before the 2x modulation (docs/RENDERING.md#vision-modes).
+global uniform float svm_vision_ambient;
+
+#ifdef SVM_SKY_ZONE
+#include "res://Shaders/svm_sky_depth.gdshaderinc"
+// The sky camera's eye (Godot space, the SkyZoneInfo) and its visibility layers (RenderLayers.Sky and its fog slot),
+// set by FaithfulView.
+global uniform vec3 svm_sky_origin;
+global uniform int svm_sky_layers;
+#define SVM_LAYERS uint(svm_sky_layers)
+#define SVM_EYE_WORLD svm_sky_origin
+
+// What the sky view and its backdrop left in the frame for a solid surface: the half-float sky target, clamped and
+// rounded to 8 bits (svm_sky_backdrop.gdshader). Exact where the GPU rounds both conversions to nearest.
+vec3 svm_sky_display(vec3 c) {
+	vec3 h = vec3(unpackHalf2x16(packHalf2x16(c.rg)), unpackHalf2x16(packHalf2x16(vec2(c.b, 0.0))).x);
+	return roundEven(clamp(h, 0.0, 1.0) * 255.0) / 255.0;
+}
+#else
+#define SVM_LAYERS CAMERA_VISIBLE_LAYERS
+#define SVM_EYE_WORLD CAMERA_POSITION_WORLD
+#endif
+
+#ifdef BLEND_ADDITIVE
+uniform float additive_gain = 1.0;
+#endif
+
+// Vision data of the material (its heat and EMF modifiers) and of the actor drawing it.
+// heat_mode: 0 flat HeatIntensity, 1 HEATTEX_Cool 4 x lum x HeatIntensity, 2 HEATTEX_Heat lum + HeatIntensity.
+// emf_mode: 0 none, 1 the EMF texture, 2 the EMF texture inverted.
+#ifndef SVM_NORMAL_VISION
+uniform sampler2D tex_heat : filter_linear_mipmap_anisotropic, repeat_enable, hint_default_black;
+uniform sampler2D tex_emf : filter_linear_mipmap_anisotropic, repeat_enable, hint_default_white;
+uniform int heat_mode = 0;
+uniform int emf_mode = 0;
+#endif
+// x HeatIntensity, y HeatOpacity, z EMF glow (EMFIntensity while bEMFIsOn), w EMFOpacity (0 hides the actor in EMF).
+// Merged geometry carries the values of each instance per vertex instead (CUSTOM0, w + 2); actors use the instance uniform.
+instance uniform vec4 svm_vision_actor = vec4(0.0, 1.0, 0.0, 1.0);
+#ifndef SVM_NORMAL_VISION
+// Set on solid and masked materials that carry a VISION_SEE_THROUGH next pass (MaterialCompiler.GetSeeThrough): in
+// thermal and EMF the solid pass leaves out a surface whose HeatOpacity (EMFOpacity) is partial, and the blended pass
+// draws it over what lies behind, by that opacity, writing no depth.
+uniform bool vision_see_through = false;
+#elif defined(VISION_SEE_THROUGH)
+#error "The see-through pass draws only in thermal and EMF: it has no normal vision variant."
+#endif
+// OpenSCCT's own cosmetics (actors only): a colour tint (rgb, a = strength; keeps each texel's brightness) and a hue
+// turn of the self-illumination (x radians, y > 0 on; keeps brightness), for goggle lenses and lamps; z > 0 turns the
+// diffuse too (the goggle beams, whose colour is their texture). Read only under SVM_COSMETIC.
+instance uniform vec4 svm_tint = vec4(1.0, 1.0, 1.0, 0.0);
+// w reserves foreground depth for the local weapon. Packed here because actor lighting uses all 16 instance slots.
+instance uniform vec4 svm_glow_hue = vec4(0.0);
+
+#ifdef SVM_CLOAK
+// One draw per surface: mixing here prevents an opaque body pass from covering another part's glass overlay.
+uniform float svm_glass = 0.0;
+uniform sampler2D svm_behind : hint_screen_texture, filter_linear, repeat_disable;
+varying float v_cloak_shift;
+#endif
+// Cosmetic pane fragments duplicate their original material and fade without changing its tint or finish.
+uniform float svm_fragment_opacity = 1.0;
+
+#ifndef SVM_NORMAL_VISION
+varying vec4 v_vision;
+#endif
+#ifdef AUTHORED_MATERIAL
+varying vec4 v_authored_direction;
+#if defined(SVM_NO_SPOT) || defined(SVM_NO_DYN)
+#error "Authored highlights read every spot and dynamic light: authored materials keep the full variant."
+#endif
+#endif
+#ifdef SVM_COSMETIC
+// Turns a colour's hue around the grey axis; the sum of the channels (its brightness) stays the same.
+vec3 svm_hue_turn(vec3 c, float angle) {
+	const vec3 k = vec3(0.57735);
+	float co = cos(angle);
+	return c * co + cross(k, c) * sin(angle) + k * dot(k, c) * (1.0 - co);
+}
+
+// OpenSCCT's own: a polished sheen on cosmetic camo materials (SkeletalModel.Cosmetic): its strength (0 off, 1 on the
+// golden camo), the colour of its highlights (gold, or near white for the pyre camo's black lacquer), and how much of a
+// mirror it is (1 on the golden camo: a full reflection of a bright fake environment, whatever the local light; 0: a
+// partial reflection that darkens in shadow like the rest of the scene).
+uniform float svm_sheen = 0.0;
+uniform vec3 svm_sheen_tint = vec3(1.0, 0.8, 0.36);
+uniform float svm_sheen_mirror = 0.0;
+// OpenSCCT's own: set on cosmetic camo materials (SkeletalModel.Cosmetic); like a body tint (svm_tint) it puts each
+// texel through svm_cosmetic_level before the light.
+uniform bool svm_camo = false;
+// Fitted coverage also gates finish lighting: unpainted rubber/gear must not become gold mirrors.
+uniform sampler2D svm_finish_mask : hint_default_white, filter_linear_mipmap, repeat_enable;
+
+// The retail suits' mean texel luminance (SPersoTextures Shadw_agent 0.112, Shadw_agent_2 0.119, DEF_01_A_Body 0.143):
+// a body tint draws a texel of this brightness in the tint's own colour, brighter and darker texels in proportion, so a
+// pale tint makes a pale suit (it used to keep each texel's brightness, which left every tint as dark as the retail suit).
+const float SVM_TINT_REF = 0.125;
+
+// OpenSCCT's own: the brightness of a cosmetic texel (camo or tint) brought into the range the original's textures are
+// painted for. The original lights a texture by up to 2x (min(2, light term)), so its suits keep their texels low (mean
+// 0.11 to 0.14; 99% below 0.42 on the spy, 0.7 on the merc) and a texel above 0.5 clips to white in any good light. The
+// camos are painted in screen colours (snow white 0xF0F4F8) and blew out to flat white with a glow halo. Up to 0.2
+// (the retail suits' range) a texel is kept; above, its luminance rises at 0.375 of the rate, 1.0 ending at 0.5, with a
+// soft knee from 0.1 to 0.3; the hue stays. So a white suit at full light reaches about white, lit, without clipping.
+vec3 svm_cosmetic_level(vec3 c) {
+	const float knee = 0.2;
+	const float width = 0.1;
+	const float slope = 0.375;
+	float l = dot(c, vec3(0.3, 0.59, 0.11));
+	if (l <= knee - width) {
+		return c;
+	}
+	float m = l <= knee + width
+		? l - (1.0 - slope) * (l - knee + width) * (l - knee + width) / (4.0 * width)
+		: knee + slope * (l - knee);
+	return clamp(c * (m / l), 0.0, 1.0);
+}
+#endif
+
+uniform sampler2D tex_diffuse : filter_linear_mipmap_anisotropic, repeat_enable, hint_default_white;
+#ifdef NORMAL_MAP
+uniform sampler2D tex_normal : filter_linear_mipmap_anisotropic, repeat_enable, hint_normal;
+varying vec3 v_wtangent;
+varying vec3 v_wbinormal;
+#endif
+
+#ifdef LIGHT_LIGHTMAP
+uniform sampler2D tex_lightmap : filter_linear, repeat_disable, hint_default_white;
+uniform float lightmap_scale = 2.0;
+#endif
+
+#ifdef SELF_ILLUM
+uniform sampler2D tex_self_illum : filter_linear_mipmap_anisotropic, repeat_enable, hint_default_black;
+// A TexPanner on the self-illumination layer alone (a Shader whose SelfIllumination pans over a still Diffuse, as the
+// Stickess skins): UV units a second.
+uniform vec2 si_pan = vec2(0.0);
+#ifdef SELF_ILLUM_MASK
+uniform sampler2D tex_self_illum_mask : filter_linear_mipmap_anisotropic, repeat_enable, hint_default_white;
+#endif
+#ifdef SI_LAYER
+// The SelfIllumination and its mask each by their own modifier chain from the mesh's own UVs (layer layout below), with
+// a second static transform after the animation (si_post_*, sim_post_*): a TexPanner over a TexScaler.
+uniform int si_anim_type = 0;
+uniform vec4 si_anim_a = vec4(0.0);
+uniform vec4 si_anim_b = vec4(0.0);
+uniform vec4 si_anim_c = vec4(0.0);
+uniform vec3 si_row_u = vec3(1.0, 0.0, 0.0);
+uniform vec3 si_row_v = vec3(0.0, 1.0, 0.0);
+uniform vec3 si_post_u = vec3(1.0, 0.0, 0.0);
+uniform vec3 si_post_v = vec3(0.0, 1.0, 0.0);
+uniform int sim_anim_type = 0;
+uniform vec4 sim_anim_a = vec4(0.0);
+uniform vec4 sim_anim_b = vec4(0.0);
+uniform vec4 sim_anim_c = vec4(0.0);
+uniform vec3 sim_row_u = vec3(1.0, 0.0, 0.0);
+uniform vec3 sim_row_v = vec3(0.0, 1.0, 0.0);
+uniform vec3 sim_post_u = vec3(1.0, 0.0, 0.0);
+uniform vec3 sim_post_v = vec3(0.0, 1.0, 0.0);
+#endif
+#endif
+
+#ifdef ENV_COLOR
+uniform sampler2D tex_spec_mask : filter_linear_mipmap_anisotropic, repeat_enable, hint_default_white;
+uniform vec3 env_color = vec3(0.0);
+#ifdef ENV_TEX
+// The env map's own texture, looked up by the camera-space reflection: u, v = R.xy x env_uv_map.x + env_uv_map.y.
+// Map materials take the fixed-function stage (game 0x1096d6f0: D3DTSS_TCI_CAMERASPACEREFLECTIONVECTOR through the
+// TexEnvMap's identity matrix, wrapped): R.xy as it is, for world and skeletal materials alike.
+// EMF uses its own texture matrix in the vision branch below.
+uniform vec2 env_uv_map = vec2(1.0, 0.0);
+// 1: a world-space TexEnvMap (EnvMapType EM_WorldSpace, TexCoordSource TCS_WorldEnvMapCoords): the camera-space
+// reflection is turned to world space (game 0x1096d6f0 case 10: the view matrix, transposed, as the texture transform)
+// and u, v are its UE X and Y.
+uniform int env_world = 0;
+uniform sampler2D tex_env : filter_linear, repeat_enable, hint_default_black;
+#endif
+#ifdef SPEC_LAYER
+// The SpecularityMask's own modifiers (layer layout below).
+uniform int sm_anim_type = 0;
+uniform vec4 sm_anim_a = vec4(0.0);
+uniform vec4 sm_anim_b = vec4(0.0);
+uniform vec4 sm_anim_c = vec4(0.0);
+uniform vec3 sm_row_u = vec3(1.0, 0.0, 0.0);
+uniform vec3 sm_row_v = vec3(0.0, 1.0, 0.0);
+#endif
+#endif
+
+#ifdef UV_ANIM
+// type 1 pan: a.xy direction, a.z rate. type 2 oscillate: a = (U amp, U rate, U type), b = (V amp, V rate, V type).
+// type 3 rotate: a.x radians per second, a.z / a.w pivot in texels; tex_size gives the texel scale.
+uniform int uv_anim_type = 0;
+uniform vec4 uv_anim_a = vec4(0.0);
+uniform vec4 uv_anim_b = vec4(0.0);
+uniform vec4 uv_anim_c = vec4(0.0);
+uniform vec2 tex_size = vec2(256.0);
+#endif
+
+// Separate layers (UE2 transforms each Shader / Combiner input by its own modifier chain): each has an animation of the
+// UV_ANIM layout and a static transform (rows dotted with (u, v, 1)). They start from the mesh's own UVs: base_row_u / v
+// undo the static transform the exporter baked into the UVs for the Diffuse.
+#if defined(OPACITY_LAYER) || defined(SPEC_LAYER) || defined(SI_LAYER) || defined(SEQUENCE_D) || defined(SEQUENCE_SI) || defined(SEQUENCE_SIM)
+uniform vec3 base_row_u = vec3(1.0, 0.0, 0.0);
+uniform vec3 base_row_v = vec3(0.0, 1.0, 0.0);
+#endif
+
+#ifdef OPACITY_LAYER
+uniform sampler2D tex_opacity : filter_linear_mipmap_anisotropic, repeat_enable, hint_default_white;
+uniform int op_anim_type = 0;
+uniform vec4 op_anim_a = vec4(0.0);
+uniform vec4 op_anim_b = vec4(0.0);
+uniform vec4 op_anim_c = vec4(0.0);
+uniform vec3 op_row_u = vec3(1.0, 0.0, 0.0);
+uniform vec3 op_row_v = vec3(0.0, 1.0, 0.0);
+// 1: the opacity is the texture's luminance (its alpha is flat), as the exporter's opacity bake picks.
+uniform int op_lum = 0;
+#endif
+
+#ifdef COMBINE
+// UE2 Combiner: tex_diffuse is Material1, tex_c2 Material2, tex_cmask the Mask (Material1 when cmask_on is 0).
+// combine = (CombineOperation, AlphaOperation, Modulate 1/2/4, InvertMask).
+uniform sampler2D tex_c2 : filter_linear_mipmap_anisotropic, repeat_enable, hint_default_white;
+uniform sampler2D tex_cmask : filter_linear_mipmap_anisotropic, repeat_enable, hint_default_white;
+uniform int cmask_on = 0;
+uniform ivec4 combine = ivec4(0, 0, 1, 0);
+uniform int c1_anim_type = 0;
+uniform vec4 c1_anim_a = vec4(0.0);
+uniform vec4 c1_anim_b = vec4(0.0);
+uniform vec4 c1_anim_c = vec4(0.0);
+uniform vec3 c1_row_u = vec3(1.0, 0.0, 0.0);
+uniform vec3 c1_row_v = vec3(0.0, 1.0, 0.0);
+uniform int c2_anim_type = 0;
+uniform vec4 c2_anim_a = vec4(0.0);
+uniform vec4 c2_anim_b = vec4(0.0);
+uniform vec4 c2_anim_c = vec4(0.0);
+uniform vec3 c2_row_u = vec3(1.0, 0.0, 0.0);
+uniform vec3 c2_row_v = vec3(0.0, 1.0, 0.0);
+uniform int cm_anim_type = 0;
+uniform vec4 cm_anim_a = vec4(0.0);
+uniform vec4 cm_anim_b = vec4(0.0);
+uniform vec4 cm_anim_c = vec4(0.0);
+uniform vec3 cm_row_u = vec3(1.0, 0.0, 0.0);
+uniform vec3 cm_row_v = vec3(0.0, 1.0, 0.0);
+// 1: Material2 is a TexEnvMap, looked up by the camera-space reflection (R.xy, as ENV_TEX on map materials) instead of the
+// UVs; c2_flip plays its AnimNext chain from the atlas in tex_c2 (x columns, y rows, z frames, w frames per second).
+uniform int c2_env = 0;
+uniform vec4 c2_flip = vec4(1.0, 1.0, 1.0, 0.0);
+#endif
+
+#if defined(AUTHORED_MATERIAL) && !defined(LIGHT_LIGHTMAP) && !defined(LIGHT_VERTEX) && !defined(LIGHT_ACTOR)
+varying vec3 v_wpos;
+varying vec3 v_wnormal;
+#endif
+
+#ifdef FLIPBOOK
+// Texture.AnimNext chain as an atlas (tex_diffuse): x columns, y rows, z frames, w frames per second.
+uniform vec4 flipbook = vec4(1.0, 1.0, 1.0, 30.0);
+#endif
+
+#ifdef LIGHT_ACTOR
+// Actor lighting (docs/RENDERING.md#actor-lighting): ambient plus the four strongest lights, set per instance in
+// the svm_one_light layout below. svm_ambient.w holds the actor's Echelon code (v_echelon).
+instance uniform vec4 svm_ambient = vec4(0.0);
+instance uniform vec4 svm_l0_pos = vec4(0.0);
+instance uniform vec4 svm_l0_col = vec4(0.0);
+instance uniform vec4 svm_l0_spot = vec4(0.0, 0.0, 0.0, -2.0);
+instance uniform vec4 svm_l1_pos = vec4(0.0);
+instance uniform vec4 svm_l1_col = vec4(0.0);
+instance uniform vec4 svm_l1_spot = vec4(0.0, 0.0, 0.0, -2.0);
+instance uniform vec4 svm_l2_pos = vec4(0.0);
+instance uniform vec4 svm_l2_col = vec4(0.0);
+instance uniform vec4 svm_l2_spot = vec4(0.0, 0.0, 0.0, -2.0);
+instance uniform vec4 svm_l3_pos = vec4(0.0);
+instance uniform vec4 svm_l3_col = vec4(0.0);
+instance uniform vec4 svm_l3_spot = vec4(0.0, 0.0, 0.0, -2.0);
+
+varying vec3 v_light;
+
+#endif
+
+// One light of either light set: pos.xyz in metres and pos.w the radius in metres (pos.w < 0: a sun, pos.xyz the
+// direction to it); col.rgb gain x colour, col.a cos(theta / 2) of a spot; spot.xyz the spot direction, spot.w
+// cos(phi / 2), else the point light's effect: -2 plain, -3 LE_QuadraticNonIncidence, -4 LE_PointAmbient (both on
+// actors only, falloff 0). Falloff 1 - 3x^2 + 2x^3 over x = d / R, Lambert, no specular.
+vec3 svm_one_light(vec4 pos, vec4 col, vec4 spot, vec3 wp, vec3 wn, int falloff) {
+	if (dot(col.rgb, col.rgb) <= 0.0) {
+		return vec3(0.0);
+	}
+	vec3 l;
+	float att = 1.0;
+	float ambient = 0.0;
+	if (pos.w < 0.0) {
+		l = normalize(pos.xyz);
+	} else {
+		vec3 d = pos.xyz - wp;
+		float dist = length(d);
+		l = d / max(dist, 1e-5);
+		float x = dist / max(pos.w, 1e-5);
+		if (x >= 1.0) {
+			att = 0.0;
+		} else if (falloff == 0 && spot.w < -2.5 && spot.w > -3.5) {
+			// D3D attenuation 1 / (Att2 d^2) with Att2 = 8 / R^2, without the 2 of the point fit that col carries
+			// (col = 2 C); the light term saturates later.
+			att = 0.5 / max(8.0 * x * x, 1e-3);
+		} else if (falloff == 0 && spot.w < -3.5) {
+			// The light's ambient (its colour, attenuated) is added whatever the normal.
+			att = 1.0 - 3.0 * x * x + 2.0 * x * x * x;
+			ambient = att;
+		} else if (falloff == 1) {
+			att = 1.0 - x * x;
+		} else if (falloff == 2) {
+			att = 1.0 - x;
+		} else if (falloff == 3) {
+			att = (1.0 - x) * (1.0 - x);
+		} else {
+			att = 1.0 - 3.0 * x * x + 2.0 * x * x * x;
+		}
+		if (spot.w > -1.5) {
+			float c = dot(-l, spot.xyz);
+			att *= clamp((c - spot.w) / max(col.a - spot.w, 1e-5), 0.0, 1.0);
+		}
+	}
+	return col.rgb * (att * max(0.0, dot(wn, l)) + ambient);
+}
+
+// A dynamic point light on a lightmapped (BSP) surface, as the original's BSP light pass draws it: one additive pass
+// per light, lit by a vertex colour and an attenuation texture, with no N.L term (FBspLightVertexStream::GetStreamData,
+// editor 0x111b97a0, and its vertex writer 0x111b9a60; FBspLightAttenuationTexture::GetTextureData, 0x111b9090).
+// With h the light's distance from the surface's plane and rho the distance along the plane from the light's foot:
+//   vertex colour  Color x 2 sqrt(1 - h / R)   (LE_QuadraticNonIncidence: 2 sqrt(1 - h^2 / R^2)), clamped as an FColor;
+//   texture        the light's circle on the plane, radius sqrt(R^2 - h^2), mapped over a 64 texel square whose texels
+//                  hold 1 - d / 30.5 around the centre: 1 - (32 / 30.5) rho / sqrt(R^2 - h^2), 0 outside.
+// So a light level with a wall still lights it fully (h = 0), where N.L gave nothing: MoonD's plaza floods on the kiosk
+// walls and building fronts. Only the side the plane faces is lit (the kiosk's far wall stays black in the original).
+// col.rgb is the packed 2 C. plane_n is the surface's own normal, not a detail normal.
+vec3 svm_bsp_light(vec4 pos, vec4 col, vec4 spot, vec3 wp, vec3 plane_n) {
+	if (dot(col.rgb, col.rgb) <= 0.0) {
+		return vec3(0.0);
+	}
+	float radius = max(pos.w, 1e-5);
+	vec3 d = pos.xyz - wp;
+	float h = dot(d, plane_n);
+	if (h < -1e-3 || h >= radius) {
+		return vec3(0.0);
+	}
+	h = max(h, 0.0);
+	float x = h / radius;
+	float incidence = sqrt(spot.w < -2.5 && spot.w > -3.5 ? 1.0 - x * x : 1.0 - x);
+	float circle = sqrt(max(radius * radius - h * h, 1e-10));
+	float rho = sqrt(max(dot(d, d) - h * h, 0.0));
+	float attenuation = max(0.0, 1.0 - (32.0 / 30.5) * rho / circle);
+	return min(col.rgb * incidence, vec3(1.0)) * attenuation;
+}
+
+// Actor lights use the original SetLight fit over the actor's sphere, rather than cutting off at R.
+// pos.w is linear attenuation per metre, col.w constant attenuation. Spot inner cone is 0.05 outer.
+vec3 svm_actor_light(vec4 pos, vec4 col, vec4 spot, vec3 wp, vec3 wn) {
+    if (dot(col.rgb, col.rgb) <= 0.0) return vec3(0.0);
+    if (pos.w < 0.0) return col.rgb * max(0.0, dot(wn, normalize(pos.xyz)));
+    vec3 d = pos.xyz - wp;
+    float dist = length(d);
+    vec3 l = d / max(dist, 1e-5);
+    float att;
+    if (spot.w < -2.5 && spot.w > -3.5) {
+        float x = dist / max(pos.w, 1e-5);
+        att = x >= 1.0 ? 0.0 : 1.0 / max(8.0 * x * x, 1e-3);
+    } else {
+        float denominator = col.w + pos.w * dist;
+        float range = (256.0 - col.w) / max(1.0, pos.w);
+        att = dist > range ? 0.0 : 1.0 / max(denominator, .01);
+    }
+    if (spot.w > -1.5) {
+        float inner = cos(acos(clamp(spot.w, -1.0, 1.0)) * 0.05);
+        att *= clamp((dot(-l, spot.xyz) - spot.w) / max(inner - spot.w, 1e-5), 0.0, 1.0);
+    }
+    return col.rgb * att * (max(0.0, dot(wn, l)) + (spot.w < -3.5 ? 1.0 : 0.0));
+}
+
+#ifdef LIGHT_VERTEX
+// A dynamic world light on a static mesh with baked vertex colours. The original lights it through the D3D vertex lights
+// like any actor (the per-actor light gathering, editor 0x111a7300: a static mesh with static lighting takes its
+// leaves' dynamic lights only; the choice of lights, 0x111a6100; RenderingModeNormal::SetLight):
+//   - a light is a candidate while its centre is nearer the mesh's bounding sphere centre than its radius plus the
+//     sphere's, a sun always;
+//   - at most Actor.MaxLights (4) light the mesh, the highest LightBrightness x (1 - d^2 / (R + r)^2) first, suns
+//     before all (a spot whose cone misses the sphere scores 0);
+//   - a point or spot light's attenuation is 1 / (constant + linear x distance), fitted to 2 S(d / R) at the near and
+//     the far side of the sphere (ActorLightRules.FitAttenuation). It is not cut off at R: a large mesh beside a light
+//     is lit over its whole sphere (MoonD's Ferris wheel, 2700 uu from a flood of radius 2500).
+// sphere: xyz the centre, w the radius (m). pos, col, spot in the svm_one_light layout (col.rgb = 2 C).
+
+// constant and linear (per metre) of the fit for a light of radius light_r whose centre is centre_dist from the sphere's.
+vec2 svm_fit_attenuation(float centre_dist, float sphere_r, float light_r) {
+	float d = max(centre_dist, 0.001);
+	float d_far = clamp(d + sphere_r, light_r * 0.05, light_r * 0.9);
+	float d_near = clamp(d - sphere_r, light_r * 0.1, light_r * 0.95);
+	float xn = d_near / light_r;
+	float xf = d_far / light_r;
+	float a = 1.0 / (2.0 * (1.0 - 3.0 * xn * xn + 2.0 * xn * xn * xn));
+	float b = 1.0 / (2.0 * (1.0 - 3.0 * xf * xf + 2.0 * xf * xf * xf));
+	if (abs(a - b) < 1e-8 || abs(d_far - d_near) < 1e-10) {
+		return vec2(a, 0.0);
+	}
+	float constant = max(0.01, a - (b - a) / (d_far - d_near) * d_near);
+	return vec2(constant, max(0.0, (a - constant) / d_near));
+}
+
+// The light at a surface point, and its rank among the mesh's lights (0: not a candidate).
+vec3 svm_mesh_light(vec4 pos, vec4 col, vec4 spot, vec3 wp, vec3 wn, vec4 sphere, float brightness, out float score) {
+	score = 0.0;
+	if (dot(col.rgb, col.rgb) <= 0.0) {
+		return vec3(0.0);
+	}
+	if (pos.w < 0.0) {
+		score = 3.0e38;
+		return col.rgb * max(0.0, dot(wn, normalize(pos.xyz)));
+	}
+	float light_r = max(pos.w, 1e-5);
+	vec3 to_centre = sphere.xyz - pos.xyz;
+	float centre_dist = length(to_centre);
+	float reach = light_r + sphere.w;
+	float rank = brightness * (1.0 - centre_dist * centre_dist / (reach * reach));
+	if (rank <= 0.0) {
+		return vec3(0.0);
+	}
+	if (spot.w > -1.5 && centre_dist > sphere.w) {
+		// A spot whose cone, widened by the sphere's angular size, misses the sphere.
+		float off_axis = acos(clamp(dot(to_centre / centre_dist, spot.xyz), -1.0, 1.0));
+		if (off_axis - asin(clamp(sphere.w / centre_dist, 0.0, 1.0)) > acos(clamp(spot.w, -1.0, 1.0))) {
+			return vec3(0.0);
+		}
+	}
+	score = rank;
+	vec3 d = pos.xyz - wp;
+	float dist = length(d);
+	vec3 l = d / max(dist, 1e-5);
+	float att;
+	if (spot.w < -2.5 && spot.w > -3.5) {
+		// LE_QuadraticNonIncidence: D3D attenuation 1 / (8 d^2 / R^2), inside R (col carries the 2 of the other lights).
+		float x = dist / light_r;
+		att = x >= 1.0 ? 0.0 : 0.5 / max(8.0 * x * x, 1e-3);
+	} else {
+		vec2 fit = svm_fit_attenuation(centre_dist, sphere.w, light_r);
+		// The D3D range (256 - constant) / max(0.01 per uu, linear).
+		att = dist > (256.0 - fit.x) / max(1.0, fit.y) ? 0.0 : 0.5 / max(fit.x + fit.y * dist, 0.01);
+	}
+	if (spot.w > -1.5) {
+		att *= clamp((dot(-l, spot.xyz) - spot.w) / max(col.a - spot.w, 1e-5), 0.0, 1.0);
+	}
+	// LE_PointAmbient also adds its attenuated colour whatever the normal.
+	return col.rgb * att * (max(0.0, dot(wn, l)) + (spot.w < -3.5 ? 1.0 : 0.0));
+}
+
+// Keeps a light among the four highest scores so far (scores, with the lights' channels in r, g and b).
+void svm_keep_light(float score, vec3 light, inout vec4 scores, inout vec4 r, inout vec4 g, inout vec4 b) {
+	float low = min(min(scores.x, scores.y), min(scores.z, scores.w));
+	if (score <= low) {
+		return;
+	}
+	vec4 pick = scores.x == low ? vec4(1.0, 0.0, 0.0, 0.0) : scores.y == low ? vec4(0.0, 1.0, 0.0, 0.0)
+		: scores.z == low ? vec4(0.0, 0.0, 1.0, 0.0) : vec4(0.0, 0.0, 0.0, 1.0);
+	scores = mix(scores, vec4(score), pick);
+	r = mix(r, vec4(light.r), pick);
+	g = mix(g, vec4(light.g), pick);
+	b = mix(b, vec4(light.b), pick);
+}
+#endif
+
+
+#if defined(LIGHT_LIGHTMAP) || defined(LIGHT_VERTEX) || defined(LIGHT_ACTOR)
+// The spot shadow lights (LE_ESpotShadow: the merc torch, searchlights, window and sun projectors,
+// docs/RENDERING.md#spot-shadow-lights), per pixel on the light stage: colour x cookie x attenuation x shadow, N.L by
+// the normal influence. One row of svm_spots per slot:
+//   0-2 world to the light camera's view (3 x 4; the camera sits at the frustum's apex)
+//   3   x on (1 a static light, 2 bDynamicLight), y range (m), z normal influence, w attenuation (0 none, 1 linear,
+//       2 late)
+//   4   rgb gain x colour, a distance from the apex to the light (m): the lit span starts there
+//   5   x, y the view to clip scale (perspective: divided by depth), z 1 for parallel rays, w cookie layer
+//   6   the slot's tile of the depth atlas (uv origin, uv size)
+//   7   x own zone (or -1), y bias (m), z bias per metre, w edge softening disc radius (texels; 0 one lookup)
+//   8   a sphere holding every point the slot can light: xyz centre, w radius squared (0 when off)
+#define SVM_SMOKE_SPOT_GLOBALS
+global uniform sampler2D svm_spots;
+global uniform int svm_spot_count;
+// Bits 0-15: the slots that are on (row 3 x not below 0.5); bits 16-31: those of a bDynamicLight (row 3 x above 1.5).
+global uniform int svm_spot_bits;
+global uniform sampler2D svm_spot_depth;
+global uniform sampler2DArray svm_spot_cookies;
+global uniform sampler2D svm_spot_atten;
+// IgnoredEchelonLights: one row per group of the map's lists (row 0 none), one texel per slot, 1 where the group
+// ignores the slot's light (SpotShadowLight.SetIgnoreGroups).
+global uniform sampler2D svm_spot_ignore;
+varying vec3 v_wpos;
+varying vec3 v_wnormal;
+// The surface's Echelon code (RenderMap.EchelonCode): bit 0 skips static spot shadow lights, bit 1 dynamic ones, the
+// rest the IgnoredEchelonLights group. Actors: svm_ambient.w; other surfaces: CUSTOM1.x (0 without the stream).
+varying flat float v_echelon;
+
+// One filtered shadow lookup (the depth map compared at the four nearest texels, blended bilinearly, as hardware
+// shadow filtering does), kept inside the slot's tile. 1 lit, 0 shadowed.
+float svm_spot_lookup(vec4 tile, vec2 suv, float zref) {
+	vec2 atlas = vec2(textureSize(svm_spot_depth, 0));
+	vec2 lo = tile.xy * atlas + 0.5;
+	vec2 hi = (tile.xy + tile.zw) * atlas - 1.5;
+	vec2 p = clamp((tile.xy + suv * tile.zw) * atlas - 0.5, lo, max(lo, hi));
+	vec2 base = floor(p);
+	vec2 f = p - base;
+	vec4 d = textureGather(svm_spot_depth, (base + 1.0) / atlas, 0);
+	vec4 lit = step(vec4(zref), d);
+	// textureGather order: (0, 1), (1, 1), (1, 0), (0, 0).
+	return mix(mix(lit.w, lit.z, f.x), mix(lit.x, lit.y, f.x), f.y);
+}
+
+// One filtered lookup, the default eight-sample ring, or a centre-weighted nine-sample tent (negative soft radius).
+float svm_spot_shadow(vec4 tile, vec2 suv, float zref, float soft) {
+	if (soft == 0.0) {
+		return svm_spot_lookup(tile, suv, zref);
+	}
+	vec2 step_uv = abs(soft) / vec2(textureSize(svm_spot_depth, 0)) / tile.zw;
+	if (soft < 0.0) {
+		float sum = 0.0;
+		for (int y = -1; y <= 1; y++) {
+			for (int x = -1; x <= 1; x++) {
+				float w = float((2 - abs(x)) * (2 - abs(y)));
+				sum += w * svm_spot_lookup(tile, suv + vec2(float(x), float(y)) * step_uv, zref);
+			}
+		}
+		return sum * 0.0625;
+	}
+	float sum = 0.0;
+	for (int k = 0; k < 8; k++) {
+		float a = float(k) * 0.78539816 + 0.39269908;
+		sum += svm_spot_lookup(tile, suv + vec2(cos(a), sin(a)) * step_uv, zref);
+	}
+	return sum * 0.125;
+}
+
+// ignore: the surface's Echelon code (v_echelon; game 0x10a37310).
+vec3 svm_spot_slot(int i, vec3 wp, vec3 wn, float zone, int ignore) {
+	// Outside the slot's bounding sphere the frustum tests below reject the point: one lookup instead of seven.
+	vec4 s = texelFetch(svm_spots, ivec2(8, i), 0);
+	vec3 ds = wp - s.xyz;
+	if (dot(ds, ds) >= s.w) {
+		return vec3(0.0);
+	}
+	vec4 a = texelFetch(svm_spots, ivec2(3, i), 0);
+	if (a.x < 0.5 || (ignore & (a.x > 1.5 ? 2 : 1)) != 0) {
+		return vec3(0.0);
+	}
+	int group = ignore >> 2;
+	if (group > 0 && group < textureSize(svm_spot_ignore, 0).y && texelFetch(svm_spot_ignore, ivec2(i, group), 0).r > 0.5) {
+		return vec3(0.0);
+	}
+	vec4 e = texelFetch(svm_spots, ivec2(7, i), 0);
+	if (e.x >= 0.0 && zone >= 0.0 && abs(e.x - zone) > 0.5) {
+		return vec3(0.0);
+	}
+	vec4 r0 = texelFetch(svm_spots, ivec2(0, i), 0);
+	vec4 r1 = texelFetch(svm_spots, ivec2(1, i), 0);
+	vec4 r2 = texelFetch(svm_spots, ivec2(2, i), 0);
+	vec4 w = vec4(wp, 1.0);
+	vec3 v = vec3(dot(r0, w), dot(r1, w), dot(r2, w));
+	float z = -v.z;
+	vec4 c = texelFetch(svm_spots, ivec2(4, i), 0);
+	if (z <= c.a || z >= c.a + a.y) {
+		return vec3(0.0);
+	}
+	vec4 f = texelFetch(svm_spots, ivec2(5, i), 0);
+	vec2 ndc = f.z > 0.5 ? v.xy * f.xy : v.xy * f.xy / z;
+	if (abs(ndc.x) >= 1.0 || abs(ndc.y) >= 1.0) {
+		return vec3(0.0);
+	}
+	vec2 suv = vec2(ndc.x, -ndc.y) * 0.5 + 0.5;
+	float shadow = svm_spot_shadow(texelFetch(svm_spots, ivec2(6, i), 0), suv, z - e.y - e.z * z, e.w);
+	if (shadow <= 0.0) {
+		return vec3(0.0);
+	}
+	vec3 cookie = texture(svm_spot_cookies, vec3(suv, f.w)).rgb;
+	// Clamped to the ramp's end texel centres: a global sampler repeats, and at the far end of the range the filter
+	// would blend the last (dark) texel with the first (full bright) one, drawing a bright ring at the range's edge.
+	// The linear ramp's last texel is 10/255, not 0, so it also fades to nothing over the last texel's span: the light
+	// would otherwise stop with a hard edge at the range (an OpenSCCT smoothing).
+	vec2 aw = vec2(textureSize(svm_spot_atten, 0));
+	float at = (z - c.a) / a.y;
+	float au = clamp(at, 0.5 / aw.x, 1.0 - 0.5 / aw.x);
+	float atten = a.w < 0.5 ? 1.0
+		: texture(svm_spot_atten, vec2(au, a.w < 1.5 ? 0.25 : 0.75)).r * clamp((1.0 - at) * aw.x, 0.0, 1.0);
+	// N.L towards the apex (parallel rays: along the axis), in the light's view space.
+	vec3 nv = vec3(dot(r0.xyz, wn), dot(r1.xyz, wn), dot(r2.xyz, wn));
+	vec3 l = f.z > 0.5 ? vec3(0.0, 0.0, 1.0) : normalize(-v);
+	float ndl = max(0.0, dot(nv, l));
+	return c.rgb * cookie * atten * mix(1.0, ndl, a.z) * shadow;
+}
+
+// Every spot shadow light at a surface point; zone is the surface's zone (-1 unknown: own-zone lights still reach it),
+// ignore its Echelon flags (svm_spot_slot).
+vec3 svm_spot_light(vec3 wp, vec3 wn, float zone, int ignore) {
+	// Only the slots that are on and not ignored by the surface's static (bit 0) or dynamic (bit 1) flag, in slot
+	// order: every other slot adds exactly nothing.
+	int on = svm_spot_bits & 65535;
+	int dynamic_slots = (svm_spot_bits >> 16) & 65535;
+	if ((ignore & 1) != 0) {
+		on &= dynamic_slots;
+	}
+	if ((ignore & 2) != 0) {
+		on &= ~dynamic_slots;
+	}
+	vec3 sum = vec3(0.0);
+	while (on != 0) {
+		int i = findLSB(on);
+		on &= on - 1;
+		sum += svm_spot_slot(i, wp, wn, zone, ignore);
+	}
+	return sum;
+}
+
+// The burning flares (FlareLights, an OpenSCCT addition): point lights in every zone, shadowed by a depth cube. One row
+// of svm_flares per flare:
+//   0-2 the light in the svm_one_light layout (position and radius, colour, spot / effect)
+//   3   x the cube's row of svm_flare_depth (-1 unshadowed), y bias (m), z normal offset (m), w softening disc (texels)
+//   4   x the faces' view to clip scale, y face size (texels), z bias per metre
+// svm_flare_depth holds six faces across (+X, -X, +Y, -Y, +Z, -Z) and one cube per row, as linear depth along each
+// face's axis.
+global uniform sampler2D svm_flares;
+global uniform int svm_flare_count;
+global uniform sampler2D svm_flare_depth;
+
+// One filtered lookup inside a face's tile (as svm_spot_lookup): 1 lit, 0 shadowed.
+float svm_flare_lookup(vec2 t0, vec2 ts, vec2 suv, float zref) {
+	vec2 atlas = vec2(textureSize(svm_flare_depth, 0));
+	vec2 lo = t0 * atlas + 0.5;
+	vec2 hi = (t0 + ts) * atlas - 1.5;
+	vec2 p = clamp((t0 + suv * ts) * atlas - 0.5, lo, max(lo, hi));
+	vec2 base = floor(p);
+	vec2 f = p - base;
+	vec4 d = textureGather(svm_flare_depth, (base + 1.0) / atlas, 0);
+	vec4 lit = step(vec4(zref), d);
+	return mix(mix(lit.w, lit.z, f.x), mix(lit.x, lit.y, f.x), f.y);
+}
+
+// The shadow of the flare at d (the surface point less the light): the face d falls in, its depth compared on a disc.
+float svm_flare_shadow(vec3 d, vec4 sh, vec4 ex) {
+	vec3 a = abs(d);
+	float face;
+	vec3 fwd;
+	vec3 up;
+	if (a.x >= a.y && a.x >= a.z) {
+		face = d.x > 0.0 ? 0.0 : 1.0;
+		fwd = vec3(d.x > 0.0 ? 1.0 : -1.0, 0.0, 0.0);
+		up = vec3(0.0, 1.0, 0.0);
+	} else if (a.y >= a.z) {
+		face = d.y > 0.0 ? 2.0 : 3.0;
+		fwd = vec3(0.0, d.y > 0.0 ? 1.0 : -1.0, 0.0);
+		up = vec3(0.0, 0.0, d.y > 0.0 ? -1.0 : 1.0);
+	} else {
+		face = d.z > 0.0 ? 4.0 : 5.0;
+		fwd = vec3(0.0, 0.0, d.z > 0.0 ? 1.0 : -1.0);
+		up = vec3(0.0, 1.0, 0.0);
+	}
+	float z = dot(d, fwd);
+	if (z <= 1e-4) {
+		return 1.0;
+	}
+	vec3 right = cross(fwd, up);
+	vec2 ndc = vec2(dot(d, right), dot(d, up)) / z * ex.x;
+	vec2 suv = vec2(ndc.x, -ndc.y) * 0.5 + 0.5;
+	vec2 atlas = vec2(textureSize(svm_flare_depth, 0));
+	vec2 ts = vec2(ex.y) / atlas;
+	vec2 t0 = vec2(face, sh.x) * ts;
+	float zref = z - sh.y - ex.z * z;
+	vec2 step_uv = sh.w / ex.y * vec2(1.0);
+	float sum = svm_flare_lookup(t0, ts, suv, zref);
+	for (int k = 0; k < 8; k++) {
+		float an = float(k) * 0.78539816 + 0.39269908;
+		sum += svm_flare_lookup(t0, ts, suv + vec2(cos(an), sin(an)) * step_uv, zref);
+	}
+	return sum / 9.0;
+}
+
+// How far a flare's light wraps past a surface's edge-on angle on BSP and static meshes: (N.L + w) / (1 + w).
+const float SVM_FLARE_WRAP = 0.5;
+// The shadow's normal offset grows with distance by this many shadow texels (a texel spans 2 / face size of the
+// distance): past the softening disc, so a surface nearly edge-on to the flare (the ceiling round one stuck to it)
+// is not shadowed by its own depth in stripes.
+const float SVM_FLARE_OFFSET_TEXELS = 3.0;
+
+// Every flare at a surface point: rscale scales the radius, falloff as svm_one_light. A flare is LE_PointAmbient, which
+// the actor model (falloff 0) lights with its attenuated colour whatever the normal. On BSP and static meshes the N.L
+// term wraps instead (SVM_FLARE_WRAP): a surface facing the flare is lit as before, one edge-on to it (the ceiling
+// round a flare stuck to it, the wall beside one lying against it) a third as much, where N.L alone left it dark. The
+// shadow still keeps the light off the far side of walls.
+vec3 svm_flare_light(vec3 wp, vec3 wn, float rscale, int falloff) {
+	vec3 sum = vec3(0.0);
+	for (int i = 0; i < svm_flare_count; i++) {
+		vec4 p = texelFetch(svm_flares, ivec2(0, i), 0);
+		p.w *= rscale;
+		vec4 col = texelFetch(svm_flares, ivec2(1, i), 0);
+		vec4 spot = texelFetch(svm_flares, ivec2(2, i), 0);
+		vec3 l;
+		if (falloff != 0 && spot.w < -3.5) {
+			// The light term towards the light itself (N.L = 1), scaled by the wrapped N.L.
+			vec3 to_light = normalize(p.xyz - wp);
+			float wrap = max(0.0, (dot(wn, to_light) + SVM_FLARE_WRAP) / (1.0 + SVM_FLARE_WRAP));
+			l = svm_one_light(p, col, spot, wp, to_light, falloff) * wrap;
+		} else {
+			l = svm_one_light(p, col, spot, wp, wn, falloff);
+		}
+		if (dot(l, l) <= 0.0) {
+			continue;
+		}
+		vec4 sh = texelFetch(svm_flares, ivec2(3, i), 0);
+		if (sh.x >= 0.0) {
+			vec4 ex = texelFetch(svm_flares, ivec2(4, i), 0);
+			float offset = sh.z + SVM_FLARE_OFFSET_TEXELS * 2.0 / ex.y * distance(wp, p.xyz);
+			l *= svm_flare_shadow(wp + wn * offset - p.xyz, sh, ex);
+		}
+		sum += l;
+	}
+	return sum;
+}
+#endif
+
+#if defined(LIGHT_LIGHTMAP) || defined(LIGHT_VERTEX)
+// Dynamic world lights (triggered and pulsing lights that are not in the baked light), one row each of a float
+// texture: position, colour, spot, own zone (or -1). They add to the baked light term before the 2x saturation.
+// The vertex colour's alpha holds the surface's zone index / 255.
+global uniform sampler2D svm_dyn_lights;
+global uniform int svm_dyn_light_count;
+// WorldLights bins light row indices by horizontal position on maps with many lights.
+global uniform sampler2D svm_dyn_cells;
+global uniform vec4 svm_dyn_cell_transform; // XZ origin and reciprocal cell size
+global uniform int svm_dyn_indexed_rows;
+// Calibration of the dynamic world lights: x gain, y radius scale, z falloff (0 smoothstep, 1 the default: the BSP
+// light pass for point lights on lightmapped surfaces and 1-x^2 otherwise, 2 1-x, 3 (1-x)^2), w 1 to honour
+// bAffectOwnZoneOnly on world surfaces. (1, 1, 0, 1) is the decoded actor model.
+global uniform vec4 svm_dyn_tune;
+#ifdef LIGHT_VERTEX
+// The light spheres of static meshes (MeshLightSpheres): one texel each, xyz the centre in the mesh's own space and w
+// the radius (m). UV2.x of a vertex holds its instance's texel + 1 (0: none), read in vertex().
+global uniform sampler2D svm_mesh_spheres;
+varying flat vec4 v_sphere;
+// WorldLights.MeshGridReach: the light grid is binned this much wider (m), for the meshes that look it up at their
+// sphere's centre.
+const float SVM_MESH_GRID_REACH = 2.0;
+#endif
+
+// The falloff of the dynamic world lights: BSP takes point lights through the attenuation texture pass (svm_bsp_light,
+// decoded) and spots and suns by 1 - x^2 (measured); static meshes through the D3D vertex lights: the actor fit over
+// their bounding sphere (svm_mesh_light), or without a sphere the falloff it is fitted to, 1 - 3x^2 + 2x^3.
+int svm_dyn_falloff() {
+#ifdef LIGHT_VERTEX
+	// Calibration modes other than the default (1) apply to both.
+	return abs(svm_dyn_tune.z - 1.0) < 0.5 ? 0 : int(svm_dyn_tune.z);
+#else
+	return int(svm_dyn_tune.z);
+#endif
+}
+
+#include "res://Shaders/svm_window_light.gdshaderinc"
+
+// One row of svm_dyn_lights at a surface point. plane_n is the surface's own normal (wn may carry a detail normal).
+// sphere: the light sphere of a static mesh (w 0: none). score: below 0 for a light that simply adds; otherwise the
+// light's rank among the lights of its mesh, of which the four highest light it (svm_mesh_light).
+vec3 svm_dynamic_row(int i, vec3 wp, vec3 wn, vec3 plane_n, float zone, vec4 sphere, out float score) {
+	score = -1.0;
+	vec4 own_row = texelFetch(svm_dyn_lights, ivec2(3, i), 0);
+	float own = own_row.x;
+	if (svm_dyn_tune.w > 0.5 && own >= 0.0 && abs(own - zone) > 0.5) {
+		return vec3(0.0);
+	}
+	vec4 p = texelFetch(svm_dyn_lights, ivec2(0, i), 0);
+	vec4 c = texelFetch(svm_dyn_lights, ivec2(1, i), 0);
+	vec4 s = texelFetch(svm_dyn_lights, ivec2(2, i), 0);
+	p.w *= svm_dyn_tune.y;
+#ifdef LIGHT_LIGHTMAP
+	// Point lights take the BSP light pass; spots and suns keep the measured model (the original's pass leaves spot
+	// effects out). The calibration falloffs other than the default (1) still apply to every light.
+	vec3 live = svm_dyn_falloff() == 1 && p.w >= 0.0 && s.w < -1.5
+		? svm_bsp_light(p, c, s, wp, plane_n)
+		: svm_one_light(p, c, s, wp, wn, svm_dyn_falloff());
+#elif defined(LIGHT_VERTEX)
+	// The calibration falloffs other than the default (1) keep the light at the pixel alone.
+	vec3 live;
+	if (sphere.w > 0.0 && svm_dyn_falloff() == 0) {
+		live = svm_mesh_light(p, c, s, wp, wn, sphere, own_row.y, score);
+	} else {
+		live = svm_one_light(p, c, s, wp, wn, svm_dyn_falloff());
+	}
+#else
+	vec3 live = svm_one_light(p, c, s, wp, wn, svm_dyn_falloff());
+#endif
+	if (any(greaterThan(live, vec3(0.0)))) live *= svm_window_filter(wp, p);
+	return live;
+}
+
+// Adds one row to the sum, or offers it to the four lights of a static mesh (top: their scores and channels).
+void svm_dynamic_add(int i, vec3 wp, vec3 wn, vec3 plane_n, float zone, vec4 sphere, inout vec3 sum, inout vec4 top,
+		inout vec4 top_r, inout vec4 top_g, inout vec4 top_b) {
+	float score;
+	vec3 live = svm_dynamic_row(i, wp, wn, plane_n, zone, sphere, score);
+#ifdef LIGHT_VERTEX
+	if (score >= 0.0) {
+		svm_keep_light(score, live, top, top_r, top_g, top_b);
+		return;
+	}
+#endif
+	sum += live;
+}
+
+vec3 svm_dynamic(vec3 wp, vec3 wn, vec3 plane_n, float zone, vec4 sphere) {
+	// The four lights of a static mesh (svm_keep_light); unused by every other surface.
+	vec4 top = vec4(0.0);
+	vec4 top_r = vec4(0.0);
+	vec4 top_g = vec4(0.0);
+	vec4 top_b = vec4(0.0);
+#ifdef SVM_RD_WORLD
+	// The world pass on the RenderingDevice (Rd/RdWorldRenderer) hands each draw the rows that can reach it (bit i for
+	// row i below 32): every other row adds exactly nothing to it. A pixel walks those rows alone, with no lookup of
+	// the light grid; only a map with more than 32 rows takes the loop below, for the rows from 32 on.
+	vec3 named = vec3(0.0);
+	int rows = svm_draw_dyn_bits;
+	if (svm_dyn_light_count < 32) {
+		rows &= (1 << svm_dyn_light_count) - 1;
+	}
+	while (rows != 0) {
+		int i = findLSB(rows);
+		rows &= rows - 1;
+		svm_dynamic_add(i, wp, wn, plane_n, zone, sphere, named, top, top_r, top_g, top_b);
+	}
+	if (svm_dyn_light_count <= 32) {
+		return (named + vec3(dot(top_r, vec4(1.0)), dot(top_g, vec4(1.0)), dot(top_b, vec4(1.0)))) * svm_dyn_tune.x;
+	}
+#endif
+	// The grid bounds use the normal light radius. Use the full list for radius calibration overrides.
+	bool indexed = svm_dyn_indexed_rows > 0 && svm_dyn_tune.y == 1.0;
+	vec2 grid_at = wp.xz;
+#ifdef LIGHT_VERTEX
+	// A static mesh is lit from as far as a light's radius plus its sphere's from the sphere's centre: it looks the grid
+	// up there (the grid is binned wider by SVM_MESH_GRID_REACH), or with a larger sphere walks every row.
+	if (sphere.w > SVM_MESH_GRID_REACH) {
+		indexed = false;
+	} else if (sphere.w > 0.0) {
+		grid_at = sphere.xz;
+	}
+#endif
+	int cell = 0;
+	int local_count = 0;
+	int count = svm_dyn_light_count;
+	if (indexed) {
+		const int side = 16; // WorldLights.CellSide
+		vec2 coord = (grid_at - svm_dyn_cell_transform.xy) * svm_dyn_cell_transform.zw;
+		cell = side * side; // Outside the grid, only directional lights can reach the pixel.
+		if (all(greaterThanEqual(coord, vec2(0.0))) && all(lessThan(coord, vec2(float(side))))) {
+			ivec2 tile = ivec2(coord);
+			cell = tile.y * side + tile.x;
+		}
+		local_count = int(texelFetch(svm_dyn_cells, ivec2(0, cell), 0).r);
+		count += local_count - svm_dyn_indexed_rows;
+	}
+	vec3 sum = vec3(0.0);
+	for (int j = 0; j < count; j++) {
+		// Transient flashes follow the map lights in the texture and do not rebuild the grid.
+		int i = j;
+		if (indexed) {
+			i = j < local_count ? int(texelFetch(svm_dyn_cells, ivec2(j + 1, cell), 0).r)
+				: svm_dyn_indexed_rows + j - local_count;
+		}
+#ifdef SVM_RD_WORLD
+		// The rows below 32 were walked above.
+		if (i < 32) {
+			continue;
+		}
+#endif
+		svm_dynamic_add(i, wp, wn, plane_n, zone, sphere, sum, top, top_r, top_g, top_b);
+	}
+#ifdef SVM_RD_WORLD
+	sum += named;
+#endif
+	sum += vec3(dot(top_r, vec4(1.0)), dot(top_g, vec4(1.0)), dot(top_b, vec4(1.0)));
+	return sum * svm_dyn_tune.x;
+}
+
+#ifdef AUTHORED_MATERIAL
+vec3 svm_authored_highlights(AuthoredSample material_value, vec3 wp, vec3 n, vec3 view_vector, vec3 tangent, float zone, int ignore) {
+    vec3 sum = vec3(0.0);
+    bool indexed = svm_dyn_indexed_rows > 0 && svm_dyn_tune.y == 1.0;
+    int cell = 256, local_count = 0, count = svm_dyn_light_count;
+    if (indexed) {
+        vec2 coord = (wp.xz - svm_dyn_cell_transform.xy) * svm_dyn_cell_transform.zw;
+        if (all(greaterThanEqual(coord, vec2(0.0))) && all(lessThan(coord, vec2(16.0)))) cell = int(coord.y) * 16 + int(coord.x);
+        local_count = int(texelFetch(svm_dyn_cells, ivec2(0, cell), 0).r);
+        count += local_count - svm_dyn_indexed_rows;
+    }
+    for (int j = 0; j < count; j++) {
+        int i = indexed ? (j < local_count ? int(texelFetch(svm_dyn_cells, ivec2(j + 1, cell), 0).r) : svm_dyn_indexed_rows + j - local_count) : j;
+        float own = texelFetch(svm_dyn_lights, ivec2(3, i), 0).x;
+        if (svm_dyn_tune.w > 0.5 && own >= 0.0 && abs(own - zone) > 0.5) continue;
+        vec4 p = texelFetch(svm_dyn_lights, ivec2(0, i), 0), c = texelFetch(svm_dyn_lights, ivec2(1, i), 0), s = texelFetch(svm_dyn_lights, ivec2(2, i), 0);
+        p.w *= svm_dyn_tune.y;
+        vec3 l = p.w < 0.0 ? normalize(p.xyz) : normalize(p.xyz - wp);
+        vec3 radiance = svm_one_light(p, c, s, wp, l, svm_dyn_falloff()) * svm_window_filter(wp, p) * svm_dyn_tune.x;
+        sum += am_highlight(material_value, n, view_vector, l, am_linear(radiance), tangent);
+    }
+    for (int i = 0; i < svm_spot_count; i++) {
+        vec4 r0 = texelFetch(svm_spots, ivec2(0, i), 0), r1 = texelFetch(svm_spots, ivec2(1, i), 0), r2 = texelFetch(svm_spots, ivec2(2, i), 0);
+        vec4 w = vec4(wp, 1.0); vec3 local = vec3(dot(r0, w), dot(r1, w), dot(r2, w));
+        vec3 local_light = texelFetch(svm_spots, ivec2(5, i), 0).z > 0.5 ? vec3(0.0, 0.0, 1.0) : normalize(-local);
+        vec3 l = normalize(r0.xyz * local_light.x + r1.xyz * local_light.y + r2.xyz * local_light.z);
+        sum += am_highlight(material_value, n, view_vector, l, am_linear(svm_spot_slot(i, wp, l, zone, ignore)), tangent);
+    }
+    return sum;
+}
+#endif
+
+// The zone ambient of world surfaces (m_RefAmbientColor x gain, WorldLights.ZoneAmbientTexture), one texel per zone.
+global uniform sampler2D svm_zone_ambient;
+
+global uniform vec2 svm_zone_ambient_gain;
+
+vec3 svm_zone_amb(float zone) {
+#if defined(LIGHT_LIGHTMAP)
+	float k = svm_zone_ambient_gain.x;
+#else
+	float k = svm_zone_ambient_gain.y;
+#endif
+	return zone >= 0.0 && zone < 254.5 ? texelFetch(svm_zone_ambient, ivec2(int(zone), 0), 0).rgb * k : vec3(0.0);
+}
+#endif
+
+#if defined(SVM_G16_RECEIVER) && !defined(SVM_CLOAK)
+#include "res://Shaders/svm_projector_receiver.gdshaderinc"
+#endif
+
+void vertex() {
+#ifdef AUTHORED_MATERIAL
+    v_authored_direction = CUSTOM2;
+#endif
+#if defined(AUTHORED_MATERIAL) && !defined(LIGHT_LIGHTMAP) && !defined(LIGHT_VERTEX) && !defined(LIGHT_ACTOR)
+    v_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+    v_wnormal = MODEL_NORMAL_MATRIX * NORMAL;
+#endif
+#ifdef SVM_CLOAK
+	v_cloak_shift = 10.0 * max(0.0, 1.0 - length(NODE_POSITION_VIEW) * 100.0 / 1500.0);
+#endif
+#ifdef BILLBOARD
+	// DT_Sprite actors face the camera drawing them (main or sky), while retaining world-space lighting/vision.
+	mat3 view_to_local = inverse(mat3(MODEL_MATRIX)) * mat3(INV_VIEW_MATRIX);
+	VERTEX = view_to_local * VERTEX;
+	NORMAL = view_to_local * NORMAL;
+#endif
+#ifndef SVM_NORMAL_VISION
+	v_vision = CUSTOM0.w > 1.5 ? vec4(CUSTOM0.xyz, CUSTOM0.w - 2.0) : svm_vision_actor;
+#endif
+#if defined(LIGHT_LIGHTMAP) || defined(LIGHT_VERTEX) || defined(LIGHT_ACTOR)
+	v_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	v_wnormal = MODEL_NORMAL_MATRIX * NORMAL;
+#ifdef LIGHT_ACTOR
+	v_echelon = svm_ambient.w;
+#else
+	v_echelon = CUSTOM1.x;
+#endif
+#endif
+#ifdef LIGHT_VERTEX
+	// The instance's light sphere, moved with the mesh; its radius scales by the largest axis.
+	v_sphere = vec4(0.0);
+	int sphere_at = int(UV2.x + 0.5);
+	if (sphere_at > 0) {
+		vec4 sphere = texelFetch(svm_mesh_spheres, ivec2(sphere_at & 255, sphere_at >> 8), 0);
+		mat3 sphere_basis = mat3(MODEL_MATRIX);
+		v_sphere = vec4((MODEL_MATRIX * vec4(sphere.xyz, 1.0)).xyz,
+			sphere.w * max(length(sphere_basis[0]), max(length(sphere_basis[1]), length(sphere_basis[2]))));
+	}
+#endif
+#ifdef LIGHT_ACTOR
+	vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	vec3 wn = normalize(MODEL_NORMAL_MATRIX * NORMAL);
+#ifdef NORMAL_MAP
+	v_wtangent = normalize(MODEL_NORMAL_MATRIX * TANGENT);
+	v_wbinormal = normalize(MODEL_NORMAL_MATRIX * BINORMAL);
+#endif
+	vec3 sum = svm_ambient.rgb;
+	sum += svm_actor_light(svm_l0_pos, svm_l0_col, svm_l0_spot, wp, wn);
+	sum += svm_actor_light(svm_l1_pos, svm_l1_col, svm_l1_spot, wp, wn);
+	sum += svm_actor_light(svm_l2_pos, svm_l2_col, svm_l2_spot, wp, wn);
+	sum += svm_actor_light(svm_l3_pos, svm_l3_col, svm_l3_spot, wp, wn);
+	v_light = min(sum, vec3(2.0));
+#endif
+#ifdef SVM_SKY_ZONE
+	// The sky camera's view space: this camera's rotation (the sky camera always shares it), the eye at the sky origin.
+	// VERTEX and NORMAL reach the fragment as the sky camera's, so its fog, reflections and view vector are too.
+	VERTEX = mat3(VIEW_MATRIX) * ((MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz - svm_sky_origin);
+	NORMAL = mat3(VIEW_MATRIX) * (MODEL_NORMAL_MATRIX * NORMAL);
+	POSITION = PROJECTION_MATRIX * vec4(VERTEX, 1.0);
+	POSITION.z *= SVM_SKY_DEPTH_SCALE;
+#elif !defined(SVM_PLAIN_DEPTH)
+	POSITION = PROJECTION_MATRIX * MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
+#ifdef SVM_COSMETIC
+	if (svm_glow_hue.w > 0.5) {
+		POSITION.z = mix(0.99 * POSITION.w, POSITION.w, POSITION.z / POSITION.w);
+	}
+#endif
+#endif
+#if defined(SVM_G16_RECEIVER) && !defined(SVM_CLOAK)
+    v_g16_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+#endif
+}
+
+#if defined(SVM_G16_RECEIVER) && !defined(SVM_CLOAK)
+#include "res://Shaders/svm_projector_receiver_fragment.gdshaderinc"
+#endif
+
+// One animated texture modifier (the UV_ANIM layout) at the scene time (Level.TimeSeconds).
+vec2 svm_anim(vec2 uv, int type, vec4 a, vec4 b, vec4 c, vec2 size) {
+	float t = svm_time;
+	if (type == 1) {
+		// UTexPanner / UTexFriendlyPanner::GetMatrix (0x10997eb0, 0x10997fe0): the offset wraps, frac(t x rate x dir).
+		uv += fract(a.xy * a.z * t);
+	} else if (type == 2) {
+		// UTexOscillator::GetMatrix (0x10998680), per axis with p = frac(t x rate): OT_Pan offsets by
+		// amp sin(2 pi (p + phase)), OT_Stretch scales by 1 + amp sin(2 pi (p + phase)), OT_StretchRepeat by
+		// 1 + amp sin(2 pi phase + p pi / 2); the stretch is about (UOffset / USize, VOffset / VSize). c = (U phase,
+		// V phase, UOffset, VOffset). OT_Jitter (random, no map uses it) stays still.
+		vec2 p = fract(vec2(a.y, b.y) * t);
+		vec2 amp = vec2(a.x, b.x);
+		vec2 kind = vec2(a.z, b.z);
+		vec2 s = amp * sin(6.2831853 * (p + c.xy));
+		vec2 sr = amp * sin(6.2831853 * c.xy + p * 1.5707964);
+		vec2 pivot = c.zw / size;
+		vec2 stretch = (uv - pivot) * (1.0 + mix(s, sr, step(1.5, kind))) + pivot;
+		vec2 pan = uv + s;
+		uv.x = kind.x > 2.5 ? uv.x : (kind.x > 0.5 ? stretch.x : pan.x);
+		uv.y = kind.y > 2.5 ? uv.y : (kind.y > 0.5 ? stretch.y : pan.y);
+	} else if (type == 3) {
+		vec2 pivot = a.zw / size;
+		float r = a.x * t;
+		vec2 d = uv - pivot;
+		uv = pivot + vec2(d.x * cos(r) - d.y * sin(r), d.x * sin(r) + d.y * cos(r));
+	}
+	return uv;
+}
+
+// A static texture transform: rows dotted with (u, v, 1).
+vec2 svm_affine(vec2 uv, vec3 row_u, vec3 row_v) {
+	vec3 h = vec3(uv, 1.0);
+	return vec2(dot(row_u, h), dot(row_v, h));
+}
+
+// OpenSCCT's own: a conveyor's belt, steps, rollers and scroll targets slide every layer of their texture with the
+// belt's phase (ConveyorViews sets it on the node's own material copies; spec/additions/conveyors.md#look).
+uniform vec2 svm_scroll = vec2(0.0);
+
+vec2 svm_uv(vec2 uv) {
+#ifdef UV_ANIM
+	uv = svm_anim(uv, uv_anim_type, uv_anim_a, uv_anim_b, uv_anim_c, tex_size);
+#endif
+	return uv;
+}
+
+#include "res://Shaders/svm_sequence.gdshaderinc"
+#include "res://Shaders/svm_fog.gdshaderinc"
+
+#if !defined(SVM_CLOAK) && !defined(BLEND_MASKED) && !defined(BLEND_TRANSLUCENT) && !defined(BLEND_ADDITIVE) && !defined(BLEND_MODULATE) && !defined(BLEND_DARKEN) && !defined(VISION_SEE_THROUGH)
+#define SVM_DEPTH_SOLID
+#endif
+
+#ifdef COMBINE
+vec3 svm_combine_rgb(vec3 first, vec3 second, vec3 mask, float alpha) {
+	if (combine.x == 1) { return second; }
+	if (combine.x == 2) { return first * second; }
+	if (combine.x == 3) { return first + second; }
+	if (combine.x == 4) { return first - second; }
+	if (combine.x == 5) { return mix(first, second, alpha); }
+	if (combine.x == 6) { return first + second * alpha; }
+	if (combine.x == 7) { return mask; }
+	return first;
+}
+#endif
+
+void fragment() {
+	// Depth cameras need coverage only. Blended surfaces write no opaque depth, and ordinary solid surfaces
+	// need none of the material textures or colour stages. Masked materials keep their exact alpha test below.
+#ifdef SVM_DEPTH_SOLID
+	if ((SVM_LAYERS & SVM_SHADOW_PASS) != 0u) {
+		ALBEDO = vec3(0.0);
+	} else {
+#elif defined(SVM_CLOAK) || defined(BLEND_TRANSLUCENT) || defined(BLEND_ADDITIVE) || defined(BLEND_MODULATE) || defined(BLEND_DARKEN) || defined(VISION_SEE_THROUGH)
+	if ((SVM_LAYERS & SVM_SHADOW_PASS) != 0u) {
+		discard;
+	}
+#endif
+#ifdef VISION_SEE_THROUGH
+	// The blended pass draws only in thermal and EMF.
+	if (svm_vision != 36 && svm_vision != 38) {
+		discard;
+	}
+#endif
+	vec2 surface_uv = UV + svm_scroll;
+	vec2 uv = svm_uv(surface_uv);
+#if defined(OPACITY_LAYER) || defined(SPEC_LAYER) || defined(SI_LAYER) || defined(SEQUENCE_D) || defined(SEQUENCE_SI) || defined(SEQUENCE_SIM)
+	vec2 raw_uv = svm_affine(surface_uv, base_row_u, base_row_v);
+#endif
+#if defined(AUTHORED_MATERIAL)
+    mat3 authored_frame = am_frame(v_wpos, normalize(v_wnormal), am_mapping(surface_uv, svm_time));
+    vec3 authored_view = normalize(SVM_EYE_WORLD - v_wpos);
+    AuthoredSample authored = am_evaluate(surface_uv, v_wpos, normalize(v_wnormal), transpose(authored_frame) * authored_view, svm_time);
+    vec4 t = vec4(am_display(authored.color.rgb), authored.color.a);
+#elif defined(SEQUENCE_D)
+    vec4 t = seq_d_sample(raw_uv);
+#elif defined(COMBINE)
+	// Each input through its own modifiers (after the Combiner's own), then CombineOperation / AlphaOperation.
+	vec2 uv1 = svm_anim(svm_affine(uv, c1_row_u, c1_row_v), c1_anim_type, c1_anim_a, c1_anim_b, c1_anim_c, vec2(textureSize(tex_diffuse, 0)));
+	vec2 uv2 = svm_anim(svm_affine(uv, c2_row_u, c2_row_v), c2_anim_type, c2_anim_a, c2_anim_b, c2_anim_c, vec2(textureSize(tex_c2, 0)));
+	vec4 m1 = texture(tex_diffuse, uv1, svm_mip_bias);
+	vec4 m2;
+	if (c2_env != 0) {
+		vec2 euv = reflect(normalize(VERTEX), normalize(NORMAL)).xy;
+		float f2 = mod(floor(svm_time * c2_flip.w), c2_flip.z);
+		vec2 cell2 = vec2(mod(f2, c2_flip.x), floor(f2 / c2_flip.x));
+		m2 = textureGrad(tex_c2, (fract(euv) + cell2) / c2_flip.xy, dFdx(euv) / c2_flip.xy, dFdy(euv) / c2_flip.xy);
+	} else {
+		m2 = texture(tex_c2, uv2, svm_mip_bias);
+	}
+	vec4 mk = m1;
+	if (cmask_on != 0) {
+		vec2 uvm = svm_anim(svm_affine(uv, cm_row_u, cm_row_v), cm_anim_type, cm_anim_a, cm_anim_b, cm_anim_c, vec2(textureSize(tex_cmask, 0)));
+		mk = texture(tex_cmask, uvm, svm_mip_bias);
+	}
+	float ma = combine.w != 0 ? 1.0 - mk.a : mk.a;
+	float ca = combine.y == 1 ? m1.a * m2.a : combine.y == 2 ? m1.a + m2.a : combine.y == 3 ? m1.a : combine.y == 4 ? m2.a : ma;
+#ifdef COMBINE_LIGHT_FIRST
+	// Native root Combiner (0x10970ad0) applies lighting to the first texture stage. The later wave/foam
+	// input keeps its authored colour; lighting the final combination made Aquarium's sea almost black.
+	vec4 t = vec4(m1.rgb, clamp(ca, 0.0, 1.0));
+#else
+	vec3 crgb = svm_combine_rgb(m1.rgb, m2.rgb, mk.rgb, ma);
+	vec4 t = clamp(vec4(crgb * float(combine.z), ca), 0.0, 1.0);
+#endif
+#elif defined(FLIPBOOK)
+	// The frame of the scene time, one atlas cell; gradients from the tiled UVs keep the mip level across cell edges.
+	float frame = mod(floor(svm_time * flipbook.w), flipbook.z);
+	vec2 cell = vec2(mod(frame, flipbook.x), floor(frame / flipbook.x));
+	vec2 fuv = (fract(uv) + cell) / flipbook.xy;
+	vec4 t = textureGrad(tex_diffuse, fuv, dFdx(uv) / flipbook.xy, dFdy(uv) / flipbook.xy);
+#else
+	vec4 t = texture(tex_diffuse, uv, svm_mip_bias);
+#endif
+#ifdef OPACITY_LAYER
+	vec2 opuv = svm_anim(svm_affine(raw_uv, op_row_u, op_row_v), op_anim_type, op_anim_a, op_anim_b, op_anim_c, vec2(textureSize(tex_opacity, 0)));
+	vec4 op = texture(tex_opacity, opuv, svm_mip_bias);
+	t.a = op_lum != 0 ? dot(op.rgb, vec3(0.299, 0.587, 0.114)) : op.a;
+#endif
+#ifdef SVM_COSMETIC
+	if (svm_tint.a > 0.0) {
+		const vec3 luma = vec3(0.3, 0.59, 0.11);
+		vec3 recolour = svm_tint.rgb * (dot(t.rgb, luma) / SVM_TINT_REF);
+		t.rgb = mix(t.rgb, clamp(recolour, 0.0, 1.0), svm_tint.a);
+	}
+	// Camos and tints only: the polished camos (svm_sheen) keep their own finish.
+	float finish_coverage = svm_camo ? texture(svm_finish_mask, uv).r : 1.0;
+	if ((svm_camo || svm_tint.a > 0.0) && svm_sheen <= 0.0) {
+		t.rgb = mix(t.rgb, svm_cosmetic_level(t.rgb), finish_coverage);
+	}
+	if (svm_glow_hue.z > 0.0) {
+		t.rgb = clamp(svm_hue_turn(t.rgb, svm_glow_hue.x), 0.0, 1.0);
+	}
+#endif
+#if defined(LIGHT_LIGHTMAP) || defined(LIGHT_VERTEX) || defined(LIGHT_ACTOR)
+	vec3 wn = normalize(v_wnormal) * (FRONT_FACING ? 1.0 : -1.0);
+	// The surface's own normal, before any authored or detail normal replaces wn (svm_bsp_light's plane).
+	vec3 plane_n = wn;
+#ifdef AUTHORED_MATERIAL
+    wn = normalize(am_triplanar ? authored.normal : authored_frame * authored.normal) * (FRONT_FACING ? 1.0 : -1.0);
+#endif
+#ifdef NORMAL_MAP
+	vec3 detail = texture(tex_normal, uv, svm_mip_bias).xyz * 2.0 - 1.0;
+	wn = normalize(mat3(normalize(v_wtangent), normalize(v_wbinormal), wn) * detail);
+#endif
+#if defined(LIGHT_LIGHTMAP) || defined(LIGHT_VERTEX)
+	float zone = floor(COLOR.a * 255.0 + 0.5);
+#else
+	float zone = -1.0;
+#endif
+	int echelon_ignore = int(v_echelon + 0.5);
+	// A shadow camera keeps only depth: no lighting (RenderLayers.ShadowPass).
+	bool shadow_pass = (SVM_LAYERS & SVM_SHADOW_PASS) != 0u;
+	// Zone 255 (MapBuilder.AuthoredOverlayZone): an additive mesh with painted colours, lit by its colours alone.
+	bool overlay = zone > 254.5;
+	bool unlit = overlay || shadow_pass;
+#ifdef SVM_NO_SPOT
+	// No slot's bounding sphere holds any point of the mesh (LightReach): every slot adds exactly nothing.
+	vec3 spot = vec3(0.0);
+#else
+	vec3 spot = svm_spot_count > 0 && !unlit ? svm_spot_light(v_wpos, wn, zone, echelon_ignore) : vec3(0.0);
+#endif
+#endif
+#if defined(LIGHT_LIGHTMAP) || defined(LIGHT_VERTEX)
+#ifdef SVM_NO_DYN
+	// Every dynamic world light is a point light whose radius stops short of the mesh (LightReach).
+	vec3 dyn_lights = vec3(0.0);
+#else
+#ifdef LIGHT_VERTEX
+	vec4 light_sphere = v_sphere;
+#else
+	vec4 light_sphere = vec4(0.0);
+#endif
+	vec3 dyn_lights = svm_dyn_light_count > 0 && !unlit ? svm_dynamic(v_wpos, wn, plane_n, zone, light_sphere) : vec3(0.0);
+#endif
+	vec3 dyn = dyn_lights + spot + svm_zone_amb(zone);
+	// The flares, with the dynamic world lights' gain, radius scale and falloff. They add past the 2x cap of the baked
+	// and dynamic light (an OpenSCCT addition, docs/RENDERING.md#flare-lights): under a bright baked light the term is
+	// already at the cap, so a flare would add nothing there.
+	vec3 flare = svm_flare_count > 0 && !unlit ? svm_flare_light(v_wpos, wn, svm_dyn_tune.y, svm_dyn_falloff()) * svm_dyn_tune.x : vec3(0.0);
+#endif
+#if defined(LIGHT_LIGHTMAP)
+	vec3 lit = t.rgb * (min(texture(tex_lightmap, UV2).rgb * lightmap_scale + vec3(svm_vision_ambient) + dyn, vec3(2.0)) + flare);
+#elif defined(LIGHT_VERTEX)
+	// COLOR holds half the light term (min(2, 2 x VC + glow) / 2), so the 2x stage is restored here. The overlay takes
+	// no vision ambient either: night vision's lift would fill its faded rim back to a square.
+	vec3 lit = t.rgb * (min(COLOR.rgb * 2.0 + dyn + vec3(overlay ? 0.0 : svm_vision_ambient), vec3(2.0)) + flare);
+#elif defined(LIGHT_ACTOR)
+	// The flares per pixel, with the actor model's falloff (their shadows fall across the actor), past the 2x cap.
+	vec3 flare = svm_flare_count > 0 && !unlit ? svm_flare_light(v_wpos, wn, 1.0, 0) : vec3(0.0);
+	vec3 actor_light = v_light;
+#if defined(NORMAL_MAP) || defined(AUTHORED_MATERIAL)
+	actor_light = svm_ambient.rgb;
+	actor_light += svm_actor_light(svm_l0_pos, svm_l0_col, svm_l0_spot, v_wpos, wn);
+	actor_light += svm_actor_light(svm_l1_pos, svm_l1_col, svm_l1_spot, v_wpos, wn);
+	actor_light += svm_actor_light(svm_l2_pos, svm_l2_col, svm_l2_spot, v_wpos, wn);
+	actor_light += svm_actor_light(svm_l3_pos, svm_l3_col, svm_l3_spot, v_wpos, wn);
+#endif
+	vec3 lit = t.rgb * (min(actor_light + spot + vec3(svm_vision_ambient), vec3(2.0)) + flare);
+#else
+	vec3 lit = t.rgb;
+#endif
+#ifdef AUTHORED_MATERIAL
+    vec3 authored_irradiance = am_linear(max(lit / max(t.rgb, vec3(0.0001)), vec3(0.0)));
+#ifdef LIGHT_VERTEX
+    if (v_authored_direction.a > 0.0) {
+        vec3 light_direction = normalize(v_authored_direction.xyz * 2.0 - 1.0);
+        float base_incidence = max(dot(normalize(v_wnormal), light_direction), 0.1);
+        float normal_incidence = max(dot(normalize(am_triplanar ? authored.normal : authored_frame * authored.normal), light_direction), 0.0);
+        authored_irradiance *= mix(1.0, clamp(normal_incidence / base_incidence, 0.0, 4.0), v_authored_direction.a);
+    }
+#endif
+#ifdef LIGHT_LIGHTMAP
+    if (am_hasBakedDirection) {
+        vec4 direction = texture(am_bakedDirection, UV2);
+        vec3 light_direction = normalize(direction.xyz * 2.0 - 1.0);
+        float base_incidence = max(dot(normalize(v_wnormal), light_direction), 0.1);
+        float normal_incidence = max(dot(normalize(am_triplanar ? authored.normal : authored_frame * authored.normal), light_direction), 0.0);
+        authored_irradiance *= mix(1.0, clamp(normal_incidence / base_incidence, 0.0, 4.0), direction.a);
+    }
+#endif
+    vec3 authored_result = authored.color.rgb * authored_irradiance * authored.ao;
+#if defined(LIGHT_LIGHTMAP) || defined(LIGHT_VERTEX) || defined(LIGHT_ACTOR)
+    authored_result *= 1.0 - authored.metallic;
+#endif
+    vec3 authored_n = normalize(am_triplanar ? authored.normal : authored_frame * authored.normal);
+#ifdef LIGHT_LIGHTMAP
+    if (am_hasBakedDirection) {
+        vec4 direction = texture(am_bakedDirection, UV2);
+        authored_result += am_highlight(authored, authored_n, authored_view, normalize(direction.xyz * 2.0 - 1.0), authored_irradiance * direction.a, authored_frame[0]);
+    }
+#endif
+#ifdef LIGHT_VERTEX
+    if (v_authored_direction.a > 0.0) authored_result += am_highlight(authored, authored_n, authored_view, normalize(v_authored_direction.xyz * 2.0 - 1.0), authored_irradiance * v_authored_direction.a, authored_frame[0]);
+#endif
+#if defined(LIGHT_LIGHTMAP) || defined(LIGHT_VERTEX)
+    if (!unlit) authored_result += svm_authored_highlights(authored, v_wpos, authored_n, authored_view, authored_frame[0], zone, echelon_ignore);
+#endif
+    authored_result += am_environment(authored, authored_n, authored_view);
+#if defined(LIGHT_ACTOR)
+    vec3 l0 = normalize(svm_l0_pos.xyz - v_wpos), l1 = normalize(svm_l1_pos.xyz - v_wpos);
+    vec3 l2 = normalize(svm_l2_pos.xyz - v_wpos), l3 = normalize(svm_l3_pos.xyz - v_wpos);
+    authored_result += am_highlight(authored, authored_n, authored_view, l0, am_linear(svm_actor_light(svm_l0_pos, svm_l0_col, svm_l0_spot, v_wpos, l0)), authored_frame[0]);
+    authored_result += am_highlight(authored, authored_n, authored_view, l1, am_linear(svm_actor_light(svm_l1_pos, svm_l1_col, svm_l1_spot, v_wpos, l1)), authored_frame[0]);
+    authored_result += am_highlight(authored, authored_n, authored_view, l2, am_linear(svm_actor_light(svm_l2_pos, svm_l2_col, svm_l2_spot, v_wpos, l2)), authored_frame[0]);
+    authored_result += am_highlight(authored, authored_n, authored_view, l3, am_linear(svm_actor_light(svm_l3_pos, svm_l3_col, svm_l3_spot, v_wpos, l3)), authored_frame[0]);
+#endif
+    lit = am_display(authored_result + authored.emission);
+#endif
+	// Evaluate once for both scene-light visibility and the final surface blend. Keeping two inlined fog
+	// paths inflated these material shaders even when Fast skipped scene shadows.
+	vec4 surfaceFog = vec4(0.0,0.0,0.0,1.0);
+	if ((SVM_LAYERS & SVM_SHADOW_PASS) == 0u) {
+		surfaceFog = surface_fog(SVM_LAYERS, VERTEX, FRAGCOORD.xy, VIEWPORT_SIZE);
+	}
+#if defined(LIGHT_LIGHTMAP) || defined(LIGHT_VERTEX) || defined(LIGHT_ACTOR)
+	if (!unlit && surfaceFog.a > .0004) lit *= responsive_smoke_scene_light(SVM_LAYERS, v_wpos, wn);
+#endif
+#ifdef COMBINE_LIGHT_FIRST
+	lit = clamp(svm_combine_rgb(min(lit, vec3(1.0)), m2.rgb, mk.rgb, ma) * float(combine.z), 0.0, 1.0);
+#endif
+	vec3 c = min(lit, vec3(1.0));
+#ifdef AM_REFRACTION
+    vec2 refraction_offset = (mat3(VIEW_MATRIX) * authored_n).xy * am_refraction;
+    c = mix(c, textureLod(am_scene, SCREEN_UV + refraction_offset, authored.roughness * 5.0).rgb, 1.0 - authored.color.a);
+#endif
+#ifdef SELF_ILLUM
+#ifdef SI_LAYER
+	vec2 siuv = svm_affine(svm_anim(svm_affine(raw_uv, si_row_u, si_row_v), si_anim_type, si_anim_a, si_anim_b, si_anim_c,
+		vec2(textureSize(tex_self_illum, 0))), si_post_u, si_post_v);
+#else
+	vec2 siuv = uv + si_pan * svm_time;
+#endif
+#ifdef SEQUENCE_SI
+    vec4 si = seq_si_sample(raw_uv);
+#else
+	vec4 si = texture(tex_self_illum, siuv);
+#endif
+#ifdef SELF_ILLUM_MASK
+#ifdef SI_LAYER
+	vec2 simuv = svm_affine(svm_anim(svm_affine(raw_uv, sim_row_u, sim_row_v), sim_anim_type, sim_anim_a, sim_anim_b, sim_anim_c,
+		vec2(textureSize(tex_self_illum_mask, 0))), sim_post_u, sim_post_v);
+#else
+	vec2 simuv = siuv;
+#endif
+#ifdef SEQUENCE_SIM
+    float m = seq_sim_sample(raw_uv).a;
+#else
+	float m = texture(tex_self_illum_mask, simuv).a;
+#endif
+#else
+	float m = si.a;
+#endif
+#ifdef SVM_COSMETIC
+	vec3 glow = svm_glow_hue.y > 0.0 ? clamp(svm_hue_turn(si.rgb, svm_glow_hue.x), 0.0, 1.0) : si.rgb;
+#else
+	vec3 glow = si.rgb;
+#endif
+	c = mix(c, glow, m);
+#endif
+#ifdef ENV_COLOR
+#ifdef SPEC_LAYER
+	vec2 smuv = svm_anim(svm_affine(raw_uv, sm_row_u, sm_row_v), sm_anim_type, sm_anim_a, sm_anim_b, sm_anim_c, vec2(textureSize(tex_spec_mask, 0)));
+#else
+	vec2 smuv = uv;
+#endif
+#ifdef ENV_TEX
+	vec3 er = reflect(normalize(VERTEX), normalize(NORMAL));
+	vec2 env_r = er.xy;
+	if (env_world != 0) {
+		// Godot world (x, y, z) is UE (X, Z, Y).
+		env_r = (INV_VIEW_MATRIX * vec4(er, 0.0)).xz;
+	}
+	vec3 env_added = texture(tex_env, env_r * env_uv_map.x + env_uv_map.y).rgb;
+#else
+	vec3 env_added = env_color;
+#endif
+	vec3 specular = env_added * texture(tex_spec_mask, smuv).a;
+#ifndef ENV_SEPARATE
+	c = min(c + specular, vec3(1.0));
+#endif
+#endif
+#ifdef SVM_COSMETIC
+	if (svm_sheen > 0.0) {
+		// Polished metal or lacquer: mostly a fake studio reflection of the texture (dark floor, bright sky, a hot strip
+		// at the horizon) instead of its diffuse lighting, two highlights, a Fresnel rim and a slow glint across the
+		// surface. All in view space. A partial mirror keeps some of the local light level, so it darkens in shadow; a
+		// full mirror (the golden camo) ignores it and adds soft bright and dark streaks to the environment, so the
+		// reflection slides over the metal as the gun moves.
+		vec3 n = normalize(NORMAL);
+		vec3 v = normalize(VIEW);
+		vec3 r = reflect(-v, n);
+		float ndv = clamp(dot(n, v), 0.0, 1.0);
+		float level = clamp(dot(c, vec3(1.0)) / max(dot(t.rgb, vec3(1.0)), 0.03), 0.0, 1.0);
+		float shade = mix(mix(0.3, 1.0, level), 1.0, svm_sheen_mirror);
+		float env = mix(0.3, 1.25, smoothstep(-0.45, 0.9, r.y)) + 0.85 * exp(-pow((r.y - 0.12) * 7.0, 2.0));
+		float streaks = 0.35 * sin(r.x * 7.0 + r.y * 2.5) + 0.2 * sin(r.x * 17.0 - r.z * 5.0)
+			+ 0.7 * pow(clamp(dot(r, normalize(vec3(-0.7, 0.45, 0.4))), 0.0, 1.0), 6.0);
+		env = max(env + streaks * svm_sheen_mirror, 0.15);
+		vec3 refl = t.rgb * env * shade;
+		float spec = pow(clamp(dot(r, normalize(vec3(0.35, 0.8, 0.5))), 0.0, 1.0), 48.0);
+		float spec2 = pow(clamp(dot(r, normalize(vec3(-0.6, 0.3, 0.7))), 0.0, 1.0), 16.0);
+		float rim = pow(1.0 - ndv, 4.0);
+		float band = fract((uv.x + uv.y) * 0.5 - svm_time * 0.18);
+		float glint = smoothstep(0.0, 0.035, band) * (1.0 - smoothstep(0.035, 0.09, band));
+		vec3 metal = mix(c, refl, mix(0.75, 0.95, svm_sheen_mirror) * svm_sheen);
+		// The moving glint belongs to the full mirror (gold camos) only; lacquer (pyre) stays still.
+		vec3 shine = svm_sheen_tint * (spec * 1.8 + spec2 * 0.5 + rim * 0.6 + glint * 0.5 * svm_sheen_mirror) * shade * svm_sheen;
+		c = mix(c, min(metal + shine, vec3(1.0)), finish_coverage);
+	}
+#endif
+	float a = t.a;
+#if defined(BLEND_MODULATE)
+	c = t.rgb * 2.0;
+	a = 1.0;
+#elif defined(BLEND_DARKEN)
+	c = vec3(1.0) - t.rgb;
+	a = 1.0;
+#elif defined(BLEND_ADDITIVE)
+	a = 1.0;
+#endif
+	// A shadow camera always uses physical coverage. Vision modes change the main colour/depth picture, not the
+	// cached occluders; in particular a thermal glass cut or EMF screen door must not persist in a map-light tile.
+#ifndef SVM_NORMAL_VISION
+	if (svm_vision == 36 && (SVM_LAYERS & SVM_SHADOW_PASS) == 0u) {
+		// Thermal Z pass: heat in G, the depth fade in B. Additive, modulating and darkening surfaces are left out.
+#if defined(BLEND_ADDITIVE) || defined(BLEND_MODULATE) || defined(BLEND_DARKEN)
+		discard;
+#else
+		float fade = 1.0 - clamp(-VERTEX.z * 100.0 / 5000.0, 0.0, 1.0);
+#ifndef SVM_PLAIN_DEPTH
+		// HeatOpacity 0 leaves the actor out of the thermal frame (as EMFOpacity does in EMF).
+		if (v_vision.y <= 0.0) {
+			discard;
+		}
+		bool partial_heat = v_vision.y < 1.0;
+#if defined(VISION_SEE_THROUGH)
+		if (!partial_heat) {
+			discard;
+		}
+#else
+		if (vision_see_through && partial_heat) {
+			discard;
+		}
+#endif
+#endif
+#if defined(BLEND_TRANSLUCENT)
+		c = vec3(0.0, 0.0, fade);
+		a = t.a * v_vision.y;
+#else
+		float heat = v_vision.x;
+		if (heat_mode != 0) {
+			vec4 h = texture(tex_heat, uv);
+			float l = dot(h.rgb, vec3(0.3, 0.59, 0.11));
+			heat = heat_mode == 1 ? 4.0 * l * v_vision.x : l + v_vision.x;
+		}
+		c = vec3(0.0, clamp(heat, 0.0, 1.0), fade);
+#if defined(VISION_SEE_THROUGH)
+		// A partly see-through solid surface: its heat and fade over what lies behind, by HeatOpacity.
+		a = v_vision.y;
+#endif
+#endif
+#endif
+	} else if (svm_vision == 38 && (SVM_LAYERS & SVM_SHADOW_PASS) == 0u) {
+		// EMF: the environment map by camera-space reflection, darkened by the actor's EMF glow (the post pass inverts).
+#if defined(BLEND_ADDITIVE) || defined(BLEND_MODULATE) || defined(BLEND_DARKEN)
+		discard;
+#else
+#ifndef SVM_PLAIN_DEPTH
+		float opacity = v_vision.w;
+		// EMFOpacity 0 hides the actor; partial opacity is blended by the see-through pass where the material has one,
+		// else drawn as a 4 x 4 screen-door pattern (actors built outside the map: pawn weapons, gadgets).
+		const float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+		ivec2 q = ivec2(mod(FRAGCOORD.xy, 4.0));
+		float threshold = (bayer[q.y * 4 + q.x] + 0.5) / 16.0;
+		bool partial_emf = opacity < 0.99;
+#if defined(VISION_SEE_THROUGH)
+		// A partly see-through solid surface: blended over what lies behind, by EMFOpacity.
+		if (opacity <= 0.0 || !partial_emf) {
+			discard;
+		}
+		a = opacity;
+#else
+		if (opacity <= 0.0 || (vision_see_through && partial_emf) || (partial_emf && threshold >= opacity)) {
+			discard;
+		}
+#endif
+#endif
+		vec3 r = reflect(normalize(VERTEX), normalize(NORMAL));
+		// RenderingModeEMF's D3D texture matrix (0x1097766d..0x109776e5): its second row
+		// contributes to both U and V. The old uniform 0.25 scale sampled only the middle quarter.
+		vec2 emf_uv = vec2(0.25 * (r.x + r.y) + 0.5, 0.5 * r.y + 0.5);
+		vec3 env = texture(svm_emf_env, emf_uv).rgb;
+		c = env * (1.0 - clamp(v_vision.z, 0.0, 1.0));
+		if (emf_mode != 0) {
+			vec3 e = texture(tex_emf, uv).rgb;
+			c *= emf_mode == 2 ? vec3(1.0) - e : e;
+		}
+#endif
+	}
+#endif
+	// Fog belongs to this fragment's surface depth, before framebuffer blending. Applying a full-scene
+	// fog pass after transparency would instead use the opaque depth behind glass, effects or cloaked bodies.
+#if defined(BLEND_ADDITIVE)
+	c *= surfaceFog.a;
+#ifdef SVM_NORMAL_VISION
+	c *= additive_gain;
+#else
+	if (svm_vision != 36 && svm_vision != 38) {
+		c *= additive_gain;
+	}
+#endif
+#elif defined(BLEND_MODULATE)
+    // Decoded SetShaderMaterial 0x10f36a30 / FinalBlend helper 0x10f33c90: fog override 127/255,
+    // doubled here because Godot's multiply draw already folds in the native 2x modulation.
+    c = mix(vec3(254.0 / 255.0), c, surfaceFog.a);
+#elif defined(BLEND_DARKEN)
+    // Inverse-source darkening approaches white after the source's black fog override.
+	c = mix(vec3(1.0), c, surfaceFog.a);
+#else
+	c = c * surfaceFog.a + surfaceFog.rgb;
+#endif
+#ifdef ENV_SEPARATE
+	// Fold the original alpha-blended diffuse and additive Specular passes into one
+	// premultiplied draw. Glass opacity must not attenuate its reflection a second time.
+	c *= a;
+#ifdef SVM_NORMAL_VISION
+	c += specular * surfaceFog.a;
+#else
+	if (svm_vision != 36 && svm_vision != 38) {
+		c += specular * surfaceFog.a;
+	}
+#endif
+#endif
+#ifdef SVM_CLOAK
+#ifdef BLEND_MASKED
+	if (a < 0.5) { discard; }
+#endif
+	vec2 cloak_normal = normalize(NORMAL).xy;
+	vec2 cloak_uv = SCREEN_UV + vec2(-v_cloak_shift * cloak_normal.x / 640.0, v_cloak_shift * cloak_normal.y / 480.0);
+	vec3 behind = texture(svm_behind, clamp(cloak_uv, vec2(0.0), vec2(1.0))).rgb;
+	// The sampled scene is already fogged at its own depths; only the body's colour needed surface fog.
+	ALBEDO = mix(c, behind, clamp(svm_glass, 0.0, 1.0));
+	// The mix already contains the scene. Write nearest depth and replace the pixel once, even across surfaces.
+	ALPHA = 1.0;
+#else
+	ALBEDO = c;
+#if defined(SVM_SKY_ZONE) && (defined(SVM_DEPTH_SOLID) || defined(BLEND_MASKED))
+	// A solid sky surface holds the value the sky view's picture had; blended ones blend over it, as they blended over
+	// the unrounded picture in the sky view (at most one 8-bit level apart).
+	ALBEDO = svm_sky_display(c);
+#endif
+#if defined(SEE_THROUGH_CUT)
+	// A masked material's blended pass keeps the alpha cut of its solid pass.
+	if (t.a < 0.5) {
+		discard;
+	}
+#endif
+#if defined(BLEND_TRANSLUCENT) || defined(BLEND_MASKED) || defined(BLEND_ADDITIVE) || defined(BLEND_MODULATE) || defined(BLEND_DARKEN) || defined(VISION_SEE_THROUGH)
+	ALPHA = a * svm_fragment_opacity;
+#endif
+#if defined(BLEND_MASKED)
+	ALPHA_SCISSOR_THRESHOLD = 0.5;
+#if defined(ALPHA_COVERAGE)
+	// MSAA on (rl:gfx.aa): alpha to coverage over a band about a texel wide around the cut, as Godot's own materials.
+	ALPHA_ANTIALIASING_EDGE = 0.3;
+	ALPHA_TEXTURE_COORDINATE = uv * vec2(textureSize(tex_diffuse, 0));
+#endif
+#endif
+#endif
+#if defined(SVM_G16_RECEIVER) && !defined(SVM_CLOAK)
+    if ((SVM_LAYERS & SVM_SHADOW_PASS) == 0u && svm_vision != 36 && svm_vision != 38)
+        ALBEDO *= svm_g16_factor(surfaceFog.a, INV_VIEW_MATRIX[3].xyz);
+#endif
+#ifdef SVM_DEPTH_SOLID
+	}
+#endif
+}
+
+#endif // SVM_PROJECTOR_DECAL

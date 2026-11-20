@@ -1,0 +1,34 @@
+{
+  "m4a1s": {
+    "triangles": 10250,
+    "muzzle": 0.732
+  },
+  "ak47": {
+    "triangles": 2480,
+    "muzzle": 0.6179901334762573
+  },
+  "galil": {
+    "triangles": 43146,
+    "muzzle": 0.6573217985337568
+  },
+  "famas": {
+    "triangles": 24010,
+    "muzzle": 0.3655923870086669
+  },
+  "compactsmg": {
+    "triangles": 5374,
+    "muzzle": 0.26885899999999996
+  },
+  "pumpshotgun": {
+    "triangles": 16792,
+    "muzzle": 0.70633
+  },
+  "boltrifle": {
+    "triangles": 5090,
+    "muzzle": 0.8057039999999999
+  },
+  "designatedmarksman": {
+    "triangles": 1675,
+    "muzzle": 0.8569200000000001
+  }
+}

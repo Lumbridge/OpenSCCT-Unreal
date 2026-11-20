@@ -1,0 +1,1765 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using Godot;
+using OpenScct.Core;
+using OpenScct.Core.Engine;
+using OpenScct.Core.Uc;
+using SpyCloak = OpenScct.Game.Equipment.SpyCloak;
+using OpenScct.Game.Objectives;
+using OpenScct.Game.SBase;
+using OpenScctGame.Chat;
+using OpenScctGame.Controls;
+using OpenScctGame.Play.Session;
+using OpenScctGame.Hud.Magma;
+using OpenScctGame.Options;
+using OpenScctGame.Smoke;
+using OpenScctGame.UI;
+
+namespace OpenScctGame.Hud;
+
+/// <summary>
+/// <c>--svm-smoke=hud</c>: builds a small offline scene with real SBase actors (a spy and a merc with their pawns,
+/// HUDs, rifle and gadget, a mission, a terminal being hacked, an alarm, players and messages), drives the spy page
+/// (P_HudATT), the merc page (P_HudDEF), the spectator page (P_SpectatorMode) and both binocular pages
+/// (P_BinocularsATT with its objective markers, P_BinocularsDEF) from it through
+/// <see cref="HudSimReader"/>, and checks the values that reach the drawn widgets: timer, objectives and their
+/// variants, countdown, alarm and alert boxes, gauges, gadget box, ammunition, messages and the kill feed, console
+/// and chat lines, lives and pings, radar, reticle with its arrows and message, posture icon, the screen effects
+/// (damage wash, perturbation, shutdown, sticky shock, droplets, foam, flash), objective and GPO markers, the
+/// interaction list, the respawn weapon, the frame-rate readout and the mission status page. Then it opens the
+/// front-end screens (main menu, lobby, options, results). Needs the converted UI content
+/// (<c>python -m svmbuild ui</c>); headless it checks the draw lists, not pixels. With a renderer and
+/// <c>--svm-hud-capture=dir</c> it also saves each screen as a PNG there (for a look, kept out of git).
+/// </summary>
+public sealed class HudSmoke(bool spectatorOnly = false, bool teammateNamesOnly = false) : SmokeTest
+{
+    public const string TestName = "hud";
+
+    private static readonly Vector2 Screen = new(1280f, 720f);
+    private const float Dt = 1f / 60f;
+
+    private readonly List<string> _failures = new();
+    private readonly List<string> _notes = new();
+    private int _phase;
+    private int _cloakCapturePhase;
+    private int _wait;
+    private double _bannerStart;
+    private Scene? _scene;
+    private HudLayer? _layer;
+    private ChatInput? _chat;
+    private SPlayerController? _viewer;
+    private Action<HudSnapshot>? _extra;
+    private ResultsScreen? _results;
+    private readonly string? _captureDir = CaptureDir();
+
+    public const string SpectatorTestName = "hud-spectator";
+    public const string TeammateNamesTestName = "hud-teammate-names";
+    public override string Name => teammateNamesOnly ? TeammateNamesTestName : spectatorOnly ? SpectatorTestName : TestName;
+
+    public override SmokeResult Step(SmokeContext context)
+    {
+        if (teammateNamesOnly)
+        {
+            if (_phase++ == 0) return Setup(context);
+            CheckSleepingTeammateName();
+            return _failures.Count == 0 ? SmokeResult.Pass() : SmokeResult.Fail(string.Join("; ", _failures));
+        }
+        if (spectatorOnly)
+        {
+            if (_phase++ == 0) return Setup(context);
+            if (_phase == 2) { CheckSpectator(); return Running(); }
+            Capture(context, "spectator");
+            return _failures.Count == 0 ? SmokeResult.Pass() : SmokeResult.Fail(string.Join("; ", _failures));
+        }
+        if (_wait > 0)
+        {
+            _wait--;
+            return Running();
+        }
+
+        // Screens get a few frames to lay out (and, in a capture run, to be drawn) before they are checked.
+        const int Settle = 4;
+        switch (_phase++)
+        {
+            case 0:
+                return Setup(context);
+            case 1:
+                // The first frame meets the local player (a fresh HUD); then a console line and a hit arrive.
+                Run(1);
+                _layer!.Receiver.TeamMessage(_scene!.SpyPc, _scene.MatePawn.PlayerReplicationInfo, "on my way", "TeamSay");
+                _layer.Effects.ClientDamageHudEffect(_scene.SpyPc, (int)SDamageType.SDamage_Explosion, Now);
+                Run(29);
+                CheckSpy();
+                CheckTextInsideScreens();
+                CheckLargeRosters();
+                return Running();
+            case 2:
+                Capture(context, "spy");
+                CheckInteractionList();
+                CheckSpyExtras();
+                return Running();
+            case 3:
+                if (_captureDir is not null && DisplayServer.GetName() != "headless")
+                {
+                    if (_cloakCapturePhase < 2)
+                    {
+                        Capture(context, _cloakCapturePhase == 0 ? "spy-list" : "cloak-full");
+                        float energy = _cloakCapturePhase == 0 ? 100f : 20f;
+                        // Capture presentation samples without advancing the synthetic pawn's gameplay state.
+                        _layer!.Effects.Reset();
+                        _extra = s => { s.CloakEngaged = true; s.EnergyLevel = energy; s.EnergyLevelMax = 100; };
+                        Run(1);
+                        _cloakCapturePhase++;
+                        _phase--;
+                        _wait = Settle;
+                        return Running();
+                    }
+                    Capture(context, "cloak-low");
+                }
+                else Capture(context, "spy-list");
+                _viewer = _scene!.MercPc;
+                _extra = null;
+                Run(30);
+                CheckMerc();
+                return Running();
+            case 4:
+                Capture(context, "merc");
+                CheckMercEffects();
+                return Running();
+            case 5:
+                Capture(context, "merc-effects");
+                CheckSpyBinoculars();
+                return Running();
+            case 6:
+                Capture(context, "binoculars-spy");
+                CheckMercBinoculars();
+                return Running();
+            case 7:
+                Capture(context, "binoculars-merc");
+                LeaveBinoculars();
+                CheckTimedCountdowns();
+                CheckCounters();
+                CheckSpectator();
+                return Running();
+            case 8:
+                Capture(context, "spectator");
+                CheckStatusPage(context);
+                _wait = Settle;
+                return Running();
+            case 9:
+                Capture(context, "status");
+                FreeStatusPage(context);
+                _layer!.Visible = false;
+                FrontEnd.ShowMainMenu(context.Tree);
+                _wait = Settle;
+                return Running();
+            case 10:
+                Capture(context, "main-menu");
+                CheckMainMenu(context.Tree);
+                FrontEnd.ShowLobby(context.Tree, new LocalLobby(new PlayRequest { PlayerName = "Tester", Side = HudSide.Merc }));
+                _wait = Settle;
+                return Running();
+            case 11:
+                CheckLobby(context.Tree);
+                _wait = Settle;
+                return Running();
+            case 12:
+                Capture(context, "lobby");
+                FrontEnd.ShowOptions(context.Tree);
+                _wait = Settle;
+                return Running();
+            case 13:
+                Capture(context, "options");
+                CheckOptions(context.Tree);
+                _results = FrontEnd.ShowResults(context.Tree, SampleResult());
+                _bannerStart = context.ElapsedSeconds;
+                return Running();
+            case 14:
+                // Frames run faster than 60 Hz headless: wait for the banner's text (from its frame 5) by time.
+                if (context.ElapsedSeconds - _bannerStart < 1.0)
+                {
+                    _phase--;
+                    return Running();
+                }
+
+                Capture(context, "results-banner");
+                CheckBanner();
+                _results?.SkipBanner();
+                _wait = Settle;
+                return Running();
+            default:
+                Capture(context, "results");
+                CheckResults();
+                return _failures.Count == 0
+                    ? SmokeResult.Pass(string.Join(" ", _notes))
+                    : SmokeResult.Fail(string.Join("; ", _failures.Take(14)));
+        }
+    }
+
+    private SmokeResult Running() => _failures.Count > 0 ? SmokeResult.Fail(string.Join("; ", _failures.Take(14))) : SmokeResult.Running;
+
+    private SmokeResult Setup(SmokeContext context)
+    {
+        _layer = HudLayer.Create(out string? error);
+        if (_layer is null)
+        {
+            return SmokeResult.Fail(error ?? "no UI content");
+        }
+
+        _scene = new Scene();
+        _viewer = _scene.SpyPc;
+        // Arrives before the first HUD frame, as it can when joining an online match.
+        _layer.Receiver.Handle(_viewer, new GameCall("ReceiveLocalizedMessage")
+        {
+            Class = new ClassRef(HudMessages.DeathMessageClass),
+            Int = 0,
+            Pri1 = _scene.MercPc.PlayerReplicationInfo,
+            Pri2 = _scene.MatePawn.PlayerReplicationInfo,
+        });
+        HudAssets assets = _layer.Assets!;
+        CheckReticleSwaps(assets);
+        CheckScopeLayout(assets);
+        CheckActivityLifecycle();
+        CheckMercShutdownRecovery(assets);
+        CheckCloakEnergy(assets);
+        var reader = new HudSimReader(() => _viewer, (section, key, fallback) => assets.Localize("MagmaDynamic", section, key, fallback), _layer.Effects);
+        _layer.Source = new Composite(reader, s => _extra?.Invoke(s));
+        _layer.Controller = () => _viewer;
+        _layer.ShowFps = true;
+        // Headless the HUD draws for a fixed 1280 x 720 screen; a capture run draws for the real window.
+        _layer.ScreenSize = _captureDir is null ? Screen : null;
+        _layer.ProcessMode = Node.ProcessModeEnum.Disabled;   // stepped by the test
+        HudLayer projectionLayer = _layer;
+        _layer.Projector = p => _scene.Project(p,
+            projectionLayer.ScreenSize ?? projectionLayer.GetViewport()?.GetVisibleRect().Size ?? Screen);
+        context.Tree.Root.AddChild(_layer);
+        _chat = new ChatInput { ProcessMode = Node.ProcessModeEnum.Disabled };
+        context.Tree.Root.AddChild(_chat);
+        _layer.AddOverlay(_chat);
+        return SmokeResult.Running;
+    }
+
+    private void CheckCloakEnergy(HudAssets assets)
+    {
+        var scene = new Scene();
+        var spy = (SPawnAttaque)scene.SpyPawn;
+        var options = new HudOptions();
+        var page = new SpyHudPage(assets, options);
+        var snapshot = new HudSnapshot();
+        using var clock = scene.World.Level.CommandTime(1200, 20f, Dt);
+        spy.EnergyLevel = spy.EnergyLevelMax;
+
+        void ReadAndDraw()
+        {
+            snapshot.Clear();
+            HudSimReader.Read(scene.SpyPc, snapshot);
+            page.Update(snapshot, 0f);
+            page.Draw(Screen, snapshot);
+        }
+
+        ReadAndDraw();
+        Expect(!snapshot.CloakEngaged && !page.DrawList.Any("Energie/"), "full idle energy gauge stays hidden");
+        SpyCloak.SetActive(spy, true);
+        ReadAndDraw();
+        Expect(snapshot.CloakEngaged && spy.GlassEffect == 0 && page.DrawList.Any("Energie/"),
+            "full energy gauge appears on cloak request before the first visible fade sample");
+        foreach (int vision in new[] { 5, 36, 37, 38 })
+        {
+            scene.SpyPc.RendMap = vision;
+            ReadAndDraw();
+            Expect(snapshot.CloakEngaged && page.DrawList.Any("Energie/"), $"cloak energy remains visible in vision {vision}");
+        }
+
+        spy.GlassEffect = 128;
+        SpyCloak.SetActive(spy, false);
+        ReadAndDraw();
+        Expect(snapshot.CloakEngaged && page.DrawList.Any("Energie/"), "full energy gauge remains through decloak fade");
+        spy.GlassEffect = 0;
+        spy.BGlassEffect = 128f;
+        spy.PerturbationStartTime = scene.SpyPc.Level.TimeSeconds;
+        spy.PerturbationDuration = 1f;
+        ReadAndDraw();
+        Expect(snapshot.CloakEngaged && page.DrawList.Any("Energie/"), "a zero glass sample during flicker keeps energy visible");
+        spy.PerturbationDuration = 0f;
+        ReadAndDraw();
+        Expect(!snapshot.CloakEngaged && !page.DrawList.Any("Energie/"), "full energy hides after fade and flicker finish");
+
+        spy.EnergyLevel = 50f;
+        ReadAndDraw();
+        Color normal = page.DrawList.Find("Energie/jaugeinterne")!.Colors[0];
+        foreach (float energy in new[] { 0f, 19f, 20f })
+        {
+            spy.EnergyLevel = energy;
+            ReadAndDraw();
+            Color low = page.DrawList.Find("Energie/jaugeinterne")!.Colors[0];
+            Expect(low.R > low.G && low.G > low.B && Math.Abs(low.A - normal.A) < .001f,
+                $"{energy}% energy fill is amber without changing opacity");
+        }
+        spy.EnergyLevel = 20.01f;
+        ReadAndDraw();
+        Expect(page.DrawList.Find("Energie/jaugeinterne")!.Colors[0] == normal,
+            "energy fill restores its authored colour immediately above 20%");
+
+        spy.EnergyLevel = 20f;
+        ReadAndDraw();
+        Rect2 originalRect = page.DrawList.Find("Energie/jaugeinterne")!.Rect;
+        float originalAlpha = page.DrawList.Find("Energie/jaugeinterne")!.Colors[0].A;
+        var layout = new HudElementSettings { X = -.1f, Y = -.05f, Scale = 1.4f, Opacity = .4f };
+        options.Layout.Spy["Energie"] = layout;
+        ReadAndDraw();
+        MagmaDrawItem edited = page.DrawList.Find("Energie/jaugeinterne")!;
+        Expect(edited.Rect.Position.X < originalRect.Position.X && edited.Rect.Position.Y < originalRect.Position.Y &&
+            edited.Rect.Size.IsEqualApprox(originalRect.Size * layout.Scale), "low energy gauge retains editor position and scale");
+        Expect(Math.Abs(edited.Colors[0].A - originalAlpha * layout.Opacity) < .001f,
+            "low energy amber retains editor opacity");
+        layout.Visible = false;
+        ReadAndDraw();
+        Expect(!page.DrawList.Any("Energie/"), "editor visibility can hide the low energy gauge");
+        options.Layout.Spy.Clear();
+
+        snapshot.CloakEngaged = true;
+        snapshot.Clear();
+        Expect(!snapshot.CloakEngaged, "snapshot clear resets cloak engagement");
+        scene.SpyPc.Pawn = null;
+        ReadAndDraw();
+        Expect(!snapshot.CloakEngaged && !page.DrawList.Any("Energie/"), "losing the pawn clears cloak energy presentation");
+        scene.SpyPc.Pawn = spy;
+        spy.EnergyLevel = spy.EnergyLevelMax;
+        ReadAndDraw();
+        Expect(!snapshot.CloakEngaged && !page.DrawList.Any("Energie/"), "full respawn energy does not retain cloak presentation");
+        _notes.Add("Cloak energy: full activation/fade, goggles, amber threshold/restoration, editor layout and pawn reset checked.");
+    }
+
+    private void CheckActivityLifecycle()
+    {
+        var scene = new Scene();
+        HudLayer? layer = HudLayer.Create(out string? error);
+        if (layer is null) { _failures.Add(error ?? "activity HUD unavailable"); return; }
+        try
+        {
+            SPlayerController? owner = scene.SpyPc;
+            layer.Controller = () => owner;
+            layer.Source = new HudSimReader(() => owner);
+            layer.ScreenSize = Screen;
+            using var clock = scene.World.Level.CommandTime(1200, 20f, Dt);
+            var call = new GameCall("ReceiveLocalizedMessage")
+            {
+                Class = new ClassRef(HudMessages.DeathMessageClass), Int = 23,
+                Pri1 = scene.MercPc.PlayerReplicationInfo, Pri2 = scene.SpyPc.PlayerReplicationInfo,
+            };
+            layer.Receiver.Handle(scene.SpyPc, call);
+            layer.Step(Dt);
+            Expect(layer.Activity.Entries.Count == 1, "activity before first Step survives initialization");
+            scene.SpyHud.bHideHUD = true;
+            layer.Step(Dt);
+            Expect(layer.Activity.Entries.Count == 1 && layer.ActivityDrawer.VisibleCount == 0,
+                "hidden HUD suppresses drawing without discarding activity");
+            scene.SpyHud.bHideHUD = false;
+            scene.SpyPc.ViewTarget = scene.MatePawn;
+            scene.SpyPc.Pawn = null;
+            layer.Step(Dt);
+            Expect(layer.Activity.Entries.Count == 1, "pawn and spectator-target changes preserve activity");
+            scene.SpyPc.Pawn = scene.SpyPawn;
+            layer.Visible = false;
+            using (scene.World.Level.CommandTime(1620, 27f, Dt))
+            {
+                layer.Step(Dt);
+                Expect(layer.Activity.Entries.Count == 0, "hidden CanvasLayer still expires old activity");
+            }
+            layer.Visible = true;
+            layer.Receiver.Handle(scene.SpyPc, call);
+            owner = null;
+            layer.Step(Dt);
+            Expect(layer.Activity.Entries.Count == 0, "disconnect clears activity");
+        }
+        finally
+        {
+            layer.Free();
+        }
+    }
+
+    private void CheckMercShutdownRecovery(HudAssets assets)
+    {
+        // Reboot clips return to an idle frame containing Stop. A Goto must run that destination action.
+        var idle = new MercHudPage(assets).Area("Vie")!;
+        idle.SetVisible(true);
+        idle.SetFrame(MercHudPage.RebootFrame);
+        idle.Playing = true;
+        for (int i = 0; i < 240; i++) idle.Tick(Dt);
+        Expect(idle is { Frame: 0, Playing: false }, "Magma reboot returns to and stops on the idle key");
+
+        foreach (int fps in new[] { 30, 60, 144 })
+        {
+            var scene = new Scene();
+            HudLayer? layer = HudLayer.Create(out string? error);
+            if (layer is null) { _failures.Add(error ?? "shutdown HUD unavailable"); return; }
+            try
+            {
+                float dt = 1f / fps;
+                layer.Controller = () => scene.MercPc;
+                layer.Source = new Composite(new HudSimReader(() => scene.MercPc, effects: layer.Effects),
+                    s => s.Gadget = new HudGadget("Camera network", 1, "C_Default_2", 0, 0, Unavailable: true));
+                layer.ScreenSize = Screen;
+                layer.Options.Crosshair.Custom = true;
+                StepAt(20f);
+                // Prime the stock reticle's hit tint too; it must not replace its shutdown alpha.
+                layer.Options.Crosshair.Custom = false;
+                StepAt(20f);
+                Expect(layer.Merc!.DrawList.Any("Reticule/Reticule/FN2000/"), $"stock reticle visible before shutdown at {fps} fps");
+                Expect(layer.Merc.DrawList.Any("Extras/GadgetCross"), $"unavailable gadget indicator visible before shutdown at {fps} fps");
+                layer.Effects.Post(new SimEvent
+                {
+                    Kind = SimEventKind.Notify, ActorId = scene.MercPc.ActorId,
+                    What = OpenScct.Game.Combat.CombatFx.HudShutDown, Location = new FVector(1f, 12.5f, 0f),
+                });
+                scene.MercHud.bShutDown = true;
+                layer.Receiver.Handle(scene.MercPc, new GameCall("ReceiveLocalizedMessage")
+                {
+                    Class = new ClassRef(HudMessages.GameMessagesClass), Int = 62,
+                    Pri1 = scene.SpyPc.PlayerReplicationInfo, Pri2 = scene.MercPc.PlayerReplicationInfo,
+                });
+                for (int i = 0; i <= 4 * fps; i++) StepAt(20f + i * dt);
+                MercHudPage page = layer.Merc!;
+                Expect(page.ShuttingDown && page.DrawList.Find("Ammo/TextAmmoStock") is { Color.A: <= .01f },
+                    $"merc shutdown hides ammunition at {fps} fps");
+                Expect(!page.DrawList.Any("Radar/"), $"merc shutdown suppresses readable radar information at {fps} fps");
+                Expect(page.DrawList.Find("Gadget/Gadget") is { } icon && icon.Colors.All(c => c.A <= .01f),
+                    $"unavailable gadget respects shutdown alpha at {fps} fps (frame {page.Area("Gadget")?.FrameF}, " +
+                    $"alpha {string.Join(",", page.DrawList.Find("Gadget/Gadget")?.Colors.Select(c => c.A) ?? [])})");
+                Expect(page.DrawList.Items.Where(i => i.Path.StartsWith("Reticule/Reticule/FN2000/", StringComparison.Ordinal))
+                    .All(i => i.Colors.All(c => c.A <= .01f)), $"stock reticle respects shutdown alpha at {fps} fps " +
+                    $"(frame {page.Area("Reticule")?.FrameF}, items " + string.Join(",", page.DrawList.Items.Where(i =>
+                        i.Path.StartsWith("Reticule/Reticule/FN2000/", StringComparison.Ordinal)).Select(i => i.Path + ":" + i.Colors.Max(c => c.A))) + ")");
+                layer.Options.Crosshair.Custom = true;
+                StepAt(24f);
+                Expect(!page.DrawList.Any("Extras/") && layer.ActivityDrawer.VisibleCount == 0,
+                    $"merc shutdown suppresses custom crosshair, readouts and activity at {fps} fps");
+                for (int i = 4 * fps + 1; i <= 13 * fps; i++) StepAt(20f + i * dt);
+                Expect(!scene.MercHud.bShutDown, $"merc shutdown flag clears before reboot at {fps} fps");
+                ExpectContains(page.DrawList, "SystemMessage/messageSystem", scene.MercHud.TextRebooting);
+                for (int i = 13 * fps + 1; i <= 22 * fps; i++) StepAt(20f + i * dt);
+                Expect(!page.ShuttingDown && !page.Perturbed, $"merc shutdown and perturbation finish at {fps} fps");
+                Expect(page.DrawList.Any("Radar/"), $"radar returns after reboot at {fps} fps");
+                foreach (string name in new[] { "Vie", "Radar", "Ammo", "Gadget", "Chrono", "Reticule", "Pos_Merc" })
+                    Expect(page.Area(name) is { Frame: 0, Playing: false }, $"{name} stays restored after reboot at {fps} fps");
+                Expect(page.DrawList.Find("Ammo/TextAmmoStock") is { Color.A: > .9f } && page.DrawList.Any("Extras/Crosshair/"),
+                    $"ammunition and custom crosshair return after reboot at {fps} fps");
+                Expect(page.DrawList.Any("Extras/GadgetCross"), $"unavailable gadget indicator returns after reboot at {fps} fps");
+                layer.Options.Crosshair.Custom = false;
+                StepAt(42f);
+                Expect(page.DrawList.Items.Any(i => i.Path.StartsWith("Reticule/Reticule/FN2000/", StringComparison.Ordinal) &&
+                    i.Colors.Any(c => c.A > .9f)), $"stock reticle returns after reboot at {fps} fps");
+                layer.Effects.Post(new SimEvent
+                {
+                    Kind = SimEventKind.Notify, ActorId = scene.MercPc.ActorId,
+                    What = OpenScct.Game.Combat.CombatFx.SetHudPerturbationLength, Location = new FVector(4.5f, 0f, 0f),
+                });
+                StepAt(43f);
+                Expect(page.Perturbed && !page.ShuttingDown, $"body shock perturbs without shutdown at {fps} fps");
+                for (int i = 1; i <= 12 * fps; i++) StepAt(43f + i * dt);
+                Expect(!page.Perturbed && page.Area("Radar") is { Frame: 0, Playing: false } &&
+                    page.Area("Vie") is { Frame: 0, Playing: false }, $"body shock restores a stable HUD at {fps} fps");
+
+                void StepAt(float time)
+                {
+                    using var clock = scene.World.Level.CommandTime((int)(time * fps), time, dt);
+                    layer.Step(dt);
+                }
+            }
+            finally
+            {
+                layer.Free();
+            }
+        }
+    }
+
+    private void CheckScopeLayout(HudAssets assets)
+    {
+        var options = new HudOptions { SliceExtras = false };
+        var page = new MercBinocularsPage(assets, options);
+        var snapshot = new HudSnapshot { Valid = true, Side = HudSide.Merc };
+        snapshot.Binoculars.Mode = HudBinocularMode.Merc;
+        snapshot.Binoculars.Fov = 30f;
+        page.Enter();
+        page.Update(snapshot, 0f);
+        foreach (Vector2 screen in new[] { new Vector2(640, 480), new Vector2(2560, 1440), new Vector2(3440, 1440) })
+        {
+            page.Draw(screen, snapshot);
+            float scale = screen.Y / 480f;
+            MagmaDrawItem? ring = page.DrawList.Find("frame/border");
+            Expect(ring is { Points.Length: 4 } &&
+                Math.Abs((ring.Points[1].X - ring.Points[0].X) - (ring.PageRect.R - ring.PageRect.L) * scale) < 0.01f,
+                $"scope ring keeps height-based width at {screen}");
+            Expect(page.DrawList.Find("ZoomDef/zoomValue") is { XScale: 1f }, $"scope text is unstretched at {screen}");
+            MagmaDrawItem? axis = page.DrawList.Find("ZoomDef/horizontalAxis");
+            Expect(axis is { Points.Length: 4 } && axis.Points[0].X <= 0 && axis.Points[1].X >= screen.X,
+                $"scope axis covers viewport at {screen}");
+            Vector2 target = screen * 0.5f + new Vector2(30f * scale, 12f * scale);
+            Vector2? aim = HudBinocularPages.AimPoint(default(FVector), _ => target, screen);
+            Expect(aim is { } p && p.DistanceTo(new Vector2(350, 252)) < 0.01f,
+                $"scope projection matches centred optics at {screen}");
+        }
+        options.StretchHud = true;
+        page.Draw(new Vector2(2560, 1440), snapshot);
+        Expect(page.DrawList.Find("ZoomDef/zoomValue") is { XScale: > 1f }, "legacy stretched scope remains available");
+        GD.Print("SVM_HUD scope layout checks completed");
+    }
+
+    private void Run(int frames)
+    {
+        for (int i = 0; i < frames; i++)
+        {
+            _layer!.Step(Dt);
+        }
+    }
+
+    private float Now => _scene!.World.Level.TimeSeconds;
+
+    private void CheckLargeRosters()
+    {
+        HudLayer layer = _layer!;
+        Scene scene = _scene!;
+        GameReplicationInfo gri = scene.SpyPc.GameReplicationInfo!;
+        PlayerReplicationInfo[] original = gri.PRIArray.OfType<PlayerReplicationInfo>().ToArray();
+        TeamInfo?[] teams = original.Select(p => p.Team).ToArray();
+        EGameMode mode = gri.GameMode;
+        SPlayerController? viewer = _viewer;
+        Vector2? screen = layer.ScreenSize;
+        try
+        {
+            for (int team = 0; team < 2; team++)
+                for (int i = original.Count(p => p.Team?.TeamIndex == team); i < 12; i++)
+                    gri.PRIArray.Add(new PlayerReplicationInfo
+                    {
+                        PlayerName = (team == 0 ? "Spy " : "Merc ") + (i + 1),
+                        Team = gri.Teams[team], NumLives = 3, Ping = 20,
+                    });
+            _viewer = scene.SpyPc;
+            foreach (Vector2 size in new[] { new Vector2(640, 480), Screen })
+            {
+                layer.ScreenSize = size;
+                Run(2);
+                Expect(layer.Snapshot.Players.Count == 24 && layer.Snapshot.Score.Count == 24,
+                    "HUD reads all 24 players in a 12v12 match");
+                MagmaDrawList list = layer.Spy!.DrawList;
+                Expect(!list.Items.Any(i => i.Path.StartsWith("PCConnectedPlayers/")), "legacy compact roster is not drawn");
+                CheckBoardBounds(list, size);
+            }
+
+            foreach (PlayerReplicationInfo? pri in gri.PRIArray)
+                if (pri is not null) pri.Team = gri.Teams[1];
+            gri.GameMode = EGameMode.GM_MercDeathMatch;
+            layer.ScreenSize = new Vector2(640, 480);
+            Run(2);
+            Expect(layer.Snapshot.Score.Count == 24, "all players remain available to the full scoreboard");
+            CheckBoardBounds(layer.Spy!.DrawList, new Vector2(640, 480));
+
+            var data = new StrategicMapData([new StrategicMapFloor(0, "", null)],
+                new StrategicMapCamera(new(0, 0, 100), new(0, 0, -1), new(1, 0, 0), new(0, 1, 0), 90), "");
+            var map = new StrategicMapModel(data);
+            StrategicMapPosition[] mates = Enumerable.Range(1, 11)
+                .Select(i => new StrategicMapPosition(new StrategicMapPoint(i, 0, 0), 0)).ToArray();
+            map.Open(new StrategicMapPosition(default, 0), mates);
+            Expect(map.Mates.Count(m => m is not null) == 11 && map.Mates[10] is not null,
+                "strategic map displays all eleven teammates in a 12-player team");
+            map.Tick(new StrategicMapPosition(default, 0), mates.Take(1));
+            Expect(map.Mates.Count(m => m is not null) == 1, "strategic map clears departed teammates from expanded slots");
+            _notes.Add("24-player HUD and 12-player strategic map checked.");
+        }
+        finally
+        {
+            gri.PRIArray.Clear();
+            for (int i = 0; i < original.Length; i++)
+            {
+                original[i].Team = teams[i];
+                gri.PRIArray.Add(original[i]);
+            }
+            gri.GameMode = mode;
+            _viewer = viewer;
+            layer.ScreenSize = screen;
+            Run(2);
+        }
+    }
+
+    private void CheckBoardBounds(MagmaDrawList list, Vector2 screen)
+    {
+        foreach (MagmaDrawItem item in list.Items.Where(i => i.Path.StartsWith("Extras/BoardBack", StringComparison.Ordinal)))
+            Expect(item.Rect.Position.X >= -1 && item.Rect.Position.Y >= -1 &&
+                item.Rect.End.X <= screen.X + 1 && item.Rect.End.Y <= screen.Y + 1,
+                $"expanded scoreboard stays inside {screen}: {item.Rect}");
+    }
+
+    // ---- spy page -------------------------------------------------------------------------------------------
+
+    private void CheckSpy()
+    {
+        HudLayer layer = _layer!;
+        Scene s = _scene!;
+        HudSnapshot snap = layer.Snapshot;
+        Expect(layer.ActivePage is SpyHudPage, "spy page active");
+        Expect(snap.Side == HudSide.Spy, $"side {snap.Side}");
+        Expect(snap.Health == 60 && snap.EnergyLevel == 50f && snap.EnergyLevelMax == 100, $"spy health {snap.Health} energy {snap.EnergyLevel}/{snap.EnergyLevelMax}");
+        MagmaDrawList list = layer.Spy!.DrawList;
+        ExpectText(list, "Chrono/Chrono", "8:45");
+        ExpectText(list, "Objectif/Story/Objectif", "3");
+        ExpectText(list, "ChronoHack/Chrono_Hack", "0:05");
+        ExpectText(list, "ChronoObjectif/Chrono_Objectif", "0:07");
+        ExpectText(list, "ChronoAlarm/Chrono_Alarm", "0:25");
+        ExpectText(list, "Gadget/NomGadget", s.Gadget.ItemName);
+        ExpectText(list, "Gadget/NbGadget", "3");
+        ExpectContains(list, "SystemMessage/messageSystem", "Laboratory : Neutralization in progress");
+        Expect(list.TextOf("SystemMessage/messageSystem")?.StartsWith('\n') == true, "stack text starts with the driver's line break");
+        ExpectContains(list, "GameMessage/messageGame", s.Objective.Description);
+        // Combat activity is immediate and independent of the mission queue.
+        Expect(s.SpyHud.GameMessageQueue.Count == 1 && layer.Activity.Entries.Count == 1 &&
+            layer.Activity.Entries[0].Actor?.Name == "Shadownet" && layer.Activity.Entries[0].Victim?.Name == "Ghost",
+            "kill arrives immediately in the activity feed without joining the mission queue");
+        Expect(layer.ActivityDrawer.VisibleCount == 1, "early kill is visible on the first player HUD");
+        // Gauges: fill top = min(133, 137 - value x 1.33) under the area origin (y 230).
+        ExpectTop(list, "Vie/jaugeinterne", 230f + 137f - 0.60f * 133f);
+        ExpectTop(list, "Energie/jaugeinterne", 230f + 137f - 0.50f * 133f);
+        Expect(list.Any("Spy_Speed/"), "sneak icon drawn");
+        // The coop icons follow the decoded spy driver (InteractionPrompts): its mate search needs the movement
+        // physics, which this synthetic scene has none of, so the ready mate here shows nothing. The play-team smoke
+        // checks the drawn icons on SteeE.
+        Expect(!list.Any("Coop/Coop1/") && !list.Any("Coop/Coop2/") && !list.Any("Coop/Coop3/") && !list.Any("Coop/Coop4/"),
+            "no coop icon without movement physics");
+        Expect(list.Find("Gadget/Gadget") is { } icon && icon.Texture.Equals("HUDConfig", StringComparison.OrdinalIgnoreCase),
+            "gadget icon from HUDConfig");
+        // Anchors: the gauge is right of the page centre, the timer too; the message areas straddle it.
+        Expect(list.Find("Vie/jaugeinterne")?.Anchor == MagmaAnchor.Right, "health gauge right anchored");
+        Expect(list.Find("SystemMessage/messageSystem")?.Anchor == MagmaAnchor.Center, "messages centred");
+        Expect(layer.Spy.Radar?.Teammates == 1, $"spy radar teammates {layer.Spy.Radar?.Teammates}");
+        // Objective markers: the terminal in front of the spy, red while hacked, with its percent or distance.
+        HudObjective? lab = snap.Objectives.Find(o => o.Name == "Laboratory");
+        Expect(layer.Markers.DrawList.Find("ER/Trigger/Laboratory/icon") is { } marker && marker.Colors[0].R > marker.Colors[0].G,
+            $"hacked terminal marker drawn red (markers {layer.Markers.DrawList.Items.Count}, taken {lab?.Taken}, " +
+            $"at {s.Project(lab?.Location ?? default)}, pawn {snap.PawnLocation})");
+        Expect(layer.Markers.DrawList.TextOf("ER/Trigger/Laboratory/state") == s.SpyHud.ObjectiveHackingSpy, "marker shows Under hacking");
+        Expect(layer.Markers.DrawList.Find("GPO/1/icon") is { } gpo && gpo.Colors[0].R > gpo.Colors[0].B, "GPO marker drawn orange");
+        Expect(snap.Objectives.Exists(o => o.Name == "Laboratory" && o.Percent == 60), "terminal capture 60 %");
+        // Console line (TeamMessage) and the damage wash (ClientDamageHudEffect: red 120 for a spy).
+        ExpectItemText(layer.Items, "Console/0", "Ghost: on my way");
+        Expect(layer.SfxDrawList.Items.Find(i => i.Path.StartsWith("Sfx/", StringComparison.Ordinal)) is { } wash &&
+               Math.Abs(wash.Colors[0].R - HudSfx.Red.R) < 0.01f && Math.Abs(wash.Colors[0].A - 120f / 255f) < 0.01f,
+            $"red damage wash ({layer.SfxDrawList.Items.Count} sfx items)");
+        Expect(layer.Items.Any(i => i.Path == "Fps"), "frame-rate readout drawn");
+        int lastActivity = layer.Items.ToList().FindLastIndex(i => layer.ActivityDrawer.DrawList.Items.Contains(i));
+        int firstWash = layer.Items.ToList().FindIndex(i => i.Path.StartsWith("Sfx/", StringComparison.Ordinal));
+        Expect(lastActivity >= 0 && firstWash > lastActivity, "screen washes cover the activity feed");
+        CheckAssets(layer);
+        CheckTeammateNames();
+        _notes.Add(string.Create(CultureInfo.InvariantCulture, $"spy={list.Items.Count}"));
+    }
+
+    private void CheckTeammateNames()
+    {
+        Scene scene = _scene!;
+        SBasePawn mate = (SBasePawn)scene.MatePawn;
+        int health = mate.Health;
+        PawnType side = mate.SPawnType;
+        bool spectator = mate.PlayerReplicationInfo!.bOnlySpectator;
+        GameReplicationInfo gri = scene.MercPc.GameReplicationInfo!;
+        EGameMode mode = gri.GameMode;
+        var names = new HudTeammateNames { ShowSpy = true, ShowHealth = true, Opacity = 0.5f };
+        void Draw(SPlayerController pc) => names.Draw(pc, _ => Screen / 2f, Screen);
+        try
+        {
+            mate.Health = 63;
+            Draw(scene.SpyPc);
+            Expect(names.DrawList.Items.Count == 1 && names.DrawList.TextOf("TeammateNames/0") == "Ghost (63 HP)",
+                "HP appears beside the friendly name without exposing own or enemy health");
+            Color colour = names.DrawList.Items[0].Color;
+            mate.Health = 27;
+            Draw(scene.SpyPc);
+            Expect(names.DrawList.TextOf("TeammateNames/0") == "Ghost (27 HP)", "teammate HP follows current pawn health");
+            names.ShowHealth = false;
+            Draw(scene.SpyPc);
+            Expect(names.DrawList.TextOf("TeammateNames/0") == "Ghost" && names.DrawList.Items[0].Color == colour,
+                "disabling HP restores the plain name and keeps the same opacity and distance fade");
+            names.ShowHealth = true;
+            names.ShowSpy = false;
+            Draw(scene.SpyPc);
+            Expect(names.DrawList.Items.Count == 0, "HP does not enable disabled role nametags");
+            names.ShowSpy = true;
+            mate.Health = 0;
+            Draw(scene.SpyPc);
+            Expect(names.DrawList.Items.Count == 0, "dead teammates have no name or HP label");
+            mate.Health = 125;
+            mate.PlayerReplicationInfo.bOnlySpectator = true;
+            Draw(scene.SpyPc);
+            Expect(names.DrawList.Items.Count == 0, "spectators have no name or HP label");
+            mate.PlayerReplicationInfo.bOnlySpectator = false;
+            mate.SPawnType = scene.MercPawn.SPawnType;
+            Draw(scene.MercPc);
+            Expect(names.DrawList.Items.Count == 0, "mercenary names retain their independent visibility option");
+            names.ShowMerc = true;
+            Draw(scene.MercPc);
+            Expect(names.DrawList.Items.Count == 1 && names.DrawList.TextOf("TeammateNames/0") == "Ghost (125 HP)",
+                "mercenary HP uses the actual value without assuming a 100 HP maximum");
+            gri.GameMode = EGameMode.GM_MercDeathMatch;
+            Expect(scene.MercPc.IsMercDeathMatch, "replicated Merc Deathmatch mode reaches the nametag viewer");
+            Draw(scene.MercPc);
+            Expect(names.DrawList.Items.Count == 0, "Merc Deathmatch opponents have no teammate name or HP labels");
+            names.ShowHealth = false;
+            Draw(scene.MercPc);
+            Expect(names.DrawList.Items.Count == 0, "Merc Deathmatch opponents also have no plain teammate labels");
+            gri.GameMode = mode;
+            names.ShowHealth = true;
+            Draw(scene.MercPc);
+            Expect(names.DrawList.TextOf("TeammateNames/0") == "Ghost (125 HP)",
+                "returning to a team mode restores friendly names and HP");
+            names.Opacity = 0;
+            Draw(scene.MercPc);
+            Expect(names.DrawList.Items.Count == 0, "zero opacity hides the entire teammate name and HP label");
+        }
+        finally
+        {
+            mate.Health = health;
+            mate.SPawnType = side;
+            mate.PlayerReplicationInfo.bOnlySpectator = spectator;
+            gri.GameMode = mode;
+        }
+    }
+
+    /// <summary>
+    /// The spy page at other window sizes (1920 x 1080, 2560 x 1080, 1024 x 768): every text the page draws, measured
+    /// with its font as the canvas lays it out, ends inside the screen (the timer sits at the right edge).
+    /// </summary>
+    private void CheckTextInsideScreens()
+    {
+        HudLayer layer = _layer!;
+        Vector2? saved = layer.ScreenSize;
+        foreach (Vector2 screen in new[] { new Vector2(1920f, 1080f), new Vector2(2560f, 1080f), new Vector2(1024f, 768f), Screen })
+        {
+            layer.ScreenSize = screen;
+            Run(2);
+            foreach (MagmaDrawItem item in layer.Spy!.DrawList.Items)
+            {
+                if (item.Kind != MagmaWidgetKind.Text || item.Text.Length == 0 || layer.Assets?.Font(item.Font) is not { } font)
+                {
+                    continue;
+                }
+
+                foreach ((string line, float _) in MagmaCanvas.Layout(font, item))
+                {
+                    float width = font.Measure(line, item.HeightPx, item.XScale, item.TrackingPx);
+                    float x = item.Align switch
+                    {
+                        MagmaAlign.Center => item.Rect.Position.X + ((item.Rect.Size.X - width) * 0.5f),
+                        MagmaAlign.Right => item.Rect.End.X - width,
+                        _ => item.Rect.Position.X,
+                    };
+                    // The glyphs as the canvas draws them (DrawRun): each at its advance, its quad from XOff over W.
+                    float k = item.HeightPx / font.Size * item.XScale;
+                    float pen = x, right = x;
+                    foreach (char ch in line)
+                    {
+                        if (font.TryGlyph(ch, out MagmaGlyph g) && g.W > 0)
+                        {
+                            right = MathF.Max(right, pen + ((g.XOff + g.W) * k));
+                        }
+
+                        pen += (font.AdvanceOf(ch) * k) + item.TrackingPx;
+                    }
+
+                    Expect(x >= -1f && right <= screen.X + 1f,
+                        string.Create(CultureInfo.InvariantCulture, $"{item.Path} '{line}' drawn at x {x:F0} to {right:F0} inside a {screen.X:F0} x {screen.Y:F0} screen"));
+                }
+            }
+        }
+
+        // The timer (an AUTOSIZED text) sits under the objective counter's figure, not against the screen edge.
+        layer.ScreenSize = Screen;
+        Run(2);
+        MagmaDrawList list = layer.Spy!.DrawList;
+        if (list.Find("Chrono/Chrono") is { } chrono && list.Find("Objectif/Story/Objectif") is { } counter &&
+            layer.Assets?.Font(chrono.Font) is { } chronoFont)
+        {
+            float width = chronoFont.Measure(chrono.Text, chrono.HeightPx, chrono.XScale, chrono.TrackingPx);
+            float x = chrono.Align switch
+            {
+                MagmaAlign.Center => chrono.Rect.Position.X + ((chrono.Rect.Size.X - width) * 0.5f),
+                MagmaAlign.Right => chrono.Rect.End.X - width,
+                _ => chrono.Rect.Position.X,
+            };
+            float centre = x + (width * 0.5f);
+            float counterCentre = counter.Rect.Position.X + (counter.Rect.Size.X * 0.5f);
+            float s = Screen.Y / MagmaRenderer.PageHeight;
+            GD.Print(string.Create(CultureInfo.InvariantCulture, $"SVM_HUD timer '{chrono.Text}' rect {chrono.Rect} centre {centre:F0}; counter '{counter.Text}' rect {counter.Rect} centre {counterCentre:F0}"));
+            Expect(Math.Abs(centre - counterCentre) <= 30f * s,
+                string.Create(CultureInfo.InvariantCulture, $"timer centred at x {centre:F0} under the objective counter at x {counterCentre:F0} (within {30f * s:F0})"));
+        }
+        else
+        {
+            Expect(false, "timer and objective counter drawn on the spy page");
+        }
+
+        layer.ScreenSize = saved;
+        Run(2);
+    }
+
+    private void CheckInteractionList()
+    {
+        _extra = s =>
+        {
+            s.Interactions.Clear();
+            s.Interactions.AddRange(["Use", "Heal Mate", "Exit"]);
+            s.SelectedInteraction = 1;
+            s.InteractionFocus = true;
+            s.ShowInteractions = true;
+        };
+        Run(20);
+        MagmaDrawList list = _layer!.Interaction!.DrawList;
+        ExpectText(list, "ListChoix#0/Choice", "Use");
+        ExpectText(list, "ListChoix#2/Choice", "Exit");
+        Expect(list.Find("ListChoix#1/PCButtonChoice") is not null, "selected row arrow");
+        Expect(list.Find("ListChoix#0/PCButtonChoice") is null, "unselected row has no arrow");
+        Expect(list.Find("ListChoix#1/highlight") is { Blend: MagmaBlend.Dodge }, "selected row dodge highlight");
+        Expect(list.Find("Fond/Element") is { Anchor: MagmaAnchor.Right }, "list frame right anchored");
+        _notes.Add(string.Create(CultureInfo.InvariantCulture, $"list={list.Items.Count}"));
+        _extra = null;
+    }
+
+    /// <summary>The chat line, the kill feed's turn, the Enhanced Reality switch.</summary>
+    private void CheckSpyExtras()
+    {
+        HudLayer layer = _layer!;
+        Scene s = _scene!;
+        ChatInput chat = _chat!;
+        chat.Open(OpenScct.Net.EChatScope.TeamSay);
+        chat.Type('g');
+        chat.Type('o');
+        chat.Type('`');
+        Run(1);
+        Expect(chat.Panel.Expanded && chat.Panel.Draft == "go`" && chat.Panel.Channel == ChatChannel.Team,
+            "native team chat editor keeps printable punctuation and the selected channel");
+        chat.Backspace();
+        chat.Backspace();
+        chat.Backspace();
+        chat.Type('o');
+        chat.Type('k');
+        chat.Submit();
+        Expect(!chat.IsOpen && chat.Sent.Count == 1 && chat.Sent[0] == (OpenScct.Net.EChatScope.TeamSay, "ok"), $"chat line sent ({chat.Sent.Count})");
+        Run(1);
+        Expect(!chat.Panel.Expanded, "native chat editor closed");
+
+        // Expiring a mission notice cannot reveal a second copy of the combat event.
+        s.SpyHud.GameMessageEndTime = Now - 1f;
+        Run(2);
+        Expect(!layer.Spy!.DrawList.Any("GameMessage/messageGame") && layer.Activity.Entries.Count == 1,
+            "combat event stays independent of the mission queue");
+
+        // F9: Enhanced Reality off, then on again.
+        HudCommands.SwitchEnhancedReality(s.SpyPc, layer.Options);
+        Run(2);
+        Expect(s.SpyHud.EnhancedRealityLevel == 0 && layer.Markers.DrawList.Find("ER/Trigger/Laboratory/icon") is null, "Enhanced Reality off hides the markers");
+        ExpectContains(layer.Spy.DrawList, "SystemMessage/messageSystem", s.SpyPc.EROff);
+        HudCommands.SwitchEnhancedReality(s.SpyPc, layer.Options);
+        Run(2);
+        Expect(s.SpyHud.EnhancedRealityLevel == 1 && layer.Markers.DrawList.Find("ER/Trigger/Laboratory/icon") is not null, "Enhanced Reality back on");
+    }
+
+    // ---- merc page ------------------------------------------------------------------------------------------
+
+    private void CheckReticleSwaps(HudAssets assets)
+    {
+        var merc = new MercHudPage(assets);
+        var snap = new HudSnapshot { Valid = true, HasPawn = true, HasWeapon = true, ShowReticle = true };
+        merc.Update(snap, 0f);
+        // Weapon changes need not produce a hidden frame between the primary and sidearm.
+        foreach (HudWeaponKind kind in new[] { HudWeaponKind.Uzi, HudWeaponKind.Rifle, HudWeaponKind.Shotgun, HudWeaponKind.Rifle })
+        {
+            snap.WeaponKind = kind;
+            merc.Update(snap, 0f);
+            MagmaNode selected = merc.Area("Reticule/Reticule")!;
+            string expectedArea = kind switch
+            {
+                HudWeaponKind.Uzi => MercHudPage.UziReticleArea,
+                HudWeaponKind.Shotgun => MercHudPage.ShotgunReticleArea,
+                _ => MercHudPage.ReticleArea,
+            };
+            Expect(selected.Children.Count(c => c.Visible) == 1 && selected.FindArea(expectedArea) is { Visible: true },
+                $"only {kind} reticle visible after a weapon swap without a hidden frame");
+        }
+        merc.Options.Crosshair.Custom = true;
+        merc.Update(snap, 0f);
+        Expect(merc.Area("Reticule/Reticule")!.Children.All(c => !c.Visible), "custom crosshair hides all stock reticles after swapping");
+        merc.Options.Crosshair.Custom = false;
+        snap.WeaponKind = HudWeaponKind.Rifle;
+        merc.Update(snap, 0f);
+        Expect(merc.Area("Reticule/Reticule")!.Children.Count(c => c.Visible) == 1,
+            "stock reticle restored after disabling custom crosshair");
+        if (_failures.Count == 0)
+        {
+            GD.Print("SVM_HUD reticle swaps OK");
+        }
+    }
+
+    private void CheckMerc()
+    {
+        CheckSleepingTeammateName();
+        HudLayer layer = _layer!;
+        Scene s = _scene!;
+        HudSnapshot snap = layer.Snapshot;
+        Expect(layer.ActivePage is MercHudPage, "merc page active");
+        MagmaDrawList list = layer.Merc!.DrawList;
+        Expect(!layer.Spy!.Root.Visible, "spy page hidden for the merc");
+        ExpectText(list, "Ammo/TextAmmoStock", "17/92");
+        ExpectText(list, "Extras/FireMode", s.Rifle.GetROFName());
+        ExpectText(list, "Extras/Vision", "Motion tracking");
+        ExpectText(list, "Chrono/Chrono", "8:45");
+        ExpectText(list, "Objectif/Story/Objectif", "3");
+        ExpectText(list, "ChronoObjectif/Chrono_Objectif", "0:07");
+        ExpectText(list, "ReticuleMessage/messageReticule", "Reloading");
+        ExpectContains(list, "SystemMessage/messageSystem", "Hacking in progress...");
+        ExpectTop(list, "Vie/jaugeinterne", 230f + 137f - 1.00f * 133f);
+        Expect(snap.FireMode == (int)SRateOfFireMode.ROF_Burst && snap.VisionMode == 37, $"merc fire mode {snap.FireMode} vision {snap.VisionMode}");
+        Expect(layer.Merc.Radar?.Alarms == 1, $"merc radar alarms {layer.Merc.Radar?.Alarms}");
+        Expect(list.Any("Radar/IconAlarm1"), "hacked terminal on the merc radar");
+        Expect(list.Any("Reticule/Reticule/FN2000/"), "rifle reticle drawn");
+        Expect(!list.Any("Reticule/Reticule/UZI/"), "other reticles hidden");
+        Expect(list.Any("Reticule/arrowSoundLeft/") && !list.Any("Reticule/arrowSoundRight/"), "left sound arrow only");
+        Expect(s.MercHud.LeftArrowTime > Now && s.MercHud.LeftArrowInt > 0.6f && s.MercHud.TopArrowTime == 0f,
+            $"noise to the left: left {s.MercHud.LeftArrowTime} ({s.MercHud.LeftArrowInt}) top {s.MercHud.TopArrowTime}");
+        Expect(list.Any("AlertMessage/"), "alert box with an objective countdown");
+        Expect(list.Any("Pos_Merc/Element/"), "posture icon drawn");
+        Expect(list.Find("Ammo/TextAmmoStock")?.Anchor == MagmaAnchor.Left, "ammo left anchored");
+        // Widescreen off: the whole page is stretched as in the unpatched game, then back.
+        layer.Options.StretchHud = true;
+        Run(1);
+        Expect(layer.Merc.DrawList.Find("Ammo/TextAmmoStock")?.Anchor == MagmaAnchor.Stretch, "widescreen off stretches the page");
+        layer.Options.StretchHud = false;
+        Run(1);
+        Expect(layer.Merc.DrawList.Find("Ammo/TextAmmoStock")?.Anchor == MagmaAnchor.Left, "widescreen on anchors again");
+        Expect(layer.Markers.DrawList.Items.Count == 0, "no objective markers for mercs");
+        var alarmLocation = new FVector(1000f, 120f, 40f);
+        s.MercPc.AddGPOOnHud(alarmLocation);
+        Run(1);
+        Expect(layer.Markers.DrawList.Find("GPO/1/icon") is { } alarmMarker && alarmMarker.Colors[0].R > alarmMarker.Colors[0].B,
+            "merc sees the orange alarm diamond");
+        Expect(!layer.Markers.DrawList.Any("ER/"), "merc alarm does not enable spy objective markers");
+        s.MercHud.EnhancedRealityLevel = 0;
+        Run(1);
+        Expect(layer.Markers.DrawList.Find("GPO/1/icon") is not null, "merc alarm diamond is independent of Enhanced Reality");
+        s.MercPc.RemoveGPOFromHud(alarmLocation);
+        s.MercHud.EnhancedRealityLevel = 1;
+        Run(1);
+        Expect(layer.Markers.DrawList.Find("GPO/1/icon") is null, "merc alarm diamond clears at stand-down");
+        Expect(layer.Interaction!.DrawList.Items.Count == 0, "no interaction list for mercs");
+        Expect(!layer.Merc.Root.Children.Any(c => c.Name == "Flash" && c.Visible), "no white-out in motion vision (immune)");
+        CheckAssets(layer);
+        _notes.Add(string.Create(CultureInfo.InvariantCulture, $"merc={list.Items.Count}"));
+    }
+
+    private void CheckSleepingTeammateName()
+    {
+        var mate = _scene!.World.Level.SpawnActor(new SPawnDefense_1Mesh(), new FVector(500, 0, 0), default)!;
+        mate.Health = 100;
+        mate.PlayerReplicationInfo = new PlayerReplicationInfo { PlayerName = "Sleeping teammate" };
+        var names = new HudTeammateNames { ShowMerc = true, ShowSpy = true, Opacity = 1 };
+        void Draw() => names.Draw(_scene.MercPc, _ => new Vector2(640, 360), Screen);
+        bool HasSleep() => names.DrawList.Items.Any(i => i.Path.EndsWith("/Sleep", StringComparison.Ordinal));
+        mate.bSleeping = true;
+        Draw();
+        Expect(HasSleep(), "Merc teammate nametag shows a sleeping icon");
+        mate.bSleeping = false;
+        Draw();
+        Expect(!HasSleep(), "Waking removes the teammate sleeping icon");
+        mate.bSleeping = true;
+        mate.Health = 0;
+        Draw();
+        Expect(!HasSleep(), "Dead teammates do not keep a sleeping icon");
+        mate.Destroy();
+    }
+
+    /// <summary>The merc page's effects, one after another.</summary>
+    private void CheckMercEffects()
+    {
+        HudLayer layer = _layer!;
+        Scene s = _scene!;
+        MercHudPage merc = layer.Merc!;
+        Expect(layer.Activity.Entries.Count == 0, "switching controller clears the previous player's activity");
+        layer.Receiver.Handle(s.MercPc, new GameCall("ReceiveLocalizedMessage")
+        {
+            Class = new ClassRef(HudMessages.GameMessagesClass), Int = 62,
+            Pri1 = s.SpyPc.PlayerReplicationInfo, Pri2 = s.MercPc.PlayerReplicationInfo,
+        });
+
+        s.MercPawn.bStickyShocking = true;
+        s.MercPawn.bStickyShockedInTheHead = true;
+        Run(3);
+        Expect(merc.DrawList.Any("A_StickyShock/") && !merc.DrawList.Any("A_StickyShock2/"), "head sticky shock drawn");
+        s.MercPawn.bStickyShocking = false;
+        Run(1);
+        Expect(!merc.DrawList.Any("A_StickyShock"), "sticky shock gone");
+
+        s.MercPawn.CurrentRainVolume = s.Mission;
+        Run(3);
+        Expect(merc.Area("gouttes/Gouttes") is { Visible: true }, "droplets while wet");
+        s.MercPawn.CurrentRainVolume = null;
+
+        s.MercPc.RendMap = 0;
+        layer.Effects.ClientDamageHudEffect(s.MercPc, (int)SDamageType.SDTFlash, Now);
+        Run(2);
+        Expect(merc.DrawList.Any("Flash/Flash/"), "flash-bang white-out drawn");
+        int lastActivity = layer.Items.ToList().FindLastIndex(i => layer.ActivityDrawer.DrawList.Items.Contains(i));
+        int firstFlash = layer.Items.ToList().FindIndex(i => i.Path.StartsWith("Flash/", StringComparison.Ordinal));
+        Expect(lastActivity >= 0 && firstFlash > lastActivity, "merc white-out covers the activity feed");
+        s.MercPc.RendMap = 37;
+
+        layer.Effects.SetHudProjection(1, 5, 10, Now);
+        Run(2);
+        Expect(merc.DrawList.Any("Mousse/Element/"), "extinguisher foam drawn");
+        layer.Effects.Reset();
+        Run(2);
+        Expect(!merc.DrawList.Any("Mousse/"), "foam gone");
+
+        s.MercHud.bPerturbation = true;
+        s.MercHud.TimetobeginPerturb = Now;
+        s.MercHud.HudPerturbationLength = 100f;
+        Run(2);
+        Expect(merc.Perturbed && merc.Area("Vie") is { Frame: >= MercHudPage.PerturbedFrame }, $"perturbed areas at frame 60+ ({merc.Area("Vie")?.Frame})");
+        s.MercHud.bPerturbation = false;
+        Run(1);
+        Expect(!merc.Perturbed && merc.Area("Vie") is { Frame: 0 }, $"perturbation over ({merc.Area("Vie")?.Frame})");
+
+        layer.Effects.Post(new SimEvent { Kind = SimEventKind.Notify, ActorId = s.MercPc.ActorId, What = OpenScct.Game.Combat.CombatFx.HudShutDown, Location = new FVector(1f, 9f, 0f) });
+        Run(2);
+        Expect(merc.ShuttingDown && merc.Area("Vie") is { Frame: >= MercHudPage.ShutDownFrame }, "HUD shutdown runs");
+        ExpectContains(merc.DrawList, "SystemMessage/messageSystem", s.MercHud.TextMalfunction);
+        _notes.Add("effects=7");
+    }
+
+    /// <summary>Counter variants and the canvas extras, through the reader and the snapshot.</summary>
+    // ---- binoculars -----------------------------------------------------------------------------------------
+
+    private Name _spyState;
+    private Name _mercState;
+
+    /// <summary>The spy's binocular page (spec/hud/binoculars.md rules 2 to 7) and its objective markers (12 to 17).</summary>
+    private void CheckSpyBinoculars()
+    {
+        HudLayer layer = _layer!;
+        Scene s = _scene!;
+        _viewer = s.SpyPc;
+
+        // The drop zone above the reticle gets the lock panel, the hacked terminal an icon, the generator an arrow.
+        s.Terminal.bActive = true;
+        s.Generator.bActive = true;
+
+        _spyState = s.SpyPc.GetStateName();
+        s.SpyPc.bBinocularVision = true;
+        s.SpyPc.GotoState(new Name("s_Binoculars_Att"));
+        Expect(s.SpyPc.IsInState(new Name("s_Binoculars_Att")), $"spy in s_Binoculars_Att ({s.SpyPc.GetStateName()})");
+        s.SpyPc.VoiceChatTarget = s.MercPawn;
+        Run(3);
+        Expect(layer.ActivePage is SpyBinocularsPage, $"spy binocular page active ({layer.ActivePage?.GetType().Name})");
+        Expect(!layer.Spy!.Root.Visible, "spy page hidden in the binoculars");
+        SpyBinocularsPage page = layer.Binoculars!.Spy!;
+        MagmaDrawList list = page.DrawList;
+        ExpectText(list, "ZoomAtt/ZoomValue", "x2");
+        ExpectLeft(list, "ZoomAtt/zoomInside", 317f - SpyBinocularsPage.ZoomMarkerStep);
+        ExpectText(list, "ZoomAtt/PCtextZoomAtt1Binding", "Mouse Wheel Up / Mouse Wheel Down");
+        ExpectText(list, "ZoomAtt/PCtextZoomAtt2Binding", "B");
+        Expect(list.Find("ZoomAtt/textZoomAtt1") is null && list.Find("ZoomAtt/IconZoomUp") is null && list.Find("ZoomAtt/PCtextZoomAtt3") is null,
+            "console-only binocular texts hidden");
+        Expect(list.Any("frame/") && list.Any("SoundAnimation/"), "binocular frame and sound meter drawn");
+        ExpectText(list, "Speak/_TextSpeakATT", "Hack");
+        Expect(page.Markers.Candidate == "Drop zone", $"lock panel on the drop zone ({page.Markers.Candidate ?? "none"})");
+        Expect(page.Markers.Paths().Count(p => p.EndsWith("/panel", StringComparison.Ordinal)) == 1, "one lock panel");
+        Expect(page.Markers.Paths().Any(p => p.EndsWith("/icon", StringComparison.Ordinal)), "terminal marker icon in the binoculars");
+        Expect(page.Markers.Paths().Any(p => p.EndsWith("/arrow", StringComparison.Ordinal)), "off-screen arrow in the binoculars");
+        ExpectItemText(layer.Items, "BinER/" + (1 + MarkerIndex(page, "Drop zone")).ToString(CultureInfo.InvariantCulture) + "/hint",
+            s.SpyHud.BinocularsAttLock.Replace(HudBinocularMarkers.UseToken, layer.Assets!.KeyDisplayName("Shift"), StringComparison.Ordinal));
+        Expect(layer.Markers.DrawList.Items.Count == 0, "the normal ER markers are not drawn in the binoculars");
+
+        // Zoom to x6: the label and the marker move right.
+        s.SpyPc.fBinocularVisionFOV = 10f;
+        Run(2);
+        ExpectText(list, "ZoomAtt/ZoomValue", "x6");
+        ExpectLeft(list, "ZoomAtt/zoomInside", 317f + SpyBinocularsPage.ZoomMarkerStep);
+        s.SpyPc.VoiceChatTarget = null;
+        Run(1);
+        Expect(list.Find("Speak/_TextSpeakATT") is null, "Hack prompt hidden without a voice target");
+        CheckAssets(layer);
+        _notes.Add(string.Create(CultureInfo.InvariantCulture, $"bino-spy={list.Items.Count}"));
+    }
+
+    /// <summary>Index of the binocular target whose lock panel shows <paramref name="name"/> (the drop zone).</summary>
+    private int MarkerIndex(SpyBinocularsPage page, string name)
+    {
+        List<HudBinocularTarget> targets = _layer!.Snapshot.Binoculars.Targets;
+        for (int i = 0; i < targets.Count; i++)
+        {
+            if (targets[i].Kind == HudObjectiveKind.DropZone)
+            {
+                return i;
+            }
+        }
+
+        _ = page;
+        _failures.Add($"no binocular target for {name}");
+        return 0;
+    }
+
+    /// <summary>The merc's scope page (spec/hud/binoculars.md rules 2, 3 and 8 to 11).</summary>
+    private void CheckMercBinoculars()
+    {
+        HudLayer layer = _layer!;
+        Scene s = _scene!;
+        _spyState = _spyState == default ? new Name("PlayerWalking") : _spyState;
+        s.SpyPc.GotoState(_spyState);
+        _viewer = s.MercPc;
+        _mercState = s.MercPc.GetStateName();
+        s.MercPc.bBinocularVision = true;
+        s.MercPc.GotoState(new Name("s_Binoculars_Def"));
+        Expect(s.MercPc.IsInState(new Name("s_Binoculars_Def")), $"merc in s_Binoculars_Def ({s.MercPc.GetStateName()})");
+        // This fixture steps only the HUD. Complete the weapon raise explicitly;
+        // scope-lifecycle covers the real timed transition and weapon visibility.
+        s.Rifle.ViewAnim.Stop(SWeaponDefense.SNIPECHANNEL);
+        s.Rifle.eventAnimEnd(SWeaponDefense.SNIPECHANNEL);
+        s.MercPc.fBinocularVisionFOV = 30f;
+        s.MercPc.BinocularHoldBreathTime = 2.5f;
+        s.MercPc.bHoldBreath = 0;
+        s.MercPc.fDateLastShootedPawn = Now;
+        HudMessages.AddReticuleMessage(s.MercHud, "Reloading", 30, 0);
+        Run(2);
+        Expect(layer.ActivePage is MercBinocularsPage, $"merc binocular page active ({layer.ActivePage?.GetType().Name})");
+        MercBinocularsPage page = layer.Binoculars!.Merc!;
+        MagmaDrawList list = page.DrawList;
+        ExpectText(list, "ZoomDef/ZoomValue", "x2");
+        int frame = page.Area("frame")?.Frame ?? -1;
+        Expect(frame is >= MercBinocularsPage.ZoomOutFrame and < MercBinocularsPage.ZoomOutFrame + 10,
+            $"scope rings play the zoom-out keys on entry (frame {frame})");
+        Expect(page.BreathFrame == 10, $"breath gauge frame 10 at 2.5 s left ({page.BreathFrame})");
+        Expect(list.Find("ZoomDef/sights") is { } red && red.Colors.Length == 4 && red.Colors[0] == MercBinocularsPage.SightsHitColour,
+            "sights red after a hit");
+        ExpectText(list, "Reload/messageReticule", "Reloading");
+        string? distance = list.TextOf("ZoomDef/distance");
+        Expect(distance is not null && System.Text.RegularExpressions.Regex.IsMatch(distance, @"^\d{2,}\.\d{2,}$"), $"range finder text ({distance ?? "(not drawn)"})");
+        Expect(MercBinocularsPage.DistanceText(1237f, 0.01f) == "12.37" && MercBinocularsPage.DistanceText(0f, 0.01f) == "00.00",
+            "range finder format");
+        Expect(!string.IsNullOrEmpty(list.TextOf("ZoomDef/PCtextZoomDef3Binding")), "hold breath key named");
+        Expect(list.Find("ZoomDef/PCtextZoomDef4") is null && list.Find("ZoomDef/textZoomDef3") is null, "unused scope texts hidden");
+
+        // Zoom in to x4: the rings play the zoom-in keys; holding the breath centres the sights; the hit fades.
+        s.MercPc.fBinocularVisionFOV = 20f;
+        s.MercPc.bHoldBreath = 1;
+        s.MercPc.fDateLastShootedPawn = Now - 1f;
+        Run(2);
+        ExpectText(list, "ZoomDef/ZoomValue", "x4");
+        frame = page.Area("frame")?.Frame ?? -1;
+        Expect(frame is >= MercBinocularsPage.ZoomInFrame and < MercBinocularsPage.ZoomInFrame + 10, $"scope rings play the zoom-in keys (frame {frame})");
+        ExpectLeft(list, "ZoomDef/sights", 289f);
+        ExpectTop(list, "ZoomDef/sights", 223f);
+        Expect(list.Find("ZoomDef/sights") is { } orange && orange.Colors[0] == MercBinocularsPage.SightsColour, "sights orange again");
+        Expect(!layer.Merc!.Root.Visible, "merc page hidden in the scope");
+        CheckAssets(layer);
+        _notes.Add(string.Create(CultureInfo.InvariantCulture, $"bino-merc={list.Items.Count}"));
+    }
+
+    private void LeaveBinoculars()
+    {
+        Scene s = _scene!;
+        s.MercPc.bBinocularVision = false;
+        s.MercPc.GotoState(_mercState == default ? new Name("PlayerWalking") : _mercState);
+        s.MercPc.bHoldBreath = 0;
+        _viewer = s.SpyPc;
+        Run(1);
+        Expect(_layer!.ActivePage is SpyHudPage, $"spy page back after the binoculars ({_layer.ActivePage?.GetType().Name})");
+    }
+
+    private void ExpectLeft(MagmaDrawList list, string path, float left)
+    {
+        if (list.Find(path) is not { } item || Math.Abs(item.PageRect.L - left) > 0.01f)
+        {
+            _failures.Add($"{path} left = {(list.Find(path) is { } i ? i.PageRect.L.ToString(CultureInfo.InvariantCulture) : "(not drawn)")}, expected {left}");
+        }
+    }
+
+    private void CheckTimedCountdowns()
+    {
+        var scene = new Scene();
+        GameReplicationInfo gri = scene.World.Level.Info.GRI!;
+        float now = scene.World.Level.TimeSeconds;
+        gri.SecondCount = now - 0.25f;
+        float elapsed = gri.PreciseElapsedTime();
+        STriggerInteraction hack = scene.SpyHud.ActorToDraw.OfType<STriggerInteraction>().Single();
+        var sleep = new HudSfx();
+        sleep.AddVisualSfx(SFXType.SFXT_TextureColorSleep, 255f, 255f, 10f,
+            SFXAttenuation.SFXA_Constant, now, dontKill: true);
+        sleep.Process(now);
+
+        foreach ((float remaining, int shown) in new (float, int)[] { (2f, 2), (1.25f, 2), (0.75f, 1), (0.01f, 1), (0f, 0), (-0.1f, 0) })
+        {
+            scene.Alarm.StartTime = elapsed + remaining - scene.Alarm.Duration;
+            hack.MinTriggerTime = elapsed + remaining;
+            scene.Objective.MinTriggerTime = elapsed + remaining;
+            scene.SpyPc.fLyingOnGroundTime = now + remaining - scene.SpyPc.fLyingOnGroundDuration;
+            var snapshot = new HudSnapshot();
+            HudSimReader.Read(scene.SpyPc, snapshot);
+            Expect(snapshot.HackCountdown?.Seconds == shown, $"hack has {shown} seconds at {remaining} remaining ({snapshot.HackCountdown?.Seconds})");
+            Expect(snapshot.ObjectiveCountdowns.Count == 1 && snapshot.ObjectiveCountdowns[0].Seconds == shown,
+                $"objective has {shown} seconds at {remaining} remaining");
+            Expect(snapshot.AlarmSeconds == (shown > 0 ? shown : null),
+                $"alarm has {shown} seconds at {remaining} remaining ({snapshot.AlarmSeconds})");
+            Expect(snapshot.SleepSeconds == shown, $"knockout has {shown} seconds at {remaining} remaining ({snapshot.SleepSeconds})");
+
+            var list = new MagmaDrawList();
+            sleep.Draw(list, Screen, new WhiteRegion("", "", Vector2.Zero), "Sleeping", snapshot.SleepSeconds);
+            if (shown > 0)
+                ExpectText(list, "Sfx/SleepTime", shown.ToString(CultureInfo.InvariantCulture));
+            else
+                Expect(!list.Any("Sfx/SleepTime"), "expired knockout has no remaining-time label");
+        }
+
+        foreach ((int seconds, string text) in new[] { (-1, "0:00"), (0, "0:00"), (1, "0:01"), (59, "0:59"), (60, "1:00"), (90, "1:30"), (600, "10:00") })
+            Expect(HudK.CountdownText(seconds) == text, $"countdown {seconds} formats as {text}");
+    }
+
+    private void CheckCounters()
+    {
+        HudLayer layer = _layer!;
+        _viewer = _scene!.SpyPc;
+        GameReplicationInfo gri = _scene.World.Level.Info.GRI!;
+        gri.GameMode = EGameMode.GM_DeathMatch;
+        gri.TotalTeamLives[0] = 7;
+        gri.TotalTeamLives[1] = 1000;
+        _extra = s => s.RespawnWeapon = new HudRespawnWeapon(64, 0, "Use");
+        Run(2);
+        ExpectText(layer.Spy!.DrawList, "Objectif/DeathMatch/Objectif", "7/Inf.");
+        Expect(!layer.Spy.DrawList.Any("Objectif/Story/"), "story counter hidden in a deathmatch");
+        Expect(layer.Items.Any(i => i.Path == "Respawn/icon" && i.Texture == HudRespawnWeaponDrawer.Atlas), "respawn weapon icon drawn");
+        ExpectItemText(layer.Items, "Respawn/key", "Use");
+        gri.GameMode = EGameMode.GM_Multi;
+        _extra = null;
+        Run(1);
+    }
+
+    /// <summary>The spectator page: the spy watches after his death through the real killed-player state.</summary>
+    private void CheckSpectator()
+    {
+        HudLayer layer = _layer!;
+        Scene s = _scene!;
+        _viewer = s.SpyPc;
+        s.SpyPc.GotoState(new Name("s_MultiSpectating_WhenKilled"));
+        Expect(HudK.IsSpectating(s.SpyPc), "killed player recognized as spectating without a forced snapshot");
+
+        var bindings = InputBindings.FromLayout(KeyLayout.Parse("""
+            [Engine.Input]
+            IK_Q=SelectGadget 0 | TeamPing
+            IK_E=SelectGadget 1
+            IK_Z=Button bAltFire
+            IK_X=Button bFire
+            """), PlaySide.Spy);
+        layer.Options.CurrentBindings = () => bindings;
+        s.SpyPc.SpecTarget = (SBasePawn)s.MatePawn;
+        s.SpyPc.fRespawnDate = Now + 6.5f;
+        Run(5);
+        Expect(layer.ActivePage is SpectatorHudPage, $"spectator page active ({layer.ActivePage?.GetType().Name})");
+        MagmaDrawList list = layer.Spectator!.DrawList;
+        ExpectText(list, "Spectator/textNbObjectives", "1/4");
+        ExpectText(list, "Spectator/textNbRemainingTime", "8:45");
+        ExpectText(list, "Spectator/textNbDeaths", "4");
+        ExpectText(list, "Spectator/textPlayerWatched", "Ghost");
+        ExpectText(list, "Spectator/textRespawnTime", "7");
+        ExpectText(list, "Spectator/textTip", "Q E Z X");
+        Expect(list.Find("Spectator/textNoRespawnLeft") is null, "respawn left");
+        Expect(!layer.Spy!.Root.Visible && !layer.Merc!.Root.Visible, "player pages hidden while spectating");
+        CheckSpectatorBoardLayout();
+        CheckClockBoundaries();
+        _extra = null;
+    }
+
+    private void CheckSpectatorBoardLayout()
+    {
+        var page = new SpectatorHudPage(_layer!.Assets!, new HudOptions { SliceExtras = false });
+        var snapshot = new HudSnapshot { Valid = true, ShowPlayers = true };
+        snapshot.Spectator.Active = true;
+        foreach (Vector2 size in new[] { new Vector2(640, 480), Screen, new Vector2(3440, 1440) })
+        {
+            page.Update(snapshot, 0);
+            page.Draw(size, snapshot);
+            Expect(!page.DrawList.Items.Any(i => i.Path.StartsWith("PCConnectedPlayers/", StringComparison.Ordinal)),
+                "spectator compact roster is replaced by the full scoreboard");
+        }
+    }
+
+    private void CheckClockBoundaries()
+    {
+        Expect(HudK.ChronoText(10, 0) == "10:00", "round begins with its full remaining duration");
+        Expect(HudK.ChronoText(1, 59) == "0:01", "one second remains before the authoritative time limit");
+        Expect(HudK.ChronoText(1, 60) == "0:00", "round reaches zero at its time limit");
+        Expect(HudK.ChronoText(1, 61) == "0:00", "expired finite clock stays zero");
+        Expect(HudK.ChronoText(0, 61) is null, "unlimited round hides the player countdown");
+        SPlayerController pc = _scene!.SpyPc;
+        GameReplicationInfo gri = pc.GameReplicationInfo!;
+        int limit = gri.TimeLimit, elapsed = gri.ElapsedTime;
+        float respawn = pc.fRespawnDate;
+        var snapshot = new HudSnapshot();
+        gri.TimeLimit = 1;
+        gri.ElapsedTime = 60;
+        pc.fRespawnDate = Now + 10f;
+        HudSimReader.Read(pc, snapshot);
+        Expect(snapshot.Spectator.RemainingTime == "0:00", "spectator finite expiry is zero, not infinite");
+        Expect(snapshot.Spectator.RespawnIn == 10, "a ten-second respawn does not display eleven");
+        snapshot.Clear();
+        pc.fRespawnDate = Now + 0.25f;
+        HudSimReader.Read(pc, snapshot);
+        Expect(snapshot.Spectator.RespawnIn == 1, "respawn final fraction remains visible");
+        using (pc.XLevel.CommandTime(1, Now - 10f, Sim.DeltaTime))
+        {
+            snapshot.Clear();
+            HudSimReader.Read(pc, snapshot);
+            Expect(snapshot.Spectator.RespawnIn == 1, "older input time cannot extend the final respawn fraction");
+        }
+        snapshot.Clear();
+        gri.TimeLimit = 0;
+        pc.fRespawnDate = Now;
+        HudSimReader.Read(pc, snapshot);
+        Expect(snapshot.Spectator.RemainingTime == HudK.InfiniteShort, "unlimited spectator clock is infinite");
+        Expect(snapshot.Spectator.RespawnIn == 0, "respawn countdown expires at the deadline");
+        using (pc.XLevel.CommandTime(1, Now - 10f, Sim.DeltaTime))
+        {
+            snapshot.Clear();
+            HudSimReader.Read(pc, snapshot);
+            Expect(snapshot.Spectator.RespawnIn == 0, "expired respawn remains zero inside an older input command");
+        }
+        gri.TimeLimit = limit;
+        gri.ElapsedTime = elapsed;
+        pc.fRespawnDate = respawn;
+    }
+
+    private GameStatusPage? _status;
+
+    private void CheckStatusPage(SmokeContext context)
+    {
+        _status = new GameStatusPage { Source = _layer!.Snapshot };
+        context.Tree.Root.AddChild(_status);
+        _status.Open();
+        _status.Refresh();
+        List<string> spies = _status.Names(0), mercs = _status.Names(1);
+        Expect(spies.Contains("Sam") && spies.Contains("Ghost") && mercs.SequenceEqual(["Shadownet"]),
+            $"mission status lists ({string.Join(",", spies)} / {string.Join(",", mercs)})");
+        Expect(_status.ObjectiveList?.Text.Contains("- Neutralize the laboratory", StringComparison.Ordinal) == true,
+            $"objective list ({_status.ObjectiveList?.Text})");
+    }
+
+    private void FreeStatusPage(SmokeContext context)
+    {
+        _status?.Close();
+        _status?.QueueFree();
+        _status = null;
+        _chat?.QueueFree();
+        _ = context;
+    }
+
+    /// <summary>Every drawn image has its texture and every text its font; the HUD's own texts sit on whole pixels.</summary>
+    private void CheckAssets(HudLayer layer)
+    {
+        if (layer.Assets!.Font(HudAssets.DefaultFont) is not { Padding: >= 1 })
+        {
+            _failures.Add("the HUD font pages are not padded (python -m svmbuild ui)");
+        }
+
+        foreach (MagmaDrawItem item in layer.Items)
+        {
+            if (item.Kind == MagmaWidgetKind.Image && item.NativeTexture is null && !layer.Assets!.HasTexture(item.Package, item.Texture))
+            {
+                _failures.Add($"{item.Path}: texture {item.Package}/{item.Texture} missing");
+                return;
+            }
+
+            if (item.Kind == MagmaWidgetKind.Text && layer.Assets!.Font(item.Font) is null)
+            {
+                _failures.Add($"{item.Path}: font {item.Font} missing");
+                return;
+            }
+
+            bool own = item.Path.StartsWith("Console/", StringComparison.Ordinal) || item.Path.StartsWith("Chat/", StringComparison.Ordinal) ||
+                item.Path.StartsWith("Extras/", StringComparison.Ordinal) || item.Path == "Fps" || item.Path.StartsWith("Respawn/", StringComparison.Ordinal);
+            if (own && item.Kind == MagmaWidgetKind.Text && item.HeightPx != MathF.Round(item.HeightPx))
+            {
+                _failures.Add($"{item.Path}: text height {item.HeightPx} is not a whole pixel");
+                return;
+            }
+        }
+    }
+
+    // ---- front end ------------------------------------------------------------------------------------------
+
+    private void CheckMainMenu(SceneTree tree)
+    {
+        if (tree.CurrentScene is not MainMenu menu)
+        {
+            _failures.Add($"main menu is not the current scene ({tree.CurrentScene?.Name})");
+            return;
+        }
+
+        Expect(menu.HostButton is not null &&
+            menu.FindButton is not null && menu.OptionsButton is not null && menu.QuitButton is not null, "main menu buttons");
+    }
+
+    private void CheckLobby(SceneTree tree)
+    {
+        if (tree.CurrentScene is not LobbyScreen lobby || lobby.Session is not LocalLobby session)
+        {
+            _failures.Add("lobby is not the current scene");
+            return;
+        }
+
+        Expect(session.Players.Count == 4 && session.Players.Count(p => p.Side == HudSide.Spy) == 2, $"lobby 2v2 ({session.Players.Count})");
+        Expect(!session.CanStart && lobby.StartButton is { Disabled: true }, "start waits for ready");
+        session.SetReady(true);
+        Expect(session.CanStart && lobby.StartButton is { Disabled: false }, "start after ready");
+        session.SetSide(HudSide.Spy);
+        Expect(session.Local.Side == HudSide.Spy && !session.Local.Ready, "side change clears ready");
+    }
+
+    private void CheckOptions(SceneTree tree)
+    {
+        if (tree.CurrentScene is not OptionsMenu options)
+        {
+            _failures.Add($"options is not the current scene ({tree.CurrentScene?.Name})");
+            return;
+        }
+
+        Expect(options.Tabs?.GetTabCount() == 9, $"option pages {options.Tabs?.GetTabCount()}");
+        Expect(options.KeyButtons.Count > 0, "key bindings listed");
+        foreach (string key in new[] { "invert_y.Spy", "invert_y.Merc", "controls_spy_kbm.free_look", "controls_merc_kbm.look", "controller.enabled",
+                     "controller.deadzone_left", "display_mode", "resolution", "vsync", "widescreen", "ws_fov", "max_fps", "master_volume",
+                     "sound_volume", "music_volume", "voice_output_volume" })
+        {
+            Expect(options.Controls.ContainsKey(key), "option " + key);
+        }
+
+        Expect(options.Controls.TryGetValue("ws_fov", out Control? fov) && fov is HSlider { MinValue: 95, MaxValue: 112 }, "ws_fov slider 95..112");
+        Expect(options.Keys?.Rows().Any(r => r.Command.Contains("Talk", StringComparison.OrdinalIgnoreCase)) == true, "chat keys in the layout");
+        // The settings file round trip (in memory: a smoke run never writes the player's settings).
+        GameSettings edited = options.Editing.Clone();
+        edited.MercFovCap = 500f;
+        edited.FpsLimit = 10;
+        edited.SoundVolume = 0.25f;
+        GameSettings back = GameSettings.FromJson(edited.ToJson());
+        Expect(back.MercFovCap == GameSettings.MaxMercFov && back.FpsLimit == GameSettings.MinFps && back.SoundVolume == 0.25f,
+            $"settings round trip and clamps ({back.MercFovCap}, {back.FpsLimit}, {back.SoundVolume})");
+        _notes.Add(string.Create(CultureInfo.InvariantCulture, $"keys={options.KeyButtons.Count}"));
+    }
+
+    private static MatchResult SampleResult() => new()
+    {
+        Map = "SteeE",
+        Winner = HudSide.Spy,
+        Reason = MatchEndReason.Story,
+        LocalSide = HudSide.Spy,
+        ObjectivesTaken = 4,
+        ObjectivesTotal = 4,
+        Rows =
+        [
+            new MatchResultRow("Sam", HudSide.Spy, 120, 1, 2, 3, true),
+            new MatchResultRow("Shadownet", HudSide.Merc, 80, 3, 1, 0, false),
+        ],
+        Request = new PlayRequest(),
+    };
+
+    private void CheckResults()
+    {
+        ResultsScreen? results = _results;
+        if (results is null || !results.IsInsideTree())
+        {
+            _failures.Add("results screen not shown");
+            return;
+        }
+
+        Expect(results.Headline?.Text == "SPIES WIN", $"results headline {results.Headline?.Text}");
+        Expect(results.Table?.GetChildCount() == 6 * 3, $"results table cells {results.Table?.GetChildCount()}");
+        Expect(!results.BannerShowing && results.Table is { Visible: true }, "table shown after the banner");
+    }
+
+    private void CheckBanner()
+    {
+        if (_results is null)
+        {
+            _failures.Add("results screen not shown");
+            return;
+        }
+
+        Expect(_results.BannerShowing && _results.Banner?.DrawList.TextOf("YouWin/Text1") == "You Win", "You Win banner drawn");
+    }
+
+    private static string? CaptureDir()
+    {
+        foreach (string arg in OS.GetCmdlineUserArgs())
+        {
+            if (arg.StartsWith("--svm-hud-capture=", StringComparison.Ordinal))
+            {
+                return arg["--svm-hud-capture=".Length..];
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Saves the frame drawn last as &lt;dir&gt;/hud-&lt;name&gt;.png (renderer runs only).</summary>
+    private void Capture(SmokeContext context, string name)
+    {
+        if (_captureDir is null || DisplayServer.GetName() == "headless")
+        {
+            return;
+        }
+
+        Image? image = context.Tree.Root.GetTexture()?.GetImage();
+        if (image is null || image.IsEmpty())
+        {
+            return;
+        }
+
+        System.IO.Directory.CreateDirectory(_captureDir);
+        image.SavePng(System.IO.Path.Combine(_captureDir, "hud-" + name + ".png"));
+    }
+
+    // ---- checks ---------------------------------------------------------------------------------------------
+
+    private void Expect(bool condition, string what)
+    {
+        if (!condition)
+        {
+            _failures.Add(what);
+        }
+    }
+
+    private void ExpectText(MagmaDrawList list, string path, string expected)
+    {
+        string? text = list.TextOf(path);
+        if (text != expected)
+        {
+            _failures.Add($"{path} = '{text ?? "(not drawn)"}', expected '{expected}'");
+        }
+    }
+
+    private void ExpectItemText(IReadOnlyList<MagmaDrawItem> items, string path, string expected)
+    {
+        string? text = null;
+        foreach (MagmaDrawItem i in items)
+        {
+            if (i.Path == path && i.Kind == MagmaWidgetKind.Text)
+            {
+                text = i.Text;
+                break;
+            }
+        }
+
+        if (text != expected)
+        {
+            _failures.Add($"{path} = '{text ?? "(not drawn)"}', expected '{expected}'");
+        }
+    }
+
+    private void ExpectContains(MagmaDrawList list, string path, string expected)
+    {
+        string? text = list.TextOf(path);
+        if (text is null || !text.Contains(expected, StringComparison.Ordinal))
+        {
+            _failures.Add($"{path} = '{text ?? "(not drawn)"}', expected it to contain '{expected}'");
+        }
+    }
+
+    private void ExpectTop(MagmaDrawList list, string path, float top)
+    {
+        if (list.Find(path) is not { } item || Math.Abs(item.PageRect.T - top) > 0.01f)
+        {
+            _failures.Add(string.Create(CultureInfo.InvariantCulture, $"{path} top {list.Find(path)?.PageRect.T}, expected {top}"));
+        }
+    }
+
+    /// <summary>The sim source plus test additions.</summary>
+    private sealed class Composite(IHudSource inner, Action<HudSnapshot> after) : IHudSource
+    {
+        public void Fill(HudSnapshot snapshot)
+        {
+            inner.Fill(snapshot);
+            after(snapshot);
+        }
+    }
+
+    /// <summary>The offline scene: SBase actors set up the way a match would leave them.</summary>
+    private sealed class Scene
+    {
+        public Scene()
+        {
+            World = new World(1, ENetMode.NM_Standalone);
+            Level level = World.Level;
+            var gri = Spawn(level, new GameReplicationInfo { TimeLimit = 10, ElapsedTime = 75, NumObjectives = 4, GameMode = EGameMode.GM_Multi }, default);
+            var spies = new STeamInfo { TeamIndex = 0, iNBGadgets = 4 };
+            spies.aTipStrings.Add(@"\\GADGET1 \\GADGET2 \\SECONDARYFIRE \\PRIMARYFIRE");
+            gri.Teams[0] = spies;
+            gri.Teams[1] = new STeamInfo { TeamIndex = 1, iNBGadgets = 4 };
+            level.Info.GRI = gri;
+
+            level.BeginLoad();
+            Mission = Spawn(level, new SMission { GameMode = EGameMode.GM_Multi, TotalObjectivesLeft = 3 }, default);
+            Terminal = Spawn(level, new SComputerObjectiveTrigger { TriggerName = "Laboratory", DominationCaptureTime = 10 },
+                new FVector(800f, 0f, 0f));
+            Objective = Spawn(level, new SObjective { ObjectiveName = "Laboratory", Description = "Neutralize the laboratory" }, default);
+            Objective.Triggers.Add(Terminal);
+            Terminal.Objective = Objective;
+            Mission.Objectives.Add(Objective);
+            Alarm = Spawn(level, new SAlarm { MessagePriority = 5, Duration = 30, StartTime = 70 }, default);
+
+            // For the binoculars: a drop zone just above the reticle (the lock panel) and a terminal far to the right
+            // (an arrow on the screen edge).
+            DropZone = Spawn(level, new SFlagDropZone(), new FVector(1000f, 0f, 70f));
+            Generator = Spawn(level, new SComputerObjectiveTrigger { TriggerName = "Generator" }, new FVector(500f, 2000f, 0f));
+            level.EndLoad();
+
+            // A hack 6 s into the 10 s capture, counting down to ElapsedTime 82.
+            Mission.GameMode = EGameMode.GM_Multi;
+            Mission.TotalObjectivesLeft = 3;
+            Terminal.bActive = true; // A real hack can only run on an active terminal; ER hides inactive devices.
+            Terminal.CaptureTime = 4;
+            Terminal.bTriggering = true;
+            Objective.MinTriggerTime = 82f;
+            Objective.ObjectiveTaken = false;   // a freshly placed objective counts as taken until its mission resets it
+
+            (SpyPc, SpyPawn) = Player(level, gri, spy: true, new FVector(0f, 0f, 0f), "Sam", 4, 48);
+            (SPlayerController mate, MatePawn) = Player(level, gri, spy: true, new FVector(-200f, 100f, 0f), "Ghost", 4, 60);
+            (MercPc, MercPawn) = Player(level, gri, spy: false, new FVector(400f, 0f, 0f), "Shadownet", 3, 70);
+            ((SBasePawn)MatePawn).bReadyForShortLadder = true;
+
+            var spy = (SPawnAttaque)SpyPawn;
+            spy.Health = 60;
+            spy.EnergyLevelMax = 100;
+            spy.EnergyLevel = 50f;
+            SpyPc.bFastSpeed = false;
+            Gadget = Give(level, new SGadStickyCam(), SpyPawn);
+            Gadget.Charge = 3;
+            SpyPawn.SelectedGadget = Gadget;
+            SpyHud = Hud(level, SpyPc);
+            SpyHud.bShowConnectedPlayers = true;
+            var hack = Spawn(level, new STriggerInteraction { MinTriggerTime = 80f }, default);
+            ObjectiveHud.AddRemoveActorOnHud(SpyHud, Objective, true);
+            ObjectiveHud.AddRemoveActorOnHud(SpyHud, hack, true);
+            SpyHud.AlarmsList.Add(Alarm);
+            SpyHud.MalfunctionGamePlayObjects.Add(new FVector(600f, 120f, 40f));
+            HudMessages.LocalizedMessage(SpyHud, K.MsgNeutralizationInProgress, HudMessages.GetString(K.MsgNeutralizationInProgress, Terminal));
+            HudMessages.LocalizedMessage(SpyHud, K.MsgMissionSpy, HudMessages.GetString(K.MsgMissionSpy, Objective));
+
+            MercPawn.Health = 100;
+            Rifle = Give(level, new SWeaponDefense(), MercPawn);
+            Rifle.GiveTo(MercPawn);
+            Rifle.ClipAmmo = 17;
+            Rifle.Ammo = 92;
+            Rifle.ROFMode = SRateOfFireMode.ROF_Burst;
+            MercPawn.WeaponLoaded = 1;
+            MercPawn.bIsCrouched = true;
+            MercPc.RendMap = 37;
+            MercPc.Rotation = new FRotator(0, 32768, 0);   // facing the terminal behind him: it is on the radar's lower half
+            MercHud = Hud(level, MercPc);
+            ObjectiveHud.AddObjective(MercHud, Terminal);
+            ObjectiveHud.AddRemoveActorOnHud(MercHud, Objective, true);
+            HudMessages.ReceiveLocalizedMessage(MercPc, K.MsgHackingInProgress, null);
+            HudMessages.AddReticuleMessage(MercHud, "Reloading", 30, 0);
+            // A noise 600 uu to the merc's left lights the left arrow (SPlayerController.ClientNotifyNoise, the
+            // SHud.NotifyHotSound port); the merc's own weapon dummy gives none.
+            int left = MercPawn.Rotation.Yaw - 16384;
+            float a = left * MathF.PI / 32768f;
+            Noise = Spawn(level, new SNotifyNoise(), MercPawn.Location + new FVector(MathF.Cos(a) * 600f, MathF.Sin(a) * 600f, 0f));
+            MercPc.ClientNotifyNoise(Noise, 1f);
+            MercPc.ClientNotifyNoise(Spawn(level, new SWeaponDefenseDummy(), MercPawn.Location + new FVector(0f, 0f, 600f)), 1f);
+        }
+
+        public World World { get; }
+
+        public SPlayerController SpyPc { get; }
+
+        public SBasePawn SpyPawn { get; }
+
+        public Pawn MatePawn { get; }
+
+        public SPlayerController MercPc { get; }
+
+        public SBasePawn MercPawn { get; }
+
+        public SHud SpyHud { get; }
+
+        public SHud MercHud { get; }
+
+        public SNotifyNoise Noise { get; }
+
+        public SMission Mission { get; }
+
+        public SObjective Objective { get; }
+
+        public SComputerObjectiveTrigger Terminal { get; }
+
+        public SAlarm Alarm { get; }
+
+        public SFlagDropZone DropZone { get; }
+
+        public SComputerObjectiveTrigger Generator { get; }
+
+        public SGadget Gadget { get; }
+
+        public SWeaponDefense Rifle { get; }
+
+        /// <summary>A camera at the spy's eyes looking down +X with a 90 degree field of view.</summary>
+        public Vector2? Project(FVector p, Vector2? screen = null)
+        {
+            FVector r = p - (SpyPawn.Location + new FVector(0f, 0f, 60f));
+            if (r.X <= 1f)
+            {
+                return null;
+            }
+
+            Vector2 size = screen ?? Screen;
+            float f = size.X / 2f;
+            return new Vector2(size.X / 2f + r.Y / r.X * f, size.Y / 2f - r.Z / r.X * f);
+        }
+
+        private static T Spawn<T>(Level level, T actor, FVector at)
+            where T : Actor => level.SpawnActor(actor, at, default) ?? throw new InvalidOperationException($"{actor} did not spawn");
+
+        private static T Give<T>(Level level, T actor, Pawn owner)
+            where T : Actor
+        {
+            T spawned = Spawn(level, actor, owner.Location);
+            spawned.Instigator = owner;
+            spawned.SetOwner(owner);
+            return spawned;
+        }
+
+        private static SHud Hud(Level level, SPlayerController pc)
+        {
+            SHud hud = Spawn(level, new SHud(), default);
+            hud.PlayerOwner = pc;
+            pc.myHUD = hud;
+            return hud;
+        }
+
+        private static (SPlayerController, SBasePawn) Player(Level level, GameReplicationInfo gri, bool spy, FVector at, string name, int lives, int ping)
+        {
+            SBasePawn pawn = level.SpawnActor<SBasePawn>(spy ? new SPawnAttaque_1Mesh() : new SPawnDefense_1Mesh(), at, default)
+                ?? throw new InvalidOperationException("pawn did not spawn");
+            SPlayerController pc = Spawn(level, new SPlayerController(), at);
+            pc.Possess(pawn);
+            pawn.Health = 100;
+            pc.SPawnType = pawn.SPawnType;
+            pc.PlayerReplicationInfo ??= new PlayerReplicationInfo();
+            pc.PlayerReplicationInfo.PlayerName = name;
+            pc.PlayerReplicationInfo.NumLives = lives;
+            pc.PlayerReplicationInfo.Ping = ping;
+            pc.PlayerReplicationInfo.Team = gri.Teams[spy ? 0 : 1];
+            pawn.PlayerReplicationInfo = pc.PlayerReplicationInfo;
+            pc.GameReplicationInfo = gri;
+            if (!gri.PRIArray.Contains(pc.PlayerReplicationInfo))
+            {
+                gri.PRIArray.Add(pc.PlayerReplicationInfo);
+            }
+
+            return (pc, pawn);
+        }
+    }
+}

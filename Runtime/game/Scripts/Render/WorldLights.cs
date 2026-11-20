@@ -1,0 +1,500 @@
+using System;
+using System.Collections.Generic;
+using Godot;
+using OpenScct.Core;
+using OpenScct.Game.Lighting;
+using OpenScct.Provenance;
+using OpenScctGame.Render.Data;
+
+namespace OpenScctGame.Render;
+
+/// <summary>
+/// The dynamic world lights of a map: lights the original does not bake (triggered STriggerLights, pulsing and
+/// other bDynamicLight lights, with or without bApplyToStaticLighting) that still light the world. The template
+/// adds them per pixel to the baked light term of BSP and static mesh surfaces, with the colour and 2x gain of actor
+/// lighting (BSP through the original's BSP light pass, static meshes through the actor fit over their bounding sphere).
+/// They live in a float texture (one row per light: position, colour, spot, zone and brightness), a global shader parameter,
+/// so switching a light or animating its brightness is one texture update. A bAffectOwnZoneOnly light lights only
+/// surfaces of its zone (each vertex carries its zone in the colour alpha). docs/RENDERING.md#dynamic-lights.
+/// </summary>
+[PortOf("eng:Render.DynamicLights", Spec = "docs/RENDERING.md#dynamic-lights")]
+public sealed class WorldLights
+{
+    public const string TextureParameter = "svm_dyn_lights";
+    public const string CountParameter = "svm_dyn_light_count";
+    public const string TuneParameter = "svm_dyn_tune";
+    public const string ZoneAmbientParameter = "svm_zone_ambient";
+    public const string ZoneAmbientGainParameter = "svm_zone_ambient_gain";
+
+    // The names Update writes every frame, made once (a name passed as a string makes a StringName per call).
+    private static readonly StringName s_textureName = TextureParameter;
+    private static readonly StringName s_countName = CountParameter;
+    private static readonly StringName s_cellTextureName = "svm_dyn_cells";
+    private static readonly StringName s_cellTransformName = "svm_dyn_cell_transform";
+    private static readonly StringName s_indexedRowsName = "svm_dyn_indexed_rows";
+    private const int CellSide = 16;
+    private const int OutsideCell = CellSide * CellSide;
+    private const int MinIndexedLights = 12;
+    // Pad the influence bounds for floating-point differences at cell edges.
+    private const float BoundsPadding = 0.001f;
+
+    /// <summary>
+    /// A static mesh with a light sphere (<see cref="MeshLightSpheres"/>) is lit by a light as far as the light's
+    /// radius plus the sphere's from the sphere's centre, so its pixels look the grid up at that centre and every
+    /// light is binned this much wider (metres); a mesh with a larger sphere walks every row instead
+    /// (svm_world.gdshaderinc, SVM_MESH_GRID_REACH).
+    /// </summary>
+    public const float MeshGridReach = 2f;
+    private bool _textureSet;
+    public const int MaxLights = 256;
+
+    /// <summary>Rows kept for lights spawned during play (flash lights of explosions and shots).</summary>
+    public const int MaxSpawned = 16;
+
+    // The RenderingServer's global parameters outlive any map; this remembers that they were added.
+    private static bool s_globalsAdded;
+
+    private readonly List<LightEntry> _lights = [];
+    private readonly List<LightEntry> _spawned = [];
+    private float _time;
+    private readonly bool[] _on;
+    private readonly Image _image;
+    private readonly ImageTexture _texture;
+    private readonly PackedLight[] _packed;
+    private readonly float[] _zones;
+    private readonly float[] _brightness;
+    private readonly bool[] _written;
+    private Image? _cellImage;
+    private ImageTexture? _cellTexture;
+    private readonly int[] _cellCounts = new int[OutsideCell + 1];
+    private bool _dirty;
+    private int _lastRows = -1;
+    private int _lastMapRows = -1;
+    private int _indexedRows = -1;
+    // Switches and moves since the last Update, and the map lights' rows as that Update wrote them (LightReach).
+    private int _placeChanges = 1;
+    private int _placeWritten;
+    private readonly Vector4?[] _reachRows;
+
+    public WorldLights(LightingDoc lighting)
+    {
+        ArgumentNullException.ThrowIfNull(lighting);
+        foreach (LightEntry l in lighting.Lights)
+        {
+            if (IsDynamicWorldLight(l) && _lights.Count < MaxLights)
+            {
+                _lights.Add(l);
+            }
+        }
+
+        _on = new bool[_lights.Count];
+        _reachRows = new Vector4?[_lights.Count];
+        for (int i = 0; i < _on.Length; i++)
+        {
+            _on[i] = _lights[i].InitiallyOn && _lights[i].LightType != 0;
+        }
+
+        _image = Image.CreateEmpty(4, _lights.Count + MaxSpawned, false, Image.Format.Rgbaf);
+        _packed = new PackedLight[_lights.Count + MaxSpawned];
+        _zones = new float[_packed.Length];
+        _brightness = new float[_packed.Length];
+        _written = new bool[_packed.Length];
+        _texture = ImageTexture.CreateFromImage(_image);
+        EnsureGlobals();
+        ShaderGlobals.Set(ZoneAmbientParameter, ZoneAmbientTexture(lighting));
+        ShaderGlobals.Set(ZoneAmbientGainParameter,
+            new Vector2(RenderK.ZoneAmbientLightmapGain, RenderK.ZoneAmbientVertexGain));
+    }
+
+    /// <summary>
+    /// The zone ambient of world surfaces, one texel per zone index (256 x 1): m_RefAmbientColor / 255, which the
+    /// template adds, times <see cref="RenderK.ZoneAmbientVertexGain"/> or <see cref="RenderK.ZoneAmbientLightmapGain"/>,
+    /// to the light term of static mesh and BSP surfaces of that zone (docs/RENDERING.md#baked-light). Sky zones are
+    /// left out (their backdrops take the zone ambient through bSpecialLit, in the converter).
+    /// </summary>
+    [Provenance(ProvenanceKind.Measured, "zone ambient goldens: OrphD/E/T outdoor, SancD Church, MissD/E spy spawn")]
+    public static ImageTexture ZoneAmbientTexture(LightingDoc lighting)
+    {
+        ArgumentNullException.ThrowIfNull(lighting);
+        Image image = Image.CreateEmpty(256, 1, false, Image.Format.Rgbaf);
+        foreach (ZoneEntry z in lighting.Zones)
+        {
+            if (z.Sky || z.ZoneIndex < 0 || z.ZoneIndex > 255)
+            {
+                continue;
+            }
+
+            image.SetPixel(z.ZoneIndex, 0, new Color(z.Ambient.R, z.Ambient.G, z.Ambient.B, 0f));
+        }
+
+        return ImageTexture.CreateFromImage(image);
+    }
+
+    public int Count => _lights.Count;
+
+    /// <summary>
+    /// Gain, radius scale and falloff of the dynamic world lights. The colour, gain and radius are the actor model's;
+    /// the falloff over the world is 1 - (d / R)^2, which matched the original's lit rooms far better than the actor
+    /// falloff 1 - 3x^2 + 2x^3 (SteeE shop: SSIM 0.70 to 0.81, luma ratio 0.54 to 1.00).
+    /// </summary>
+    [Provenance(ProvenanceKind.Measured, "SteeE golden sweep of gain, radius and falloff (tools/golden, shop and yard-north views)")]
+    public static readonly Vector4 DefaultTune = new(1f, 1f, 1f, 1f);
+
+    /// <summary>Overrides the calibration (gain, radius scale, falloff mode) for calibration runs.</summary>
+    public static void SetTune(Vector4 tune)
+    {
+        EnsureGlobals();
+        Tune = tune;
+        ShaderGlobals.Set(TuneParameter, tune);
+    }
+
+    /// <summary>The calibration in use (process wide, like the global shader parameter it feeds).</summary>
+    public static Vector4 Tune { get; private set; } = DefaultTune;
+
+    public IReadOnlyList<LightEntry> Lights => _lights;
+
+    /// <summary>
+    /// Lights the original keeps out of the baked light but applies to the world at run time: every bDynamicLight
+    /// light, whatever its bApplyToStaticLighting. The game keeps a light for run time when it is in-game or dynamic
+    /// (cooked light references, editor 0x110cd700; the in-game leaf light lists, UnVisi.cpp 0x1101dcb7), and the
+    /// static flag only decides what Build Lighting bakes. Seen in game: MoonD's flickering STriggerLights, saved with
+    /// bApplyToStaticLighting False and no in-game flag, light their wall (Reloaded Editor docs/MapBuilderPatterns.md).
+    /// </summary>
+    [Provenance(ProvenanceKind.Decoded, "editor 0x110cd700 and 0x1101dcb7: lights kept for run time are in-game or bDynamicLight")]
+    public static bool IsDynamicWorldLight(LightEntry l)
+    {
+        ArgumentNullException.ThrowIfNull(l);
+        return l.Dynamic && l.Effect != RenderK.LE_ESpotShadow && l.Brightness > 0f;
+    }
+
+    /// <summary>Switches a light (STriggerLight on and off); takes effect at the next <see cref="Update"/>.</summary>
+    public void SetOn(string name, bool on)
+    {
+        for (int i = 0; i < _lights.Count; i++)
+        {
+            if (string.Equals(_lights[i].Name, name, StringComparison.OrdinalIgnoreCase) && _on[i] != on)
+            {
+                _on[i] = on;
+                _placeChanges++;
+            }
+        }
+    }
+
+    /// <summary>Moves a light (one riding a mover or a bone); takes effect at the next <see cref="Update"/>.</summary>
+    public void SetPlace(string name, FVector location, FRotator rotation)
+    {
+        for (int i = 0; i < _lights.Count; i++)
+        {
+            if (string.Equals(_lights[i].Name, name, StringComparison.OrdinalIgnoreCase)
+                && (_lights[i].Location != location || _lights[i].Rotation != rotation))
+            {
+                _lights[i] = _lights[i] with { Location = location, Rotation = rotation };
+                _placeChanges++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Changes whenever an <see cref="Update"/> writes a map light switched or moved since the last one
+    /// (<see cref="LightReach"/> looks at them again only then).
+    /// </summary>
+    internal int PlaceStamp { get; private set; }
+
+    /// <summary>
+    /// Map light <paramref name="index"/>'s position row as the template reads it (xyz, radius in w; w below 0 a sun's
+    /// direction), or null while it is switched off, as of the last <see cref="Update"/>: a switch or move takes effect
+    /// in the texture only there. Its light type only scales the colour, so the row stays put while the light pulses,
+    /// blinks or flickers.
+    /// </summary>
+    internal Vector4? ReachOf(int index) => _reachRows[index];
+
+    /// <summary>The rows of the lights spawned this frame (<see cref="SetSpawned"/>), as the template reads them.</summary>
+    internal ReadOnlySpan<PackedLight> SpawnedRows =>
+        _lastRows < 0 ? default : _packed.AsSpan(_lastMapRows, _lastRows - _lastMapRows);
+
+    /// <summary>
+    /// Every row of the light texture as the template reads it this frame (map lights that give light, then the spawned
+    /// ones), and each row's own zone (below 0: every zone), as of the last <see cref="Update"/>.
+    /// </summary>
+    internal ReadOnlySpan<PackedLight> Rows => _lastRows < 0 ? default : _packed.AsSpan(0, _lastRows);
+
+    internal ReadOnlySpan<float> RowZones => _lastRows < 0 ? default : _zones.AsSpan(0, _lastRows);
+
+    /// <summary>Lights spawned during play now drawn (after the map's own).</summary>
+    public int SpawnedCount => _spawned.Count;
+
+    /// <summary>
+    /// The dynamic lights spawned during play this frame (SFlashLight and kin: the frag explosion's flash, muzzle
+    /// flashes), at most <see cref="MaxSpawned"/>, each at the brightness it has now; they light the world as the map's
+    /// dynamic lights do. Written at once.
+    /// </summary>
+    public void SetSpawned(IEnumerable<LightEntry> lights)
+    {
+        ArgumentNullException.ThrowIfNull(lights);
+        _spawned.Clear();
+        foreach (LightEntry l in lights)
+        {
+            if (_spawned.Count < MaxSpawned)
+            {
+                _spawned.Add(l);
+            }
+        }
+
+        Update(_time);
+    }
+
+    /// <summary>Writes every light at scene time <paramref name="time"/> (Level.TimeSeconds) and makes them current.</summary>
+    public void Update(float time)
+    {
+        _time = time;
+        if (_placeWritten != _placeChanges)
+        {
+            // The switches and moves this Update writes, for LightReach (positions do not depend on the modulation).
+            _placeWritten = _placeChanges;
+            for (int i = 0; i < _lights.Count; i++)
+            {
+                _reachRows[i] = _on[i] ? ActorLighting.PackWorld(_lights[i], 1f).Pos : null;
+            }
+
+            PlaceStamp++;
+        }
+
+        // Only lights that give light this frame take rows, so the shader's per-pixel loop skips the ones off.
+        int rows = 0;
+        bool cellsDirty = false;
+        for (int i = 0; i < _lights.Count; i++)
+        {
+            LightEntry l = _lights[i];
+            float m = _on[i] ? Modulation(l, time) : 0f;
+            if (m > 0f)
+            {
+                int row = rows++;
+                Vector4 previousPosition = _packed[row].Pos;
+                Write(row, l, m);
+                cellsDirty |= previousPosition != _packed[row].Pos;
+            }
+        }
+        int mapRows = rows;
+
+        for (int i = 0; i < _spawned.Count; i++)
+        {
+            Write(rows++, _spawned[i], 1f);
+        }
+
+        // Steady lights and an unchanged spawned-light list need no CPU-to-GPU transfer. Effects call this again
+        // after SetTime, often with exactly the same rows; compare the packed values rather than the scene time.
+        if (_dirty)
+        {
+            _texture.Update(_image);
+            _dirty = false;
+        }
+
+        if (!_textureSet)
+        {
+            // The same texture every frame (only its pixels change): set once, a texture variant is a finalizable wrapper.
+            _textureSet = true;
+            ShaderGlobals.Set(s_textureName, _texture);
+        }
+
+        if (cellsDirty || mapRows != _lastMapRows)
+        {
+            UpdateCells(mapRows);
+            _lastMapRows = mapRows;
+        }
+
+        if (rows != _lastRows)
+        {
+            _lastRows = rows;
+            ShaderGlobals.Set(s_countName, rows);
+        }
+    }
+
+    // Preserve the order of the original light loop. Each horizontal cell lists every light whose
+    // padded radius can touch it. Directional lights also go in the row used outside the grid.
+    private void UpdateCells(int rows)
+    {
+        if (rows < MinIndexedLights)
+        {
+            SetIndexedRows(0);
+            return;
+        }
+
+        Vector2 min = new(float.PositiveInfinity, float.PositiveInfinity);
+        Vector2 max = new(float.NegativeInfinity, float.NegativeInfinity);
+        for (int row = 0; row < rows; row++)
+        {
+            Vector4 p = _packed[row].Pos;
+            if (p.W < 0f) continue;
+            Vector2 center = new(p.X, p.Z);
+            Vector2 extent = Vector2.One * CullExtent(p.W);
+            min = min.Min(center - extent);
+            max = max.Max(center + extent);
+        }
+
+        Vector2 scale = new Vector2(CellSide, CellSide) / (max - min);
+        if (!min.IsFinite() || !scale.IsFinite() || scale.X <= 0f || scale.Y <= 0f)
+        {
+            SetIndexedRows(0);
+            return;
+        }
+
+        _cellImage ??= Image.CreateEmpty(_lights.Count + 1, OutsideCell + 1, false, Image.Format.Rf);
+        Array.Clear(_cellCounts);
+        for (int row = 0; row < rows; row++)
+        {
+            Vector4 p = _packed[row].Pos;
+            if (p.W < 0f)
+            {
+                for (int cell = 0; cell <= OutsideCell; cell++)
+                {
+                    AddCellLight(cell, row);
+                }
+                continue;
+            }
+
+            float extent = CullExtent(p.W);
+            int x0 = CellCoordinate(p.X - extent, min.X, scale.X);
+            int x1 = CellCoordinate(p.X + extent, min.X, scale.X);
+            int z0 = CellCoordinate(p.Z - extent, min.Y, scale.Y);
+            int z1 = CellCoordinate(p.Z + extent, min.Y, scale.Y);
+            for (int z = z0; z <= z1; z++)
+            {
+                for (int x = x0; x <= x1; x++)
+                {
+                    AddCellLight(z * CellSide + x, row);
+                }
+            }
+        }
+
+        for (int cell = 0; cell <= OutsideCell; cell++)
+        {
+            _cellImage.SetPixel(0, cell, new Color(_cellCounts[cell], 0f, 0f));
+        }
+
+        if (_cellTexture is null)
+        {
+            _cellTexture = ImageTexture.CreateFromImage(_cellImage);
+            ShaderGlobals.Set(s_cellTextureName, _cellTexture);
+        }
+        else
+        {
+            _cellTexture.Update(_cellImage);
+        }
+        ShaderGlobals.Set(s_cellTransformName, new Vector4(min.X, min.Y, scale.X, scale.Y));
+        SetIndexedRows(rows);
+    }
+
+    private void SetIndexedRows(int rows)
+    {
+        if (_indexedRows != rows)
+        {
+            _indexedRows = rows;
+            ShaderGlobals.Set(s_indexedRowsName, rows);
+        }
+    }
+
+    private static int CellCoordinate(float value, float origin, float scale) =>
+        Math.Clamp((int)MathF.Floor((value - origin) * scale), 0, CellSide - 1);
+
+    private static float CullExtent(float radius) => MathF.Max(radius, 1e-5f) + BoundsPadding + MeshGridReach;
+
+    private void AddCellLight(int cell, int row) =>
+        _cellImage!.SetPixel(++_cellCounts[cell], cell, new Color(row, 0f, 0f));
+
+    private void Write(int row, LightEntry l, float m)
+    {
+        PackedLight p = ActorLighting.PackWorld(l, m);
+        float zone = l.OwnZoneOnly ? l.ZoneIndex : -1f;
+        if (_written[row] && _packed[row] == p && _zones[row] == zone && _brightness[row] == l.Brightness)
+        {
+            return;
+        }
+
+        _written[row] = true;
+        _packed[row] = p;
+        _zones[row] = zone;
+        _brightness[row] = l.Brightness;
+        _dirty = true;
+        _image.SetPixel(0, row, new Color(p.Pos.X, p.Pos.Y, p.Pos.Z, p.Pos.W));
+        _image.SetPixel(1, row, new Color(p.Col.X, p.Col.Y, p.Col.Z, p.Col.W));
+        _image.SetPixel(2, row, new Color(p.Spot.X, p.Spot.Y, p.Spot.Z, p.Spot.W));
+        // y: LightBrightness alone, which ranks the light among those of a static mesh (the light type scales the colour only).
+        _image.SetPixel(3, row, new Color(zone, l.Brightness, 0f, 0f));
+    }
+
+    /// <summary>
+    /// Brightness factor of a light type at scene time <paramref name="time"/> (FDynamicLight::Update, run once a frame):
+    /// <list type="bullet">
+    /// <item>steady 1;</item>
+    /// <item>pulse 0.6 + 0.39 sin(a), subtle pulse 0.9 + 0.09 sin(a), with a = time x 35 x 2 pi / max(1, LightPeriod)
+    /// + (LightPhase &lt;&lt; 8) in radians (the phase keeps the sine table's index scale);</item>
+    /// <item>blink off while the integer part of time x 35 x 65536 / (LightPeriod + 1) + (LightPhase &lt;&lt; 8) is odd
+    /// (an index that moves thousands a frame, so blink reads as noise);</item>
+    /// <item>flicker a new appFrand each frame, 0 below 0.5;</item>
+    /// <item>strobe one switch shared by every strobe light, toggled each time the scene time changes.</item>
+    /// </list>
+    /// </summary>
+    [Provenance(ProvenanceKind.Decoded, "FDynamicLight::Update light types, game 0x10a1de70 (editor 0x111af860)")]
+    public static float Modulation(LightEntry l, float time)
+    {
+        ArgumentNullException.ThrowIfNull(l);
+        // The curves are ActorLightRules.Modulation (shared with the bots); the flicker's value and the strobe switch
+        // are kept here, per frame.
+        return ActorLightRules.Modulation(l.LightType, l.Period, l.Phase, time,
+            l.LightType == 4 ? FrameRandom(l, time) : 1f, l.LightType == 5 && StrobeOff(time));
+    }
+
+    // The shared strobe switch (a static in the original): toggled whenever a new scene time is seen.
+    private static float s_strobeTime = float.NaN;
+    private static bool s_strobeOff;
+
+    private static bool StrobeOff(float time)
+    {
+        if (time != s_strobeTime)
+        {
+            s_strobeTime = time;
+            s_strobeOff = !s_strobeOff;
+        }
+
+        return s_strobeOff;
+    }
+
+    /// <summary>
+    /// The flicker's appFrand: one value per light and frame, the same for the world and actor terms in that frame
+    /// (a hash of the scene time and the light, not the original's generator).
+    /// </summary>
+    private static float FrameRandom(LightEntry l, float time)
+    {
+        uint h = (uint)BitConverter.SingleToInt32Bits(time) ^ (uint)l.Seed;
+        h ^= h >> 16;
+        h *= 0x7feb352dU;
+        h ^= h >> 15;
+        h *= 0x846ca68bU;
+        h ^= h >> 16;
+        return (h >> 8) / 16777216f;
+    }
+
+    public static void EnsureGlobals()
+    {
+        WindowLightFilter.EnsureGlobals();
+        if (s_globalsAdded)
+        {
+            return;
+        }
+
+        Image empty = Image.CreateEmpty(4, 1, false, Image.Format.Rgbaf);
+        ShaderGlobals.Add(TextureParameter, RenderingServer.GlobalShaderParameterType.Sampler2D,
+            ImageTexture.CreateFromImage(empty));
+        ShaderGlobals.Add(CountParameter, RenderingServer.GlobalShaderParameterType.Int, 0);
+        ShaderGlobals.Add(s_cellTextureName, RenderingServer.GlobalShaderParameterType.Sampler2D,
+            ImageTexture.CreateFromImage(empty));
+        ShaderGlobals.Add(s_cellTransformName, RenderingServer.GlobalShaderParameterType.Vec4, Vector4.Zero);
+        ShaderGlobals.Add(s_indexedRowsName, RenderingServer.GlobalShaderParameterType.Int, 0);
+        ShaderGlobals.Add(TuneParameter, RenderingServer.GlobalShaderParameterType.Vec4, DefaultTune);
+        ShaderGlobals.Add(ZoneAmbientParameter, RenderingServer.GlobalShaderParameterType.Sampler2D,
+            ImageTexture.CreateFromImage(Image.CreateEmpty(256, 1, false, Image.Format.Rgbaf)));
+        ShaderGlobals.Add(ZoneAmbientGainParameter, RenderingServer.GlobalShaderParameterType.Vec2, Vector2.Zero);
+        MeshLightSpheres.EnsureGlobals();
+        s_globalsAdded = true;
+    }
+}

@@ -1,0 +1,685 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using Godot;
+using OpenScctGame.Controls;
+using OpenScctGame.Hud.Magma;
+using OpenScctGame.Play.Session;
+
+namespace OpenScctGame.Hud;
+
+/// <summary>Switches for things the original HUD pages do not have.</summary>
+public sealed class HudOptions
+{
+    /// <summary>
+    /// Draws the merc's fire mode under the ammo count and the active vision mode next to the gadget box. The
+    /// original shows the fire mode on the rifle's sight screen and the vision mode only as the picture itself, so
+    /// these lines are a slice addition until the first-person weapon draws its sight skins.
+    /// </summary>
+    public OpenScctGame.Options.HudEditorSettings Layout { get; set; } = new();
+
+    public bool SliceExtras { get; set; } = true;
+
+    /// <summary>
+    /// Shows the spy's objective markers even when HUD.EnhancedRealityLevel is 0. The level comes from the player's
+    /// profile in the original; until profiles are ported the slice turns the markers on here.
+    /// </summary>
+    public bool EnhancedReality { get; set; } = true;
+
+    /// <summary>
+    /// Stretches every page over the whole screen as the unpatched game does (Reloaded's widescreen off); otherwise
+    /// each area keeps the 4:3 scale and is anchored to its side.
+    /// </summary>
+    public bool StretchHud { get; set; }
+
+    /// <summary>Reloaded's classic_crosshair: the merc reticle at the original off-centre spot (rl:qol.crosshair).</summary>
+    public bool ClassicCrosshair { get; set; }
+
+    /// <summary>The merc's custom crosshair; while it is off the original reticle draws.</summary>
+    public OpenScctGame.Options.CrosshairSettings Crosshair { get; set; } = new();
+
+    /// <summary>The name of the key a command is bound to in the player's layout (for the key tokens of page texts), or null.</summary>
+    public Func<string, string?>? KeyName { get; set; }
+
+    /// <summary>The active input layout, including changes made during the round.</summary>
+    public Func<InputBindings?>? CurrentBindings { get; set; }
+}
+
+/// <summary>
+/// A driver for page areas another module owns (the gadget overlays: sticky cam menu, mine menu, backpack, gas mask,
+/// heart sensor). The page runs it after its own drivers and stops hiding the areas it names.
+/// </summary>
+public interface IHudAreaDriver
+{
+    /// <summary>The page side it runs on, or null for both.</summary>
+    HudSide? Side { get; }
+
+    /// <summary>Top-level instance names it drives (the page leaves their visibility to it).</summary>
+    IReadOnlyCollection<string> Areas { get; }
+
+    /// <summary>Reads what it needs from the local controller (null without one), once a frame before the pages run.</summary>
+    void Read(OpenScct.Game.SBase.SPlayerController? pc, HudSnapshot s);
+
+    /// <summary>Drives its areas of <paramref name="page"/> for this frame.</summary>
+    void Drive(HudPage page, HudSnapshot s, float dt);
+}
+
+/// <summary>
+/// A full page that replaces the spy or merc page while it is active (binoculars, sticky cam view, camera network),
+/// as the native page manager swaps pages.
+/// </summary>
+public interface IHudPageOverride
+{
+    /// <summary>The page to update and draw instead of the player page this frame, or null.</summary>
+    HudPage? ActivePage(OpenScct.Game.SBase.SPlayerController? pc, HudSnapshot s);
+}
+
+/// <summary>
+/// One Magma page driven from a <see cref="HudSnapshot"/>, the way the native page object drives its areas: it shows
+/// and hides instances, restarts their animations, writes texts and moves widgets, then the page clock runs and the
+/// page is drawn into a <see cref="MagmaDrawList"/>.
+/// </summary>
+public abstract class HudPage
+{
+    private readonly Dictionary<string, string> _lastTexts = new(StringComparer.Ordinal);
+
+    protected HudPage(HudAssets assets, string pageName, HudOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(assets);
+        Assets = assets;
+        Options = options ?? new HudOptions();
+        MagmaPackage package = assets.Hud;
+        if (!package.Pages.TryGetValue(pageName, out int area))
+        {
+            throw new InvalidOperationException($"page {pageName} is not in the Hud package");
+        }
+
+        Root = new MagmaNode(package, area);
+        Renderer = new MagmaRenderer
+        {
+            TextureSize = assets.TextureSize,
+            MeasureText = (font, text, height, tracking) => assets.Font(font)?.Measure(text, height, 1f, tracking) ?? 0f,
+            ExpandText = text => Options.CurrentBindings?.Invoke() is { } bindings
+                ? KeyTokens.ExpandHint(text, bindings.Layout, bindings.Side == PlaySide.Merc, assets.KeyDisplayName)
+                : text,
+        };
+        // The first update stops every top-level area at frame 0 (the native shared init) and the page inits hide
+        // the areas their drivers own: everything starts hidden here and each driver shows what it draws.
+        foreach (MagmaNode child in Root.Children)
+        {
+            child.SetFrame(0);
+            child.Playing = false;
+            child.SetVisible(false);
+        }
+    }
+
+    public HudAssets Assets { get; }
+
+    public HudOptions Options { get; }
+
+    public MagmaNode Root { get; }
+
+    public MagmaRenderer Renderer { get; }
+
+    public MagmaDrawList DrawList { get; } = new();
+
+    private bool? _ownStretch;
+
+    public abstract HudSide Side { get; }
+
+    /// <summary>Drivers of areas other modules own, run after the page's own.</summary>
+    public List<IHudAreaDriver> Drivers { get; } = new();
+
+    /// <summary>Drives the areas from <paramref name="s"/>, then advances the page clocks by <paramref name="dt"/>.</summary>
+    public void Update(HudSnapshot s, float dt)
+    {
+        ArgumentNullException.ThrowIfNull(s);
+        Root.SetVisible(s.Valid && !s.HideHud, children: false);
+        if (Root.Visible)
+        {
+            Drive(s, dt);
+            foreach (IHudAreaDriver d in Drivers)
+            {
+                if (d.Side is null || d.Side == Side)
+                {
+                    d.Drive(this, s, dt);
+                }
+            }
+        }
+
+        Root.Tick(dt);
+    }
+
+    /// <summary>Draws the page for a screen of <paramref name="screen"/> pixels into <see cref="DrawList"/>.</summary>
+    public void Draw(Vector2 screen, HudSnapshot s)
+    {
+        DrawList.Clear();
+        _ownStretch ??= Renderer.StretchAll;
+        Renderer.StretchAll = _ownStretch.Value || Options.StretchHud;
+        Renderer.DrawPage(Root, screen, DrawList);
+        if (Root.Visible)
+        {
+            DrawGadgetCross(s);
+            DrawGadgetRecharge(s);
+            DrawCanvas(screen, s);
+        }
+
+        if (Root.Visible && Options.SliceExtras)
+        {
+            DrawExtras(s);
+        }
+
+        var layout = Options.Layout.For(Side == HudSide.Merc);
+        if (layout.Count > 0)
+            HudEditorTransform.Apply(DrawList.Items, layout, screen, LayoutBounds(screen));
+    }
+
+    /// <summary>Editable bounds of the current draw list, with stable anchors for animated HUD elements.</summary>
+    public Dictionary<string, Rect2> LayoutBounds(Vector2 screen)
+    {
+        var bounds = HudEditorTransform.Bounds(DrawList.Items);
+        if (bounds.ContainsKey("Radar") && HudRadar.LayoutBounds(this, screen) is { } radar)
+            bounds["Radar"] = radar;
+        return bounds;
+    }
+
+    protected abstract void Drive(HudSnapshot s, float dt);
+
+    protected virtual void DrawExtras(HudSnapshot s)
+    {
+    }
+
+    /// <summary>What the page's SHud state draws on the canvas over the page (the binocular markers).</summary>
+    protected virtual void DrawCanvas(Vector2 screen, HudSnapshot s)
+    {
+    }
+
+    /// <summary>The instance at <paramref name="path"/> below the page root ("Gadget", "Reticule/Reticule").</summary>
+    public MagmaNode? Area(string path) => Root.Find(path);
+
+    /// <summary>Shows an instance; when it was hidden it restarts from frame 0 (native SetVisible + SetTime(0) + Play).</summary>
+    public static void Show(MagmaNode? node, bool restart = true)
+    {
+        if (node is null || node.Visible)
+        {
+            return;
+        }
+
+        node.SetVisible(true);
+        if (restart)
+        {
+            node.SetFrame(0);
+            node.Playing = true;
+        }
+    }
+
+    public static void Hide(MagmaNode? node)
+    {
+        if (node is { Visible: true })
+        {
+            node.SetVisible(false);
+        }
+    }
+
+    public static void SetShown(MagmaNode? node, bool shown, bool restart = true)
+    {
+        if (shown)
+        {
+            Show(node, restart);
+        }
+        else
+        {
+            Hide(node);
+        }
+    }
+
+    public static void SetText(MagmaNode? node, string widget, string text)
+    {
+        if (node is not null)
+        {
+            node.Widget(widget).Text = text;
+        }
+    }
+
+    /// <summary>True when <paramref name="text"/> differs from the last value given for <paramref name="key"/>.</summary>
+    protected bool Changed(string key, string text)
+    {
+        if (_lastTexts.TryGetValue(key, out string? last) && last == text)
+        {
+            return false;
+        }
+
+        _lastTexts[key] = text;
+        return true;
+    }
+
+    // ---- shared drivers ---------------------------------------------------------------------------------------
+
+    private float _shownHealth = -1f;
+
+    /// <summary>
+    /// A_Jauge / A_JaugeEnergie: the fill's top at min(133, 137 - value / 100 x 133) and the two triangles 3 units
+    /// above it (native gauge 0x10b30090).
+    /// </summary>
+    protected static void DriveGauge(MagmaNode gauge, float percent)
+    {
+        float top = Math.Min(HudK.GaugeBottom, HudK.GaugeTopOffset - Math.Clamp(percent, 0f, 100f) / 100f * HudK.GaugeSpan);
+        gauge.Widget("jaugeinterne").Top = top;
+        gauge.Widget("jaugeindicator_gauche").MoveTop = top - HudK.GaugeArrowLift;
+        gauge.Widget("jaugeindicator_droite").MoveTop = top - HudK.GaugeArrowLift;
+    }
+
+    protected void DriveHealth(HudSnapshot s, float dt)
+    {
+        MagmaNode? vie = Area("Vie");
+        MagmaNode? poison = vie?.Find("poison");
+        bool poisonWasVisible = vie is { Visible: true } && poison is { Visible: true };
+        SetShown(vie, s.HasPawn && !s.LifeOff, restart: false);
+        if (vie is null || !s.HasPawn)
+        {
+            _shownHealth = -1f;
+            return;
+        }
+
+        // The native gauge (0x10b30090) starts a frame-count curve on each change, but its blend factor is the int
+        // truncation of (1 - curve), which is 0 on every frame: fill and triangles show the current health at once.
+        _shownHealth = Math.Max(0, s.Health);
+        DriveGauge(vie, _shownHealth);
+        if (poison is not null)
+        {
+            // These authored screen layers live inside the gauge, but must not move its anchor or follow
+            // health-widget layout edits. Keep their original texture, tint, blend and animated geometry.
+            poison.Widget("effet01").Anchor = MagmaAnchor.Stretch;
+            poison.Widget("effet02_dodge").Anchor = MagmaAnchor.Stretch;
+            if (s.Poisoned && (!poisonWasVisible || !poison.Playing || poison.Frame == 0))
+            {
+                poison.SetVisible(true);
+                // Native gauge 0x10b30090 seeks one frame: frame 0 has a Stop action; frames 1..10 loop.
+                poison.SetFrame(1);
+                poison.Playing = true;
+            }
+            else if (!s.Poisoned)
+            {
+                Hide(poison);
+            }
+        }
+    }
+
+    /// <summary>The health the gauge shows now (the real value, clamped at 0).</summary>
+    public float ShownHealth => _shownHealth;
+
+    /// <summary>
+    /// Objectif (spec/hud/counters-and-prompts.md rule 2): the Story count, or in a deathmatch the two team lives on
+    /// the DeathMatch counter, or in Disk Hunt the disks; the shown counter restarts when its value changes.
+    /// </summary>
+    protected void DriveObjectives(HudSnapshot s)
+    {
+        MagmaNode? objectif = Area("Objectif");
+        SetShown(objectif, true, restart: false);
+        MagmaNode? story = objectif?.Find("Story");
+        MagmaNode? dm = objectif?.Find("DeathMatch");
+        bool deathMatch = s.CounterMode == HudCounterMode.DeathMatch;
+        MagmaNode? shown = deathMatch ? dm : story;
+        if (deathMatch)
+        {
+            Hide(story);
+        }
+        else
+        {
+            Hide(dm);
+        }
+
+        string text = s.CounterText.Length > 0 ? s.CounterText : s.ObjectivesLeft.ToString(CultureInfo.InvariantCulture);
+        SetText(shown, "Objectif", text);
+        if (shown is not null && Changed(deathMatch ? "objectives-dm" : "objectives", text))
+        {
+            shown.Restart();
+        }
+    }
+
+    /// <summary>Chrono: the time-limit countdown, hidden without a time limit or past it.</summary>
+    protected void DriveChrono(HudSnapshot s)
+    {
+        MagmaNode? chrono = Area("Chrono");
+        string? text = s.TimeOff ? null : HudK.ChronoText(s.TimeLimit, s.ElapsedTime);
+        SetShown(chrono, text is not null, restart: false);
+        if (text is not null && chrono is not null)
+        {
+            SetText(chrono, "Chrono", text);
+            chrono.Widget("Chrono").KeepInside = true;
+        }
+    }
+
+    /// <summary>
+    /// The Hacking, Objective and Alarm countdown boxes (open over f0..f6 and hold). Returns whether an objective box
+    /// is in use (the merc's alert box follows it).
+    /// </summary>
+    protected bool DriveCountdowns(HudSnapshot s)
+    {
+        Countdown(Area("ChronoHack"), "Chrono_Hack", s.HackCountdown);
+        Countdown(Area("ChronoObjectif"), "Chrono_Objectif", s.ObjectiveCountdowns.Count > 0 ? s.ObjectiveCountdowns[0] : null);
+        Countdown(Area("ChronoObjectif2"), "Chrono_Objectif2", s.ObjectiveCountdowns.Count > 1 ? s.ObjectiveCountdowns[1] : null);
+        Countdown(Area("ChronoAlarm"), "Chrono_Alarm", s.AlarmSeconds is { } a ? new HudCountdown(a) : null);
+        return s.ObjectiveCountdowns.Count > 0;
+    }
+
+    private static void Countdown(MagmaNode? box, string widget, HudCountdown? value)
+    {
+        if (box is null)
+        {
+            return;
+        }
+
+        if (value is not { } v)
+        {
+            Hide(box);
+            return;
+        }
+
+        SetText(box, widget, HudK.CountdownText(v.Seconds));
+        if (!box.Visible)
+        {
+            Show(box);
+        }
+        else if (box.Frame == 0)
+        {
+            box.Playing = true;
+        }
+    }
+
+    /// <summary>Gadget: shown with gadget slots, a selected gadget and the gadget display on.</summary>
+    protected void DriveGadget(HudSnapshot s)
+    {
+        MagmaNode? box = Area("Gadget");
+        bool shown = s.TeamGadgetSlots > 0 && s.Gadget is not null && !s.GadgetOff;
+        SetShown(box, shown, restart: false);
+        if (!shown || box is null || s.Gadget is not { } g)
+        {
+            return;
+        }
+
+        SetText(box, "NbGadget", g.RechargeRemaining > 0f ? MathF.Ceiling(g.RechargeRemaining).ToString(CultureInfo.InvariantCulture) + "s" :
+            g.Charge < 0 ? HudK.NoCharge : g.Charge.ToString(CultureInfo.InvariantCulture));
+        SetText(box, "NomGadget", g.Name);
+        // The icon is a HUDConfig region named by the gadget's MagmaIconName in Options.mgm (C_Default_2 when missing).
+        MagmaPackage? options = Assets.Package("Options");
+        int icon = options?.FindMaterial(g.MagmaIconName) ?? -1;
+        if (icon < 0)
+        {
+            icon = options?.FindMaterial("C_Default_2") ?? -1;
+        }
+
+        MagmaOverride image = box.Widget("Gadget");
+        if (icon >= 0)
+        {
+            image.Region = options!.Materials[icon].Region;
+        }
+
+        image.Tint = g.Unavailable ? UnavailableIconColour : g.RechargeRemaining > 0f ? new Color(.45f, .45f, .45f, .7f) : null;
+    }
+
+    /// <summary>An unavailable gadget's icon: greyed and half transparent, like an unavailable gadget menu line.</summary>
+    private static readonly Color UnavailableIconColour = new(0.5f, 0.5f, 0.5f, 0.6f);
+
+    /// <summary>The cross over an unavailable gadget's icon.</summary>
+    private static readonly Color GadgetCrossColour = new(0.9f, 0.12f, 0.1f, 0.95f);
+
+    private WhiteRegion? _white;
+
+    /// <summary>
+    /// An OpenSCCT addition: a red cross drawn over the gadget box's icon when the selected gadget cannot work on this
+    /// level (<see cref="HudGadget.Unavailable"/>), on top of the drawn page.
+    /// </summary>
+    private void DrawGadgetCross(HudSnapshot s)
+    {
+        if (s.Gadget is not { Unavailable: true } || DrawList.Find("Gadget/Gadget") is not { Points.Length: >= 4 } icon)
+        {
+            return;
+        }
+
+        float opacity = 0f;
+        foreach (Color colour in icon.Colors) opacity = Math.Max(opacity, colour.A);
+        opacity = Math.Min(1f, opacity / UnavailableIconColour.A);
+        if (opacity <= 0f) return;
+
+        _white ??= WhiteRegion.Find(Assets);
+        if (_white is not { } white)
+        {
+            return;
+        }
+
+        float l = float.MaxValue, t = float.MaxValue, r = float.MinValue, b = float.MinValue;
+        foreach (Vector2 p in icon.Points)
+        {
+            l = Mathf.Min(l, p.X);
+            t = Mathf.Min(t, p.Y);
+            r = Mathf.Max(r, p.X);
+            b = Mathf.Max(b, p.Y);
+        }
+
+        float inset = (r - l) * 0.12f;
+        var tl = new Vector2(l + inset, t + inset);
+        var br = new Vector2(r - inset, b - inset);
+        float thickness = Mathf.Max(2f, (r - l) * 0.1f);
+        Bar("Extras/GadgetCrossA", tl, br, thickness, white, GadgetCrossColour with { A = GadgetCrossColour.A * opacity });
+        Bar("Extras/GadgetCrossB", new Vector2(br.X, tl.Y), new Vector2(tl.X, br.Y), thickness, white,
+            GadgetCrossColour with { A = GadgetCrossColour.A * opacity });
+    }
+
+    private void DrawGadgetRecharge(HudSnapshot s)
+    {
+        if (s.Gadget is not { RechargeRemaining: > 0f } gadget) return;
+        _white ??= WhiteRegion.Find(Assets);
+        if (_white is not { } white) return;
+        float l = float.MaxValue, t = float.MaxValue, r = float.MinValue, b = float.MinValue;
+        // A masked Magma rectangle can produce several clipped pieces with the same path.
+        // Bound the complete box, so the fill grows from its bottom rather than a partial icon/piece.
+        foreach (var piece in DrawList.Items)
+            if (piece.Path == "Gadget/fond01")
+                foreach (Vector2 p in piece.Points)
+                {
+                    l = Math.Min(l, p.X); t = Math.Min(t, p.Y);
+                    r = Math.Max(r, p.X); b = Math.Max(b, p.Y);
+                }
+        if (l == float.MaxValue) return;
+        float progress = Math.Clamp(1f - gadget.RechargeRemaining / OpenScct.Game.Svm.CloneGadget.RechargeSeconds, 0f, 1f);
+        float height = (b - t) * progress;
+        if (height > 0f) Bar("Gadget/RechargeFill", new Vector2(l, b - height * .5f),
+            new Vector2(r, b - height * .5f), height, white, HudK.SpyColour with { A = .18f });
+    }
+
+    protected void ProgressBar(string path, Vector2 start, float width, float progress, MagmaAnchor anchor, Color color)
+    {
+        _white ??= WhiteRegion.Find(Assets);
+        if (_white is not { } white) return;
+
+        Vector2 from = Renderer.ToScreen(start, anchor);
+        Vector2 end = Renderer.ToScreen(start + new Vector2(width, 0f), anchor);
+        Bar(path + "/Track", from, end, 5f * Renderer.S, white, new Color(0f, 0f, 0f, 0.8f));
+        Bar(path + "/Fill", from, from.Lerp(end, progress), 3f * Renderer.S, white, color);
+    }
+
+    /// <summary>A solid bar from <paramref name="from"/> to <paramref name="to"/>, <paramref name="thickness"/> pixels wide.</summary>
+    private void Bar(string path, Vector2 from, Vector2 to, float thickness, WhiteRegion white, Color c)
+    {
+        Vector2 dir = (to - from).Normalized();
+        Vector2 side = new Vector2(-dir.Y, dir.X) * (thickness / 2f);
+        MagmaDrawItem item = DrawList.Add(MagmaWidgetKind.Image);
+        item.Path = path;
+        item.Package = white.Package;
+        item.Texture = white.Texture;
+        item.SetGeometry([from + side, to + side, to - side, from - side],
+            [white.Uv, white.Uv, white.Uv, white.Uv], [c, c, c, c]);
+    }
+
+    /// <summary>
+    /// The four message areas (spec/hud/messages.md rules 8 and 9): the stacks' live entries after a leading line
+    /// break, the game queue's head alone; an area shows from frame 0 when it appears and is not restarted when its
+    /// text changes. The zone area is not driven in a deathmatch; the game area waits while the tutorial shows.
+    /// </summary>
+    protected void DriveMessages(HudSnapshot s)
+    {
+        Message("SystemMessage", "messageSystem", HudMessages.StackText(s.SystemMessages));
+        Message("StateMessage", "messageState", HudMessages.StackText(s.StateMessages));
+        if (s.CounterMode != HudCounterMode.DeathMatch)
+        {
+            Message("ZoneMessage", "_ZoneMessage", HudMessages.StackText(s.InfoMessages));
+        }
+
+        if (s.Tutorial.Length == 0)
+        {
+            Message("GameMessage", "messageGame", s.GameMessages.Count > 0 ? s.GameMessages[0] : "");
+        }
+        else
+        {
+            Hide(Area("GameMessage"));
+        }
+    }
+
+    private void Message(string area, string widget, string text)
+    {
+        MagmaNode? node = Area(area);
+        if (node is null)
+        {
+            return;
+        }
+
+        if (text.Length == 0)
+        {
+            Hide(node);
+            return;
+        }
+
+        SetText(node, widget, text);
+        Show(node);
+    }
+
+    /// <summary>TutoMessage: keep the authored text panel open for as long as a zone hint is active.</summary>
+    protected void DriveTutorial(HudSnapshot s)
+    {
+        MagmaNode? tuto = Area("TutoMessage");
+        SetShown(tuto, s.Tutorial.Length > 0);
+        if (s.Tutorial.Length > 0)
+        {
+            MagmaNode? panel = tuto?.Find("Tuto");
+            SetText(panel, "messageTuto", s.Tutorial);
+            // The exported panel's mask collapses to zero height at frame 8. Zone hints have no timeout:
+            // the zone owns their lifetime, so hold the fully open frame instead of playing the close animation.
+            if (panel is not null)
+            {
+                panel.SetFrame(1);
+                panel.Playing = false;
+            }
+        }
+    }
+
+    private float _ballisticLatch;
+
+    /// <summary>
+    /// The throw charge (Bridge spy page notes 3.1): hidden at 0; below 1 paused on frame trunc(10 v); at 1 it plays
+    /// from frame 10 once (the full-bar blink), latched until the area hides.
+    /// </summary>
+    protected void DriveBallistic(MagmaNode? area, float v)
+    {
+        if (area is null)
+        {
+            return;
+        }
+
+        if (v <= 0f)
+        {
+            Hide(area);
+            _ballisticLatch = 0f;
+            return;
+        }
+
+        if (!area.Visible)
+        {
+            area.SetVisible(true);
+        }
+
+        if (v < 1f)
+        {
+            area.SetFrame((int)(10f * v));
+            area.Playing = false;
+        }
+        else if (_ballisticLatch != v)
+        {
+            _ballisticLatch = v;
+            area.SetFrame(10);
+            area.Playing = true;
+        }
+    }
+
+    /// <summary>The compact roster was replaced by the passive full scoreboard.</summary>
+    protected void DrivePlayers(HudSnapshot s) => SetShown(Area("PCConnectedPlayers"), false, restart: false);
+
+    /// <summary>The page position of a top-level instance from its first key.</summary>
+    protected Vector2 InstanceOrigin(MagmaNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        MagmaWidget w = Root.Area.Widgets[node.WidgetIndex];
+        return w.Keys.Count > 0 ? w.Keys[0].Pos : Vector2.Zero;
+    }
+
+    /// <summary>Areas the slice does not drive yet: hidden, as the native inits leave them until their driver runs.</summary>
+    protected void HideAll(params string[] names)
+    {
+        foreach (string name in names)
+        {
+            if (!OwnedByDriver(name))
+            {
+                Hide(Area(name));
+            }
+        }
+    }
+
+    /// <summary>Whether an area belongs to one of <see cref="Drivers"/>.</summary>
+    protected bool OwnedByDriver(string name)
+    {
+        foreach (IHudAreaDriver d in Drivers)
+        {
+            if (d.Side is not null && d.Side != Side)
+            {
+                continue;
+            }
+
+            foreach (string area in d.Areas)
+            {
+                if (string.Equals(area, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>An extra text line in the HUD font (slice additions), at page units with the anchor of the area.</summary>
+    protected void ExtraText(string path, string text, Rect4 pageRect, MagmaAnchor anchor, MagmaAlign align, Color color,
+        float pageHeight = HudK.ExtraTextHeight)
+    {
+        if (text.Length == 0)
+        {
+            return;
+        }
+
+        Vector2 p0 = Renderer.ToScreen(new Vector2(pageRect.L, pageRect.T), anchor);
+        Vector2 p1 = Renderer.ToScreen(new Vector2(pageRect.R, pageRect.B), anchor);
+        float height = Mathf.Round(pageHeight * Renderer.S);
+        MagmaDrawItem item = DrawList.Add(MagmaWidgetKind.Text);
+        item.Path = path;
+        item.Anchor = anchor;
+        item.PageRect = pageRect;
+        item.Text = text;
+        item.Font = HudAssets.DefaultFont;
+        item.Rect = new Rect2(p0, p1 - p0);
+        item.HeightPx = height;
+        item.Align = align;
+        item.Color = color;
+        item.Shadow = new Color(0f, 0f, 0f, color.A);
+        item.ShadowOffsetPx = new Vector2(1f, 1f) * Renderer.S;
+        item.TrackingPx = 0.045f * height;
+    }
+}
