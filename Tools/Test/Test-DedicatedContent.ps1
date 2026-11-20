@@ -3,7 +3,7 @@
 .SYNOPSIS
 Checks the Unreal server's content selection against a conflicting installation and an explicitly configured map.
 .EXAMPLE
-pwsh Tools/Test/Test-DedicatedContent.ps1 -Archive Saved/Release/0.1.10/OpenSCCT-Unreal-Server-0.1.10-win-x64.zip
+pwsh Tools/Test/Test-DedicatedContent.ps1 -Archive Saved/Release/0.1.11/OpenSCCT-Unreal-Server-0.1.11-win-x64.zip
 #>
 param([Parameter(Mandatory)][string]$Archive)
 $ErrorActionPreference = 'Stop'

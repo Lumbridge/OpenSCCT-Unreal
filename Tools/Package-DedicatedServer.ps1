@@ -3,7 +3,7 @@
 .SYNOPSIS
 Builds the self-contained OpenSCCT Unreal dedicated server using the runtime in this checkout.
 .EXAMPLE
-pwsh Tools/Package-DedicatedServer.ps1 -Version 0.1.10 -Out Saved/Release/0.1.10
+pwsh Tools/Package-DedicatedServer.ps1 -Version 0.1.11 -Out Saved/Release/0.1.11
 #>
 [CmdletBinding()]
 param(
@@ -68,7 +68,10 @@ try {
         $maps = [IO.Directory]::CreateDirectory((Join-Path $publish 'maps')).FullName
         Copy-Item -LiteralPath (Join-Path $runtimeRoot 'fixtures/testbox') -Destination (Join-Path $maps 'TestBox') -Recurse
         Copy-Item -LiteralPath $receipt -Destination (Join-Path $publish 'contenttools') -Recurse
-        Copy-Item -LiteralPath (Join-Path $templates 'server.json'), (Join-Path $templates 'README.md') -Destination $publish
+        $settings = Get-Content -Raw -LiteralPath (Join-Path $templates 'server.json') | ConvertFrom-Json
+        $settings.name = "$($settings.name) ($Version)"
+        [IO.File]::WriteAllText((Join-Path $publish 'server.json'), ($settings | ConvertTo-Json -Depth 8) + "`n")
+        Copy-Item -LiteralPath (Join-Path $templates 'README.md') -Destination $publish
         if ($rid -eq 'linux-x64') {
             Copy-Item -LiteralPath (Join-Path $templates 'openscct-unreal-server.service') -Destination $publish
             $name = "OpenSCCT-Unreal-Server-$Version-$rid.tar.gz"
