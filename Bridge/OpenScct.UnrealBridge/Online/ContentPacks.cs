@@ -13,8 +13,7 @@ namespace OpenScct.UnrealBridge.Online;
 /// <summary>
 /// The client's downloads from OpenSCCT-Content (docs/CONTENT-PACKS.md in OpenSCCT), ported from the Godot client's
 /// game/Scripts/Online/ContentPacks.cs, which has no Godot in it: the content index, read in the background and kept
-/// for ten minutes, and one download job per map, which first fetches the shared packs when the player has no shared
-/// content of their own (no converted install). Downloads go into <see cref="ContentPaths.PacksFolder"/>, whose
+/// for ten minutes, and one download job per eligible community map. Downloads go into <see cref="ContentPaths.PacksFolder"/>, whose
 /// <c>svmap</c> every map catalog of this client already searches, so a map downloaded here plays offline and online
 /// through the runtime map level once the catalogs are read again (<see cref="Generation"/>).
 /// <para>Thread-safe: the downloads run on worker threads, Unreal polls <see cref="Job"/> and <see cref="Generation"/>
@@ -45,19 +44,10 @@ public static class ContentPacks
             Title = map.DisplayTitle;
         }
 
-        internal DownloadJob(ContentSharedPack pack)
-        {
-            Shared = pack;
-            Title = pack.Title.Length > 0 ? pack.Title : pack.Id;
-        }
-
         internal DownloadJob(string title) => Title = title;
 
         /// <summary>The map being downloaded, or null for a shared pack or bot navigation.</summary>
         public ContentMap? Map { get; }
-
-        /// <summary>The shared pack being downloaded, or null.</summary>
-        public ContentSharedPack? Shared { get; }
 
         /// <summary>The map's title, or the shared pack's.</summary>
         public string Title { get; }
@@ -108,56 +98,9 @@ public static class ContentPacks
         }
     }
 
-    /// <summary>The key a shared pack's own download is kept under.</summary>
-    public static string SharedKey(string id) => "shared:" + id;
-
-    /// <summary>The Content page's download of a shared pack, running or finished, else null.</summary>
-    public static DownloadJob? SharedJob(string id) => Job(SharedKey(id));
-
-    /// <summary>
-    /// Downloads a shared pack (core, chars, audio) on its own, as the Content page's Download does; a running one
-    /// is returned as it is.
-    /// </summary>
-    public static DownloadJob DownloadShared(ContentSharedPack pack)
-    {
-        ArgumentNullException.ThrowIfNull(pack);
-        DownloadJob job;
-        lock (Gate)
-        {
-            if (Jobs.TryGetValue(SharedKey(pack.Id), out DownloadJob? running) && running.Running)
-            {
-                return running;
-            }
-
-            job = new DownloadJob(pack);
-            Jobs[SharedKey(pack.Id)] = job;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                job.Step = $"Downloading {job.Title}";
-                await Store.InstallSharedAsync(pack, Progress(job), job.Stop.Token).ConfigureAwait(false);
-                job.Done = true;
-                Interlocked.Increment(ref s_generation);
-            }
-            catch (OperationCanceledException) when (job.Stop.IsCancellationRequested)
-            {
-                job.Error = "stopped";
-            }
-            catch (Exception e) when (e is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException or TaskCanceledException)
-            {
-                NetworkDiagnostics.Report("content download: " + job.Title, e);
-                job.Error = e is TaskCanceledException ? "the download timed out" : NetworkDiagnostics.Describe(e);
-            }
-        });
-        return job;
-    }
-
     /// <summary>
     /// The store downloads go into: the packs folder as <see cref="BridgeSession.Configure"/> set it. Made again when
-    /// that folder changed (a test process moves it with OPENSCCT_PACKS) and nothing is downloading.
+    /// that folder changed (a test process moves it with OPENSCCT_UNREAL_PACKS) and nothing is downloading.
     /// </summary>
     public static ContentStore Store
     {
@@ -175,7 +118,10 @@ public static class ContentPacks
         string root = ContentPaths.PacksFolder;
         if (s_store is null || (!string.Equals(s_storeRoot, root, StringComparison.OrdinalIgnoreCase) && !AnyRunningLocked()))
         {
-            s_store = new ContentStore(root, Http);
+            s_store = new ContentStore(root, Http)
+            {
+                ResolveCommunityBuilder = () => CommunityBuildContext.ResolveUnreal(BridgeSession.UnrealContentDirectory, BridgeSession.UnrealToolsDirectory),
+            };
             s_storeRoot = root;
         }
 
@@ -267,7 +213,7 @@ public static class ContentPacks
     public static string NavigationKey(string map) => "nav:" + map;
 
     /// <summary>The map of the index for a code, else null.</summary>
-    public static ContentMap? Find(string code, string? contentHash = null) => Index?.FindMap(code, contentHash);
+    public static ContentMap? Find(string code, string? contentHash = null) => SteamVersusMaps.Contains(code) ? null : Index?.FindMap(code, contentHash);
 
     /// <summary>
     /// Removes a downloaded map (its folder under packs\svmap and its entry) and forgets its finished download. A
@@ -292,17 +238,16 @@ public static class ContentPacks
         Interlocked.Increment(ref s_generation);
     }
 
-    /// <summary>The player has converted shared content of their own (so the downloaded shared packs go unused).</summary>
-    public static bool UsesOwnSharedContent => HasOwnSharedContent();
-
     /// <summary>
-    /// Downloads a map (once; a failed or finished one may be started again). The shared packs come first when the
-    /// player has no shared content of their own.
+    /// Downloads a community map for the local Steam conversion.
     /// </summary>
     public static DownloadJob Download(ContentMap map)
     {
         ArgumentNullException.ThrowIfNull(map);
-        ContentIndex? index = Index;
+        if (!map.CanDistribute)
+            return new DownloadJob(map) { Error = "Only reviewed community content is available for download." };
+        if (!ContentPaths.SteamBaseReady)
+            return new DownloadJob(map) { Error = "Use Set up from Steam in OpenSCCT Unreal first." };
         DownloadJob job;
         lock (Gate)
         {
@@ -316,7 +261,7 @@ public static class ContentPacks
             Jobs[map.Code] = job;
         }
 
-        _ = Task.Run(() => RunAsync(job, index));
+        _ = Task.Run(() => RunAsync(job));
         return job;
     }
 
@@ -360,25 +305,11 @@ public static class ContentPacks
         return job;
     }
 
-    private static async Task RunAsync(DownloadJob job, ContentIndex? index)
+    private static async Task RunAsync(DownloadJob job)
     {
         ContentStore store = Store;
         try
         {
-            // Without a converted install the game has no shared content: the downloaded packs supply it.
-            if (index is not null && !HasOwnSharedContent())
-            {
-                foreach (ContentSharedPack pack in index.Shared)
-                {
-                    if (!store.HasShared(pack))
-                    {
-                        job.Step = $"Downloading {(pack.Title.Length > 0 ? pack.Title : pack.Id)}";
-                        await store.InstallSharedAsync(pack, Progress(job), job.Stop.Token).ConfigureAwait(false);
-                        Interlocked.Increment(ref s_generation);
-                    }
-                }
-            }
-
             job.Step = $"Downloading {job.Title}";
             await store.InstallMapAsync(job.Map!, ContentKind.Full, Progress(job), job.Stop.Token).ConfigureAwait(false);
             job.InstalledFolder = Path.Combine(store.SvMapRoot, job.Map!.Code);
@@ -389,16 +320,12 @@ public static class ContentPacks
         {
             job.Error = "stopped";
         }
-        catch (Exception e) when (e is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException or TaskCanceledException)
+        catch (Exception e) when (e is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException or TaskCanceledException or InvalidOperationException)
         {
             NetworkDiagnostics.Report("content download: " + job.Title, e);
             job.Error = e is TaskCanceledException ? "the download timed out" : NetworkDiagnostics.Describe(e);
         }
     }
-
-    /// <summary>The player converted an install (the content folder this client was started with has a shared folder).</summary>
-    private static bool HasOwnSharedContent() =>
-        ContentPaths.Root is { } root && Directory.Exists(Path.Combine(root, "shared"));
 
     private static Progress<PackProgress> Progress(DownloadJob job) => new(p =>
     {

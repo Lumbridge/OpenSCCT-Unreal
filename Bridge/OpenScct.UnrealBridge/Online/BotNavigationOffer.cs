@@ -35,6 +35,11 @@ public static class BotNavigationOffer
     /// </summary>
     public static BotNavigationState Check(string map, out string text)
     {
+        if (SteamVersusMaps.Contains(map))
+        {
+            text = string.Empty;
+            return BotNavigationState.None;
+        }
         if (!Find(map, out string folder, out SvMapManifest? manifest, out text))
         {
             return BotNavigationState.None;
@@ -70,6 +75,7 @@ public static class BotNavigationOffer
     /// <summary>Starts downloading the map's prebuilt navigation; null when the index has none for it.</summary>
     public static ContentPacks.DownloadJob? Start(string map)
     {
+        if (SteamVersusMaps.Contains(map)) return null;
         if (!Find(map, out _, out SvMapManifest? manifest, out _) ||
             ContentPacks.Index?.FindBotNavigation(manifest!.Map, manifest.SimHash, NavGraph.FormatVersion) is not { } nav)
         {

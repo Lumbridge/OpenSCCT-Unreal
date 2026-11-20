@@ -61,7 +61,7 @@ public static class ContentCatalogue
                     detail.Add("Downloaded " + pack.InstalledAt.ToLocalTime().ToString("g", CultureInfo.InvariantCulture));
                 }
 
-                Row(text, "map", map.Code, map.DisplayTitle, map.Category, map.Full.Size, state,
+                Row(text, "map", map.Code, map.DisplayTitle, map.Category, map.DownloadSize(), state,
                     state == "downloaded" ? pack!.Version : map.Version, ContentPacks.Job(map.Code), Picture(map.Code), string.Join(',', map.Modes), detail);
             }
         }
@@ -73,21 +73,6 @@ public static class ContentCatalogue
                 ["Map code " + pack.Code, "Downloaded " + pack.InstalledAt.ToLocalTime().ToString("g", CultureInfo.InvariantCulture)]);
         }
 
-        bool own = ContentPacks.UsesOwnSharedContent;
-        if (index is not null)
-        {
-            foreach (ContentSharedPack pack in index.Shared)
-            {
-                bool has = store.HasShared(pack);
-                bool older = !has && installed.Any(c => c.IsShared && string.Equals(c.Code, pack.Id, StringComparison.OrdinalIgnoreCase));
-                string state = has ? "downloaded" : older ? "update" : own ? "notneeded" : "available";
-                Row(text, "shared", pack.Id, pack.Title.Length > 0 ? pack.Title : pack.Id, string.Empty, pack.Download.Size, state, pack.Version,
-                    ContentPacks.SharedJob(pack.Id), string.Empty, string.Empty,
-                    [pack.Contents.Count > 0 ? "Holds " + string.Join(", ", pack.Contents) : pack.Id,
-                        has || older ? string.Empty : own ? "Your converted game files have it." : "Maps download it when they need it."]);
-            }
-        }
-
         return text.ToString();
     }
 
@@ -95,14 +80,12 @@ public static class ContentCatalogue
     public static string Library()
     {
         string own = ContentPaths.Root is { } root
-            ? "Converted from your game: " + root
-            : ContentPacks.UsesOwnSharedContent
-                ? "Converted from your game"
-                : "No converted game files: the shared packs supply what maps need.";
+            ? "Built from Steam: " + root
+            : "Open the OpenSCCT launcher to build your Steam game files.";
         return own + "\nDownloads: " + ContentPaths.PacksFolder;
     }
 
-    /// <summary>The page's status line: loading, the index's failure, or how many maps there are and are downloaded.</summary>
+    /// <summary>The page's status line: loading, the index's failure, or how many maps are available and installed.</summary>
     public static string Summary()
     {
         ContentIndex? index = ContentPacks.Index;
@@ -115,7 +98,7 @@ public static class ContentCatalogue
 
         int count = index.PlayableMaps().Count();
         int have = ContentPacks.Store.Installed().Count(c => !c.IsShared);
-        return string.Create(CultureInfo.InvariantCulture, $"{count} maps on OpenSCCT-Content, {have} downloaded.") + (index.Problem is { } p ? " " + p : string.Empty);
+        return string.Create(CultureInfo.InvariantCulture, $"{count} community maps, {have} downloaded.") + (index.Problem is { } p ? " " + p : string.Empty);
     }
 
     /// <summary>
@@ -150,21 +133,7 @@ public static class ContentCatalogue
     }
 
     /// <summary>Starts a shared pack's download. Returns 1 started (or running), 0 the index has no such pack, -1 the index is not read yet.</summary>
-    public static int StartShared(string id)
-    {
-        if (ContentPacks.Index is not { } index)
-        {
-            return -1;
-        }
-
-        if (index.FindShared(id) is not { } pack)
-        {
-            return 0;
-        }
-
-        ContentPacks.DownloadShared(pack);
-        return 1;
-    }
+    public static int StartShared(string id) => 0;
 
     private static bool InGameFiles(string code) =>
         ContentPaths.SvMap is { } svmap && File.Exists(Path.Combine(svmap, code, "manifest.json"));

@@ -8,10 +8,12 @@ namespace OpenScct.Maps;
 
 public sealed partial class ContentStore
 {
+    public Func<CommunityBuildContext>? ResolveCommunityBuilder { get; init; }
+
     private async Task<string> BuildCommunityMapAsync(ContentMap map, SteamMapRecipe recipe, string staging,
         IProgress<PackProgress>? progress, CancellationToken cancel)
     {
-        CommunityBuildContext context = CommunityBuildContext.Resolve(Root);
+        CommunityBuildContext context = ResolveCommunityBuilder?.Invoke() ?? CommunityBuildContext.Resolve(Root);
         foreach (string dependency in recipe.SteamFiles)
         {
             if (!File.Exists(Path.Combine(context.SteamVersusFolder, dependency)))

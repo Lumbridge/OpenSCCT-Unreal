@@ -20,7 +20,7 @@ internal static unsafe class DownloadProbe
         bool nav = args.Length > 3 && args[3] == "nav";
 
         // The packs folder BridgeSession.Configure reads, as a test process of Unreal moves it.
-        Environment.SetEnvironmentVariable("OPENSCCT_PACKS", packs);
+        Environment.SetEnvironmentVariable("OPENSCCT_UNREAL_PACKS", packs);
         BridgeSession.Configure(content);
 
         ContentApi api;

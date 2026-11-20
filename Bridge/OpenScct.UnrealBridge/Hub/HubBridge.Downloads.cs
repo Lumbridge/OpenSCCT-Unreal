@@ -41,7 +41,7 @@ public sealed partial class HubBridge
 
     /// <summary>"Aquarius - download 31 MB".</summary>
     public static string DownloadTitle(ContentMap map) =>
-        string.Create(CultureInfo.InvariantCulture, $"{map.DisplayTitle} - download {Math.Max(1, map.Full.Size / 1048576)} MB");
+        string.Create(CultureInfo.InvariantCulture, $"{map.DisplayTitle} - download {Math.Max(1, map.DownloadSize() / 1048576)} MB");
 
     /// <summary>Picking a map the player lacks at the laptop: starts its download. False when the index does not have it.</summary>
     private bool StartLaptopDownload(string mapId)

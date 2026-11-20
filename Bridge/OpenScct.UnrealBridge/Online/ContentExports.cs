@@ -220,6 +220,7 @@ public static unsafe class ContentExports
     /// <summary>The managed side of <c>StartMapDownload</c>.</summary>
     public static int Start(string map, string? hash)
     {
+        if (SteamVersusMaps.Contains(map)) return 0;
         if (ContentPacks.Index is not { } index)
         {
             return -1;
@@ -231,7 +232,11 @@ public static unsafe class ContentExports
             return 0;
         }
 
-        ContentPacks.Download(found);
+        if (ContentPacks.Download(found).Error is { } error)
+        {
+            Exports.ReportFailure(error);
+            return -2;
+        }
         return 1;
     }
 

@@ -29,7 +29,8 @@ namespace
 		{
 			Host = InHost;
 			UScctMenuSubsystem* Menu = UScctMenuSubsystem::GetCurrent();
-			if (UScctOnlineSubsystem* Visit = Host.Online.Get())
+			const bool bNeedsSetup = FOpenSCCTModule::FindContentRoot().IsEmpty();
+			if (UScctOnlineSubsystem* Visit = Host.Online.Get(); Visit != nullptr && !bNeedsSetup)
 			{
 				// The master's message of the day comes with its list.
 				Visit->EnsureConnected();
@@ -51,7 +52,7 @@ namespace
 
 			// A round this game dropped out of that is still being played: shown once the master or the server confirmed
 			// it (Online/ScctRejoinSubsystem.h), with a question the first time it is offered.
-			if (UScctOnlineSubsystem* Visit = Host.Online.Get())
+			if (UScctOnlineSubsystem* Visit = Host.Online.Get(); Visit != nullptr && !bNeedsSetup)
 			{
 				Rejoin = Visit->GetGameInstance()->GetSubsystem<UScctRejoinSubsystem>();
 			}
@@ -107,7 +108,7 @@ namespace
 				return Index;
 			};
 
-			if (FOpenSCCTModule::FindContentRoot().IsEmpty())
+			if (bNeedsSetup)
 			{
 				Add(Top, TEXT("Set up from Steam"), TEXT("Build original maps and assets"),
 					TEXT("Select your Steam installation of Chaos Theory. Setup reads the original files and saves the converted maps on this PC."),

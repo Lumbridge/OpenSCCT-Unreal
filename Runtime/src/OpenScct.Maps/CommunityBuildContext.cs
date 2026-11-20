@@ -17,23 +17,42 @@ public sealed record CommunityBuildContext(BuilderTool Tool, string SteamVersusF
             ? configured : Path.Combine(launcher, "content");
         string root = SteamContentInstall.ActiveRoot(content)
             ?? throw new InvalidOperationException("Build the original game content from Steam in the OpenSCCT launcher before installing this map.");
+        string source = SteamSource(root);
+        foreach (string? directory in ToolDirectories(launcher, builderDirectory))
+        {
+            if (directory is null) continue;
+            if (ReadTool(Path.Combine(directory, BuilderTool.ToolsFolder)) is { } tool)
+                return new CommunityBuildContext(tool, source, root);
+        }
+        throw new InvalidOperationException("Install or repair the current Godot game or Editor to restore the Steam map builder.");
+    }
+
+    public static CommunityBuildContext ResolveUnreal(string contentDirectory, string toolsDirectory)
+    {
+        string root = UnrealSteamInstall.ActiveRoot(contentDirectory, UnrealSteamInstall.ReadRecipe(toolsDirectory))
+            ?? throw new InvalidOperationException("Use Set up from Steam in OpenSCCT Unreal before installing this map.");
+        var tool = ReadTool(toolsDirectory)
+            ?? throw new InvalidOperationException("Repair or reinstall OpenSCCT Unreal to restore its map converter.");
+        return new CommunityBuildContext(tool, SteamSource(root), root);
+    }
+
+    private static BuilderTool? ReadTool(string directory)
+    {
+        string marker = Path.Combine(directory, "steam-builder-v1");
+        string python = OperatingSystem.IsLinux() ? Path.Combine(directory, "python", "bin", "python3") : Path.Combine(directory, "python", "python.exe");
+        string module = Path.Combine(directory, "repo", "content");
+        return File.Exists(marker) && File.ReadAllText(marker).Trim() == (OperatingSystem.IsLinux() ? "linux-x64" : "win-x64") &&
+            File.Exists(python) && File.Exists(Path.Combine(module, "svmbuild", "__main__.py")) ? new BuilderTool(python, module) : null;
+    }
+
+    private static string SteamSource(string root)
+    {
         string? source = ReadString(Path.Combine(root, "content-build.json"), "game");
         if (string.IsNullOrWhiteSpace(source) || !Path.IsPathFullyQualified(source) ||
             Directory.GetParent(source) is not { } game || !SteamLibraryManifest.IsManifestInstall(game) ||
             !File.Exists(Path.Combine(source, "System", "SCCT_Versus.exe")) || !File.Exists(Path.Combine(source, "Packages", "Maps", "Entry.sdc")))
-            throw new InvalidOperationException("The original Steam installation is needed to build this map. Locate it and rebuild stock content in the OpenSCCT launcher.");
-        foreach (string? directory in ToolDirectories(launcher, builderDirectory))
-        {
-            if (directory is null) continue;
-            string tool = Path.Combine(directory, BuilderTool.ToolsFolder);
-            string marker = Path.Combine(tool, "steam-builder-v1");
-            string python = OperatingSystem.IsLinux() ? Path.Combine(tool, "python", "bin", "python3") : Path.Combine(tool, "python", "python.exe");
-            string module = Path.Combine(tool, "repo", "content");
-            if (File.Exists(marker) && File.ReadAllText(marker).Trim() == (OperatingSystem.IsLinux() ? "linux-x64" : "win-x64") &&
-                File.Exists(python) && File.Exists(Path.Combine(module, "svmbuild", "__main__.py")))
-                return new CommunityBuildContext(new BuilderTool(python, module), source, root);
-        }
-        throw new InvalidOperationException("Install or repair the current Godot game or Editor to restore the Steam map builder.");
+            throw new InvalidOperationException("This map needs the Steam installation used to build your original game files. Locate it and rebuild those files.");
+        return source;
     }
 
     private static IEnumerable<string?> ToolDirectories(string launcher, string? explicitDirectory)

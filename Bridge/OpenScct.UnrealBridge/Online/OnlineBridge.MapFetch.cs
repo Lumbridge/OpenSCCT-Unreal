@@ -74,7 +74,7 @@ public sealed partial class OnlineBridge
             {
                 string verb = LocalMapState == MapState.Missing ? "You don't have" : "Your copy differs from the host's for";
                 return new LobbyMapFetch(
-                    string.Create(CultureInfo.InvariantCulture, $"{verb} {pack!.DisplayTitle}. Download it ({pack.Full.Size / 1048576.0:0} MB) to play."),
+                    string.Create(CultureInfo.InvariantCulture, $"{verb} {pack!.DisplayTitle}. Download it ({pack.DownloadSize() / 1048576.0:0} MB) to play."),
                     true, false, 0, false);
             }
 
@@ -96,6 +96,12 @@ public sealed partial class OnlineBridge
         string? hostHash = client.Lobby.SetupContentHash != 0
             ? client.Lobby.SetupContentHash.ToString("x16", CultureInfo.InvariantCulture)
             : null;
+        if (OpenScct.Maps.SteamVersusMaps.Contains(map))
+        {
+            why = $"Build or repair {map} from your Steam installation in the OpenSCCT launcher.";
+            return false;
+        }
+
         if (ContentPacks.Index is not { } index)
         {
             why = ContentPacks.IndexError is { } error
