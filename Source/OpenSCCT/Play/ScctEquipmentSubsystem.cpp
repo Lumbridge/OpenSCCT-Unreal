@@ -35,7 +35,7 @@ namespace
 
 	// How far first-person primitives are pulled towards the camera. The muzzle is up to 76 cm from the eye and
 	// a wall can be as near as the pawn's collision radius; at this scale the whole model stays nearer than that.
-	constexpr float FirstPersonScale = 0.42f;
+	constexpr float DefaultFirstPersonScale = 0.42f;
 
 	// The torch. The original's brightness (304) is a number for its baked, unshadowed projector; as a physical
 	// spot light under Lumen this many candelas per unit gives a beam that owns a dark room without washing out
@@ -82,7 +82,7 @@ namespace
 		TEXT("How strongly a merc's torch beam shows in the level's volumetric fog."));
 	TAutoConsoleVariable<float> CVarMercTorchPeak(TEXT("scct.Merc.TorchPeak"), 7.0f,
 		TEXT("Maximum direct intensity of the mercenary's first-person torch, in Unreal's unitless falloff mode. Follows the gadget's brightness."));
-	TAutoConsoleVariable<float> CVarFirstPersonScale(TEXT("scct.FirstPerson.Scale"), FirstPersonScale,
+	TAutoConsoleVariable<float> CVarFirstPersonScale(TEXT("scct.FirstPerson.Scale"), DefaultFirstPersonScale,
 		TEXT("How far the first-person view model is pulled towards the camera (0.05 to 1). Lower keeps it out of walls; too low and the near plane cuts the hands."));
 
 	struct FFlagName
