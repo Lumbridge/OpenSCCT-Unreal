@@ -3,6 +3,7 @@
 param(
     [Parameter(Mandatory)][string]$Stage,
     [Parameter(Mandatory)][string]$OpenScct,
+    [string]$Engine = $(if ($env:UE_ROOT) { $env:UE_ROOT } else { 'F:\UE_5.8' }),
     [string]$Report
 )
 
@@ -46,6 +47,12 @@ foreach ($path in $seen) {
     if ($relative -match '\.(?:sdc|sds|usx|utx|utc|ukx|uax|uas|mux|u|umd|bik|gpr)$') {
         throw "Original game package staged at $path."
     }
+    if ($relative -eq 'Content/Splash/Splash.bmp') {
+        if ((Get-FileHash -LiteralPath (Join-Path $stageRoot $path)).Hash -ne (Get-FileHash -LiteralPath (Join-Path $project $relative)).Hash) {
+            throw 'The staged Windows splash differs from the project artwork.'
+        }
+        continue
+    }
     if ($relative -notlike 'Binaries/Bridge/maps/*' -and $relative -match '\.(glb|gltf|ogg|wav|dds|png|jpg|jpeg|tga|bmp)$') {
         throw "Unexpected loose media in the project staging inventory: $path."
     }
@@ -65,6 +72,19 @@ foreach ($required in 'Content/OpenSCCT/Maps/L_FrontEnd', 'Content/OpenSCCT/Runt
 
 if (!$seen.Contains("$target/Plugins/glTFRuntime/Content/M_glTFRuntimeBase.uasset")) {
     throw 'Missing cooked glTFRuntime material for local skeletal meshes.'
+}
+
+# A mesh can be present in the container with missing material slots after the cook strips editor imports.
+# Inspect the resolved runtime objects and their textures directly in the shipped IoStore packages.
+$toc = Join-Path $stageRoot "$target/Content/Paks/global.utoc"
+$description = Join-Path ([IO.Path]::GetTempPath()) ("scct-weapon-imports-" + [Guid]::NewGuid() + ".txt")
+try {
+    & (Join-Path $Engine 'Engine/Binaries/Win64/UnrealPak.exe') IoStore "-Describe=$toc" '-PackageFilter=/Game/OpenSCCT/Weapons/SM_Merc*' "-DumpToFile=$description" | Out-Null
+    if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $description -PathType Leaf)) { throw 'Could not inspect cooked weapon attachments.' }
+    & python (Join-Path $PSScriptRoot 'verify_attachment_imports.py') $description
+    if ($LASTEXITCODE -ne 0) { throw 'The cooked weapon attachments have incomplete material dependencies.' }
+} finally {
+    if (Test-Path -LiteralPath $description) { Remove-Item -LiteralPath $description -Force }
 }
 
 $fixtures = @{}

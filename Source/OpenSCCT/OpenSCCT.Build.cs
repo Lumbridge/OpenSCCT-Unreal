@@ -107,11 +107,23 @@ public class OpenSCCT : ModuleRules
 		//   Binaries/Bridge   the built bridge and OpenSCCT's assemblies (dotnet build Bridge/OpenScct.UnrealBridge)
 		//   Binaries/DotNet   optional: a private .NET runtime laid out as an install root, so players need none
 		// Build the bridge before packaging; a folder that does not exist yet is skipped, not an error.
-		foreach (string Folder in new[] { "Bridge", "DotNet" })
+		string Binaries = Path.Combine(Target.ProjectFile.Directory.FullName, "Binaries");
+		if (Directory.Exists(Path.Combine(Binaries, "Bridge")))
 		{
-			if (Directory.Exists(Path.Combine(Target.ProjectFile.Directory.FullName, "Binaries", Folder)))
+			RuntimeDependencies.Add("$(ProjectDir)/Binaries/Bridge/...", StagedFileType.NonUFS);
+		}
+		// A developer may link DotNet to an entire SDK. Only the host and the core runtime belong in the game.
+		foreach (string Part in new[] { "dotnet.exe", "LICENSE.txt", "ThirdPartyNotices.txt", "host/fxr", "shared/Microsoft.NETCore.App" })
+		{
+			string Source = Path.Combine(Binaries, "DotNet", Part);
+			string Staged = "$(ProjectDir)/Binaries/DotNet/" + Part;
+			if (Directory.Exists(Source))
 			{
-				RuntimeDependencies.Add("$(ProjectDir)/Binaries/" + Folder + "/...", StagedFileType.NonUFS);
+				RuntimeDependencies.Add(Staged + "/...", StagedFileType.NonUFS);
+			}
+			else if (File.Exists(Source))
+			{
+				RuntimeDependencies.Add(Staged, StagedFileType.NonUFS);
 			}
 		}
 	}

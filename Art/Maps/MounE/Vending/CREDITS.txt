@@ -1,0 +1,17 @@
+Mount Hospital vending cabinet artwork
+
+The OpenSCCT project created these three RGB plates with OpenAI ImageGen on
+November 19, 2026. Each was generated from a text description alone.
+
+Cabinet-Art.png depicts dark blue-gray powder-coated steel with surface wear.
+Shelf-Art.png depicts six snack shelves, folded fictional wrappers and coils.
+Panel-Art.png depicts selector buttons, a coin slot and a banknote slot.
+
+The local builder reads the player's original cabinet colours and alpha mask
+and fits these plates to the model. From the project directory, run
+
+    python Tools/Import/build_vending_override.py "<converted content>/svmap/MounE"
+
+The generated file is render/overrides/Prison_TEX_machine_HD.png in that map.
+Use --plates to locate these source images or --output to select a PNG cache
+path. The builder requires NumPy and Pillow.

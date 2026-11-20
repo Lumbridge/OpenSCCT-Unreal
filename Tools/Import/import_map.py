@@ -172,9 +172,12 @@ def apply_hospital_vending_art(instance):
     """Use the restored cabinet on both colour inputs. The mask still samples the original texture's alpha."""
     import apply_hospital_base_colors as colours
 
-    source = Path(HERE).parents[1] / "Art/Maps/MounE/Prison_TEX_machine_HD.png"
+    source = Path(RENDER) / "overrides/Prison_TEX_machine_HD.png"
     if not source.is_file():
-        log(f"Using the imported Mount Hospital vending cabinet. Put the approved local atlas at {source} to apply the HD cabinet.")
+        source = Path(HERE).parents[1] / "Art/Maps/MounE/Prison_TEX_machine_HD.png"
+    if not source.is_file():
+        log("Using the original Mount Hospital cabinet. To restore the HD artwork, "
+            f"run build_vending_override.py on {Path(RENDER).parent} before importing.")
         return
     stage = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_intermediate_dir())) / "ScctImport/MounE/Vending"
     stage.mkdir(parents=True, exist_ok=True)

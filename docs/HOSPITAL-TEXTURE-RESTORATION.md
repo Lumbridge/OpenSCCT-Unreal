@@ -1,5 +1,13 @@
 # Enhanced Mount Hospital texture restoration
 
+## Playing the converted community map
+
+Install your own converted Enhanced Mount Hospital in a map folder and select it in the game. You can also point the client at that folder with `-ScctMaps="<folder containing MounE>"`. The first time Unreal loads the vending cabinet, it combines the map's original colours and alpha with three project-authored plates. Both cabinets use the resulting 2048 × 2048 artwork and the map's original illumination mask.
+
+The Windows release includes the builder and plates in `contenttools/community/MounE` and runs them with its bundled Python. The generated texture lives in `%LOCALAPPDATA%/OpenSCCT/unreal/cache/MounE/<input digest>/Prison_TEX_machine_HD.png`. Subsequent loads reuse it. Changing the source textures, plates or builder selects a fresh cache entry. If generation is unavailable, the map renders its original cabinet.
+
+An explicit `render/overrides/Prison_TEX_machine_HD.png` inside your map takes priority. To create it manually from a source checkout, run `python Tools/Import/build_vending_override.py "<path to MounE>"`. The artwork credits are in [Art/Maps/MounE/Vending/CREDITS.txt](../Art/Maps/MounE/Vending/CREDITS.txt).
+
 ## Restore the complete preview
 
 Start with an independently imported `Content/Imported/Maps/MounE/MounE.umap` in the candidate checkout.

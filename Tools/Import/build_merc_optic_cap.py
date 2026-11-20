@@ -1,6 +1,7 @@
 """Build the merc's sight and rail accessory meshes in Unreal centimetres."""
 import math
 import unreal as ue
+from scct_attachment_finishes import finish
 
 
 def save_mesh(mesh, name, triangle_count, materials, sockets=()):
@@ -36,10 +37,7 @@ def save_mesh(mesh, name, triangle_count, materials, sockets=()):
 
 
 def build(torch_only=False, *, include_sight=True):
-    source = "/Game/Imported/Chars/OpenScctRifles/m4a1s_first/Materials/OpenScctRifles_"
-    materials = [ue.load_asset(source + suffix) for suffix in ("OpticRubber", "OpticAnodized")]
-    if any(m is None for m in materials):
-        raise RuntimeError("The M4 optic's rubber or anodized finish was not found")
+    materials = [finish(suffix) for suffix in ("OpticRubber", "OpticAnodized")]
     mesh = ue.DynamicMesh()
     vertices, normals, triangles, uvs = [], [], [], []
     triangle_count = 0
@@ -210,7 +208,7 @@ def build(torch_only=False, *, include_sight=True):
     # their original hardware finish. The same three sections serve both player views.
     finishes = "/Game/OpenSCCT/Weapons/Materials/MI_ScctScope"
     grip, body = (ue.load_asset(finishes + suffix) for suffix in ("Rubber", "Anodized"))
-    hardware = ue.load_asset(source + "OpticFasteners")
+    hardware = finish("OpticFasteners")
     if not all((grip, body, hardware)):
         raise RuntimeError("Missing rail module finish")
     inset_face(torch, 4.54, .82)

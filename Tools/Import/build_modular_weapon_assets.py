@@ -6,6 +6,7 @@ import sys
 
 import unreal as ue
 from build_merc_optic_cap import build, save_mesh
+from scct_attachment_finishes import finish
 
 
 def build_attachments(pack_root, pistol_only=False):
@@ -15,7 +16,6 @@ def build_attachments(pack_root, pistol_only=False):
     model = json.loads(data[20:20+json_length])
     binary = memoryview(data)[28+json_length:]
     materials = model["materials"]
-    material_folder = "/Game/Imported/Chars/OpenScctRifles/m4a1s_first/Materials/"
 
     def values(index):
         accessor = model["accessors"][index]
@@ -34,12 +34,11 @@ def build_attachments(pack_root, pistol_only=False):
             material = materials[part["material"]]["name"].replace(".", "_")
             compact_mark = compact_dot and material.endswith("_OpticReticle")
             if material not in slots:
-                path = "/Game/OpenSCCT/Weapons/Materials/M_ScctAcogChevron" if compact_mark else material_folder + material
-                finish = ue.load_asset(path)
-                if not finish:
+                surface = ue.load_asset("/Game/OpenSCCT/Weapons/Materials/M_ScctAcogChevron") if compact_mark else finish(material.removeprefix("OpenScctRifles_"))
+                if not surface:
                     raise RuntimeError("Missing attachment finish " + material)
                 slots[material] = len(finishes)
-                finishes.append(finish)
+                finishes.append(surface)
             attr = part["attributes"]
             points = [ue.Vector((x-origin[0])*100, (z-origin[2])*100, (y-origin[1])*100)
                       for x, y, z in values(attr["POSITION"])]

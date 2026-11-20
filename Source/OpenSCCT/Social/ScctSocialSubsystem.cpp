@@ -238,7 +238,7 @@ bool UScctSocialSubsystem::Tick(float DeltaSeconds)
 {
 	if (Api == nullptr)
 	{
-		if (bConnectTried || Connect() == nullptr)
+		if (bConnectTried || FOpenSCCTModule::FindContentRoot().IsEmpty() || Connect() == nullptr)
 		{
 			return true;
 		}
@@ -562,9 +562,10 @@ void UScctSocialSubsystem::HandleRequest(const FScctSocialRequest& Request, cons
 void UScctSocialSubsystem::JoinMaster(const FString& Id, const FString& Name, const FString& Password, int32 Team, bool bRequireAccount)
 {
 	UScctOnlineSubsystem* Online = GetGameInstance()->GetSubsystem<UScctOnlineSubsystem>();
-	if (Online == nullptr || !Online->EnsureReady())
+	FString Error;
+	if (Online == nullptr || !Online->EnsureReady(&Error))
 	{
-		ShowNotice(Online != nullptr ? Online->GetNotice() : FString(TEXT("Online play is not available.")));
+		ShowNotice(Error.IsEmpty() ? FString(TEXT("Online play is not available.")) : Error);
 		return;
 	}
 	UE_LOG(LogOpenSCCT, Log, TEXT("Social: joining %s (%s) through the master%s"), *Name, *Id, bRequireAccount ? TEXT(" with the signed-in account") : TEXT(""));

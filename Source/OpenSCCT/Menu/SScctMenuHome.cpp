@@ -450,7 +450,7 @@ namespace
 			{
 				return ScctUi::Card(TEXT("Maps"),
 					SNew(STextBlock).Font(ScctUi::Body()).ColorAndOpacity(ScctHudStyle::TextDim()).AutoWrapText(true)
-					.Text(FText::FromString(TEXT("No map can be played yet. Convert your game with OpenSCCT, then import a map (README: Tools\\Import\\Import-Map.ps1)."))));
+					.Text(INVTEXT("Choose Set up from Steam to prepare the original maps from your installed copy of Chaos Theory.")));
 			}
 			FString Description = Menu->GetMapText(FeaturedMap, EScctMenuMapText::Description);
 			if (Description.TrimStartAndEnd().IsEmpty())

@@ -159,6 +159,7 @@ USkeletalMesh* ScctRuntimeSkins::Load(const FString& Input)
 		ModelName == TEXT("compactsmg") || ModelName == TEXT("pumpshotgun"));
 	int32 Index = 0;
 	TMap<FString, int32> SlotNames;
+	TMap<UMaterialInterface*, FName> MaterialSlots;
 	const auto Parser = Asset->GetParser();
 	for (const TSharedRef<FJsonObject>& Material : Parser->GetMaterials())
 	{
@@ -171,6 +172,38 @@ USkeletalMesh* ScctRuntimeSkins::Load(const FString& Input)
 		const TSharedPtr<FJsonObject>* PbrField = nullptr;
 		Material->TryGetObjectField(TEXT("pbrMetallicRoughness"), PbrField);
 		const TSharedPtr<FJsonObject> Pbr = PbrField ? *PbrField : nullptr;
+		FString SlotName = SafeName(Name.IsEmpty() ? FString::FromInt(Index) : Name);
+		const int32 Occurrence = SlotNames.FindOrAdd(SlotName)++;
+		if (Occurrence) SlotName += FString::FromInt(Occurrence);
+		const FName Slot(*SlotName);
+		const TSharedPtr<FJsonObject>* Extensions = nullptr;
+		const bool bUnlit = Material->TryGetObjectField(TEXT("extensions"), Extensions) && (*Extensions)->HasField(TEXT("KHR_materials_unlit"));
+		if (bUnlit || AlphaMode == TEXT("BLEND") || AlphaMode == TEXT("MASK"))
+		{
+			// These slots need the glTF blend mode, opacity cutoff or unlit shader. External
+			// images still go through our map-local resolver rather than arbitrary file access.
+			auto BindTexture = [&](const TSharedPtr<FJsonObject>& Fields, const TCHAR* Key, TextureCompressionSettings Usage)
+			{
+				const TSharedPtr<FJsonObject>* Info = nullptr;
+				int32 TextureIndex = INDEX_NONE;
+				if (Fields && Fields->TryGetObjectField(Key, Info) && (*Info)->TryGetNumberField(TEXT("index"), TextureIndex))
+				{
+					if (UTexture2D* Picture = TextureAt(Package, TextureFile(*Parser, Fields, Key, Directory), Usage))
+						Config.MaterialsConfig.TexturesOverrideMap.Add(TextureIndex, Picture);
+				}
+			};
+			BindTexture(Pbr, TEXT("baseColorTexture"), TC_Default);
+			BindTexture(Pbr, TEXT("metallicRoughnessTexture"), TC_Masks);
+			BindTexture(Material, TEXT("normalTexture"), TC_Normalmap);
+			BindTexture(Material, TEXT("emissiveTexture"), TC_Default);
+			BindTexture(Material, TEXT("occlusionTexture"), TC_Masks);
+			FString SourceName;
+			UMaterialInterface* Optical = Parser->LoadMaterial(Index, Config.MaterialsConfig, false, SourceName, nullptr);
+			if (!Optical) return nullptr;
+			MaterialSlots.Add(Optical, Slot);
+			Config.MaterialsConfig.MaterialsOverrideMap.Add(Index++, Optical);
+			continue;
+		}
 		FString FinishFile;
 		bool bPackedFinish = false;
 		if (bFirstPersonFinish)
@@ -185,12 +218,9 @@ USkeletalMesh* ScctRuntimeSkins::Load(const FString& Input)
 		const TCHAR* Path = bLongGun ? LongGun : bRifleFinish ? RifleFinish : !FinishFile.IsEmpty() ? EquipmentFinish : Surface;
 		UMaterialInterface* Parent = LoadObject<UMaterialInterface>(nullptr, Path);
 		if (!Parent) return nullptr;
-		FString SlotName = TEXT("MI_") + SafeName(Name.IsEmpty() ? FString::FromInt(Index) : Name);
-		const int32 Occurrence = SlotNames.FindOrAdd(SlotName)++;
-		if (Occurrence) SlotName += FString::FromInt(Occurrence);
-		const FName Slot(*SlotName);
-		auto* Instance = FindObjectFast<UMaterialInstanceDynamic>(Package, Slot);
-		if (!Instance) Instance = UMaterialInstanceDynamic::Create(Parent, Package, Slot);
+		const FName InstanceName(*(TEXT("MI_") + SlotName));
+		auto* Instance = FindObjectFast<UMaterialInstanceDynamic>(Package, InstanceName);
+		if (!Instance) Instance = UMaterialInstanceDynamic::Create(Parent, Package, InstanceName);
 		UTexture2D* Colour = TextureAt(Package, TextureFile(*Parser, Pbr, TEXT("baseColorTexture"), Directory));
 		if (Colour) Instance->SetTextureParameterValue(bLongGun ? TEXT("GunBase") : bRifleFinish ? TEXT("BaseColorTexture") : TEXT("BaseColor"), Colour);
 		if (bLongGun || bRifleFinish)
@@ -249,12 +279,20 @@ USkeletalMesh* ScctRuntimeSkins::Load(const FString& Input)
 			Instance->SetScalarParameterValue(TEXT("Emissive"), bDisplay ? 4.f : 0.f);
 			Instance->SetScalarParameterValue(TEXT("AlphaMask"), 0.f);
 		}
+		MaterialSlots.Add(Instance, Slot);
 		Config.MaterialsConfig.MaterialsOverrideMap.Add(Index++, Instance);
 	}
 	// A first-person file can have several skinned nodes for the arms, equipment and magazine. Use the whole scene.
 	USkeletalMesh* Mesh = Asset->LoadSkeletalMeshRecursive(TEXT(""), {}, Config);
 	if (Mesh)
 	{
+		// glTFRuntime creates one material entry per primitive. Gameplay identifies every
+		// repeated optic, lens, suppressor and arm section by its authored material name.
+		for (FSkeletalMaterial& Section : Mesh->GetMaterials())
+		{
+			if (const FName* Slot = MaterialSlots.Find(Section.MaterialInterface.Get()))
+				Section.MaterialSlotName = *Slot;
+		}
 		Mesh->Rename(*SafeName(FPaths::GetBaseFilename(File)), Package, REN_DontCreateRedirectors | REN_NonTransactional);
 		Models.Add(File, {Mesh});
 		UE_LOG(LogOpenSCCT, Log, TEXT("Local skeletal mesh %s: %d bones, %d material slots"),

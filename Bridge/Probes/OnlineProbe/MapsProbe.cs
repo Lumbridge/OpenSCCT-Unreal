@@ -48,7 +48,12 @@ internal static unsafe class MapsProbe
         bool installedHas(string m) => Array.Exists(installed.Split('\n'), line => string.Equals(line, m, StringComparison.OrdinalIgnoreCase));
         bool renderableHas(string m) => Array.Exists(renderable.Split('\n'), line => string.Equals(line, m, StringComparison.OrdinalIgnoreCase));
         Console.WriteLine($"TestBox in: {testBox}; installed maps {installed.Split('\n').Length} (has {map}: {installedHas(map)}, TestBox: {installedHas("TestBox")}); renderable {renderable.Split('\n').Length} (has {map}: {renderableHas(map)}, TestBox: {renderableHas("TestBox")})");
-        ok &= testBox.StartsWith(Path.Combine(content, "maps"), StringComparison.OrdinalIgnoreCase) && installedHas(map) && installedHas("TestBox") && renderableHas(map) && renderableHas("TestBox");
+        // Installed releases also ship TestBox beside the bridge. A duplicate in a later
+        // root must never displace the copy the player or the application selected first.
+        string? expectedTestBox = Array.Find(Array.ConvertAll(roots.Split('\n'), root => Path.Combine(root, "TestBox")),
+            candidate => File.Exists(Path.Combine(candidate, "manifest.json")));
+        ok &= string.Equals(testBox, expectedTestBox, StringComparison.OrdinalIgnoreCase)
+            && installedHas(map) && installedHas("TestBox") && renderableHas(map) && renderableHas("TestBox");
 
         using (BridgeSession session = BridgeSession.StartLocal(new LocalMatch { Map = map, Bots = 0 }))
         {

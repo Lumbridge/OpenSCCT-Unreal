@@ -385,7 +385,7 @@ try {
     if ($madeDotNet -and (Test-Path -LiteralPath $dotNetFolder)) { Remove-Item -LiteralPath $dotNetFolder -Recurse -Force }
 }
 
-& (Join-Path $PSScriptRoot 'Test/Assert-ReleaseContent.ps1') -Stage $staged -OpenScct $runtimeRoot -Report (Join-Path $Out 'cook-audit.json')
+& (Join-Path $PSScriptRoot 'Test/Assert-ReleaseContent.ps1') -Stage $staged -OpenScct $runtimeRoot -Engine $Engine -Report (Join-Path $Out 'cook-audit.json')
 # Map pak cooks are for local development. Release builds load player-prepared maps at runtime
 # and use the default cook configuration, with a single project chunk.
 $stagedPaks = Join-Path $staged "$target/Content/Paks"

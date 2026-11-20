@@ -5,9 +5,9 @@ import unreal as ue
 from build_merc_optic_cap import save_mesh
 from scct_materials import Graph, FLOAT3
 from scct_sight_glass import coat_sight_glass
+from scct_attachment_finishes import finish
 
 MATERIAL = "/Game/OpenSCCT/Weapons/Materials/"
-M4_FINISHES = "/Game/Imported/Chars/OpenScctRifles/m4a1s_first/Materials/OpenScctRifles_"
 
 
 def coated_glass():
@@ -30,9 +30,7 @@ def scope_materials():
     mark.material.set_editor_property("two_sided", True)
     mark.output(mark.in_the_picture(mark.colour("Reticle", (2.6, .055, .016, 1))),
                 ue.MaterialProperty.MP_EMISSIVE_COLOR)
-    finishes = [ue.load_asset(M4_FINISHES + part) for part in ("OpticAnodized", "OpticRubber", "OpticFasteners")]
-    if not all(finishes):
-        raise RuntimeError("Could not load the existing rifle finishes")
+    finishes = [finish(part) for part in ("OpticAnodized", "OpticRubber", "OpticFasteners")]
     return finishes + [coated, mark.finish(), image]
 
 

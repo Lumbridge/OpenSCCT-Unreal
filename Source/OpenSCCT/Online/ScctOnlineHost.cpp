@@ -327,8 +327,9 @@ const FScctHostApi* UScctOnlineSubsystem::ConnectHost()
 
 bool UScctOnlineSubsystem::Host(const FScctHostRequest& Request, FString* OutError)
 {
-	if (Connect() == nullptr || ConnectHost() == nullptr)
+	if (Connect(OutError ? OutError : &Notice) == nullptr || ConnectHost() == nullptr)
 	{
+		Touch();
 		return false;
 	}
 

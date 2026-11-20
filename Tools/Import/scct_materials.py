@@ -145,7 +145,7 @@ float start = 0.0;
 return picked;""" % (SEQUENCE_SLOTS, SEQUENCE_SLOTS)
 
 
-def sequence_colour(g, time, shared_samplers=False):
+def sequence_colour(g, time):
     """The colour of a MaterialSequence: each item is its own texture with its own modifier (AnimA/B/C, as
     uv_anim_code) and AnimNext flipbook (SeqFlip = columns, rows, frames, fps), sampled with the material's own
     sampling (so mip selection works on every kind of mesh), and the clock picks the two items to show and blends
@@ -165,9 +165,8 @@ def sequence_colour(g, time, shared_samplers=False):
                       A=g.vector4("Seq%dAnimA" % slot, (0, 0, 0, 0)), B=g.vector4("Seq%dAnimB" % slot, (0, 0, 0, 0)),
                       C=g.vector4("Seq%dAnimC" % slot, (0, 0, 0, 0)), Flip=g.vector4("Seq%dFlip" % slot, (1, 1, 1, 0)))
         sample = g.texture("SeqTex%d" % slot, "/Engine/EngineResources/WhiteSquareTexture", uvs=uv)
-        if shared_samplers:
-            # Runtime frame textures all use wrap addressing. One sampler leaves room for forward translucency on SM5.
-            sample.set_editor_property("sampler_source", unreal.SamplerSourceMode.SSM_WRAP_WORLD_GROUP_SETTINGS)
+        # All sequence frames wrap. Sharing their sampler leaves room for lighting on SM5.
+        sample.set_editor_property("sampler_source", unreal.SamplerSourceMode.SSM_WRAP_WORLD_GROUP_SETTINGS)
         samples["S%d" % slot] = (sample, "RGBA")
     pick = "float4 s[%d] = { %s }; int a = (int)(W.x + 0.5); int b = (int)(W.y + 0.5); return lerp(s[a], s[b], W.z);" % (
         SEQUENCE_SLOTS, ", ".join("S%d" % slot for slot in range(SEQUENCE_SLOTS)))
@@ -412,7 +411,7 @@ def build_surface(cosmetic=False, scrolling_overlay=False, translucent_sequence=
                           Base=(sampled, "RGBA"), Layer=(overlay, "RGB"), LightFirst=light_first)
         picked.set_editor_property("include_file_paths", ["/Engine/Private/GammaCorrectionCommon.ush"])
     elif translucent_sequence:
-        picked = sequence_colour(g, time, shared_samplers=True)
+        picked = sequence_colour(g, time)
     else:
         picked = g.static_switch("Sequence", sequence_colour(g, time), (sampled, "RGBA"))
     base_rgb = g.custom("return P.rgb;", FLOAT3, P=picked)

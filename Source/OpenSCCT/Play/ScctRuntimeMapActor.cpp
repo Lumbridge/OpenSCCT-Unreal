@@ -9,6 +9,7 @@
 #include "Play/ScctMeshMaterial.h"
 #include "Play/ScctAuthoredDirections.h"
 #include "Play/ScctWaterRefraction.h"
+#include "Play/ScctHospitalCabinet.h"
 
 #include "Algo/AllOf.h"
 #include "Components/PointLightComponent.h"
@@ -1361,7 +1362,7 @@ UMaterialInterface* AScctRuntimeMapActor::MaterialFor(int32 GltfMaterial)
 	return Materials.IsValidIndex(GltfMaterial) ? Materials[GltfMaterial].Get() : nullptr;
 }
 
-UTexture2D* AScctRuntimeMapActor::TextureFor(const FString& RelativePath, bool bSRGB)
+UTexture2D* AScctRuntimeMapActor::TextureFor(const FString& RelativePath, bool bSRGB, const FString* LocalFile)
 {
 	if (RelativePath.IsEmpty())
 	{
@@ -1375,7 +1376,7 @@ UTexture2D* AScctRuntimeMapActor::TextureFor(const FString& RelativePath, bool b
 
 	UTexture2D* Texture = nullptr;
 	TArray<uint8> Compressed;
-	const FString Path = RenderFolder / RelativePath;
+	const FString Path = LocalFile ? *LocalFile : RenderFolder / RelativePath;
 	IImageWrapperModule& Images = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
 	if (FFileHelper::LoadFileToArray(Compressed, *Path))
 	{
@@ -1603,7 +1604,19 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 		{
 			TextureFile = ImageOfTexture(static_cast<int32>(NumberOf(ObjectOf(Pbr, TEXT("baseColorTexture")), TEXT("index"), -1.0)));
 		}
-		UTexture2D* Base = bUseOverlay ? FirstLayer : TextureFor(TextureFile);
+		UTexture2D* Cabinet = nullptr;
+		if (Name.Equals(TEXT("Prison_TEX.machineEMF"), ESearchCase::IgnoreCase))
+		{
+			const FString Atlas = ScctHospitalCabinet::AtlasFor(RenderFolder);
+			if (!Atlas.IsEmpty())
+			{
+				Cabinet = TextureFor(TEXT("overrides/Prison_TEX_machine_HD.png"), true, &Atlas);
+				if (Cabinet)
+					UE_LOG(LogOpenSCCT, Log, TEXT("Mount Hospital vending cabinet uses %dx%d colour and original illumination mask: %s"),
+						Cabinet->GetSizeX(), Cabinet->GetSizeY(), *Atlas);
+			}
+		}
+		UTexture2D* Base = Cabinet ? Cabinet : (bUseOverlay ? FirstLayer : TextureFor(TextureFile));
 		if (Base)
 		{
 			Instance->SetTextureParameterValue(TEXT("BaseColor"), Base);
@@ -1669,7 +1682,7 @@ void AScctRuntimeMapActor::BuildMaterials(const TSharedPtr<FJsonObject>& Gltf, c
 			// The self-lit part: lamp glass, screens, lit windows.
 			if (!SelfLit.IsEmpty())
 			{
-				UTexture2D* Glow = TextureFor(SelfLit);
+				UTexture2D* Glow = Cabinet ? Cabinet : TextureFor(SelfLit);
 				UTexture2D* MaskTexture = bMaskedGlow ? TextureFor(SelfLitMask) : nullptr;
 				if (Glow && (!bMaskedGlow || MaskTexture))
 				{

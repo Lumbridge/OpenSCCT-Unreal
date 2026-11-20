@@ -38,7 +38,12 @@ UMaterialInstanceDynamic* ScctCosmeticMaterial::Create(UObject* Outer, UMaterial
 			LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/OpenSCCT/Materials/M_ScctCosmeticFinish.M_ScctCosmeticFinish"));
 	}
 
-	UMaterialInstanceDynamic* Instance = UMaterialInstanceDynamic::Create(Finish ? Finish : Source, Outer);
+	// Runtime-loaded meshes already carry dynamic instances. Unreal only accepts
+	// a base material or a constant instance as the parent of another instance.
+	const auto* RuntimeSource = Cast<UMaterialInstanceDynamic>(Source);
+	UMaterialInterface* Parent = RuntimeSource ? RuntimeSource->Parent.Get() : Source;
+	UMaterialInstanceDynamic* Instance = UMaterialInstanceDynamic::Create(Finish ? Finish : Parent, Outer);
+	if (RuntimeSource && !Finish) Instance->CopyMaterialUniformParameters(Source);
 	if (Finish)
 	{
 		Instance->CopyMaterialUniformParameters(Source);

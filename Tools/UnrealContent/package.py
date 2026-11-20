@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -27,6 +28,11 @@ SETUP = "OpenScct.UnrealSetup.dll"
 SETUP_FILES = {SETUP, "OpenScct.UnrealSetup.deps.json", "OpenScct.UnrealSetup.runtimeconfig.json",
                "OpenScct.Launcher.Core.dll", "OpenScct.Maps.dll"}
 PYTHON_BUILD_SUFFIXES = {".lib", ".pdb", ".pyc", ".whl"}
+VENDING_PLATES = {
+    "Cabinet-Art.png": "b54a452ac3921eace23bd1bd9113d0426cc1add58a47105e77a8543c5d08e08b",
+    "Shelf-Art.png": "e4d29305a036be84b78dcfc63e16b15cb33633e5b5f41f114e99eff0015cfbfe",
+    "Panel-Art.png": "8bc3d4b185ccaaf7d72d7e1445007b2ea4b6c25927479488469f1274e01a0458",
+}
 
 
 def sha256(path):
@@ -136,8 +142,35 @@ def check_setup(folder):
                     raise ValueError(f"Setup payload contains a local build path: {entry.name}")
 
 
+def cabinet_sources():
+    art = PROJECT / "Art/Maps/MounE/Vending"
+    return [*(art / name for name in VENDING_PLATES), art / "CREDITS.txt",
+            PROJECT / "Tools/Import/build_vending_override.py"]
+
+
+def check_community(folder):
+    sources = cabinet_sources()
+    expected = {f"MounE/{source.name}" for source in sources}
+    actual = {path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file()}
+    if actual != expected:
+        raise ValueError(f"Unexpected community tools: extra={sorted(actual - expected)}, missing={sorted(expected - actual)}")
+    for source in sources:
+        file = folder / "MounE" / source.name
+        approved = VENDING_PLATES.get(source.name) or sha256(source)
+        if file.is_symlink() or sha256(file) != approved:
+            raise ValueError(f"Community tool differs from its reviewed source: {source.name}")
+
+
+def stage_community(folder):
+    destination = folder / "MounE"
+    destination.mkdir(parents=True, exist_ok=True)
+    for source in cabinet_sources():
+        shutil.copyfile(source, destination / source.name)
+    check_community(folder)
+
+
 def receipt_for(folder, names):
-    expected = {"python", "repo", "setup", "steam-builder-v1", RECEIPT}
+    expected = {"python", "repo", "setup", "community", "steam-builder-v1", RECEIPT}
     extras = {p.name for p in folder.iterdir()} - expected
     if extras:
         raise ValueError(f"Unexpected files at the root of the Unreal converter: {sorted(extras)}")
@@ -145,6 +178,7 @@ def receipt_for(folder, names):
     if paths != set(names):
         raise ValueError(f"Unexpected converter payload: extra={sorted(paths - set(names))}, missing={sorted(set(names) - paths)}")
     check_setup(folder / "setup")
+    check_community(folder / "community")
     if unexpected := next(python_build_files(folder / "python"), None):
         raise ValueError(f"Unexpected Python build artifact: {unexpected.relative_to(folder)}")
     for name in ("python/python.exe", "python/LICENSE.txt", "steam-builder-v1"):
@@ -183,6 +217,7 @@ def package(output):
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
         stage = Path(temporary) / "contenttools"
         packager.package(stage, "win-x64")
+        stage_community(stage / "community")
         for path in python_build_files(stage / "python"):
             path.unlink()
         subprocess.run(["dotnet", "publish", str(PROJECT / "Tools/SteamSetup/OpenScct.UnrealSetup.csproj"),

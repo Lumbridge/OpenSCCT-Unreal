@@ -199,19 +199,16 @@ void UScctOnlineSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-const FScctOnlineApi* UScctOnlineSubsystem::Connect()
+const FScctOnlineApi* UScctOnlineSubsystem::Connect(FString* OutError)
 {
 	if (Api != nullptr)
 	{
 		return Api;
 	}
 
-	FString Error;
-	Api = ScctFeature<FScctOnlineApi>(&Error);
+	Api = ScctFeature<FScctOnlineApi>(OutError);
 	if (Api == nullptr)
 	{
-		Notice = Error;
-		Touch();
 		return nullptr;
 	}
 
@@ -327,8 +324,9 @@ FString UScctOnlineSubsystem::ReadText(EScctOnlineText Kind) const
 
 bool UScctOnlineSubsystem::Join(const FString& Address, const FString& Password, int32 PreferredTeam)
 {
-	if (Connect() == nullptr)
+	if (Connect(&Notice) == nullptr)
 	{
+		Touch();
 		return false;
 	}
 
@@ -347,7 +345,12 @@ bool UScctOnlineSubsystem::Join(const FString& Address, const FString& Password,
 
 void UScctOnlineSubsystem::JoinListed(int32 Index, const FString& Password, int32 PreferredTeam)
 {
-	if (Connect() == nullptr || !Servers.IsValidIndex(Index))
+	if (Connect(&Notice) == nullptr)
+	{
+		Touch();
+		return;
+	}
+	if (!Servers.IsValidIndex(Index))
 	{
 		return;
 	}

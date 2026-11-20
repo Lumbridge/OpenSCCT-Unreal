@@ -172,9 +172,9 @@ public:
 	/**
 	 * Brings the online bridge up (the identity, the master) without joining, so a visit another part of the game
 	 * starts in the bridge (a hub's pad match) is followed: its levels opened, its round presented. False when the
-	 * bridge cannot be loaded (GetNotice says why).
+	 * bridge cannot be loaded. OutError receives the reason if supplied.
 	 */
-	bool EnsureReady() { return Connect() != nullptr; }
+	bool EnsureReady(FString* OutError = nullptr) { return Connect(OutError) != nullptr; }
 	// ---- hosting (ScctOnlineHost.cpp) ------------------------------------------------------------------------
 
 	/**
@@ -417,7 +417,7 @@ public:
 
 private:
 	/** The table, fetched on first use; null (the reason is in Notice) when the bridge cannot be loaded. */
-	const FScctOnlineApi* Connect();
+	const FScctOnlineApi* Connect(FString* OutError = nullptr);
 
 	/** Once a frame, whoever calls first: Online.Update, the status, and everything that follows from it. */
 	void TickVisit();
