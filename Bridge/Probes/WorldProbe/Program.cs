@@ -471,7 +471,14 @@ for (int i = 0; i < Math.Min(3, finalLasers); i++)
 {
     BridgeWorldLaser l = lasers[i];
     float dx = l.EndX - l.StartX, dy = l.EndY - l.StartY, dz = l.EndZ - l.StartZ;
-    Console.WriteLine($"   #{l.Id} kind {l.Kind} {world.NameOf(l.NameId)} ({l.StartX:F0},{l.StartY:F0},{l.StartZ:F0}) -> ({l.EndX:F0},{l.EndY:F0},{l.EndZ:F0}) length {MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz)):F0} flags {l.Flags} heat {l.Heat:F1}");
+    string source = l.Kind switch
+    {
+        0 => $"tripwire {world.NameOf(l.ObjectId)}",
+        1 when l.ObjectId != 0 => $"mine owner actor #{l.ObjectId}",
+        1 => "mine owner unknown",
+        _ => $"object #{l.ObjectId}",
+    };
+    Console.WriteLine($"   #{l.Id} kind {l.Kind} {source} ({l.StartX:F0},{l.StartY:F0},{l.StartZ:F0}) -> ({l.EndX:F0},{l.EndY:F0},{l.EndZ:F0}) length {MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz)):F0} flags {l.Flags} heat {l.Heat:F1}");
 }
 
 int finalAnimated = Math.Min(world.GetAnimated(animated), animated.Length);
