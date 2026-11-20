@@ -132,5 +132,5 @@ public static class WeaponAttachments
 
     public static int Granted(SBasePawn pawn, string? weaponClass, int requested) =>
         requested != 0 && Key(weaponClass) is { } key &&
-        IsValid(key, requested, WeaponCareer.GetKills(pawn.Controller, key)) ? requested : 0;
+        IsValid(key, requested, OpenScct.Game.Modes.PracticeRules.IsOn(pawn) ? int.MaxValue : WeaponCareer.GetKills(pawn.Controller, key)) ? requested : 0;
 }

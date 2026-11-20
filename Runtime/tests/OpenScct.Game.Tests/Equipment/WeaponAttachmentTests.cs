@@ -240,6 +240,22 @@ public sealed class WeaponAttachmentTests
         Assert.Equal(0, WeaponAttachments.Granted(firstPawn, M4, WeaponAttachments.Suppressor | WeaponAttachments.Acog));
     }
 
+    [Fact]
+    public void PracticeIssuesSelectedAttachmentsOnTheWeaponWithZeroKills()
+    {
+        var scene = new CombatScene(ENetMode.NM_ListenServer);
+        var (pc, pawn) = scene.Player(false, FVector.Zero);
+        pc.GameReplicationInfo = new GameReplicationInfo { RiflesEnabled = true };
+        pawn.PlayerReplicationInfo!.Team = new STeamDefenseur();
+        pawn.PlayerReplicationInfo.SvmRank = 30;
+        pawn.XLevel!.SetService(new OpenScct.Game.Modes.PracticeRules { On = true });
+        Loadouts.OpenGrant(pawn, EGameMode.GM_Multi);
+        const int mask = WeaponAttachments.RedDot | WeaponAttachments.Suppressor;
+        Loadouts.ServerSpawnWeapon(pawn, new ClassRef(M4), mask);
+        Assert.Equal(mask, Assert.IsType<M4A1S>(pawn.MyWeapon).AttachmentMask);
+        Assert.Equal(0, WeaponCareer.GetKills(pc, M4));
+        Assert.Equal(0, WeaponAttachments.Granted(pawn, M4, mask | WeaponAttachments.Laser));
+    }
     [Theory]
     [InlineData(SDamageType.SDTBase, CombatDeathCause.Rifle, 0, 1)]
     [InlineData(SDamageType.SDTSnipeShot, CombatDeathCause.Sniper, 0, 1)]
