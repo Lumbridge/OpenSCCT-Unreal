@@ -45,10 +45,10 @@ def cooked(description):
             if match:
                 current.add(match[1].split(".", 1)[0])
     expected = REQUIRED.copy()
-    for name in ("OpticAnodized", "OpticFasteners", "OpticRubber", "Suppressor", "OpticLens", "OpticReticle"):
+    for name in ("OpticAnodized", "OpticFasteners", "OpticRubber", "Suppressor", "OpticLens"):
         texture = "suppressor" if name == "Suppressor" else name
         deps = {ATTACHMENTS + "Textures/" + texture}
-        if name not in ("OpticLens", "OpticReticle"):
+        if name != "OpticLens":
             deps.add("/Game/OpenSCCT/Materials/M_ScctRifleFinish")
         expected[ATTACHMENTS + "OpenScctRifles_" + name] = deps
     for asset, required in expected.items():
