@@ -10,14 +10,17 @@ namespace OpenScct.Game.Tests.Equipment;
 public sealed class RifleAimMovementTests
 {
     [Theory]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
     [InlineData(true, true)]
-    public void AimingQuartersWalkingAndRunningThenRestoresSpeed(bool crouched, bool fast)
+    public void AimingQuartersWalkingAndRunningThenRestoresSpeed(bool crouched, bool fast, bool shotgun = false)
     {
         var rig = Rig(PawnTeam.Merc, crouched: crouched);
-        var rifle = rig.Pawn.XLevel.SpawnActor(new AK47(), rig.Pawn.Location, default)!;
+        SWeaponDefense equipment = shotgun ? new PumpShotgun() : new AK47();
+        var rifle = rig.Pawn.XLevel.SpawnActor(equipment, rig.Pawn.Location, default)!;
         rifle.GiveTo(rig.Pawn);
         rig.Pawn.WeaponLoaded = 2;
         rifle.GotoState("s_Selected");

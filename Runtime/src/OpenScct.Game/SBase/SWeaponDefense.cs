@@ -819,7 +819,9 @@ public partial class SWeaponDefense
         {
             // An observing client has no owning controller and receives the pose from the server.
             var owner = OwnerPC;
-            if (owner is null ? Role == ENetRole.ROLE_Authority : !CanAim(owner))
+            if (owner is not null && !CanAim(owner))
+                SetAiming(owner, false);
+            else if (owner is null && Role == ENetRole.ROLE_Authority)
                 AimRequested = false;
         }
     }

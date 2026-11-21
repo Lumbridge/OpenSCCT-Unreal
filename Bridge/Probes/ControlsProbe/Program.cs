@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using OpenScct.Core.Engine;
+using OpenScct.Game.Combat;
 using OpenScct.Game.Equipment;
 using OpenScct.Game.SBase;
 using OpenScct.UnrealBridge;
@@ -727,6 +728,11 @@ unsafe
                     "reload takes the eye out of the optic and preserves the peripheral FOV");
                 if (scopedGun is MercSidearm done) done.ReloadUntil = 0f;
                 scopedGun.GotoState("s_Selected");
+                GadgetNetReceive.FromServer(pc, new CombatCall(new OpenScct.Core.Name("RifleAimState"))
+                    { Target = scopedGun, Bool1 = true });
+                Settle(ref raw);
+                Check(!scopedGun.AimRequested && SPlayerController.WeaponGroundSpeedScale(pawn) == 1f,
+                    "late aim acknowledgement after reload cannot leave movement slowed with ADS held");
                 raw.Keys[(int)BridgeKey.RightMouse] = 0;
                 Settle(ref raw);
                 raw.Keys[(int)BridgeKey.RightMouse] = 1;

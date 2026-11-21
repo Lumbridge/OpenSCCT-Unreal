@@ -79,8 +79,7 @@ public:
 
 private:
 	FTransform MercWeaponPose(const FString& Model, float Aim, float Speed, bool bFresh, const FScctWeaponMotion& Motion, float DeltaSeconds);
-	void SetM4SightGlass(bool bEnabled);
-	enum class EStockSight : uint8 { Visible, ReplaceHousing, Removed };
+	enum class EStockSight : uint8 { Visible, Removed };
 	void SetStockSight(EStockSight Mode);
 	void SetSightProjection(UCameraComponent* Camera, float Aim, float RaisedHalfTan = 0.260f);
 	void UpdatePrecisionImage(UStaticMeshComponent* Optic, const UCameraComponent* Camera, float Power, bool bHasEtchedReticle = false);
@@ -104,14 +103,6 @@ private:
 	float CompactIdleBlend = 0.0f;
 	float ShoulderFollow = 0.0f;
 	int32 MercWeaponActor = 0;
-	bool bM4SightGlass = false;
-	struct FSightBinding
-	{
-		TWeakObjectPtr<UMeshComponent> Mesh;
-		int32 Slot;
-		TObjectPtr<UMaterialInterface> Original;
-	};
-	TArray<FSightBinding> SightBindings;
 	EStockSight StockSight = EStockSight::Visible;
 	struct FHiddenSightSection
 	{
@@ -120,11 +111,6 @@ private:
 		int32 Lod;
 	};
 	TArray<FHiddenSightSection> HiddenSightMaterials;
-	UPROPERTY()
-	TObjectPtr<UMaterialInterface> M4SightGlass;
-	UPROPERTY()
-	TObjectPtr<UStaticMeshComponent> MercOpticCap;
-
 	void TickFlash(float DeltaSeconds);
 	/** Where the flash's light goes this frame: the muzzle, or short of the level's wall the barrel reaches through. */
 	FVector FlashLightPlace() const;

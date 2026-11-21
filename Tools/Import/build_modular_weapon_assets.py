@@ -65,7 +65,7 @@ def build_attachments(pack_root, pistol_only=False):
     accessory("SM_MercPistolRedDot", meshes["MicroRedDot"], (.118, .1763, 0), compact_dot=True)
     if pistol_only:
         return
-    accessory("SM_MercRedDot", meshes["MicroRedDot"], (.118, .1763, 0))
+    build(rifle_dot_only=True)
     accessory("SM_MercSuppressor", [p for p in meshes["m4a1s"] if materials[p["material"]]["name"].endswith(".Suppressor")],
               (.55, .096, 0))
     build(torch_only=True)

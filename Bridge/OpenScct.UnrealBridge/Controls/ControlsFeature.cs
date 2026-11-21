@@ -107,6 +107,7 @@ public sealed class ControlsFeature
     private SWeaponDefense? _menuSight;
     private bool _shoulderHeldLastFrame;
     private bool _ownsRifleAim;
+    private SWeaponDefense? _releasedAim;
     internal float RifleAimBlend => _aimBlend;
 
     private ControlsFeature(BridgeSession bridge)
@@ -242,6 +243,7 @@ public sealed class ControlsFeature
     {
         if (!ReferenceEquals(weapon, _presentedWeapon))
         {
+            _releasedAim = null;
             _presentedWeapon = weapon;
             _aimBlend = _aimPhase = _aimZoomBlend = _opticZoomExtra = 0f;
         }
@@ -257,8 +259,7 @@ public sealed class ControlsFeature
         _menuSight = menuView && ready && ReferenceEquals(weapon, _menuSight ?? _shouldered) ? weapon : null;
         if (_shouldered is not null && (!held || !ready || !ReferenceEquals(weapon, _shouldered)))
         {
-            if (_ownsRifleAim && _shouldered is { AimRequested: true } owned && pc is not null)
-                owned.SetAiming(pc, false);
+            if (_ownsRifleAim) _releasedAim = _shouldered;
             // Reload cancels aim immediately. The same visible rifle still has to travel out of its sights.
             bool reloading = weapon is MercSidearm { ReloadUntil: > 0f }
                 || weapon?.StateNode is SWeaponDefense.s_Reloading or SWeaponDefense.s_FullReloading;
@@ -268,6 +269,7 @@ public sealed class ControlsFeature
         }
         if (ready && held && !_shoulderHeldLastFrame)
         {
+            _releasedAim = null;
             _shouldered = weapon;
             if (weapon is { AimRequested: false } rifle)
             {
@@ -276,6 +278,8 @@ public sealed class ControlsFeature
                 _ownsRifleAim = rifle.AimRequested;
             }
         }
+        // A late owner acknowledgement can arrive after reload has lowered the sights.
+        if (_releasedAim is { AimRequested: true } released && pc is not null) released.SetAiming(pc, false);
         _shoulderHeldLastFrame = held;
 
         if (!MercWeaponView)

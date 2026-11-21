@@ -38,7 +38,7 @@ public static class MercRifles
         FireCue: "OpenScctRifles.ak47_fire", ReloadCue: "OpenScctRifles.ak47_reload");
     public static readonly MercRifleDefinition DesignatedMarksman = new("DesignatedMarksman", "Semi-Auto DMR", "SEMI-AUTO / 4×",
         "A built-in 4× scope and one shot per trigger press. A body hit deals 35 damage and a head hit deals 60.",
-        35, WeaponAttachments.StandardCapacity, 60, .27f, 2.7f, 1f, 1f, 1f, .07f, .73f, 3.8f, 2.5f,
+        35, WeaponAttachments.StandardCapacity, 60, .40f, 2.7f, 1f, 1f, 1f, .07f, .73f, 3.8f, 2.5f,
         RangeModifier: 1f, EyeRelief: .30f, NativeOpticPower: 4f, HeadDamage: 60,
         FireCue: "OpenScctRifles.galil_fire", ReloadCue: "OpenScctRifles.galil_reload");
 

@@ -55,8 +55,8 @@ public sealed class PrecisionRifleTests
     [Theory]
     [InlineData("Svm.BoltRifle", 1.05f, false)]
     [InlineData("Svm.BoltRifle", 1.05f, true)]
-    [InlineData("Svm.DesignatedMarksman", .27f, false)]
-    [InlineData("Svm.DesignatedMarksman", .27f, true)]
+    [InlineData("Svm.DesignatedMarksman", .40f, false)]
+    [InlineData("Svm.DesignatedMarksman", .40f, true)]
     public void PrecisionFireRequiresAReleaseAndRespectsTheMinimumInterval(string weapon, float interval, bool aiming)
     {
         var (scene, pc, rifle) = Equip(weapon, aiming);
@@ -129,7 +129,7 @@ public sealed class PrecisionRifleTests
 
     [Theory]
     [InlineData("Svm.BoltRifle", 1.05f)]
-    [InlineData("Svm.DesignatedMarksman", .27f)]
+    [InlineData("Svm.DesignatedMarksman", .40f)]
     public void RemoteShooterCannotExceedTheSameCycleTime(string weapon, float interval)
     {
         var (scene, pc, rifle) = Equip(weapon, false);
